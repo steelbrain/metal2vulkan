@@ -2237,6 +2237,9 @@ pub(crate) fn free_all(core: &mut Core) {
         let shared = class == MemoryClass::Shared;
         core.counters
             .fall_by(class.idle_gauge(), idle[class.index()]);
+        // The blocks still taken (the texture set's empty block kept for its next place among
+        // them) go with their allocations.
+        core.counters.set(class.placed_gauge(), 0);
         (core.counters).idle_since(shared, 0);
         (core.counters).reserve_bytes(shared, 0);
         (core.counters).long_reused_bytes(shared, 0);
