@@ -1,5 +1,6 @@
-//! The required test: on every committed profile, every image type the core can declare has a
-//! neutral in `Device::neutral_kinds()` that satisfies Vulkan's view/format compatibility rules.
+//! The neutral resources: a `ulong` atomic's neutral is listed exactly where its slot compiles,
+//! the zero buffer covers any uniform view, an undeclarable type has none, and their formats follow
+//! the declared type and the registry's numeric formats.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -148,76 +149,6 @@ fn assert_compatible(stem: &str, class: &ImageHandleClass, n: &NeutralResource, 
             assert!(supported(p, format, usage), "{ctx}: {usage:?}");
         }
         _ => panic!("{ctx}: not an image or texel buffer"),
-    }
-}
-
-#[test]
-fn every_declarable_image_has_a_compatible_neutral_on_every_profile() {
-    for (stem, device) in committed_devices() {
-        let profile = device.profile();
-        let kinds: BTreeSet<NeutralResource> = device.neutral_kinds().into_iter().collect();
-        let mut classes = image_classes(profile);
-        assert!(!classes.is_empty(), "{stem}");
-        classes.extend(ulong_classes(profile));
-        let depth_dims: BTreeSet<(ImageDim, bool, bool)> = classes
-            .iter()
-            .filter(|c| c.depth_compare)
-            .map(|c| (c.dim, c.arrayed, c.multisampled))
-            .collect();
-        for shape in [
-            (ImageDim::D2, false, false),
-            (ImageDim::D2, true, false),
-            (ImageDim::D2, false, true),
-            (ImageDim::D2, true, true),
-            (ImageDim::Cube, false, false),
-        ] {
-            assert!(depth_dims.contains(&shape), "{stem}: depth {shape:?}");
-        }
-        assert!(
-            depth_dims
-                .iter()
-                .all(|&(dim, _, _)| matches!(dim, ImageDim::D2 | ImageDim::Cube)),
-            "{stem}: depth only for 2D and cube: {depth_dims:?}"
-        );
-        for class in &classes {
-            let n = NeutralResource::for_image(class)
-                .unwrap_or_else(|| panic!("{stem}: no neutral for {class:?}"));
-            assert!(
-                kinds.contains(&n),
-                "{stem}: {n:?} missing from neutral_kinds"
-            );
-            assert_compatible(&stem, class, &n, profile);
-        }
-        for n in [
-            NeutralResource::ZeroBuffer {
-                min_bytes: zero_buffer_bytes(profile),
-            },
-            NeutralResource::Sink { min_bytes: 64 },
-            NeutralResource::Sampler { compare: false },
-            NeutralResource::Sampler { compare: true },
-        ] {
-            assert!(kinds.contains(&n), "{stem}: {n:?} missing");
-        }
-    }
-}
-
-#[test]
-fn neutral_kinds_are_exactly_the_derived_set() {
-    for (stem, device) in committed_devices() {
-        let kinds = device.neutral_kinds();
-        let sorted: Vec<NeutralResource> = kinds
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        assert_eq!(kinds, sorted, "{stem}: fixed order, no duplicates");
-        let images: BTreeSet<NeutralResource> = image_classes(device.profile())
-            .iter()
-            .chain(&ulong_classes(device.profile()))
-            .filter_map(NeutralResource::for_image)
-            .collect();
-        assert_eq!(kinds.len(), images.len() + 4, "{stem}");
     }
 }
 

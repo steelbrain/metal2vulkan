@@ -45,7 +45,7 @@ const UNMADE: [ExtendedRange; 9] = [
 /// The sources a test reads `form` from: the input attachment, and the sample planes of its raw
 /// format's bits copy.
 fn sources(form: ExtendedRange) -> [ResolveSource; 2] {
-    let copy = PlanesCopy::for_planes(form.raw_format()).expect("a bits copy");
+    let copy = super::tests::bits_copy(form.raw_format());
     [ResolveSource::InputAttachment, ResolveSource::Planes(copy)]
 }
 

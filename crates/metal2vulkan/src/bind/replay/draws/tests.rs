@@ -244,8 +244,8 @@ fn preprocess_raw(
         put(bytes.offset, &BYTES.to_le_bytes());
     }
     if let Some([location, length]) = range {
-        put(l.range_offset(), &location.to_le_bytes());
-        put(l.range_offset() + 4, &length.to_le_bytes());
+        put(l.params_offset() + P_RANGE, &location.to_le_bytes());
+        put(l.params_offset() + P_RANGE + 4, &length.to_le_bytes());
     }
     let mut push = pre.push_constants.clone();
     for hole in &pre.push_holes {

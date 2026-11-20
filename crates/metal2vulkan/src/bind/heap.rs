@@ -2495,7 +2495,6 @@ fn relisted_sampler_tables(
 }
 
 impl BindingPlan {
-
     /// Where this plan's heap writes go for `state` ([`HeapElements`]), each heap array having
     /// `capacity` elements (the layout's set-1 count). Under [`HeapPlacement::ResourceId`] a
     /// member's element is its resource ID and a listed sampler's its

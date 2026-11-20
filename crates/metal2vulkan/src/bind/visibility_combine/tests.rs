@@ -209,8 +209,14 @@ fn the_plan_binds_aligned_windows() {
     // A sum into the low half states 2; an OR stays an OR.
     let low = VisibilityCombine::plan(
         &[
-            at(8, 0, 1, true).in_low_half(),
-            at(16, 1, 1, false).in_low_half(),
+            ContinuedResult {
+                low_half: true,
+                ..at(8, 0, 1, true)
+            },
+            ContinuedResult {
+                low_half: true,
+                ..at(16, 1, 1, false)
+            },
         ],
         8,
         1 << 16,

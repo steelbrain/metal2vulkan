@@ -976,7 +976,6 @@ fn a_tile_pipeline_binds_its_attachments() {
         let pipe = dev
             .compile_tile_pipeline(&d, &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(pipe.key, dev.tile_pipeline_key(&d), "{stem}");
         assert!(pipe
             .dependencies
             .iter()
@@ -1133,6 +1132,7 @@ fn a_tile_pipeline_binds_its_attachments() {
         // The descriptor's limit lowers it, never raises it, and is part of the key; Metal's 0 is
         // no limit. A limit answers the most threads of a threadgroup of even sides within it, as
         // Metal's does (on an M3 Max and an M4: 1000 answers 960, 255 252, 3 none).
+        let unlimited = pipe.key;
         for (limit, metal) in [
             (Some(64), 64),
             (Some(1024), 1024),
@@ -1155,7 +1155,7 @@ fn a_tile_pipeline_binds_its_attachments() {
                 pipe.metal_info.metal_max_total_threads_per_threadgroup, metal,
                 "{stem} {limit:?}: Metal's own"
             );
-            assert_ne!(dev.tile_pipeline_key(&limited), dev.tile_pipeline_key(&d));
+            assert_ne!(pipe.key, unlimited, "{stem} {limit:?}");
         }
     }
 }

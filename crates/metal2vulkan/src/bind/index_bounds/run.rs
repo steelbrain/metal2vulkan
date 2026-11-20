@@ -17,7 +17,7 @@
 //!   | 5 to 7 | nobody | zero |
 //!
 //!   A slot's words 0 to 23 are a pass's bounds words (the parent module's table), its two draws
-//!   at [`IndexBoundsRun::first_draw_offset`] and [`IndexBoundsRun::second_draw_offset`]; its word
+//!   at its words 8 and 13; its word
 //!   24, which the plan writes, is the draw's first fill workgroup (the fill workgroups of the
 //!   draws before it).
 //! - **The plan** ([`index_bounds_plan_run_module`]) plans each draw in turn, then writes the
@@ -200,11 +200,6 @@ impl IndexBoundsRun {
             .chain(self.slots.iter().flatten())
             .flat_map(|w| w.to_le_bytes())
             .collect()
-    }
-
-    /// The byte of the words at which slot `slot` starts.
-    fn slot_offset(slot: u32) -> u64 {
-        4 * u64::from(Self::HEADER_WORDS) + u64::from(slot) * Self::SLOT_BYTES
     }
 }
 

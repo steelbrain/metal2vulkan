@@ -619,7 +619,6 @@ impl IndexRewritePass {
         self.parameters[Parameter::Listed as usize] = 1;
         self
     }
-
 }
 
 /// The consumer's words, by index into the rewrite words.

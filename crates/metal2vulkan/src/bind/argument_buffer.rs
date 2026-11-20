@@ -313,7 +313,6 @@ fn type_size_align(ty: DataType) -> Option<(u64, u64, ArgumentType)> {
 }
 
 impl ArgumentBufferLayout {
-
     /// Where argument `index` lands: in the last member whose indices hold it, inside a struct
     /// member's element as that element's layout says. `None` when no member holds it.
     pub fn argument(&self, index: u32) -> Option<ArgumentPlace> {
@@ -359,8 +358,7 @@ impl ArgumentBufferLayout {
     }
 }
 
-impl ArgumentBufferLayout {
-}
+impl ArgumentBufferLayout {}
 
 /// Which of Metal's two rules lays out a reflected struct (the module docs).
 #[derive(Clone, Copy, PartialEq, Eq)]

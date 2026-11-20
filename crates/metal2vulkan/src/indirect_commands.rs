@@ -910,8 +910,7 @@ pub enum RecordField {
     ImageblockSize([u16; 2]),
 }
 
-impl CommandRecord {
-}
+impl CommandRecord {}
 
 fn require_length(bytes: &[u8]) -> Result<(), RecordError> {
     if bytes.len() == COMMAND_BYTES {

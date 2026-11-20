@@ -728,39 +728,6 @@ impl ExtendedRange {
     }
 }
 
-/// How Metal converts a render pass's clear color to a bfloat attachment's codes
-/// ([`ExtendedRange::clear_texel`]). Its two routes depend on the pass and the attachment, not on
-/// the release: an Apple M4 under macOS 27.0.1 (16 colors and 39 NaN colors, 34 shapes, each bfloat
-/// format) and the consumer's Apple M3 Max under macOS 26.7 take each as the shape says. The
-/// runtime chooses by its clear's pass and attachment. A `BGR10_XR` or `BGRA10_XR` attachment and
-/// their `_sRGB` twins take the same two routes by the same shapes (the M4 under 27.0.1; the
-/// consumer's M3 Max under 26.7 byte for byte alike); a two-plane form's are one (each of its 2,574
-/// colors' planes alike).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ClearRoute {
-    /// Each channel through `float` and then `half`, each rounded to nearest even (past the
-    /// largest `half`, the infinity), then the bfloat code nearest that `half`, ties to even; a
-    /// NaN `0x7fc0`, its sign and payload dropped. Metal's clear of a texture it does not keep
-    /// losslessly compressed (a level under 16 texels a side, `ShaderWrite` or `PixelFormatView`
-    /// usage, `allowGPUOptimizedContents` off), and of any texture in a pass that records a draw
-    /// call, even one that draws nothing.
-    ThroughHalf,
-    /// Each channel through `float`, rounded to nearest even, then the bfloat code nearest that,
-    /// ties to even, `float` subnormals kept: `-3e38` is `0xff62`, `1e-40` is `0x0001`, `70000` is
-    /// `0x4789`, `1 + 2^-8 + 2^-23` is `0x3f81`. A NaN is the `float` NaN of its sign and its top
-    /// 23 payload bits, quieted, cut to its top 16 bits (`0xfff0_0400_0000_0000` is `0xffc0`,
-    /// `0x7ff8_4000_0000_0000` is `0x7fc2`, `0x7fff_ffff_ffff_ffff` is `0x7fff`). Metal's clear of
-    /// a texture it keeps losslessly compressed, the attachment's level 16 texels or more a side,
-    /// by a pass that records no draw call (the consumer's M3 Max rows of a 16x16 `Private`
-    /// texture). A `BGR10_XR` or `BGRA10_XR` channel's code there is straight from the `float` too:
-    /// a linear channel's `(v + 384/510) · 510` in `float` steps, ties up, a color NaN 0 and an
-    /// alpha NaN 384, an `_sRGB` color channel's by Metal's own encode, and `BGR10_XR`'s bits 30
-    /// and 31 zero.
-    Straight,
-}
-
 /// The bfloat code of `v` by [`ClearRoute::Straight`]: its `float` rounded to nearest even
 /// (Rust's conversion), then [`bfloat_nearest_even`]; a NaN the `float` NaN of its sign and top
 /// 23 payload bits, quieted, cut to its top 16 bits.
@@ -2001,8 +1968,8 @@ pub const BICUBIC_TEXELS_UNBOUND: u32 = crate::metal::bicubic::BicubicTexels::NE
 /// The class of pixel format `pf` (`metal::texel_format::TexelFormat`'s word, as its `half`
 /// conversion takes it): the value a specialized note's test of
 /// `SpecKey::BoundTexelFormat` reads for a texture of `pf` bound at its slot
-/// (`StageModule::bound_format_clauses`), which a runtime takes from each draw's or dispatch's
-/// bound textures.
+/// (`StageModule::precision_notes_bound`'s `bound`), which a runtime takes from each draw's or
+/// dispatch's bound textures.
 pub fn bound_texel_format(pf: PixelFormat) -> u32 {
     crate::metal::texel_format::texel_format(pf).0
 }

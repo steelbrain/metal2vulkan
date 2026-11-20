@@ -866,21 +866,9 @@ fn direct_argument_use_is_decided_where_the_reflection_refuses_a_type() {
         }
         other => panic!("{at}: {other:?}"),
     };
-    for (kernel, uses) in [("buffer_kernel", false), ("texture_kernel", true)] {
-        let descriptor =
-            |library: &Library| ComputePipelineDescriptor::new(source(library, kernel));
-        refused_type(
-            descriptor(&unmeasured).reflection(&budget).map(drop),
-            BUFFER,
-            kernel,
-        );
-        for library in [&measured, &unmeasured] {
-            assert_eq!(
-                descriptor(library).uses_direct_arguments(&budget),
-                Ok(uses),
-                "{kernel}"
-            );
-        }
+    for kernel in ["buffer_kernel", "texture_kernel"] {
+        let descriptor = ComputePipelineDescriptor::new(source(&unmeasured, kernel));
+        refused_type(descriptor.reflection(&budget).map(drop), BUFFER, kernel);
     }
     for (fragment, uses) in [
         ("plain_fragment", vec![]),

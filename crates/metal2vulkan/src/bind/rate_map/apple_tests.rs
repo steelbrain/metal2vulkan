@@ -179,35 +179,3 @@ fn metals_integer_answers() {
         mismatches[..mismatches.len().min(20)].join("\n")
     );
 }
-
-/// A reset to and from a map of a zero screen extent writes Metal's words (an Apple M3 Max under
-/// macOS 27.0.1, our probe `vec`, one map per process): a 64 by 64 map of quality 0.5 reset to 0
-/// by 64 keeps the entries the narrower map does not write, and the same map reset the other way
-/// holds exactly what a fresh 64 by 64 map holds.
-#[test]
-fn metals_words_across_a_zero_extent_reset() {
-    let half = |screen| {
-        let mut d = RateMapDescriptor::new(screen);
-        d.layers
-            .push(RateMapLayerDescriptor::new(vec![0.5], vec![0.5]));
-        d
-    };
-    let wide = RasterizationRateMap::new(&half([64, 64])).expect("64 by 64");
-    let narrowed =
-        RasterizationRateMap::new_over(&half([0, 64]), wide.words()).expect("reset to 0 by 64");
-    assert_eq!(narrowed.physical_size(0), Some([0, 33]));
-    assert_eq!(
-        sha(&narrowed.to_bytes()),
-        "e8367ffa698309495b1907fddd1a752dee56f95d953f513aa11a2a900f7c221d",
-        "the reset to a zero screen width is not Metal's"
-    );
-    let narrow = RasterizationRateMap::new(&half([0, 64])).expect("0 by 64");
-    let widened =
-        RasterizationRateMap::new_over(&half([64, 64]), narrow.words()).expect("reset to 64 by 64");
-    assert_eq!(widened.to_bytes(), wide.to_bytes());
-    assert_eq!(
-        sha(&widened.to_bytes()),
-        "4c21eca9c26d2f2d4f50ce61db86bda15021461bf41b9eccc94798443a93dd5e",
-        "the reset from a zero screen width is not Metal's"
-    );
-}

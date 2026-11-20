@@ -1,53 +1,11 @@
 //! The sample planes' copy modules: what each needs, valid on every committed profile that has
-//! it (L3, `G-val`), refused on a device that does not; and the copy format of each texel size.
+//! it (L3, `G-val`), refused on a device that does not.
 
 use super::*;
 use crate::device::requirements::VkFeature;
 use crate::device::{DeviceDescription, DevicePolicy};
 use crate::spirv::testing::assert_valid;
 use std::path::PathBuf;
-
-/// The copy format follows the texel size of a single-texel color format that shares its
-/// compatibility class, and no other format has one; the sample planes' copies take `A8_UNORM`'s
-/// own format besides.
-#[test]
-fn the_copy_format_is_the_texel_size() {
-    for (format, copy) in [
-        (Format::R8_UNORM, Some(PlanesCopy::R8)),
-        (Format::R8G8_UNORM, Some(PlanesCopy::R16)),
-        (Format::R16_SFLOAT, Some(PlanesCopy::R16)),
-        (Format::R8G8B8A8_SRGB, Some(PlanesCopy::R32)),
-        (Format::B10G11R11_UFLOAT_PACK32, Some(PlanesCopy::R32)),
-        (Format::R32_SFLOAT, Some(PlanesCopy::R32)),
-        (Format::R16G16B16A16_SNORM, Some(PlanesCopy::Rg32)),
-        (Format::R32G32B32A32_UINT, Some(PlanesCopy::Rgba32)),
-        (Format::R32G32B32_SFLOAT, None),
-        (Format::D32_SFLOAT, None),
-        (Format::S8_UINT, None),
-        (Format::BC1_RGBA_UNORM_BLOCK, None),
-        // A size shared with a copy format, a class of its own: no view of it in the copy's.
-        (Format::A8_UNORM, None),
-        (Format::A1B5G5R5_UNORM_PACK16, Some(PlanesCopy::R16)),
-        (Format::R10X6G10X6B10X6A10X6_UNORM_4PACK16, None),
-        (Format::G8B8G8R8_422_UNORM, None),
-    ] {
-        assert_eq!(PlanesCopy::for_format(format), copy, "{format:?}");
-        let planes = match format {
-            Format::A8_UNORM => Some(PlanesCopy::Alpha8),
-            _ => copy,
-        };
-        assert_eq!(PlanesCopy::for_planes(format), planes, "{format:?}");
-    }
-    for copy in PlanesCopy::ALL {
-        assert_eq!(
-            PlanesCopy::for_planes(copy.format()),
-            Some(copy),
-            "{copy:?}"
-        );
-        let bits = copy.moves_bits().then_some(copy);
-        assert_eq!(PlanesCopy::for_format(copy.format()), bits, "{copy:?}");
-    }
-}
 
 /// The requirements of `m` as serialized.
 fn needs(m: TypedModule) -> Requirements {

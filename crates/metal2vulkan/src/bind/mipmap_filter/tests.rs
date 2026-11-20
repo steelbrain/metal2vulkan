@@ -15,15 +15,27 @@ use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::{check_valid, committed_profiles};
 use crate::vk::Format;
 
+/// The view a fetch reads an image of `image` through: the UNORM twin of an 8-bit sRGB format (the
+/// same bytes, its codes undecoded), else the image's own.
+fn unorm_twin(image: Format) -> Format {
+    match image {
+        Format::R8_SRGB => Format::R8_UNORM,
+        Format::R8G8_SRGB => Format::R8G8_UNORM,
+        Format::R8G8B8A8_SRGB => Format::R8G8B8A8_UNORM,
+        Format::B8G8R8A8_SRGB => Format::B8G8R8A8_UNORM,
+        other => other,
+    }
+}
+
 /// The sampled views through which a fetch reads the first level of `pf`: one per candidate
-/// Vulkan format of its image whose fetch recovers the texel (`MipmapFilterChain::fetch_format`).
+/// Vulkan format of its image whose fetch recovers the texel, through its view (`unorm_twin`).
 fn fetch_views(pf: PixelFormat) -> Vec<Format> {
     let Some(l) = layout(pf) else {
         return Vec::new();
     };
     let mut views: Vec<Format> = candidate_formats(pf)
         .into_iter()
-        .filter_map(MipmapFilterChain::fetch_format)
+        .map(unorm_twin)
         .filter(|&view| components(view).is_some_and(|c| fits(&l, &c)))
         .collect();
     views.dedup();
@@ -784,19 +796,4 @@ fn the_plan_fetches_only_what_a_fetch_recovers() {
         fetched(PixelFormat::BGRA10XRSRGB, Some(Format::R16G16B16A16_UINT)),
         Some(Format::R16G16B16A16_UINT)
     );
-    assert_eq!(
-        MipmapFilterChain::fetch_format(Format::B8G8R8A8_SRGB),
-        Some(Format::B8G8R8A8_UNORM)
-    );
-    assert_eq!(MipmapFilterChain::fetch_format(Format::R32_SFLOAT), None);
-    assert!(MipmapFilterChain::fetch_converts(
-        Format::R16G16B16A16_SFLOAT
-    ));
-    assert!(MipmapFilterChain::fetch_converts(
-        Format::A2B10G10R10_UNORM_PACK32
-    ));
-    assert!(!MipmapFilterChain::fetch_converts(Format::R32_UINT));
-    assert!(!MipmapFilterChain::fetch_converts(
-        Format::R16G16B16A16_UINT
-    ));
 }

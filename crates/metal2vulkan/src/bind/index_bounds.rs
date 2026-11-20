@@ -32,9 +32,9 @@
 //! | Words | Written by | Contents |
 //! |---|---|---|
 //! | 0 to 7 | the consumer | [`IndexBoundsPass::parameters`]: the arguments' first word in the bound arguments range, the index offset's byte in the bound indices range, the whole indices from the offset (saturated to `u32`), 1 for 32-bit indices, the pool's index bytes; then zeros |
-//! | 8 to 12 | the plan | the first draw's `VkDrawIndexedIndirectCommand` ([`IndexBoundsPass::FIRST_DRAW_OFFSET`]) |
-//! | 13 to 17 | the plan | the second draw's ([`IndexBoundsPass::SECOND_DRAW_OFFSET`]) |
-//! | 18 to 20 | the plan | the fill's `VkDispatchIndirectCommand` ([`IndexBoundsPass::FILL_DISPATCH_OFFSET`]) |
+//! | 8 to 12 | the plan | the first draw's `VkDrawIndexedIndirectCommand` |
+//! | 13 to 17 | the plan | the second draw's |
+//! | 18 to 20 | the plan | the fill's `VkDispatchIndirectCommand` |
 //! | 21 to 23 | the plan | the fill's first pool word, first Metal position, and count |
 //!
 //! **The pool**: [`IndexBoundsPass::POOL_HEADER_BYTES`] of header (the counter in its first word,
@@ -103,10 +103,6 @@ impl IndexBoundsPass {
     pub const BYTES: u64 = 96;
     /// The consumer's parameter words at the bounds words' start.
     pub const PARAMETER_WORDS: usize = 8;
-    /// The first draw's `VkDrawIndexedIndirectCommand` in the bounds words.
-    pub const FIRST_DRAW_OFFSET: u64 = 32;
-    /// The second draw's `VkDrawIndexedIndirectCommand` in the bounds words.
-    pub const SECOND_DRAW_OFFSET: u64 = 52;
     /// The pool's header: its counter, then reserved bytes; its index bytes follow, where the
     /// second draw binds the pool as its index buffer.
     pub const POOL_HEADER_BYTES: u64 = 16;
@@ -162,7 +158,6 @@ impl IndexBoundsPass {
             parameters,
         })
     }
-
 }
 
 /// The consumer's parameter words, by index into the bounds words.

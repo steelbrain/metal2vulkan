@@ -106,7 +106,7 @@ fn passes(draws: &[BoundsRunDraw], arguments: &[u8], indices: &[u8]) -> Left {
         );
         let planned = words(&after[0]);
         (pool, status) = (after[2].clone(), after[3].clone());
-        let groups = planned[(IndexBoundsPass::FILL_DISPATCH_OFFSET / 4) as usize];
+        let groups = planned[Output::FillDispatch as usize];
         if groups > 0 {
             let filled = dispatch(
                 &fill,
@@ -115,7 +115,7 @@ fn passes(draws: &[BoundsRunDraw], arguments: &[u8], indices: &[u8]) -> Left {
             );
             pool = filled[2].clone();
         }
-        let at = (IndexBoundsPass::FIRST_DRAW_OFFSET / 4) as usize;
+        let at = (super::super::tests::FIRST_DRAW / 4) as usize;
         commands.push(planned[at..at + 10].try_into().expect("commands"));
     }
     (commands, words(&pool), status)
@@ -170,11 +170,8 @@ fn run_of(
         planned[last + FIRST_GROUP as usize] + planned[last + Output::FillDispatch as usize];
     let commands = (0..draws.len() as u32)
         .map(|slot| {
-            let at = (IndexBoundsRun::first_draw_offset(slot) / 4) as usize;
-            assert_eq!(
-                IndexBoundsRun::second_draw_offset(slot),
-                IndexBoundsRun::first_draw_offset(slot) + 20
-            );
+            let at = (IndexBoundsRun::HEADER_WORDS + slot * IndexBoundsRun::SLOT_WORDS) as usize
+                + (super::super::tests::FIRST_DRAW / 4) as usize;
             planned[at..at + 10].try_into().expect("commands")
         })
         .collect();

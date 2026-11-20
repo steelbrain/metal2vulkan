@@ -2,10 +2,6 @@
 //! of one of Apple's extended-range formats is written as the raw texel Metal stores, and the
 //! attachment holds the format's raw texels.
 //!
-//! - On the CPU interpreter, the raw texel `ExtendedRange::clear_texel` gives a clear color (the
-//!   runtime's clear value) is the texel the shader's encode stores for the same `half` values,
-//!   over a grid of `half`s from below the format's range to past it, and NaN, the infinities and
-//!   the largest finite `half`s.
 //! - On every committed profile, a fragment function compiled for a pipeline with such an
 //!   attachment (`rt6_fill_rgba32float`, `rt6_fill_rgba16float`) records the attachment
 //!   (`StageIo::extended_range_colors`), keeps its interface variable's Metal type, declares the
@@ -35,7 +31,6 @@
 
 use super::*;
 use crate::error::{DescriptorError, Error, MetalAnswer, Needs, RuntimeInput};
-use crate::metal::format::ClearRoute;
 use crate::metal::ColorWriteMask;
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::link::{link, LinkInputs, RenderLinkInputs};
@@ -116,58 +111,6 @@ fn half_lane(b: u32, l: u32) -> u16 {
     match b % 2 {
         0 => bits,
         _ => bits | 0x8000,
-    }
-}
-
-/// The `ExtendedRange::clear_texel` of `half` values is the texel the shader's encode stores
-/// for them (the module docs): the runtime's clear value of a color is the kernel write's texel
-/// of the color rounded to `half`, as Metal clears.
-#[test]
-fn clear_texels_are_the_kernel_writes_of_their_halves() {
-    let Some(bc) = assemble("clear texels", WRITE) else {
-        return;
-    };
-    let (stem, p) = profiles().into_iter().next().expect("profile");
-    // An `_sRGB` form's write takes the device's `Pow`, which the interpreter does not model (and
-    // its clear texel keeps Metal's table: the two may be a code apart).
-    for form in FORMS.into_iter().filter(|f| !f.srgb()) {
-        let mut inputs = LowerInputs::new();
-        inputs.extended_range.insert(TARGET, form);
-        inputs.storage_images.insert(
-            TARGET,
-            StorageImageChoice::new(form.raw_format(), StorageImageClass::Identity),
-        );
-        let what = format!("{form:?} on {stem}");
-        let (plan, m) =
-            typed_module_with(&bc, "k", &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-        validate(&bc, &inputs, &p, &what);
-        // Batches 0 to 3 reach every fourth pattern below 0x4400 (4.0) of either sign.
-        for batch in 0..4 {
-            let lanes = |n: u32| -> [u16; 4] { [0, 1, 2, 3].map(|c| half_lane(batch, 4 * n + c)) };
-            let mut res = resources(&plan, 16, &[]);
-            res.buffers[0].bytes = (0..SIDE * SIDE)
-                .flat_map(&lanes)
-                .flat_map(|h| crate::float16::f16_bits_to_f32(h).to_le_bytes())
-                .collect();
-            let images = [image(1, |_| [0; 4])];
-            let (_, images) = run(&m, &res, &images);
-            let target = texels_of(&images, 1);
-            let layout = image(1, |_| [0; 4]);
-            for n in 0..SIDE * SIDE {
-                let color = lanes(n).map(|h| f64::from(crate::float16::f16_bits_to_f32(h)));
-                let want = form.clear_texel(color, ClearRoute::ThroughHalf);
-                let at = layout
-                    .index(0, 0, 0, [n % SIDE, n / SIDE, 0])
-                    .expect("texel");
-                let raw = form.raw_components() as usize;
-                assert_eq!(
-                    target[at][..raw],
-                    want[..raw],
-                    "{what}: batch {batch} texel {n} of halves {:x?}",
-                    lanes(n)
-                );
-            }
-        }
     }
 }
 

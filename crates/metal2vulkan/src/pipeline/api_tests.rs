@@ -147,7 +147,11 @@ fn a_stage_s_notes_under_a_specialization_are_its_held_clauses() {
     ] {
         let mut sorted = m.precision_notes.clone();
         sorted.retain(|n| want.contains(n));
-        assert_eq!(m.precision_notes_under(&key(&values)), sorted, "{values:?}");
+        assert_eq!(
+            m.precision_notes_bound(&key(&values), &|_| None),
+            sorted,
+            "{values:?}"
+        );
     }
 }
 

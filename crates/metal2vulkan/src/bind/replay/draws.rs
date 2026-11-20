@@ -283,7 +283,6 @@ impl DrawReplayLayout {
     pub fn params_offset(&self) -> u64 {
         self.resident_offset - PARAMS_BYTES
     }
-
 }
 
 /// The preprocess of one draw replay: what the consumer uploads into the scratch (of

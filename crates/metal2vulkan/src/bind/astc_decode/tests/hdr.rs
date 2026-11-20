@@ -309,7 +309,6 @@ fn an_hdr_format_s_twin_holds_halves() {
     for texels in [AstcTexels::Unorm8, AstcTexels::Half] {
         assert_eq!(d.form(texels), AstcTexels::Half);
         assert_eq!(d.texel_format(texels), Format::R16G16B16A16_SFLOAT);
-        assert_eq!(d.texel_pixel_format(texels), PixelFormat::RGBA16Float);
         assert_eq!(d.texel_bytes(texels), 8);
     }
     assert_eq!(

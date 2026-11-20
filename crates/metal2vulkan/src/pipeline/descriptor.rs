@@ -91,7 +91,6 @@ impl FunctionDescriptor {
         self.libraries = libraries;
         self
     }
-
 }
 
 /// The dynamic libraries a pipeline stage links (`MTLDynamicLibrary`): its preloaded libraries, and

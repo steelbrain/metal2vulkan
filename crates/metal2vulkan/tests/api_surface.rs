@@ -187,7 +187,6 @@ surface! {
         enum VerifyError N;
         enum Error N;
         enum Retry N;
-        enum Permanence N;
         struct Unsupported N;
         enum Needs N;
         enum RuntimeDriverDefect N;
@@ -949,9 +948,7 @@ surface! {
         enum ExtendedRange N;
         enum WordAttachment N;
         struct WordField E;
-        enum ClearRoute N;
         fn vk_format;
-        fn swizzle_over;
         fn direct_format;
         fn byte_format;
         fn srgb_raw_twin;
@@ -964,7 +961,6 @@ surface! {
         fn copies_only;
         fn imageblock_sample_length;
         fn color_record;
-        fn explicit_imageblock_sample_length;
         fn aspects;
         fn is_depth_stencil;
         fn sampled_type;

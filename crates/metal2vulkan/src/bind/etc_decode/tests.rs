@@ -44,12 +44,6 @@ fn the_etc2_and_eac_formats_alone_decode() {
         assert_eq!(decode.eleven_bit(), compact != float, "{decode:?}");
         for texels in [EtcTexels::Compact, EtcTexels::Float] {
             let format = decode.texel_format(texels);
-            let pf = decode.texel_pixel_format(texels);
-            assert_eq!(
-                crate::metal::format::direct_format(pf),
-                Some(format),
-                "{decode:?} {texels:?}"
-            );
             let bytes = format.block().map(|b| b.size).expect("a block");
             assert_eq!(decode.texel_bytes(texels), bytes, "{decode:?} {texels:?}");
         }

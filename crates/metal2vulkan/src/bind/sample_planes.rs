@@ -72,8 +72,8 @@ pub enum PlanesCopy {
     Rgba32,
     /// One byte of `A8_UNORM`'s own compatibility class ("8-bit alpha"), which no view of another
     /// format reads: moved through `A8_UNORM` views as the `float` each reads, `code / 255` in
-    /// alpha, which its store keeps as the code. Not a bits copy ([`PlanesCopy::for_format`]):
-    /// the sample planes' copies alone take it ([`PlanesCopy::for_planes`]).
+    /// alpha, which its store keeps as the code. Not a bits copy ([`PlanesCopy::moves_bits`]):
+    /// the sample planes' copies alone take it.
     Alpha8,
 }
 
@@ -87,34 +87,6 @@ impl PlanesCopy {
         PlanesCopy::Rgba32,
         PlanesCopy::Alpha8,
     ];
-
-    /// The copy format of `format` through which a copy moves its texels' bits: a color format
-    /// of one texel per block, of 1, 2, 4, 8 or 16 bytes, which shares the compatibility class of
-    /// that unsigned format, so a view of it moves the texel's bits. `None` for a depth, stencil,
-    /// compressed, multi-planar or 3-component 96-bit format, and for one of a class of its own
-    /// (`A8_UNORM`'s "8-bit alpha", the 4-pack 10- and 12-bit formats', the 4:2:2 formats'),
-    /// which no view of another format reads (VUID-VkImageCreateInfo-pNext-06722).
-    pub fn for_format(format: Format) -> Option<PlanesCopy> {
-        let block = format.block()?;
-        if block.color.is_none() || block.depth.is_some() || block.stencil.is_some() {
-            return None;
-        }
-        if block.texels != 1 {
-            return None;
-        }
-        let copy = match block.size {
-            1 => PlanesCopy::R8,
-            2 => PlanesCopy::R16,
-            4 => PlanesCopy::R32,
-            8 => PlanesCopy::Rg32,
-            16 => PlanesCopy::Rgba32,
-            _ => return None,
-        };
-        copy.format()
-            .block()
-            .is_some_and(|own| own.class == block.class)
-            .then_some(copy)
-    }
 
     /// The Vulkan format of the copy's views: an unsigned-integer one, or `A8_UNORM` for
     /// [`PlanesCopy::Alpha8`].

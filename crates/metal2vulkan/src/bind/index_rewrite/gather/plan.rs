@@ -14,8 +14,8 @@
 //! - writes each draw's record (its first workgroup, its list's indices and first word in the
 //!   pool, its first index), the run's workgroups and the gather's `VkDispatchIndirectCommand`
 //!   (at most [`IndexGatherModule::MAX_GROUPS`] workgroups, which take the run's in turn), and
-//!   each draw's `VkDrawIndexedIndirectCommand` at its place's [`IndexGatherPlanModule::DRAW_BYTES`]
-//!   of the draws' binding: its list's indices, Metal's instances, its first index in the pool's
+//!   each draw's `VkDrawIndexedIndirectCommand` in its place's 20 bytes of the draws'
+//!   binding: its list's indices, Metal's instances, its first index in the pool's
 //!   index region, its base vertex (Metal's base vertex, or its vertex start), Metal's base
 //!   instance.
 //!

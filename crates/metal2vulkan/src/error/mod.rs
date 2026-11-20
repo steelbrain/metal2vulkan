@@ -111,18 +111,6 @@ pub enum Retry {
     Later,
 }
 
-/// What the outcome is permanent for, i.e. which cache key may memoize it.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Permanence {
-    /// Permanent for the input (bytes, entry, constants, descriptor) on every device.
-    Input,
-    /// Permanent for the input on this device profile.
-    InputAndDevice,
-    /// Not permanent; never memoize.
-    Never,
-}
-
 impl Error {
     /// A refusal ([`Error::Unsupported`]) tied to render pipeline attachment `attachment`
     /// ([`Unsupported::at_attachment`]); any other error as it is.
@@ -150,7 +138,6 @@ impl Error {
             | Error::Internal(_) => Retry::Never,
         }
     }
-
 }
 
 impl fmt::Display for Error {
@@ -452,7 +439,6 @@ impl Unsupported {
         self.symbol = Some(symbol);
         self
     }
-
 }
 
 impl fmt::Display for Unsupported {

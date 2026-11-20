@@ -544,9 +544,10 @@ fn resource_id_placement_puts_a_sampler_at_its_element() {
         ..BindState::default()
     };
     for (id, element) in [(16380, 1), (2, 2)] {
-        state.argument_samplers.push(
-            crate::bind::ArgumentSampler::new(SamplerDescriptor::new(), id).at_element(element),
-        );
+        state.argument_samplers.push(crate::bind::ArgumentSampler {
+            element: Some(element),
+            ..crate::bind::ArgumentSampler::new(SamplerDescriptor::new(), id)
+        });
     }
     let planned = PlannedHandleTable {
         set: 0,
@@ -993,8 +994,9 @@ fn sampler_tables_relist_states_of_the_plans_shapes() {
         descs
             .iter()
             .enumerate()
-            .map(|(i, &d)| {
-                crate::bind::ArgumentSampler::new(d, i as u64 + 1).at_element(i as u32 + 1)
+            .map(|(i, &d)| crate::bind::ArgumentSampler {
+                element: Some(i as u32 + 1),
+                ..crate::bind::ArgumentSampler::new(d, i as u64 + 1)
             })
             .collect()
     };
@@ -1096,8 +1098,9 @@ fn a_late_cubic_sampler_is_listed_with_its_cubic_bit_beside_tested_stages() {
         descs
             .iter()
             .enumerate()
-            .map(|(i, &d)| {
-                crate::bind::ArgumentSampler::new(d, i as u64 + 1).at_element(i as u32 + 1)
+            .map(|(i, &d)| crate::bind::ArgumentSampler {
+                element: Some(i as u32 + 1),
+                ..crate::bind::ArgumentSampler::new(d, i as u64 + 1)
             })
             .collect()
     };
@@ -1182,7 +1185,10 @@ fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
         stage: Stage::Kernel,
         entries: 4,
     };
-    let encoded = [crate::bind::ArgumentSampler::new(SamplerDescriptor::new(), 1).at_element(1)];
+    let encoded = [crate::bind::ArgumentSampler {
+        element: Some(1),
+        ..crate::bind::ArgumentSampler::new(SamplerDescriptor::new(), 1)
+    }];
     let template = |classes: Vec<HandleClass>, opaque_black: bool| ResourceTemplate {
         sampler_tables: vec![planned],
         argument_samplers: Some(ArgumentSamplersShape::of(&encoded)),
@@ -1200,7 +1206,10 @@ fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
     let held_on =
         |profile: &DeviceProfile, template: &ResourceTemplate, late: SamplerDescriptor| -> bool {
             let mut samplers = encoded.to_vec();
-            samplers.push(crate::bind::ArgumentSampler::new(late, 2).at_element(2));
+            samplers.push(crate::bind::ArgumentSampler {
+                element: Some(2),
+                ..crate::bind::ArgumentSampler::new(late, 2)
+            });
             assert!(!template
                 .argument_samplers
                 .as_ref()

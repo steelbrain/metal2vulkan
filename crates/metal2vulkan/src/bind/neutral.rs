@@ -297,8 +297,7 @@ pub fn ulong_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
     out
 }
 
-impl Device {
-}
+impl Device {}
 
 /// Bytes of the `ZeroBuffer` neutral on `profile`: large enough for any uniform-buffer view
 /// (`maxUniformBufferRange`, capped at 64 KiB), a multiple of 16.

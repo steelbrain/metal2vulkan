@@ -497,7 +497,6 @@ pub struct RasterizationRateMap {
 }
 
 impl RasterizationRateMap {
-
     /// Compile `desc` (`newRasterizationRateMapWithDescriptor:`) by this module's rule, Apple
     /// M3's, or refuse it ([`RateMapError::Unpinned`]) outside the bounds the rule is measured in.
     /// A descriptor of no layers compiles to a map of none.

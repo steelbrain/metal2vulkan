@@ -62,8 +62,8 @@
 //!   The twin's formats are never read from planes: a twin resolve reads the attachment.
 //!
 //! Draw it into a render pass whose one color attachment is the resolve texture's single-sampled
-//! level and layer in [`ColorResolveFormat::written_format`] (its own format, or its raw twin
-//! where the result is written raw), over the render area, one sample, without blending; for
+//! level and layer in its own format, or its raw twin's where the result is written raw
+//! ([`ColorResolveFormat::written_raw`]), over the render area, one sample, without blending; for
 //! [`ResolveSource::InputAttachment`] the pass's subpass also reads the multisampled attachment as
 //! its input attachment 0, and for [`ResolveSource::RawInputAttachment`] a view of it in its raw
 //! twin.

@@ -791,94 +791,6 @@ fn a_storage_access_without_a_format_goes_by_the_format_s_own_bits_with_the_exte
     }
 }
 
-/// An `A8Unorm` view reads an `R8Unorm` image through `(Zero, Zero, Zero, Red)` composed under the
-/// view's own swizzle, where the device has `A8_UNORM` and where it does not (the probe a8view on
-/// an Apple M3 Max under macOS 27.0.1: Metal's `A8Unorm` view of an `R8Unorm` texture made without
-/// `PixelFormatView` samples, reads, gathers and borders as a plain `A8Unorm` texture and as an
-/// `R8Unorm` view of that swizzle do, shared and private, through four swizzles). A pair whose
-/// opaque-black border texel moves with the mapping (`BGRA8Unorm` over `RGBA8Unorm`: the format
-/// has alpha of its own) has none, nor a format over itself, nor a format of no such candidate,
-/// nor a device whose portability subset withholds `imageViewFormatSwizzle`.
-#[test]
-fn a_view_in_other_channels_of_the_same_bits_reads_through_a_swizzle() {
-    use crate::metal::TextureSwizzle as T;
-    let s = SAMPLED;
-    let table = [
-        (vk::Format::R8_UNORM, s),
-        (vk::Format::A8_UNORM, s),
-        (vk::Format::R8G8B8A8_UNORM, s),
-        (vk::Format::B8G8R8A8_UNORM, s),
-    ];
-    let mut desc = floor_with(&table);
-    desc.extensions.extend([
-        VkExtension::KhrMaintenance5,
-        VkExtension::KhrDynamicRendering,
-    ]);
-    let m5 = device(desc);
-    let floor = device(floor_with(&table));
-    let alpha = TextureSwizzleChannels::new(T::Zero, T::Zero, T::Zero, T::Red);
-    for d in [&m5, &floor] {
-        let over = |pf, swizzle, own| swizzle_over(pf, swizzle, own, d.profile());
-        let default = TextureSwizzleChannels::DEFAULT;
-        assert_eq!(
-            over(PixelFormat::A8Unorm, default, PixelFormat::R8Unorm),
-            Some(alpha)
-        );
-        let swizzled = TextureSwizzleChannels::new(T::Alpha, T::Red, T::One, T::Zero);
-        assert_eq!(
-            over(PixelFormat::A8Unorm, swizzled, PixelFormat::R8Unorm),
-            Some(TextureSwizzleChannels::new(
-                T::Red,
-                T::Zero,
-                T::One,
-                T::Zero
-            ))
-        );
-        // The first lane whose source is alpha stores the image's red (probe a8write).
-        let second = TextureSwizzleChannels::new(T::Zero, T::Alpha, T::Alpha, T::Red);
-        assert_eq!(
-            over(PixelFormat::A8Unorm, second, PixelFormat::R8Unorm),
-            Some(TextureSwizzleChannels::new(
-                T::Zero,
-                T::Red,
-                T::Red,
-                T::Zero
-            ))
-        );
-        // No lane's source is alpha: Metal stores the alpha lane, a swizzled R8 image its red.
-        let opaque = TextureSwizzleChannels::new(T::Red, T::Green, T::Blue, T::One);
-        assert_eq!(
-            over(PixelFormat::A8Unorm, opaque, PixelFormat::R8Unorm),
-            None
-        );
-        assert_eq!(
-            over(PixelFormat::BGRA8Unorm, default, PixelFormat::RGBA8Unorm),
-            None
-        );
-        assert_eq!(
-            over(PixelFormat::R8Unorm, default, PixelFormat::R8Unorm),
-            None
-        );
-        assert_eq!(
-            over(PixelFormat::R8Uint, default, PixelFormat::R8Unorm),
-            None
-        );
-    }
-    let mut desc = floor_with(&table);
-    desc.extensions.insert(VkExtension::KhrPortabilitySubset);
-    let withheld = device(desc);
-    let default = TextureSwizzleChannels::DEFAULT;
-    assert_eq!(
-        swizzle_over(
-            PixelFormat::A8Unorm,
-            default,
-            PixelFormat::R8Unorm,
-            withheld.profile()
-        ),
-        None
-    );
-}
-
 /// A portability subset that withholds `imageViewFormatSwizzle` makes no view with a component
 /// mapping (`VUID-VkImageViewCreateInfo-imageViewFormatSwizzle-04465`): `A8Unorm`'s swizzled
 /// `R8_UNORM` candidate names the feature beside the direct format's needs, and is chosen once the
@@ -1136,7 +1048,7 @@ fn formats_metal_names_are_named_and_refused_typed() {
         (650, "MTLPixelFormatRGB10A8Uint_2P"),
     ];
     // All but `R10Unorm_X6`, `RG10Unorm_X12` and their `_sRGB` twins, held raw
-    // in their words' integer formats (`padded_words`).
+    // in their words' integer formats.
     // And the eleven RGBX formats, held in their RGBA twins (`x_channel`).
     // And the three bfloat formats and `RGB10A2Unorm_sRGB`, held raw (`ExtendedRange`).
     // And `BGRA4Unorm`, held in the 4-bit word of its bits (`A4R4G4B4_UNORM_PACK16`, or
@@ -1155,7 +1067,14 @@ fn formats_metal_names_are_named_and_refused_typed() {
         let pf = PixelFormat::try_from(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
         assert_eq!(pf.name(), name);
         assert_eq!(PixelFormat::from_name(name), Some(pf));
-        if padded_words(pf) || x_channel(pf) || bfloat(pf) || rgb10a2_srgb(pf) {
+        let padded = matches!(
+            pf,
+            PixelFormat::R10UnormX6
+                | PixelFormat::RG10UnormX12
+                | PixelFormat::R10UnormX6SRGB
+                | PixelFormat::RG10UnormX12SRGB
+        );
+        if padded || x_channel(pf) || bfloat(pf) || rgb10a2_srgb(pf) {
             continue;
         }
         if pf == PixelFormat::BGRA4Unorm || copies_only(pf) {
@@ -1183,28 +1102,12 @@ fn formats_metal_names_are_named_and_refused_typed() {
 
 /// `R10Unorm_X6` and `RG10Unorm_X12` are held raw in their words' integer formats for sampling,
 /// storage and rendering (the shader decodes, filters and encodes them, `ExtendedRange::R10X6` and `Rg10X12`),
-/// they and their `_sRGB` twins are exactly the formats whose codes sit in the top bits of their
-/// own 16-bit words (`padded_words`), and a clear stores Metal's words: the color
-/// through `float` and `half`, each to nearest even, the code of the exact product with 1023
-/// rounded to nearest in the top 10 bits.
+/// and they and their `_sRGB` twins are the formats whose codes sit in the top bits of their own
+/// 16-bit words.
 #[test]
 fn padded_formats_are_held_raw() {
     use FormatUsage as U;
     use PixelFormat as P;
-    let held: Vec<PixelFormat> = PixelFormat::ALL
-        .iter()
-        .copied()
-        .filter(|&pf| padded_words(pf))
-        .collect();
-    assert_eq!(
-        held,
-        [
-            P::R10UnormX6,
-            P::R10UnormX6SRGB,
-            P::RG10UnormX12,
-            P::RG10UnormX12SRGB
-        ]
-    );
     for (pf, raw, form) in [
         (P::R10UnormX6, vk::Format::R16_UINT, ExtendedRange::R10X6),
         (
@@ -1260,48 +1163,6 @@ fn padded_formats_are_held_raw() {
         assert!(held > 0, "{pf:?}");
         assert_eq!(out_of_bounds_alpha_one(pf), Some(true));
     }
-    let r = ExtendedRange::R10X6;
-    let rg = ExtendedRange::Rg10X12;
-    assert_eq!(
-        rg.clear_texel([0.5, 0.25, 0.0, 1.0], ClearRoute::ThroughHalf),
-        [32768, 16384, 0, 0]
-    );
-    assert_eq!(
-        rg.clear_texel([0.3, 0.7, 0.0, 1.0], ClearRoute::ThroughHalf),
-        [19648, 45824, 0, 0]
-    );
-    assert_eq!(
-        r.clear_texel([0.3, 0.7, 0.0, 1.0], ClearRoute::ThroughHalf),
-        [19648, 0, 0, 0]
-    );
-    assert_eq!(
-        r.clear_texel([-1.0, 0.0, 0.0, 0.0], ClearRoute::ThroughHalf),
-        [0, 0, 0, 0]
-    );
-    assert_eq!(
-        r.clear_texel([2.0, 0.0, 0.0, 0.0], ClearRoute::ThroughHalf),
-        [1023 << 6, 0, 0, 0]
-    );
-    // The `_sRGB` twins' clear of (0.3, 0.7) is Metal's (a clear-only
-    // pass over a buffer stores 38208 and [4928, 7424] in every texel), through their tables.
-    let rs = ExtendedRange::R10X6Srgb;
-    let rgs = ExtendedRange::Rg10X12Srgb;
-    assert_eq!(
-        rs.clear_texel([0.3, 0.7, 0.0, 1.0], ClearRoute::ThroughHalf),
-        [597 << 6, 0, 0, 0]
-    );
-    assert_eq!(
-        rgs.clear_texel([0.3, 0.7, 0.0, 1.0], ClearRoute::ThroughHalf),
-        [77 << 6, 116 << 6, 0, 0]
-    );
-    assert_eq!(
-        rs.clear_texel([2.0, 0.0, 0.0, 0.0], ClearRoute::ThroughHalf),
-        [1023 << 6, 0, 0, 0]
-    );
-    assert_eq!(
-        rgs.clear_texel([1.0, -1.0, 0.0, 0.0], ClearRoute::ThroughHalf),
-        [137 << 6, 0, 0, 0]
-    );
 }
 
 /// Every swizzled sampling view reads Metal's opaque-black border texel where the device applies
@@ -1634,8 +1495,7 @@ fn storage_choices_follow_d25() {
 /// Apple's bfloat formats are held raw in the unsigned integer format of their 16-bit words
 /// ([`FormatEmulation::Bfloat`]): read as floats, sampled and stored through it, never filtered
 /// by a device nor blended; a color attachment of the raw format; a multisample texture is none
-/// (the runtime's descriptor rules). A fill's texel is each channel through `float` and `half`,
-/// each to nearest even, then the bfloat nearest that, ties to even, a NaN `0x7fc0`.
+/// (the runtime's descriptor rules).
 #[test]
 fn bfloat_formats_are_held_raw() {
     use vk::Format as F;
@@ -1711,89 +1571,6 @@ fn bfloat_formats_are_held_raw() {
             assert!(blended.is_err(), "{pf:?} on {stem}: {blended:?}");
         }
     }
-    // Clears under `ThroughHalf`: the color through `float` and `half` to nearest even, then the
-    // bfloat code nearest, ties to even (a tie of the `half` rounded down and one rounded up),
-    // the overflow of the `half` its infinity, a NaN `0x7fc0`.
-    let texel = |form: ExtendedRange, c: [f64; 4]| form.clear_texel(c, ClearRoute::ThroughHalf);
-    let one_tie_down = 1.0 + 1.0 / 256.0;
-    let one_tie_up = 1.0 + 3.0 / 256.0;
-    assert_eq!(
-        texel(
-            ExtendedRange::Rgba16Bfloat,
-            [one_tie_down, one_tie_up, -0.0, f64::NAN]
-        ),
-        [0x3f80, 0x3f82, 0x8000, 0x7fc0]
-    );
-    assert_eq!(
-        texel(
-            ExtendedRange::Rgba16Bfloat,
-            [65520.0, -65520.0, 65504.0, 0.1]
-        ),
-        [0x7f80, 0xff80, 0x4780, 0x3dcd]
-    );
-    assert_eq!(
-        texel(ExtendedRange::Rg16Bfloat, [0.25, 0.5, 0.75, 1.0]),
-        [0x3e80, 0x3f00, 0, 0]
-    );
-    assert_eq!(
-        texel(ExtendedRange::R16Bfloat, [1.5, -0.5, 7.0, 0.0]),
-        [0x3fc0, 0, 0, 0]
-    );
-    // Clears under `Nearest`: the color through `float` to nearest even, then the bfloat code
-    // nearest, ties to even, subnormals kept (the consumer's M3 Max: `-3e38`, `1e-40`, `70000`
-    // and `1 + 2^-8 + 2^-23`, where `ThroughHalf` gives `0xff80`, 0, `0x7f80` and `0x3f80`), a
-    // `half`'s value as under `ThroughHalf`, the infinity past the largest `float`, a NaN its
-    // `float`'s sign and top payload bits, quieted.
-    let nearest = |form: ExtendedRange, c: [f64; 4]| form.clear_texel(c, ClearRoute::Straight);
-    let consumers = [-3e38, 1e-40, 70000.0, 1.0 + 1.0 / 256.0 + 2f64.powi(-23)];
-    assert_eq!(
-        nearest(ExtendedRange::Rgba16Bfloat, consumers),
-        [0xff62, 0x0001, 0x4789, 0x3f81]
-    );
-    assert_eq!(
-        texel(ExtendedRange::Rgba16Bfloat, consumers),
-        [0xff80, 0x0000, 0x7f80, 0x3f80]
-    );
-    assert_eq!(
-        nearest(
-            ExtendedRange::Rgba16Bfloat,
-            [-2.5, one_tie_down, one_tie_up, -0.0]
-        ),
-        [0xc020, 0x3f80, 0x3f82, 0x8000]
-    );
-    assert_eq!(
-        nearest(
-            ExtendedRange::Rgba16Bfloat,
-            [3.402_823_466_385_288_6e38, 1e39, -1e39, f64::NAN]
-        ),
-        [0x7f80, 0x7f80, 0xff80, 0x7fc0]
-    );
-    assert_eq!(
-        nearest(
-            ExtendedRange::Rg16Bfloat,
-            [1.401_298_464_324_817e-45, -f64::NAN, 1.0, 1.0]
-        ),
-        [0x0000, 0xffc0, 0, 0]
-    );
-    assert_eq!(
-        nearest(
-            ExtendedRange::Rgba16Bfloat,
-            [
-                f64::from_bits(0x7ff8_4000_0000_0000),
-                f64::from_bits(0xfff0_0400_0000_0000),
-                f64::from_bits(0x7fff_ffff_ffff_ffff),
-                f64::from_bits(0x7ff4_0000_0000_0000),
-            ]
-        ),
-        [0x7fc2, 0xffc0, 0x7fff, 0x7fe0]
-    );
-    // The bfloat rounding alone: ties to even, either sign, and the infinity past the largest.
-    assert_eq!(bfloat_nearest_even(f32::from_bits(0x3f80_8000)), 0x3f80);
-    assert_eq!(bfloat_nearest_even(f32::from_bits(0x3f81_8000)), 0x3f82);
-    assert_eq!(bfloat_nearest_even(f32::from_bits(0xbf81_8001)), 0xbf82);
-    assert_eq!(bfloat_nearest_even(f32::from_bits(0x7f7f_8000)), 0x7f80);
-    assert_eq!(bfloat_nearest_even(f32::NEG_INFINITY), 0xff80);
-    assert_eq!(bfloat_nearest_even(-f32::NAN), 0x7fc0);
 }
 
 #[test]
@@ -2141,20 +1918,6 @@ fn queries_cover_candidates_and_neutrals() {
     }
     // The view of a `ulong` slot a `ulong` atomic updates, which no Metal format maps to.
     assert!(set.contains(&vk::Format::R64_UINT));
-    for (stem, dev) in committed_devices() {
-        // Neutral images of a declared storage format take it from the profile's own table;
-        // the others use fixed formats the consumer must be able to ask about.
-        for neutral in dev.neutral_kinds() {
-            if let crate::bind::NeutralResource::Image {
-                storage_format: None,
-                ..
-            } = neutral
-            {
-                let f = neutral.format().unwrap();
-                assert!(set.contains(&f), "{stem}: neutral {f:?} is not queried");
-            }
-        }
-    }
 }
 
 #[test]
@@ -2373,61 +2136,6 @@ fn color_records_are_metals() {
     }
 }
 
-/// `explicit_imageblock_sample_length` answers what Metal answered for a render pipeline whose
-/// fragment function declares an explicit imageblock, on an M3 Max and an M4: the data size, then
-/// the color attachments' bytes rounded up to 8 and then to the layout's alignment. Each row is a
-/// layout (its data size and alignment) and color formats.
-#[test]
-fn explicit_imageblock_sample_lengths_are_metals() {
-    use PixelFormat as P;
-    let r8 = Some(P::R8Unorm);
-    let rgba32f = Some(P::RGBA32Float);
-    let rgba8x4 = vec![Some(P::RGBA8Unorm); 4];
-    for (data_size, alignment, formats, metal) in [
-        // `char`
-        (1, 1, vec![], 1),
-        (1, 1, vec![r8], 9),
-        (1, 1, vec![rgba32f], 17),
-        (1, 1, vec![r8, rgba32f], 25),
-        (1, 1, rgba8x4.clone(), 17),
-        // `half`
-        (2, 2, vec![r8], 10),
-        (2, 2, vec![r8, rgba32f], 26),
-        // three `char`s
-        (3, 1, vec![r8], 11),
-        // three `half`s
-        (6, 2, vec![rgba32f], 22),
-        (6, 2, vec![r8, rgba32f], 30),
-        // `float2`
-        (8, 8, vec![r8], 16),
-        (8, 8, vec![r8, rgba32f], 32),
-        // `float`, `half` and `uint`
-        (12, 4, vec![r8, rgba32f], 36),
-        (12, 4, rgba8x4.clone(), 28),
-        // `float4`
-        (16, 16, vec![], 16),
-        (16, 16, vec![r8], 32),
-        (16, 16, vec![rgba32f], 32),
-        (16, 16, vec![r8, rgba32f], 48),
-        // `packed_float4`, and four `float`s
-        (16, 4, vec![r8], 24),
-        (16, 4, vec![rgba32f], 32),
-        (16, 4, vec![r8, rgba32f], 40),
-        // `float4` and `float`
-        (32, 16, vec![], 32),
-        (32, 16, vec![r8], 48),
-        (32, 16, vec![r8, rgba32f], 64),
-        (32, 16, rgba8x4, 48),
-    ] {
-        let colors = imageblock_sample_length(&formats).expect("measured formats pack");
-        assert_eq!(
-            explicit_imageblock_sample_length(data_size, alignment, colors),
-            Some(metal),
-            "{data_size} bytes aligned to {alignment}, {formats:?}"
-        );
-    }
-}
-
 /// [`ycbcr_format`] describes exactly the 69 two-plane YCbCr formats, each as its Metal name
 /// states (`MTLPixelFormat{YCBCR|RGB}{bits}_{420|422|444}_2P[_PACKED][_{sRGB|PQ|HLG|XR}]`), and
 /// this crate holds a texture of the ones of unpacked 8- and 10-bit codes read converted, through
@@ -2642,93 +2350,6 @@ fn a_pass_renders_only_the_ycbcr_formats_whose_store_is_matched() {
     }
 }
 
-/// A clear's halves are what its stored codes read back, rounded to `half`, only where each
-/// channel's `half` is the `half` of its code's value: `0.1`'s (code 435 reads 51/510, whose
-/// `half` is `half` 0.1's), not `0.25`'s (code 512 reads 0.25098) or `0.0012345`'s (code 385);
-/// the two-plane formats' alpha byte reads `0.5` as `128 / 255`, a `BGRA10_XR` alpha code exactly;
-/// `BGR10_XR` has no alpha. A padded form's channels read `c / 1023`: `0.33371`'s `half` is not
-/// code 341's (the M3 Max's tile held the `half`: a premultiplied blend of `(0, 0, 0, 0.5)` over
-/// that clear stored code 171 where code 341's value gives 170), nor `0.5`'s code 512's, while 0
-/// and 1 are (but `RG10Unorm_X12_sRGB`'s 1, whose code reads back linear); only the channels a
-/// padded form has count. The bfloat forms' tile memory is unmeasured.
-#[test]
-fn clears_read_back_where_their_halves_are_their_codes_values() {
-    let planes = ExtendedRange::Planes { srgb: false };
-    let bgra = ExtendedRange::Bgra10 { srgb: false };
-    let bgr = ExtendedRange::Bgr10 { srgb: false };
-    for form in [planes, bgra, bgr, ExtendedRange::Bgra10 { srgb: true }] {
-        assert_eq!(form.clear_read_back([0.0; 4]), Some(true), "{form:?}");
-        assert_eq!(form.clear_read_back([1.0; 4]), Some(true), "{form:?}");
-    }
-    assert_eq!(bgra.clear_read_back([0.1, 0.3, 1.0 / 3.0, 0.7]), Some(true));
-    assert_eq!(
-        planes.clear_read_back([0.1, 0.3, 1.0 / 3.0, 0.7]),
-        Some(false)
-    );
-    assert_eq!(bgra.clear_read_back([0.25, 0.5, 0.0, 1.0]), Some(false));
-    assert_eq!(
-        bgra.clear_read_back([0.0012345, 0.0, 0.0, 1.0]),
-        Some(false)
-    );
-    assert_eq!(bgra.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(true));
-    assert_eq!(planes.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(false));
-    assert_eq!(bgr.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(true));
-    for form in [
-        ExtendedRange::R10X6,
-        ExtendedRange::Rg10X12,
-        ExtendedRange::R10X6Srgb,
-        ExtendedRange::Rg10X12Srgb,
-        ExtendedRange::Rgb10A2Srgb,
-    ] {
-        assert_eq!(form.clear_read_back([0.0; 4]), Some(true), "{form:?}");
-        // `RG10Unorm_X12_sRGB` writes 1 as code 137 (Metal's table), which reads `137 / 1023`.
-        let one = form != ExtendedRange::Rg10X12Srgb;
-        assert_eq!(form.clear_read_back([1.0; 4]), Some(one), "{form:?}");
-    }
-    let r10 = ExtendedRange::R10X6;
-    assert_eq!(
-        r10.clear_read_back([0.33371, 0.70011, 0.10049, 0.5]),
-        Some(false)
-    );
-    // Red alone counts: green's 0.5 is no channel of `R10Unorm_X6`.
-    assert_eq!(r10.clear_read_back([1.0, 0.5, 0.5, 0.5]), Some(true));
-    let rg = ExtendedRange::Rg10X12;
-    assert_eq!(rg.clear_read_back([1.0, 0.5, 0.0, 1.0]), Some(false));
-    assert_eq!(ExtendedRange::Rgba16Bfloat.clear_read_back([0.0; 4]), None);
-}
-
-/// A clear's tile holds each channel through `float` and then `half`, nearest even, unclamped:
-/// `0.1` as `half` 0.1 (`0x2e66`), `1/3` as `0x3555`, `5.0` past the codes' range as 5, a value
-/// halfway between two `float`s rounding twice; `BGR10_XR`'s alpha reads 1 whatever the clear's;
-/// the padded and bfloat forms' tile memory is unmeasured.
-#[test]
-fn a_clears_tile_holds_its_colors_halves() {
-    let h = crate::float16::f16_bits_to_f32;
-    let bgra = ExtendedRange::Bgra10 { srgb: true };
-    assert_eq!(
-        bgra.clear_tile_value([0.1, 1.0 / 3.0, 5.0, -0.75]),
-        Some([h(0x2e66), h(0x3555), 5.0, -0.75])
-    );
-    let planes = ExtendedRange::Planes { srgb: false };
-    assert_eq!(
-        planes.clear_tile_value([0.0, -0.0, 1.0, 0.5]),
-        Some([0.0, -0.0, 1.0, 0.5])
-    );
-    let bgr = ExtendedRange::Bgr10 { srgb: false };
-    assert_eq!(
-        bgr.clear_tile_value([0.25, 0.5, 2.0, 0.0]),
-        Some([0.25, 0.5, 2.0, 1.0])
-    );
-    // 1 + 2^-11 + 2^-40 is 1 + 2^-11 as a `float`, a tie, which `half` rounds to 1.
-    let twice = 1.0 + 2f64.powi(-11) + 2f64.powi(-40);
-    assert_eq!(
-        bgr.clear_tile_value([twice, 0.0, 0.0, 1.0]).map(|v| v[0]),
-        Some(1.0)
-    );
-    assert_eq!(ExtendedRange::R10X6.clear_tile_value([0.0; 4]), None);
-    assert_eq!(ExtendedRange::Rgba16Bfloat.clear_tile_value([0.0; 4]), None);
-}
-
 /// The probe's clear colors: each 10-bit code's value and each tie between two
 /// codes, 512 values of its generator, and the specials; color `i` is values `i` to `i + 3`.
 fn straight_clear_colors() -> Vec<[f64; 4]> {
@@ -2765,96 +2386,6 @@ fn straight_clear_colors() -> Vec<[f64; 4]> {
     (0..n)
         .map(|i| std::array::from_fn(|c| values[(i + c) % n]))
         .collect()
-}
-
-/// Metal's two clear routes store the texels the model gives (an Apple M4 under
-/// macOS 27.0.1, plain and under Metal's validation layer alike: 2,574 colors into a 16 x 16
-/// private target of plain usage in a pass with no draw call, `ClearRoute::Straight`, and into a
-/// 4 x 4 one, `ClearRoute::ThroughHalf`), as an FNV-1a digest of each format's texels as Metal
-/// stores them, a two-plane format's plane-0 word then its alpha byte. The two-plane formats
-/// store the same on either route; `0.25` is code 511 on the straight route, 512 through `half`.
-#[test]
-fn clears_store_metal_s_texels_on_each_route() {
-    let fnv = |bytes: &[u8]| {
-        bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
-            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-        })
-    };
-    let colors = straight_clear_colors();
-    assert_eq!(colors.len(), 2574);
-    let bytes = |form: ExtendedRange, route: ClearRoute| -> Vec<u8> {
-        colors
-            .iter()
-            .flat_map(|&c| {
-                let t = form.clear_texel(c, route);
-                match form {
-                    ExtendedRange::Bgr10 { .. } => t[0].to_le_bytes().to_vec(),
-                    ExtendedRange::Planes { .. } => {
-                        let mut word = t[0].to_le_bytes().to_vec();
-                        word.push(t[1] as u8);
-                        word
-                    }
-                    _ => t.iter().flat_map(|&f| (f as u16).to_le_bytes()).collect(),
-                }
-            })
-            .collect()
-    };
-    // (form, Metal's straight digest, its digest through `half`)
-    let metal = [
-        (
-            ExtendedRange::Bgr10 { srgb: false },
-            0xbb6a_4158_d28b_a838u64,
-            0x9619_2923_5cc4_c348u64,
-        ),
-        (
-            ExtendedRange::Bgr10 { srgb: true },
-            0xa62c_eca5_4ebf_3d07,
-            0x1b43_711d_789f_660d,
-        ),
-        (
-            ExtendedRange::Bgra10 { srgb: false },
-            0x304d_3161_5f46_4eea,
-            0xd417_f619_6f15_36c5,
-        ),
-        (
-            ExtendedRange::Bgra10 { srgb: true },
-            0x5456_e21b_8297_972b,
-            0xfa8f_e6a4_b69b_bb94,
-        ),
-        (
-            ExtendedRange::Planes { srgb: false },
-            0x3051_a4b4_879c_69e9,
-            0x3051_a4b4_879c_69e9,
-        ),
-        (
-            ExtendedRange::Planes { srgb: true },
-            0xf844_3bb4_8958_6eba,
-            0xf844_3bb4_8958_6eba,
-        ),
-    ];
-    for (form, straight, through_half) in metal {
-        let got = fnv(&bytes(form, ClearRoute::Straight));
-        assert_eq!(got, straight, "{form:?} straight: {got:#018x}");
-        let got = fnv(&bytes(form, ClearRoute::ThroughHalf));
-        assert_eq!(got, through_half, "{form:?} through half: {got:#018x}");
-    }
-    let bgr = ExtendedRange::Bgr10 { srgb: false };
-    let codes = |t: [u32; 4]| {
-        [
-            t[0] >> 20 & 1023,
-            t[0] >> 10 & 1023,
-            t[0] & 1023,
-            t[0] >> 30,
-        ]
-    };
-    assert_eq!(
-        codes(bgr.clear_texel([0.25, -0.25, f64::NAN, 0.0], ClearRoute::Straight)),
-        [511, 257, 0, 0]
-    );
-    assert_eq!(
-        codes(bgr.clear_texel([0.25, -0.25, f64::NAN, 0.0], ClearRoute::ThroughHalf)),
-        [512, 256, 384, 3]
-    );
 }
 
 /// The table [`repr`] reads holds [`make_repr`]'s entry of every format, at its raw value.

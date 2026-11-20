@@ -40,10 +40,10 @@ fn a_word_resolve_holds_the_word_and_an_srgb_word_has_none() {
     for word in words() {
         let rules = ColorResolveFormat::word(word).expect("a word resolve");
         assert_eq!(rules.format(), word.word_format(), "{word:?}");
-        assert_eq!(rules.held_word(), Some(word));
+        assert_eq!(rules.word, Some(word));
         assert_eq!(rules.channels(), [None; 4]);
         assert_eq!(rules.raw_format(), rules.format());
-        assert_eq!(rules.written_format(), rules.format());
+        assert_eq!(super::tests::written(rules), rules.format());
         assert_eq!(rules.exact(), word == WordAttachment::Rgb9e5, "{word:?}");
     }
     let srgb = WordAttachment::layout(crate::metal::PixelFormat::R8UnormSRGB).expect("a word");
@@ -58,7 +58,7 @@ fn the_word_modules_are_valid_and_need_nothing_of_a_device() {
     let profiles = committed_profiles().expect("profiles");
     for word in words() {
         let rules = ColorResolveFormat::word(word).expect("a word resolve");
-        let copy = PlanesCopy::for_planes(word.word_format()).expect("a bits copy");
+        let copy = super::tests::bits_copy(word.word_format());
         for source in [ResolveSource::InputAttachment, ResolveSource::Planes(copy)] {
             for samples in [2, 4, 8] {
                 let m = fragment_typed_module(rules, samples, source).expect("module");

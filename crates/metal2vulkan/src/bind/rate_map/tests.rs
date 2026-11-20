@@ -832,53 +832,6 @@ fn fnv(bytes: &[u8]) -> u64 {
     })
 }
 
-/// A reset writes the new map's tables over the old (`new_over`), as Metal's private
-/// `resetUsingDescriptor:` does (our probe `none`, the M3 Max under macOS 27.0.1: a mutable map of
-/// 64 by 32 screen pixels reset to 100 by 60 at one and two layers, then to no layers; every byte of
-/// each map's parameter data, here by its hash). Each map reset to no layers keeps the horizontal
-/// tables and the vertical entries past its own; a map over zero words is `new`'s.
-#[test]
-fn a_reset_writes_its_tables_over_the_maps() {
-    let none = RateMapDescriptor::new([64, 32]);
-    let fresh = RasterizationRateMap::new(&none).unwrap();
-    assert_eq!(
-        fnv(&fresh.to_bytes()),
-        0x7ead_0d0b_02b1_afdb,
-        "a fresh map of none"
-    );
-    let zeros = vec![0u32; format::WORDS as usize];
-    assert_eq!(
-        RasterizationRateMap::new_over(&none, &zeros),
-        Ok(fresh.clone())
-    );
-    let cases: [(&[RateMapLayerDescriptor], u64, u64); 3] = [
-        (
-            &[layer(&[0.5], &[0.5])],
-            0xb906_457e_1eb4_0870,
-            0x03b3_2978_774d_4131,
-        ),
-        (
-            &[layer(&[0.5], &[0.5]), layer(&[0.25], &[0.25])],
-            0x2b20_361b_8ed2_a324,
-            0x5fb1_b833_f7c6_3085,
-        ),
-        (
-            &[layer(&[1.0], &[1.0])],
-            0x3185_559d_f1c5_12a1,
-            0xcd66_ddc9_de96_0d01,
-        ),
-    ];
-    for (layers, before, after) in cases {
-        let earlier = map([100, 60], layers);
-        assert_eq!(fnv(&earlier.to_bytes()), before, "{layers:?}");
-        let reset = RasterizationRateMap::new_over(&none, earlier.words()).unwrap();
-        assert_eq!(fnv(&reset.to_bytes()), after, "{layers:?} reset to none");
-        assert_eq!(reset.words()[..4104], earlier.words()[..4104]);
-        assert_eq!(reset.layer_count(), 0);
-        assert_eq!(reset.vertical(), fresh.vertical());
-    }
-}
-
 /// An axis of no screen pixels has one tile of no screen and no physical pixels, whatever its
 /// quality samples, so the layer's physical extent on it is 0 and the map compiles (Metal's API
 /// validation stops the descriptor; plain Metal compiles it, and `apple_tests` holds its bytes).

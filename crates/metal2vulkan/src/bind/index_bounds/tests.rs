@@ -10,6 +10,12 @@ use crate::bind::status::{ExecutionStatus, StatusReport};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
+/// The byte of the bounds words at which the first draw's `VkDrawIndexedIndirectCommand` lies
+/// (words 8 to 12 of the module's table).
+pub(super) const FIRST_DRAW: u64 = 32;
+/// The byte of the second draw's (words 13 to 17).
+const SECOND_DRAW: u64 = 52;
+
 /// The pool's index bytes in these tests.
 const POOL_BYTES: u32 = 64;
 
@@ -97,7 +103,7 @@ fn ran(pass: &IndexBoundsPass, arguments: &[u32], indices: &[u8], counter: u32) 
     let mut pool = words(&after[2]);
     let status: [u8; 32] = after[3].as_slice().try_into().expect("status");
     let report = ExecutionStatus::decode(&status);
-    let groups = bounds[(IndexBoundsPass::FILL_DISPATCH_OFFSET / 4) as usize];
+    let groups = bounds[Output::FillDispatch as usize];
     if groups > 0 {
         // The indices as bound: the range `pass` names, or 4 bytes nothing reads.
         let bound = match pass.indices_range {
@@ -167,8 +173,8 @@ fn drawn(r: &Ran, indices: &[u8], index_offset: u64, vk_end: u64, wide: bool) ->
             ))
         }
     };
-    let first = command(&r.words, IndexBoundsPass::FIRST_DRAW_OFFSET);
-    let second = command(&r.words, IndexBoundsPass::SECOND_DRAW_OFFSET);
+    let first = command(&r.words, FIRST_DRAW);
+    let second = command(&r.words, SECOND_DRAW);
     assert!(
         first[0] == 0 || second[0] == 0,
         "one draw carries the primitives: {first:?} {second:?}"
@@ -288,10 +294,7 @@ fn a_draw_inside_the_buffer_draws_from_it() {
             metal(&indices, 4, start, count, 100),
             "{count} from {start}"
         );
-        assert_eq!(
-            command(&r.words, IndexBoundsPass::FIRST_DRAW_OFFSET)[0],
-            count
-        );
+        assert_eq!(command(&r.words, FIRST_DRAW)[0], count);
         assert_eq!(r.pool[0], 0, "no reservation");
         assert!(!r.report.index_pool_overflow);
     }
@@ -331,8 +334,8 @@ fn a_draw_past_the_buffer_draws_metals_vertices_from_the_pool() {
                 want,
                 "{size}-byte indices: {count} from {start}"
             );
-            let first = command(&r.words, IndexBoundsPass::FIRST_DRAW_OFFSET);
-            let second = command(&r.words, IndexBoundsPass::SECOND_DRAW_OFFSET);
+            let first = command(&r.words, FIRST_DRAW);
+            let second = command(&r.words, SECOND_DRAW);
             let past = u64::from(start) + u64::from(count) > inside;
             assert_eq!((first[0] != 0, second[0] != 0), (!past, past));
             if past {

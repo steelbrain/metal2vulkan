@@ -1763,82 +1763,11 @@ fn pushed_levels(plan: &BindingPlan, s: &BindState) -> u32 {
     u32::from_le_bytes(w.bytes[i..i + 4].try_into().expect("u32"))
 }
 
-/// A plan's key keeps a bound texture's level count only at a slot whose levels the pipeline
-/// reads (`StorageTextureLevels` or `StorageTextureLevelViews`): a texture another slot samples,
-/// and a used texture (a heap array views level 0 alone), key one level, and a shape with nothing
-/// to project is borrowed.
-#[test]
-fn a_plan_s_key_keeps_levels_only_where_the_pipeline_reads_them() {
-    use crate::bind::{TextureShape, UsedClass, UsedShape};
-    use crate::pipeline::artifact::RuntimeDependency;
-    use crate::pipeline::facts::Mechanism;
-    use std::borrow::Cow;
-
-    let levels = |shape: &TextureShape| match shape {
-        TextureShape::Texture {
-            mipmap_level_count, ..
-        } => *mipmap_level_count,
-        other => panic!("{other:?}"),
-    };
-    let texture = |n: u32| {
-        let mut facts = TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA16Float);
-        facts.usage = TextureUsage::SHADER_READ;
-        facts.mipmap_level_count = n;
-        facts
-    };
-    let mut s = state(Some(3));
-    let table = s.stages.get_mut(&Stage::Kernel).expect("kernel table");
-    table.textures.insert(
-        1,
-        BoundTexture::Texture {
-            facts: texture(5),
-            resource_id: None,
-        },
-    );
-    let mut shape = s.shape();
-    shape.used.insert(
-        7,
-        UsedShape {
-            class: UsedClass::Texture(texture(4).shape()),
-            usage: crate::metal::ResourceUsage::empty(),
-            stages: crate::metal::RenderStages::empty(),
-        },
-    );
-    let at = |shape: &crate::bind::BindShape, index: u32| {
-        levels(&shape.stages[&Stage::Kernel].textures[&index])
-    };
-    let used = |shape: &crate::bind::BindShape| match &shape.used[&7].class {
-        UsedClass::Texture(t) => levels(t),
-        other => panic!("{other:?}"),
-    };
-    assert_eq!((at(&shape, 0), at(&shape, 1), used(&shape)), (3, 5, 4));
-
-    for fact in [
-        RuntimeFact::StorageTextureLevels { slot: tslot(0) },
-        RuntimeFact::StorageTextureLevelViews { slot: tslot(0) },
-    ] {
-        let deps = [RuntimeDependency::new(fact, Mechanism::PushConstant)];
-        let key = shape.for_plan(&deps);
-        assert!(matches!(key, Cow::Owned(_)), "{fact:?}");
-        assert_eq!(
-            (at(&key, 0), at(&key, 1), used(&key)),
-            (3, 1, 1),
-            "{fact:?}"
-        );
-        assert_eq!(key.for_plan(&deps), Cow::Borrowed(key.as_ref()), "{fact:?}");
-    }
-    let key = shape.for_plan(&[]);
-    assert_eq!((at(&key, 0), at(&key, 1), used(&key)), (1, 1, 1));
-    let one = state(Some(1)).shape();
-    assert!(matches!(one.for_plan(&[]), Cow::Borrowed(_)));
-}
-
 /// A level slot binds a texture of any usage at its levels: plain Metal writes a texture made
 /// without `ShaderWrite` at every level, through every write form, as one made with it
 /// (CoreAnimation's blur textures are `ShaderRead | RenderTarget | BlockWritesOnly`),
 /// where the binder bound the neutral there and dropped the writes. Its shape states its levels
-/// whatever the usage, and the plan's key (`BindShape::for_plan`) keeps them only where the
-/// pipeline reads them. A texture with more levels than the views hold is larger than the device's
+/// whatever the usage. A texture with more levels than the views hold is larger than the device's
 /// largest 2D image: refused, naming `maxImageDimension2D`.
 #[test]
 fn level_slots_bind_textures_of_every_usage_the_device_can_hold() {
@@ -1873,16 +1802,6 @@ fn level_slots_bind_textures_of_every_usage_the_device_can_hold() {
         let what = format!("{usage:?}");
         let (three, one) = (with_usage(Some(3), usage), with_usage(Some(1), usage));
         assert_ne!(three.shape(), one.shape(), "{what}");
-        assert_ne!(
-            three.shape().for_plan(&pipe.dependencies),
-            one.shape().for_plan(&pipe.dependencies),
-            "{what}: the pipeline reads the slot's levels"
-        );
-        assert_eq!(
-            three.shape().for_plan(&[]),
-            one.shape().for_plan(&[]),
-            "{what}: a pipeline that reads no levels"
-        );
 
         let plan = pipe.plan(&dev, &three.shape()).expect("plan");
         let writes: Vec<_> = plan

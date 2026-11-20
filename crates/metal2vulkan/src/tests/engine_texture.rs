@@ -375,16 +375,18 @@ fn a_half_texel_read_notes_the_device_nan_encoding_where_the_bound_format_may_ho
         let when = &entries[0].when;
         assert_eq!(when.len(), 1, "{stem}: {when:?}");
         for clause in when {
-            assert!(clause.tests_bound_formats(), "{stem}: {clause:?}");
             for test in &clause.all {
                 assert_eq!(test.key, SpecKey::BoundTexelFormat(texture_slot(2)));
             }
         }
         let holds = |pf: Option<PixelFormat>| {
             when.iter().any(|clause| {
-                clause.holds_of_bound(&|slot| {
-                    assert_eq!(slot, texture_slot(2));
-                    pf.map(bound_texel_format)
+                clause.all.iter().all(|t| match (t.key, pf) {
+                    (SpecKey::BoundTexelFormat(slot), Some(pf)) => {
+                        assert_eq!(slot, texture_slot(2));
+                        (bound_texel_format(pf) & t.mask == t.bits) == t.equal
+                    }
+                    _ => true,
                 })
             })
         };

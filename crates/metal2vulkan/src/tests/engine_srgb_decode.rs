@@ -29,7 +29,7 @@ use crate::metal::texel_format::srgb_twin_on;
 use crate::metal::{self, PixelFormat, TextureType};
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
+use crate::pipeline::sym::{SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
@@ -428,11 +428,13 @@ fn bound_note(specialized: &[SpecializedNote], pf: PixelFormat) -> bool {
         .filter(|s| s.note == PrecisionNote::SrgbTexelDecode)
         .flat_map(|s| &s.when)
         .any(|c| {
-            c.tests_bound_formats()
-                && c.holds_of_bound(&|slot| {
+            c.all.iter().all(|t| match t.key {
+                SpecKey::BoundTexelFormat(slot) => {
                     assert_eq!(slot, TEXTURE);
-                    Some(bound_texel_format(pf))
-                })
+                    (bound_texel_format(pf) & t.mask == t.bits) == t.equal
+                }
+                _ => false,
+            })
         })
 }
 
@@ -698,16 +700,6 @@ fn slot_views(plan: &crate::bind::BindingPlan, slot: SlotRef) -> Vec<crate::bind
         .collect()
 }
 
-/// Whether `p`'s stage notes `PrecisionNote::SrgbTexelDecode` where slot 0 binds a texture of
-/// `pf`, as the runtime reads it at a dispatch (`StageModule::bound_format_clauses`).
-fn notes_bound(p: &ComputePipeline, pf: PixelFormat) -> bool {
-    !p.stage
-        .bound_format_clauses(PrecisionNote::SrgbTexelDecode, &|_| {
-            Some(bound_texel_format(pf))
-        })
-        .is_empty()
-}
-
 /// A slot bound in an 8-bit sRGB format joins the plan's variant exactly where the device holds
 /// the format as its UNORM twin (`metal::texel_format::srgb_twin_on`), from the device's format
 /// features alone. Where the device samples the format the slot joins nothing, every binding of
@@ -733,7 +725,6 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
         };
         for (stem, dev) in devices() {
             let plain = pipeline(&dev, &bc, &inputs(false));
-            assert!(!notes_bound(&plain, PixelFormat::RGBA8Unorm), "{stem}");
             for pf in [
                 PixelFormat::RGBA8UnormSRGB,
                 PixelFormat::BGRA8UnormSRGB,
@@ -769,7 +760,6 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
                             "{what}"
                         );
                     }
-                    assert!(notes_bound(&plain, pf), "{what}");
                     decoded += 1;
                     continue;
                 }
@@ -795,7 +785,6 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
                         .contains(&PrecisionNote::SrgbTexelDecode),
                     "{what}"
                 );
-                assert!(!notes_bound(&variant, pf), "{what}");
                 let a = compile_bitcode(
                     &bc,
                     EntryRef::Name("k"),
@@ -865,7 +854,6 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
             } else {
                 native += 1;
             }
-            assert!(notes_bound(&plain, pf), "{what}");
         }
     }
     assert!(decoded > 0, "no committed profile holds an ASTC sRGB twin");
@@ -904,7 +892,9 @@ fn the_device_s_srgb_decode_converts_to_half_noted() {
         for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::BGRA8UnormSRGB] {
             let plan = p.plan(&dev, &state(Some(pf)).shape()).expect("plan");
             assert!(plan.variant.srgb_textures.is_empty(), "{stem} {pf:?}");
-            let notes = p.stage.precision_notes_under(&plan.specialization);
+            let notes = p
+                .stage
+                .precision_notes_bound(&plan.specialization, &|_| None);
             assert!(
                 notes.contains(&PrecisionNote::HalfTexelConversion),
                 "{stem} {pf:?}: {notes:?}"

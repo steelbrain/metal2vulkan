@@ -721,7 +721,6 @@ impl TessellationFactorBuffer {
 }
 
 impl BindState {
-
     /// The projection of this state that can change a plan: per stage, which slots are bound and
     /// with what kind of resource, whether a buffer has a device address, its per-bind stride, its
     /// length class as the table's [`StageTable::buffer_ranges`] tell it apart and bind-offset
@@ -1943,9 +1942,7 @@ pub struct BindShape {
     pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
-impl BindShape {
-
-}
+impl BindShape {}
 
 /// One stage's slots into a shape key ([`BindShape::key_beside_used`]): the stage, then each
 /// class's count and its slots' shapes in index order, as a state's table and a shape's give them.

@@ -1044,10 +1044,15 @@ fn a_tile_function_recurses_under_its_pipeline_s_depth() {
         d.max_call_stack_depth = k;
         d
     };
-    let key = |k| dev.tile_pipeline_key(&descriptor(StageSource::Function(t.clone()), k));
+    let b = Budget::standard();
+    let key = |k| {
+        let d = descriptor(StageSource::Function(t.clone()), k);
+        dev.compile_tile_pipeline(&d, &b)
+            .unwrap_or_else(|e| panic!("the tile pipeline at {k}: {e}"))
+            .key
+    };
     assert_eq!(key(0), key(1));
     assert_ne!(key(1), key(8));
-    let b = Budget::standard();
     dev.compile_tile_pipeline(&descriptor(StageSource::Function(t.clone()), 8), &b)
         .unwrap_or_else(|e| panic!("the tile pipeline at 8: {e}"));
     let inputs = LowerInputs {

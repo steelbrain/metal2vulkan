@@ -2943,21 +2943,6 @@ impl BindingPlan {
         Ok(t)
     }
 
-    /// What [`rebind_draw_slots_into`](Self::rebind_draw_slots_into) of the slots `slots` works
-    /// out of the plan alone, whatever the state and the commands: each changed buffer slot's
-    /// place among the descriptor ranges, the push fields that read the slots and where they lie,
-    /// and the fixed-function vertex buffers they bind. `None` where the plan reads one of them
-    /// some other way (a device-address slot, a stage's argument or root table, a fixed-function
-    /// binding of a per-bind stride, a texture buffer's texel range, a YCbCr texture's planes, a
-    /// mesh, patch or de-indexed draw, a uniform view a written slot may alias), where that method
-    /// answers `Ok(false)`. Made once, it serves every rebind of the same slots on this plan
-    /// ([`rebind_draw_slots_with`](Self::rebind_draw_slots_with)).
-    pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds> {
-        let mut rebinds = SlotRebinds::default();
-        self.slot_rebinds_into(slots, &mut rebinds)
-            .then_some(rebinds)
-    }
-
     /// [`slot_rebinds`](Self::slot_rebinds) of `slots`, made in `into` in place of what it held,
     /// keeping its lists' room: whether the plan rebinds them so (`into` then holds the same
     /// rebinds `slot_rebinds` answers), else `into` serves no rebind. A caller that makes rebinds
@@ -2972,34 +2957,6 @@ impl BindingPlan {
             }
         }
     }
-
-    /// [`rebind_draw_slots_into`](Self::rebind_draw_slots_into) of the slots `rebinds` was made
-    /// for, by [`slot_rebinds`](Self::slot_rebinds) of this plan: the same commands, the same
-    /// answers, where only the state and the commands are looked at. `Ok(false)` also where the
-    /// commands read a slot some other way (an argument table's bytes or a root table), or a moved
-    /// fixed-function vertex buffer's offset cannot be fetched there. `rebinds` is this plan's, or
-    /// an equal plan's (checked in builds with debug assertions).
-    pub fn rebind_draw_slots_with(
-        &self,
-        rebinds: &SlotRebinds,
-        state: &BindState,
-        commands: &mut DrawCommands,
-    ) -> Result<bool, BindError> {
-        // Made again in a scratch of the thread's, whose lists keep their room from check to
-        // check, so the check allocates nothing past its first; none past the thread's
-        // thread-locals' end (a program's exit handler, which runs after them).
-        #[cfg(debug_assertions)]
-        let _ = REBINDS_MADE_AGAIN.try_with(|again| {
-            let again = &mut *again.borrow_mut();
-            let made = self.slot_rebinds_into(&rebinds.slots, again);
-            assert!(made && again == rebinds, "slot rebinds another plan made");
-        });
-        match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => rebind_with(t, rebinds, state, commands),
-            _ => Ok(false),
-        }
-    }
-
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the

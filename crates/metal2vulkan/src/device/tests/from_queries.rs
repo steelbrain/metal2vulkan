@@ -70,7 +70,7 @@ fn from_queries_derives_one_profile_whatever_the_identity() {
             ],
             "{stem}"
         );
-        assert!(queried.reads_ycbcr_planes_in_place(), "{stem}");
+        assert!(queried.fields().ycbcr_in_place, "{stem}");
     }
 }
 

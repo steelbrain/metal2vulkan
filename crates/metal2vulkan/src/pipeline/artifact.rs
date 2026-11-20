@@ -274,24 +274,6 @@ impl StageModule {
             .collect()
     }
 
-    /// The clauses of `note`'s [`specialized_notes`](Self::specialized_notes) entry that hold
-    /// where a pipeline creates the stage under `specialization` and a draw or dispatch binds
-    /// the values `bound` gives, as [`precision_notes_bound`](Self::precision_notes_bound) reads
-    /// them.
-    pub fn note_clauses_bound(
-        &self,
-        note: PrecisionNote,
-        specialization: &SpecializationKey,
-        bound: &dyn Fn(SpecKey) -> Option<u64>,
-    ) -> Vec<&SpecClause> {
-        self.specialized_notes
-            .iter()
-            .filter(|s| s.note == note)
-            .flat_map(|s| &s.when)
-            .filter(|clause| self.clause_holds(clause, specialization, bound))
-            .collect()
-    }
-
     /// Whether every test of `clause` holds under `specialization`, a constant the key does not
     /// give reading its default, and a key no pipeline's key carries (one the stage reads as data,
     /// a bound sampler's word) reading the value `bound` gives.
@@ -417,30 +399,6 @@ pub struct SpecializedNote {
 pub struct SpecClause {
     /// The tests, sorted and each once; never empty.
     pub all: Vec<SpecTest>,
-}
-
-impl SpecClause {
-    /// Whether every test reads the class of the format bound at a texture slot
-    /// (`SpecKey::BoundTexelFormat`), which no pipeline's key carries: a clause a runtime reads
-    /// at a draw or dispatch, from the textures it binds
-    /// ([`StageModule::bound_format_clauses`]).
-    pub fn tests_bound_formats(&self) -> bool {
-        self.all
-            .iter()
-            .all(|t| matches!(t.key, SpecKey::BoundTexelFormat(_)))
-    }
-
-    /// Whether every test of the bound formats holds where `bound` gives the class of the format
-    /// bound at each slot (`None` where it is not known, of which the test holds); a test of any
-    /// other key holds here.
-    pub(crate) fn holds_of_bound(&self, bound: &dyn Fn(SlotRef) -> Option<u32>) -> bool {
-        self.all.iter().all(|t| match t.key {
-            SpecKey::BoundTexelFormat(slot) => {
-                bound(slot).is_none_or(|v| (v & t.mask == t.bits) == t.equal)
-            }
-            _ => true,
-        })
-    }
 }
 
 /// A test of one specialization constant's value `v`: it holds when `(v & mask == bits) == equal`.

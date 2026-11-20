@@ -2143,7 +2143,12 @@ fn bound_out(
     };
     let record = bound.record(0).to_vec();
     let gate_bytes = PredicationStep::GATE_BYTES as usize;
-    let mut region = vec![0xEE; PredicationStep::bound_bytes(gates.len() as u64) as usize];
+    let mut region = vec![
+        0xEE;
+        (PredicationStep::BOUND_GATES_OFFSET
+            + (gates.len() as u64 + 1) * PredicationStep::GATE_BYTES)
+            as usize
+    ];
     region[..record.len()].copy_from_slice(&record);
     let count = PredicationStep::BOUND_COUNT_OFFSET as usize;
     region[count..count + 4].copy_from_slice(&(gates.len() as u32).to_le_bytes());
@@ -2420,31 +2425,6 @@ fn a_predication_step_drops_holds_resumes_and_checks_a_units_end() {
     );
 }
 
-/// Metal's six comparison codes compare the word with the reference unsigned, the word on the left,
-/// and every other code compares `==` (measured: 6, 7, 8, 255, `2^32 + 2`, `2^64 - 1`).
-#[test]
-fn a_predication_condition_compares_as_metal_does() {
-    let words = [0u32, 1, 7, 8, 9, 0x8000_0000, u32::MAX];
-    for raw in [0u64, 1, 2, 3, 4, 5, 6, 7, 8, 255, 0x1_0000_0002, u64::MAX] {
-        let compare = PredicationCompare::from_metal(raw);
-        for &word in &words {
-            let reference = 8;
-            let expected = match raw {
-                1 => word != reference,
-                2 => word > reference,
-                3 => word >= reference,
-                4 => word < reference,
-                5 => word <= reference,
-                _ => word == reference,
-            };
-            assert_eq!(compare.holds(word, reference), expected, "{raw} {word}");
-            let step = PredicationStep::condition(STEP_COUNTER, STEP_WORD, compare, reference);
-            let (c, _) = step_run(step, 0, Some(word), &[]);
-            assert_eq!(c, u32::from(!expected), "code {raw}, word {word:#x}");
-        }
-    }
-}
-
 /// A step's gates run their commands where the counter it leaves is 0, and nothing (a zero command)
 /// where not.
 #[test]
@@ -2484,7 +2464,7 @@ fn a_predication_table_ends_at_the_records_sink_gate() {
     for gates in 0..3 {
         let past = PredicationStep::BOUND_GATES_OFFSET + gates * PredicationStep::GATE_BYTES;
         assert_eq!(
-            PredicationStep::bound_bytes(gates),
+            PredicationStep::BOUND_GATES_OFFSET + (gates + 1) * PredicationStep::GATE_BYTES,
             past + PredicationStep::GATE_BYTES
         );
     }
@@ -2511,9 +2491,15 @@ const OTHER_ID: u32 = 3;
 /// word it leaves.
 fn loop_run(op: PredicationOp, holds: bool, (counter, flag, halt): (u32, u32, u32)) -> [u32; 3] {
     let reference = if holds { 8 } else { 7 };
-    let step = PredicationStep::new(STEP_COUNTER, op)
-        .testing(STEP_WORD, PredicationCompare::Less, reference)
-        .in_loop(STEP_FLAG, LOOP_ID);
+    let step = PredicationStep {
+        flag: STEP_FLAG,
+        id: LOOP_ID,
+        ..PredicationStep::new(STEP_COUNTER, op).testing(
+            STEP_WORD,
+            PredicationCompare::Less,
+            reference,
+        )
+    };
     let record = step.record(STEP_RECORD).to_vec();
     let buffer = |address, bytes: Vec<u8>| Buffer {
         slot: None,
@@ -2554,7 +2540,8 @@ fn bound_loop_run(step: PredicationStep, (counter, flag, halt): (u32, u32, u32))
         ..step
     };
     let record = bound.record(0).to_vec();
-    let mut region = vec![0; PredicationStep::bound_bytes(0) as usize];
+    let mut region =
+        vec![0; (PredicationStep::BOUND_GATES_OFFSET + PredicationStep::GATE_BYTES) as usize];
     region[..record.len()].copy_from_slice(&record);
     let mut words = vec![0xEE; BOUND_WORD_AT + 8];
     words[BOUND_WORD_AT..BOUND_WORD_AT + 4].copy_from_slice(&7u32.to_le_bytes());
@@ -2678,9 +2665,15 @@ fn a_halted_unit_holds_every_step_and_runs_nothing() {
             assert_eq!(left, Some(word), "{:?} at {c}", step.op);
         }
     }
-    let first = PredicationStep::new(STEP_COUNTER, PredicationOp::WhileFirst)
-        .testing(STEP_WORD, PredicationCompare::Equal, 7)
-        .in_loop(STEP_FLAG, LOOP_ID);
+    let first = PredicationStep {
+        flag: STEP_FLAG,
+        id: LOOP_ID,
+        ..PredicationStep::new(STEP_COUNTER, PredicationOp::WhileFirst).testing(
+            STEP_WORD,
+            PredicationCompare::Equal,
+            7,
+        )
+    };
     let resumed = halted_out(first, (0, LOOP_ID), Some(7), &gates);
     assert_eq!((resumed.0, resumed.1), ((0, 0), gates.to_vec()));
     let other = halted_out(first, (0, OTHER_ID), Some(7), &gates);

@@ -753,9 +753,7 @@ impl SampledLevels {
     }
 }
 
-impl LevelReads {
-
-}
+impl LevelReads {}
 
 /// An emulated mesh function's records: what each of its threadgroups writes to the draw's records
 /// buffer (`SyntheticBinding::MeshRecords`), all of it words.
@@ -913,7 +911,6 @@ pub enum PatchDomain {
 }
 
 impl PipelineInterface {
-
     /// The buffer slots of `stage` (bit `i` for index `i`, below 64) whose form `takes`.
     fn buffers_where(&self, stage: Stage, takes: impl Fn(BufferForm) -> bool) -> u64 {
         let mut slots = 0;

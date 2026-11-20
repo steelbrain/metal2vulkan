@@ -450,10 +450,12 @@ fn a_compensated_draw_runs_its_variant_with_the_states_values() {
             let clamp = [-0.5f32, 1.25];
             let state = BindState {
                 viewport_compensation: Some(
-                    CompensatedViewport::new(compensation, values)
-                        .with_guard(guard)
-                        .with_mirrors(bits)
-                        .with_vertex_clamp(clamp),
+                    CompensatedViewport {
+                        guard,
+                        ..CompensatedViewport::new(compensation, values)
+                    }
+                    .with_mirrors(bits)
+                    .with_vertex_clamp(clamp),
                 ),
                 ..Default::default()
             };

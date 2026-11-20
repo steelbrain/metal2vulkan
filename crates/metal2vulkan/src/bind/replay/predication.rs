@@ -237,7 +237,6 @@ pub enum PredicationCompare {
 }
 
 impl PredicationCompare {
-
     fn code(self) -> u32 {
         match self {
             PredicationCompare::Equal => 0,

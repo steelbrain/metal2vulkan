@@ -1932,8 +1932,7 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
     for (stem, p) in mesh_profiles().into_iter().chain(emulating_profiles()) {
         let dev = device(&stem);
         let l = &p.fields().limits;
-        let emulated = p.emulates_mesh_shading();
-        assert_eq!(emulated, crate::lower::mesh::emulates(&p), "{stem}");
+        let emulated = crate::lower::mesh::emulates(&p);
         let (object, mesh, total) = match emulated {
             true => (
                 l.max_compute_work_group_invocations,
@@ -2364,7 +2363,7 @@ fn the_descriptors_payload_length_sizes_both_stages_payloads() {
     let budget = Budget::standard();
     for (stem, p) in mesh_profiles().into_iter().chain(emulating_profiles()) {
         let dev = device(&stem);
-        let emulated = p.emulates_mesh_shading();
+        let emulated = crate::lower::mesh::emulates(&p);
         let mut d =
             MeshPipelineDescriptor::new(StageSource::Function(function("mesh_outputs_triangles")));
         d.object = Some(StageSource::Function(function("mesh_outputs_object")));

@@ -633,7 +633,7 @@ fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
         };
         assert!(
             (p.stage)
-                .precision_notes_under(&SpecializationKey::new())
+                .precision_notes_bound(&SpecializationKey::new(), &|_| None)
                 .contains(&note),
             "{stem}: {:?}",
             p.stage.precision_notes

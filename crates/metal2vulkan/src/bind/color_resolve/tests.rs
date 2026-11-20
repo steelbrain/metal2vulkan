@@ -9,6 +9,23 @@ use crate::spirv::interp::{run, Buffer, Config, Order, Outcome, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 use std::path::PathBuf;
 
+/// The sample planes' copy that moves the bits of `format`'s texels: the one of its texel's size.
+pub(super) fn bits_copy(format: Format) -> PlanesCopy {
+    let size = |f: Format| f.block().map(|b| b.size);
+    (PlanesCopy::ALL.into_iter())
+        .find(|c| c.moves_bits() && size(c.format()) == size(format))
+        .expect("a bits copy")
+}
+
+/// The format of the view `format`'s result is written through: the raw twin's where it is
+/// written raw, else its own.
+pub(super) fn written(format: ColorResolveFormat) -> Format {
+    match format.written_raw {
+        true => format.raw_format(),
+        false => format.format,
+    }
+}
+
 /// Every format the module docs list: the twin resolve's.
 const CLOSED: [Format; 8] = [
     Format::R8_UNORM,
@@ -189,7 +206,7 @@ fn the_modules_come_numbered_and_refuse_another_count_or_planes() {
         assert!(matches!(refused, Err(Error::Internal(_))), "{samples}");
     }
     for format in representatives() {
-        let copy = PlanesCopy::for_planes(format.format()).expect("copy");
+        let copy = bits_copy(format.format());
         let planes = ResolveSource::Planes(copy);
         assert!(
             fragment_typed_module(format, 4, planes).is_err(),
@@ -239,7 +256,7 @@ fn arithmetic_module(
 ) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b).expect("types");
-    let srgb = (format.srgb() && !format.decodes_on_device())
+    let srgb = (format.srgb() && !format.device_srgb)
         .then(|| SrgbTables::declare(&mut b, t, format, source))
         .transpose()
         .expect("tables");
@@ -460,7 +477,7 @@ fn check(
                 "{:?} written as {:?} x{samples} {source:?} component {component}: {codes:x?} \
                  wrote {word:#x}",
                 format.format(),
-                format.written_format()
+                written(format)
             );
         }
     }
@@ -723,8 +740,8 @@ fn the_device_srgb_form_writes_the_mean_of_the_decoded_samples() {
         let resolve = ColorResolveFormat::of(format)
             .expect("closed")
             .device_srgb();
-        assert!(resolve.decodes_on_device(), "{format:?}");
-        assert_eq!(resolve.written_format(), format, "{format:?}");
+        assert!(resolve.device_srgb, "{format:?}");
+        assert_eq!(written(resolve), format, "{format:?}");
         let source = ResolveSource::InputAttachment;
         let tables = fragment_typed_module(resolve, 4, source).expect("module");
         let table =

@@ -275,12 +275,6 @@ fn a_draw_writes_its_constant_primitive_type() {
         let writes = e.command_writes();
         assert_eq!(writes.operations, CommandWrites::DRAW, "{raw}");
         assert_eq!(writes.primitive_types, types, "{raw}");
-        assert_eq!(
-            writes.may_draw_primitive_type(3),
-            types & 0b1000 != 0,
-            "{raw}"
-        );
-        assert!(!writes.may_draw_primitive_type(5));
     }
     let loaded = specialized(|f| {
         let i32t = f.module().int(32);

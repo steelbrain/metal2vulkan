@@ -339,40 +339,6 @@ fn ranges_listed_apart_join_the_resident_set_and_not_the_shape() {
     assert_eq!(listed.shape(), state.shape());
 }
 
-/// A root table's `R0` points at a resident set uploaded apart, below or above the table, as a
-/// count of 32-byte entries modulo `2^64`; a set not a whole number of entries away is refused.
-#[test]
-fn a_root_table_points_at_a_resident_set_uploaded_apart() {
-    use crate::bind::instantiate::ResidentRange;
-    for (table, set) in [(0x1000u64, 0x2000u64), (0x2000, 0x1000), (0x40, 0x40)] {
-        let fields = RootTable::resident_fields(table, set, 7).unwrap();
-        let first = u64::from_le_bytes(fields[..8].try_into().unwrap());
-        let count = u64::from_le_bytes(fields[8..].try_into().unwrap());
-        assert_eq!(table.wrapping_add(first.wrapping_mul(32)), set);
-        assert_eq!(count, 7);
-    }
-    assert_eq!(RootTable::resident_fields(0x1000, 0x1010, 1), None);
-    // The fields lie where the search reads `R0` and `N`.
-    let table = stage_root_table(
-        &[],
-        2,
-        &[RootEntry {
-            host: 0x9000,
-            guest: 0x4000,
-            size: 64,
-            bind_offset: 0,
-        }],
-    );
-    let at = RootTable::RESIDENT_FIELDS_OFFSET as usize;
-    let first = u64::from_le_bytes(table.bytes[at..at + 8].try_into().unwrap());
-    let count = u64::from_le_bytes(table.bytes[at + 8..at + 16].try_into().unwrap());
-    assert_eq!((first, count), (2, 1));
-    assert_eq!(
-        table.resident_ranges(),
-        vec![ResidentRange::new(0x9000, 0x4000, 64)]
-    );
-}
-
 /// A resident set made apart coalesces as a root table's does, and holds a range exactly where
 /// one of its entries resolves every address of it to the same device address.
 #[test]
@@ -397,50 +363,6 @@ fn a_resident_set_holds_what_its_entries_resolve_alike() {
     let with = set.with([other]);
     assert_eq!(with.len(), 3);
     assert!(with.holds(&other) && with.holds(&own) && with.holds(&placed));
-}
-
-/// What a consumer points a replay preprocess's resident root table at holds the set of its
-/// ranges in their entries' layout, then each entry's unpadded extent, then a zero: the same
-/// set, and the same extents, as the binder lays out after the table it builds of those
-/// allocations, so a table pointed there resolves as the binder's own does.
-#[test]
-fn replay_bytes_are_the_binders_set_then_its_extents() {
-    use crate::bind::{ResidentRange, ResidentSet};
-    // Three allocations, one inside another and one of a length the padding rounds up.
-    let ranges = [
-        ResidentRange::new(0x9000, 0x1_0000_0000, 64),
-        ResidentRange::new(0x9010, 0x1_0000_0010, 16),
-        ResidentRange::new(0x5000, 0x2_0000_0000, 60),
-    ];
-    let (bytes, count) = ResidentSet::replay_bytes(ranges);
-    let set = ResidentSet::new(ranges);
-    assert_eq!(count, set.len());
-    assert_eq!(count, 2);
-    let entries = set.bytes();
-    assert_eq!(&bytes[..entries.len()], &entries[..]);
-    let extents: Vec<u64> = bytes[entries.len()..]
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| u64::from_le_bytes(*c))
-        .collect();
-    assert_eq!(extents, [64, 60, 0]);
-    let allocations = ranges.iter().map(|r| (r.guest, r.length));
-    let entries: Vec<RootEntry> = (set.bytes().as_chunks::<32>().0.iter())
-        .map(|e| {
-            let field = |at: usize| u64::from_le_bytes(e[at..at + 8].try_into().unwrap());
-            RootEntry {
-                host: field(0),
-                guest: field(8),
-                size: field(16),
-                bind_offset: field(24),
-            }
-        })
-        .collect();
-    assert_eq!(
-        extents_bytes(extents_of(allocations, &entries)),
-        bytes[set.bytes().len()..]
-    );
 }
 
 /// Under `BindState::resident_apart` a root table's own resident set is the bound buffers' alone,
@@ -570,39 +492,4 @@ fn list_ranges(rng: &mut Rng, sorted: bool) -> Vec<crate::bind::ResidentRange> {
         ranges.sort_by_key(|range| range.guest);
     }
     ranges
-}
-
-/// The property a consumer's cached parts rest on: the set joined of parts
-/// (`ResidentSet::of_parts`), each made of a run of consecutive ranges of a list, is the set made
-/// of the whole list (`ResidentSet::new`), entry for entry: parts in order, parts whose ranges
-/// interleave, empty parts, shared starts at different hosts (where the order of the list
-/// decides), and records.
-#[test]
-fn a_set_joined_of_parts_is_the_set_of_their_ranges() {
-    use crate::bind::{ResidentPart, ResidentSet};
-    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
-    let mut interleaved = 0;
-    for case in 0..4000 {
-        let ranges = list_ranges(&mut rng, case % 2 == 0);
-        let mut parts = Vec::new();
-        // The greatest start of a range before the part, and whether a part's starts below it.
-        let (mut greatest, mut below) = (0, false);
-        let mut at = 0;
-        while at < ranges.len() {
-            let take = (rng.below(10) as usize).min(ranges.len() - at);
-            let part = &ranges[at..at + take];
-            let starts = part.iter().filter(|range| range.length > 0);
-            below |= starts.clone().any(|range| range.guest < greatest);
-            greatest = starts.map(|range| range.guest).fold(greatest, u64::max);
-            parts.push(ResidentPart::new(part.iter().copied()));
-            at += take;
-        }
-        if rng.below(4) == 0 {
-            parts.push(ResidentPart::new([]));
-        }
-        let want = ResidentSet::new(ranges.iter().copied());
-        assert_eq!(ResidentSet::of_parts(&parts), want, "case {case}");
-        interleaved += usize::from(below);
-    }
-    assert!(interleaved > 1000, "{interleaved} cases interleave");
 }
