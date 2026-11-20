@@ -1590,24 +1590,29 @@ made, with no lock, and never rewritten for layouts.
   before any of that queue's work. `Scheduled` means the last segment is in
   a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
-  "Presenting"). One that waits for a shared event's value not yet reached when its last segment
-  joins a submission stays `Committed` until the value is: the completion thread schedules it, and
-  runs its scheduled handlers, once it sees the signal land or the host set the value, and before
-  it completes where its own completion comes first. Its queue's later command buffers stay
-  `Committed` behind it, waits or none, and are scheduled after it in order. Apple defines `Scheduled` as "All dependencies
-  have been resolved and the command buffer has been scheduled for execution", and Metal applies
-  it so to shared-event waits only: recorded on the M3 Max, a command buffer behind a signal still
-  running reads `Committed` with no handler where it waits for an `MTLSharedEvent`, and `Scheduled`
-  with its scheduled handler run where it waits for an `MTLEvent`, as here; the next command buffer
-  on its queue, which waits for nothing, reads as it does. A command buffer whose
-  segments hold no commands, no event wait and no event signal takes no submission: the submit thread schedules it as it reaches it, and it completes
-  with its queue's command buffer before it, in flight, or at once where that one has completed. Where that one is in a group held, it joins the group, which
-  goes at once, so its completion waits only on submitted work.
+  "Presenting"). One that waits for an event's value whose signal is submitted, of an `Event` or
+  a `SharedEvent`, is scheduled so too, while the GPU still waits for the value: the wait goes to
+  the driver with the submission, and the queue's later command buffers go behind it. Apple's
+  MTLCommandBuffer.h describes `Scheduled` as "All dependencies have been resolved and the command
+  buffer has been scheduled for execution" (lines 47-48), and `encodeWaitForEvent:value:` as a
+  command that "pauses execution of this command buffer until the specified event reaches a given
+  value" (lines 405-406): execution pauses after scheduling. The M3 Max does more for a shared
+  event: recorded there, a command buffer behind a signal still running reads `Committed` with no
+  handler where it waits for an `MTLSharedEvent`, and its queue's next command buffer with it,
+  and `Scheduled` with its handler run where it waits for an `MTLEvent`. No documented Metal
+  states that hold, and rt keeps none, so do not bring it back from a recording: it is an accepted
+  difference (docs/API.md). A wait for a value that neither the host has set nor a submitted
+  signal promises is held by the submit thread, its command buffer `Committed`, until one does:
+  on the one `VkQueue` every queue submits to, a wait submitted ahead of its signal would hold the
+  signal too. `Metrics::event_holds` counts those holds by length. A command buffer whose
+  segments hold no commands, no event wait and no event signal takes no submission: the submit
+  thread schedules it as it reaches it, and it completes with its queue's command buffer before
+  it, in flight, or at once where that one has completed. Where that one is in a group held, it
+  joins the group, which goes at once, so its completion waits only on submitted work.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
   its submission goes to the driver (one that presents a drawable: after, before the completion
-  thread learns of it; one that ends without a submission: once it ends, before it retires; one
-  held for a shared event's value: on the completion thread, once it is reached), with no lock of
-  the runtime's held. In the handler its status is `Scheduled` and its kernel times are
+  thread learns of it; one that ends without a submission: once it ends, before it retires), with
+  no lock of the runtime's held. In the handler its status is `Scheduled` and its kernel times are
   set, and it runs before the command buffer's completed handlers. `wait_until_scheduled` returns
   once the scheduled handlers have returned, as Metal's does: Apple's page for
   `waitUntilScheduled` names both events, the command buffer scheduled and its scheduled

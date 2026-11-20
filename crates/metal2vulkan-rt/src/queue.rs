@@ -5,7 +5,7 @@ use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::kept::Objects;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 /// `MTLCommandQueue`: one FIFO on the submit thread. Every queue submits to the device's one
@@ -32,10 +32,6 @@ pub(crate) struct QueueInner {
     /// the next one's kernel start is placed at the latest, as Metal schedules a queue's command
     /// buffers in order.
     pub(crate) last_scheduled: AtomicU64,
-    /// Its command buffers submitted and held at `Committed` (`Pending::held`), not yet
-    /// scheduled: while any is, a later one of the queue is held behind it, as Metal schedules a
-    /// queue's command buffers in order.
-    pub(crate) held: AtomicUsize,
     /// The GPU run, in nanoseconds, its next command buffer is expected to take
     /// ([`expected_run`](Self::expected_run)); `u64::MAX` before one of its command buffers
     /// retired with its GPU times.
@@ -80,7 +76,6 @@ impl Device {
                 room: Condvar::new(),
                 last_end: AtomicU64::new(0),
                 last_scheduled: AtomicU64::new(0),
-                held: AtomicUsize::new(0),
                 run: AtomicU64::new(u64::MAX),
                 retired: AtomicU64::new(0),
                 counters: core.counters.clone(),

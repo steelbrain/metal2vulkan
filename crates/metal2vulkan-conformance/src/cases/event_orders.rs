@@ -93,6 +93,49 @@ use crate::transcript::{Negative, Node, Observed, Sites, Value};
 /// A wait committed before the signal that meets it.
 pub const CROSS_QUEUE_WAIT: &str = "event-cross-queue-wait";
 
+/// The slug of `docs/API.md`'s accepted difference that says `metal2vulkan-rt` schedules a
+/// command buffer waiting for a shared event's value as it is submitted
+/// ([`shared_wait_scheduled_as_submitted`]).
+const SHARED_WAIT_SCHEDULED_AS_SUBMITTED: &str =
+    "a-command-buffer-that-waits-for-a-shared-event-s-value-is-scheduled-as-it-is-submitted";
+
+/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLSharedEvent` row needs on
+/// `metal2vulkan-rt`: the waiting command buffer's status while the signaller runs may be
+/// `Committed` or `Scheduled`, and its handlers then none or the scheduled one.
+///
+/// **What it rests on**, the accepted difference [`SHARED_WAIT_SCHEDULED_AS_SUBMITTED`] names:
+/// MTLCommandBuffer.h describes `Scheduled` as "All dependencies have been resolved and the
+/// command buffer has been scheduled for execution", and `encodeWaitForEvent:value:` as a command
+/// that "pauses execution of this command buffer until the specified event reaches a given
+/// value", so execution pauses after scheduling. The runtime schedules a waiter whose signal is
+/// submitted as it is submitted, for a shared event as for a plain one, once its submit thread is
+/// free ([`SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE`]). The M3 Max holds it at `Committed` with no
+/// handler run until the value lands, which no documented Metal states.
+///
+/// **It loosens those two sites alone**; the event's value while the signaller runs still
+/// compares exactly.
+fn shared_wait_scheduled_as_submitted() -> Vec<Allowance> {
+    let justified = || Justification::accepted(SHARED_WAIT_SCHEDULED_AS_SUBMITTED);
+    vec![
+        Allowance::new(
+            "case/order/shared-event/waiting/status-while-the-signaller-runs",
+            Loosening::AnyOf(vec![
+                Value::unit_variant("Committed"),
+                Value::unit_variant("Scheduled"),
+            ]),
+            justified(),
+        ),
+        Allowance::new(
+            "case/order/shared-event/waiting/handlers-while-the-signaller-runs",
+            Loosening::AnyOf(vec![
+                Value::Nothing(Negative::RanNothing),
+                Value::Lines(vec![SCHEDULED.to_owned()]),
+            ]),
+            justified(),
+        ),
+    ]
+}
+
 /// Two queues signalling one shared event, in both orders.
 pub const HIGHEST_SIGNAL: &str = "event-highest-signal";
 
@@ -186,6 +229,7 @@ impl Case for EventOrder {
             Shape::WaitBehindRunningSignal => {
                 let mut allowances = vec![crate::replay::shared_memory_notice()];
                 allowances.extend(scheduled_once_the_submit_thread_is_free());
+                allowances.extend(shared_wait_scheduled_as_submitted());
                 allowances
             }
             Shape::HighestSignal | Shape::Held | Shape::SignalBeforeWait => Vec::new(),
@@ -317,8 +361,8 @@ const SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE: &str =
 /// outlasts the reading, the waiting one, its wait already met by that signal, is still
 /// `Committed` with no handler run.
 ///
-/// **It loosens those two sites alone.** The shared event's row is not loosened: the runtime holds
-/// its waiting command buffer until the value is reached, as Metal does.
+/// **It loosens those two sites alone.** The shared event's row has its own declaration
+/// ([`shared_wait_scheduled_as_submitted`]).
 fn scheduled_once_the_submit_thread_is_free() -> Vec<Allowance> {
     let justified = || Justification::accepted(SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE);
     vec![

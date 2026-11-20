@@ -4516,6 +4516,19 @@ each item named states the rule in full.
   buffer whose wait an earlier submission's signal meets stays `Committed`, its scheduled
   handlers not run, for as long as that submission's driver call lasts, where an Apple M3 Max had
   scheduled it while the signalling command buffer still ran.
+- **A command buffer that waits for a shared event's value is `Scheduled` as it is submitted**
+  (`metal2vulkan-rt`'s `CommandBufferStatus::Scheduled`, `Device::new_shared_event`), its
+  scheduled handlers run, while the GPU still waits for the value, as for an `MTLEvent`'s value.
+  Apple's MTLCommandBuffer.h describes `MTLCommandBufferStatusScheduled` as "All dependencies
+  have been resolved and the command buffer has been scheduled for execution" (lines 47-48), and
+  `encodeWaitForEvent:value:` as a command that "pauses execution of this command buffer until
+  the specified event reaches a given value" (lines 405-406): execution pauses after scheduling.
+  An Apple M3 Max with macOS 27.0.1 holds a command buffer that waits for an `MTLSharedEvent`'s
+  value not yet reached at `Committed`, with no scheduled handler run, and its queue's next
+  command buffer with it, until the value lands, and holds none for an `MTLEvent` (the
+  conformance case `event-wait-behind-a-running-signal`). No documented Metal states that hold,
+  so the runtime keeps none. The GPU's order and when each command buffer completes are the same
+  either way; what moves is when the program's threads and handlers see `Scheduled`.
 
 **Process exit**
 

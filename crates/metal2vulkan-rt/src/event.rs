@@ -37,10 +37,6 @@ pub(crate) type Listener = Box<dyn FnOnce(u64) + Send>;
 /// The event itself: what command buffers and the completion thread hold.
 pub(crate) struct EventInner {
     pub(crate) semaphore: vk::Semaphore,
-    /// Made by `newSharedEvent`: a command buffer that waits for a value of it not yet reached
-    /// when it is submitted is scheduled once the value is (`crate::complete`), as Metal holds it
-    /// at `Committed` until then.
-    pub(crate) shared: bool,
     core: Arc<Core>,
     pub(crate) state: Mutex<EventState>,
     /// Signalled whenever the value the host sees rises, and at a loss.
@@ -58,9 +54,6 @@ pub(crate) struct EventState {
     pub(crate) pending: VecDeque<u64>,
     /// In the completion thread's watch list: while signals are pending.
     pub(crate) watched: bool,
-    /// The waits of submitted command buffers held at `Committed` for a value of it
-    /// (`crate::complete`): while there are any, a host set wakes the completion thread.
-    pub(crate) holds: usize,
     listeners: Vec<(u64, Listener)>,
     /// The device was lost while signals were pending: they never come.
     lost: bool,
@@ -71,18 +64,12 @@ impl Device {
     ///
     /// Err: [`Error::Vulkan`] where the semaphore cannot be made.
     pub fn new_event(&self) -> Result<Event, Error> {
-        self.event(false)
-    }
-
-    /// An event, a shared one where `shared`.
-    fn event(&self, shared: bool) -> Result<Event, Error> {
         let core = self.core();
         let semaphore = timeline(&core.device)?;
         core.counters.rise(Gauge::Events);
         Ok(Event {
             inner: Arc::new(EventInner {
                 semaphore,
-                shared,
                 core: Arc::clone(core),
                 state: Mutex::new(EventState {
                     submitted: 0,
@@ -90,7 +77,6 @@ impl Device {
                     observed: 0,
                     pending: VecDeque::new(),
                     watched: false,
-                    holds: 0,
                     listeners: Vec::new(),
                     lost: false,
                 }),
@@ -102,23 +88,21 @@ impl Device {
 
     /// `newSharedEvent`.
     ///
-    /// A command buffer that waits for a value of it is `Scheduled`, with its scheduled handlers
-    /// run, once that value is reached, never while the signal it waits for is still running on
-    /// the GPU; a wait for an [`Event`]'s value is scheduled as its command buffer is submitted.
-    /// Apple defines `MTLCommandBufferStatusScheduled` as "All dependencies have been resolved and
-    /// the command buffer has been scheduled for execution", and Metal applies it so to
-    /// shared-event waits only. Recorded on the M3 Max (`event-wait-behind-a-running-signal`, five
-    /// runs alike), a command buffer committed on another queue behind one whose signal still runs
-    /// (that one `Scheduled`, its signal not landed) reads `Scheduled` with its scheduled handler
-    /// run where it waits for an `MTLEvent`, and `Committed` with no handler run and the value 0
-    /// where it waits for an `MTLSharedEvent`. The next command buffer on its queue, which waits
-    /// for nothing, reads the same as it, six runs of six: so a queue's later command buffers are
-    /// scheduled after a held one here, in order.
+    /// A command buffer that waits for a value of it is `Scheduled` as it is submitted, while the
+    /// GPU still waits for the value, as one that waits for an [`Event`]'s value is: Apple's
+    /// MTLCommandBuffer.h describes `MTLCommandBufferStatusScheduled` as "All dependencies have
+    /// been resolved and the command buffer has been scheduled for execution", and
+    /// `encodeWaitForEvent:value:` as a command that "pauses execution of this command buffer
+    /// until the specified event reaches a given value", so execution pauses after scheduling.
+    /// What differs: the M3 Max (`event-wait-behind-a-running-signal`) holds a command buffer that
+    /// waits for a shared event's value not yet reached at `Committed`, with no scheduled handler
+    /// run, and its queue's next one with it, and holds none for an `MTLEvent`. Documented Metal
+    /// states no such hold, and rt keeps none (docs/API.md, accepted differences).
     ///
     /// Err: [`Error::Vulkan`] where the semaphore cannot be made.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
         Ok(SharedEvent {
-            event: self.event(true)?,
+            event: self.new_event()?,
         })
     }
 }
@@ -156,8 +140,8 @@ impl SharedEvent {
     }
 
     /// `setSignaledValue:`: raises the host's floor to `value`; a value not above it changes
-    /// nothing. The semaphore is never signalled from the host. Held command buffers and host
-    /// waits that the new value meets go on, and listeners it reaches run.
+    /// nothing. The semaphore is never signalled from the host. Segments the submit thread holds
+    /// and host waits that the new value meets go on, and listeners it reaches run.
     pub fn set_signaled_value(&self, value: u64) {
         let inner = &self.event.inner;
         let reached = {
@@ -167,7 +151,7 @@ impl SharedEvent {
             }
             state.floor = value;
             inner.changed.notify_all();
-            state.holds > 0 || state.listeners.iter().any(|(at, _)| *at <= value)
+            state.listeners.iter().any(|(at, _)| *at <= value)
         };
         let core = &inner.core;
         core.work.poke();
@@ -318,13 +302,6 @@ impl EventInner {
         state.pending.clear();
         state.watched = false;
         self.changed.notify_all();
-    }
-
-    /// Whether the value the host sees, its floor or the semaphore's value the completion thread
-    /// has seen, reaches `value`.
-    pub(crate) fn reached(&self, value: u64) -> bool {
-        let state = lock(&self.state);
-        state.observed.max(state.floor) >= value
     }
 
     /// The value the completion thread waits for next: the lowest pending signal.

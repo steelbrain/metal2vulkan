@@ -305,10 +305,6 @@ pub(crate) struct Core {
     /// ([`DeviceOptions::maker`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) maker_test: memory::MakerTest,
-    /// For the device tests: while a test holds it for writing, the completion thread, with work
-    /// in flight, waits at the top of its round, so no completion is seen, as on a loaded host.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) hold_completions: std::sync::RwLock<()>,
     pub(crate) pool: Pool,
     /// The runtime's `vkQueueSubmit2` calls inside the driver, which the block-maker thread waits
     /// out after each of its memory calls.
@@ -726,8 +722,6 @@ impl Device {
             park_region: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             maker_test: options.maker,
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            hold_completions: std::sync::RwLock::new(()),
             pool,
             submit_calls,
             imports,

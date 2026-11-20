@@ -1,15 +1,13 @@
 //! The completion thread: it retires command buffers and uploads as the GPU completes them, runs
-//! their completed handlers, follows the event signals it submitted and runs listeners, schedules
-//! the command buffers held at `Committed` for a shared event's value once it is reached, and ends
+//! their completed handlers, follows the event signals it submitted and runs listeners, and ends
 //! the work in flight at a loss.
 
 use crate::capture::CopyIn;
-use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, Pending};
+use crate::command::{self, CbInner, CommandBufferError, Gpu, Handlers, Pending};
 use crate::counters::Metric;
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
-use crate::queue::QueueInner;
 use crate::submit::{Ended, Finished, Upload};
 use crate::times::{self, Calibration};
 use ash::vk;
@@ -45,12 +43,8 @@ struct DoneState {
     ended: Vec<Retiree>,
     /// Events with submitted signals the completion thread has not yet seen.
     watched: Vec<Arc<EventInner>>,
-    /// Events whose listeners, or whose held command buffers' waits, a host value may reach.
+    /// Events whose listeners a host value may reach.
     fire: Vec<Arc<EventInner>>,
-    /// Submitted command buffers held at `Committed` (`Pending::held`), in their submission order:
-    /// each scheduled once its waits are reached and its queue's held ones before it are
-    /// scheduled, or as it retires.
-    held: Vec<Held>,
     waiting: Waiting,
     /// The wake semaphore's last value.
     woken: u64,
@@ -73,67 +67,6 @@ enum Waiting {
 struct Retiree {
     value: u64,
     item: Item,
-}
-
-impl DoneState {
-    /// `cb`, held at `Committed` with `waits`, taking its scheduled handlers from `handlers`: the
-    /// thread looks at it from its next round.
-    fn hold(
-        &mut self,
-        cb: &Arc<CbInner>,
-        waits: Vec<(Arc<EventInner>, u64)>,
-        handlers: &mut Handlers,
-    ) {
-        for (event, _) in &waits {
-            lock(&event.state).holds += 1;
-        }
-        self.held.push(Held {
-            cb: Arc::clone(cb),
-            waits,
-            scheduled: std::mem::take(&mut handlers.scheduled),
-        });
-    }
-}
-
-/// A command buffer held at `Committed`: its waits for a shared event's value (none for one held
-/// only behind an earlier one of its queue) and its scheduled handlers.
-struct Held {
-    cb: Arc<CbInner>,
-    waits: Vec<(Arc<EventInner>, u64)>,
-    scheduled: Vec<Handler>,
-}
-
-impl Held {
-    /// Whether the value the host sees reaches each of its waits.
-    fn reached(&self) -> bool {
-        (self.waits.iter()).all(|(event, value)| event.reached(*value))
-    }
-}
-
-/// Takes out of `held` the command buffers to schedule now, in order: those whose waits are
-/// reached with no held one of their queue left before them, and those that retire in `retire`,
-/// which are scheduled, where they ran, before they complete. Each event's count of held waits
-/// falls with them; each queue's count of held command buffers falls once each is scheduled.
-fn due(held: &mut Vec<Held>, retire: &[Retiree]) -> Vec<Held> {
-    // The queues with a held command buffer left, by address: a later one of each waits for it.
-    let mut blocked: Vec<*const QueueInner> = Vec::new();
-    let mut due = Vec::new();
-    let mut index = 0;
-    while index < held.len() {
-        let entry = &held[index];
-        let queue = Arc::as_ptr(&entry.cb.queue);
-        let retires = retire.iter().any(|retiree| retiree.is(&entry.cb));
-        if retires || (entry.reached() && !blocked.contains(&queue)) {
-            due.push(held.remove(index));
-        } else {
-            blocked.push(queue);
-            index += 1;
-        }
-    }
-    for (event, _) in due.iter().flat_map(|entry| &entry.waits) {
-        lock(&event.state).holds -= 1;
-    }
-    due
 }
 
 enum Item {
@@ -204,7 +137,6 @@ impl Done {
                 ended: Vec::new(),
                 watched: Vec::new(),
                 fire: Vec::new(),
-                held: Vec::new(),
                 waiting: Waiting::Not,
                 woken: 0,
                 stop: false,
@@ -278,7 +210,7 @@ impl Done {
         watch: Vec<Arc<EventInner>>,
     ) {
         let mut state = self.lock();
-        let mut flight_only = watch.is_empty();
+        let flight_only = watch.is_empty();
         for upload in uploads {
             state.flight.push_back(Retiree {
                 value,
@@ -293,16 +225,7 @@ impl Done {
         }
         for (cb, pending, error) in finished {
             let written = pending.stamps_written();
-            let Pending {
-                gpu,
-                mut handlers,
-                held,
-                ..
-            } = pending;
-            if let Some(waits) = held {
-                state.hold(&cb, waits, &mut handlers);
-                flight_only = false;
-            }
+            let Pending { gpu, handlers, .. } = pending;
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Command {
@@ -331,13 +254,9 @@ impl Done {
             let Pending {
                 value,
                 gpu,
-                mut handlers,
-                held,
+                handlers,
                 ..
             } = pending;
-            if let Some(waits) = held {
-                state.hold(&cb, waits, &mut handlers);
-            }
             let retiree = Retiree {
                 value,
                 item: Item::Command {
@@ -358,8 +277,7 @@ impl Done {
         self.wake(&mut state, &core.device, false);
     }
 
-    /// A host value of `event` may reach some of its listeners, or the waits of command buffers
-    /// held for it.
+    /// A host value of `event` may reach some of its listeners.
     pub(crate) fn fire(&self, core: &Core, event: Arc<EventInner>) {
         let mut state = self.lock();
         state.fire.push(event);
@@ -418,24 +336,6 @@ impl Retiree {
         }
     }
 
-    /// Whether it is `cb`.
-    fn is(&self, cb: &Arc<CbInner>) -> bool {
-        matches!(&self.item, Item::Command { cb: own, .. } if Arc::ptr_eq(own, cb))
-    }
-
-    /// Where it is `cb` and ends with an error: its handlers, which its scheduled handlers join.
-    fn failed(&mut self, cb: &Arc<CbInner>) -> Option<&mut Handlers> {
-        match &mut self.item {
-            Item::Command {
-                cb: own,
-                handlers,
-                error: Some(_),
-                ..
-            } if Arc::ptr_eq(own, cb) => Some(handlers),
-            _ => None,
-        }
-    }
-
     /// In flight at a loss.
     fn lost(mut self) -> Retiree {
         if let Item::Command { error, .. } = &mut self.item {
@@ -484,12 +384,6 @@ pub(crate) fn run(core: Arc<Core>) {
     let mut behind: Option<u64> = None;
     let mut state = done.lock();
     loop {
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        if !state.flight.is_empty() && core.hold_completions.try_read().is_err() {
-            drop(state);
-            drop(core.hold_completions.read());
-            state = done.lock();
-        }
         let mut retire = std::mem::take(&mut state.ended);
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
@@ -575,8 +469,7 @@ pub(crate) fn run(core: Arc<Core>) {
         for event in &fired {
             event.observe(None, &mut fire);
         }
-        let due = due(&mut state.held, &retire);
-        if newly_lost || !retire.is_empty() || !fire.is_empty() || !due.is_empty() {
+        if newly_lost || !retire.is_empty() || !fire.is_empty() {
             state.waiting = Waiting::Not;
             drop(state);
             if newly_lost {
@@ -587,23 +480,6 @@ pub(crate) fn run(core: Arc<Core>) {
             // this round, which sees no completion, running while it is held.
             done.busy.store(true, Ordering::SeqCst);
             core.work.completed();
-            // Each held command buffer whose waits are reached, or that retires now, is scheduled
-            // before any retires, so before it completes. One that retires with an error is not:
-            // its scheduled handlers run as it retires, as a failed submission's do. Its queue's
-            // later command buffers are held behind it until then, its handlers run.
-            for Held { cb, scheduled, .. } in due {
-                let queue = Arc::clone(&cb.queue);
-                match retire.iter_mut().find_map(|retiree| retiree.failed(&cb)) {
-                    Some(handlers) => handlers.scheduled = scheduled,
-                    None => {
-                        cb.scheduled(times::host_time(), !scheduled.is_empty());
-                        if !scheduled.is_empty() {
-                            command::run_scheduled(cb, scheduled);
-                        }
-                    }
-                }
-                queue.held.fetch_sub(1, Ordering::SeqCst);
-            }
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the
             // last calibration, read again first where the period has passed since it, and moved

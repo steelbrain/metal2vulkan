@@ -3090,11 +3090,13 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
     );
 }
 
-/// **The running-signal case's `MTLEvent` reading may be `Committed`.** The case names the
-/// accepted difference that the runtime schedules a command buffer once its submit thread is free
-/// ([`Justification::AcceptedDifference`]): a waiting command buffer still `Committed` with no
-/// handler run, where Metal had scheduled it, is no divergence. The shared event's reading is not
-/// loosened, and a status other than the two is a row.
+/// **The running-signal case's `MTLEvent` reading may be `Committed`, and its `MTLSharedEvent`
+/// reading `Scheduled`.** The case names the accepted difference that the runtime schedules a
+/// command buffer once its submit thread is free ([`Justification::AcceptedDifference`]): a
+/// waiting command buffer still `Committed` with no handler run, where Metal had scheduled it, is
+/// no divergence. It names the one that the runtime schedules a shared event's waiter as it is
+/// submitted: such a waiter `Scheduled` with its handler run, where Metal held it at `Committed`,
+/// is none either. A status other than the two is a row.
 #[test]
 fn a_wait_met_by_a_running_signal_may_read_committed() {
     let case = (crate::cases::event_orders::all().into_iter())
@@ -3141,15 +3143,17 @@ fn a_wait_met_by_a_running_signal_may_read_committed() {
     assert!(found.divergences.is_empty(), "{found:?}");
     assert!(found.bad_allowances.is_empty(), "{found:?}");
 
-    // The shared event's reading is not the declaration's.
+    // The shared event's waiter scheduled as it was submitted, its handler run.
     let shared = transcript(("Scheduled", scheduled()), ("Scheduled", scheduled()));
     let found = compare(&metal, &shared, &allowances, rt);
+    assert!(found.divergences.is_empty(), "{found:?}");
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    // Its status other than the two is a row.
+    let completed = transcript(("Scheduled", scheduled()), ("Completed", scheduled()));
+    let found = compare(&metal, &completed, &allowances, rt);
     assert_eq!(
         paths(&found),
-        [
-            "case/order/shared-event/waiting/handlers-while-the-signaller-runs",
-            "case/order/shared-event/waiting/status-while-the-signaller-runs",
-        ],
+        ["case/order/shared-event/waiting/status-while-the-signaller-runs"],
         "{found:?}"
     );
 
