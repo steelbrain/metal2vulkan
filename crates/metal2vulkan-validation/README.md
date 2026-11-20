@@ -135,11 +135,9 @@ payload a generated object function writes, need none. Nor does a mesh row whose
 vertex or primitive and writes no device memory: it has no effect a stage observes, so it draws
 without rasterization and its case observes the empty output (`"output": {"kind": "none"}`). The Metal oracle draws a case through
 `MTLMeshRenderPipelineDescriptor` and the case's own stage's setters. The engine's candidate
-draws it through the runtime's mesh render pipeline state and `draw_mesh_threadgroups` or
-`draw_mesh_threads`. On a device without `VK_EXT_mesh_shader` the runtime emulates the draw and
-announces `emulated-mesh-draws`. An object case's `threadgroup_memory` sets its arguments'
-lengths: the oracle's through `setObjectThreadgroupMemoryLength:atIndex:`, the candidate's
-through the runtime's `set_object_threadgroup_memory_length`.
+does not draw one: an object or mesh case requires `mesh_render_pipeline`, which no candidate
+runs, so its Metal observation stands with its Vulkan side unsupported. An object case's
+`threadgroup_memory` sets its arguments' lengths through `setObjectThreadgroupMemoryLength:atIndex:`.
 
 Dynamic Metal `threadgroup` arguments are declared through `threadgroup_memory` binding/length
 pairs. Metal binds that exact allocation; Vulkan uses the translator's descriptor-free `Workgroup`
