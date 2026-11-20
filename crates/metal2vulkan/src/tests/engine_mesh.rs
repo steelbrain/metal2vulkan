@@ -803,7 +803,7 @@ fn without_the_extension_a_mesh_pipeline_is_refused() {
                 Some(_) => "mesh_draws_mesh",
                 None => "mesh_draws_grid",
             }));
-            d.object = object.map(&stage);
+            d.object = object.map(stage);
             d.rasterization_enabled = false;
             match dev.compile_mesh_pipeline(&d, &Budget::standard()) {
                 Err(Error::Unsupported(u)) => {
