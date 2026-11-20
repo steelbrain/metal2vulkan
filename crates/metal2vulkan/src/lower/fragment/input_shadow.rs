@@ -36,7 +36,6 @@
 use std::collections::BTreeMap;
 
 use crate::air::abi::{AbiInt, OutputRole, Stage as AbiStage};
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
 use crate::error::{Attachment, Capability, Error, Feature, RuntimeInput, Unsupported};
@@ -209,13 +208,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // tests (see the module docs).
     let stores = planned.values().any(InputShadow::stores);
     if inputs.depth_or_stencil && stores && !declared_early {
-        let dropped = multisampled
-            && cx
-                .profile
-                .fields()
-                .workarounds
-                .contains(&DriverWorkaround::EarlyTestsDropMultisampledImageWrites);
-        if exports || body.discards || body.side_effects || dropped {
+        if exports || body.discards || body.side_effects {
             let color = planned.keys().next().copied().unwrap_or_default();
             return Err(refused(color));
         }

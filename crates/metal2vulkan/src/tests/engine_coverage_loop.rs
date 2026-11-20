@@ -32,7 +32,7 @@
 use std::path::Path;
 
 use crate::budget::Budget;
-use crate::device::{Device, DeviceDescription, DevicePolicy, DriverWorkaround};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs, RuntimeInput, Unsupported};
 use crate::library::Library;
 use crate::metal::PixelFormat;
@@ -109,17 +109,6 @@ fn description(stem: &str) -> DeviceDescription {
 
 fn device(stem: &str) -> Device {
     Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
-}
-
-/// The refusal of a memory writer on a driver that runs it once per covered sample where that
-/// driver would mask its coverage, where `dev`'s profile carries that workaround.
-fn per_sample_defect(dev: &Device) -> Option<Error> {
-    let defect = DriverWorkaround::MemoryWritingFragmentsRunPerSample;
-    dev.profile()
-        .fields()
-        .workarounds
-        .contains(&defect)
-        .then(|| Unsupported::driver_defect(Feature::PixelCoverageAtSampleRate, defect).into())
 }
 
 /// Every committed profile's stem, sorted.
@@ -256,10 +245,9 @@ fn a_coverage_reading_memory_writer_loops_over_its_covered_samples() {
         for samples in [2, 4] {
             let what = format!("{stem} at {samples}");
             let d = render(&lib, function(&lib, COVERAGE), samples, false);
-            let driver_runs = per_sample_defect(&dev).is_some();
             match dev.compile_render_pipeline(&d, &Budget::standard()) {
                 Ok(p) => {
-                    looped += usize::from(!driver_runs);
+                    looped += 1;
                     assert!(!p.graphics.sample_shading, "{what}");
                     assert_eq!(
                         Shape {
@@ -268,8 +256,8 @@ fn a_coverage_reading_memory_writer_loops_over_its_covered_samples() {
                         },
                         Shape {
                             sample_mask: true,
-                            loops: !driver_runs,
-                            find_lsb: !driver_runs,
+                            loops: true,
+                            find_lsb: true,
                             ..Shape::default()
                         },
                         "{what}"
@@ -513,9 +501,8 @@ fn l3(dev: &Device, p: &RenderPipeline, what: &str) {
 /// made), and the sample-qualified varying loops, read at each
 /// pass's sample through `InterpolateAtSample` with no `Sample` decoration, or is refused as
 /// needing the interpolation functions on a device that withholds them. A device that does not
-/// make the memory writers refuses them for what it lacks, never for the loop, except a driver
-/// that runs a memory writer once per covered sample (MoltenVK on Apple's GPU), which refuses them,
-/// and the varying, as its defect, and every other function by its reason.
+/// make the memory writers refuses them for what it lacks, never for the loop, and every other
+/// function by its reason.
 #[test]
 fn the_loop_refuses_each_function_it_does_not_fit_by_its_reason() {
     let Some(lib) = library("coverage_loop") else {
@@ -531,12 +518,7 @@ fn the_loop_refuses_each_function_it_does_not_fit_by_its_reason() {
     for stem in stems() {
         let dev = device(&stem);
         let fits = COV_FITS.map(|f| coverage_loop_pipeline(&dev, &lib, COV_COVER, f));
-        let defect = per_sample_defect(&dev);
-        if let Some(defect) = &defect {
-            for (f, made) in COV_FITS.iter().zip(&fits) {
-                assert_eq!(made.as_ref().map(|_| ()), Err(defect), "{f} on {stem}");
-            }
-        } else if fits.iter().any(Result::is_err) {
+        if fits.iter().any(Result::is_err) {
             for (f, made) in COV_FITS.iter().zip(&fits) {
                 match made {
                     Ok(_) => {}

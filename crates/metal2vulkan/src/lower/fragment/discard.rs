@@ -43,37 +43,6 @@
 //! operations. Demote needs no guard: Vulkan helper invocations have no memory side effects and
 //! their outputs are discarded.
 //!
-//! **A discard before the storage writes, on Apple's compiler**. Where a fragment function discards
-//! (`discard_fragment()`, which SPIRV-Cross writes for both a demote and a terminate), then writes
-//! a texture, samples a texture through an argument buffer, and calls a `[[clang::optnone]]`
-//! function (SPIRV-Cross's `spvFAdd` for an `OpFAdd` decorated `NoContraction`) in a branch only
-//! discarded threads enter, Apple's compiler drops the texture writes of every live thread of a
-//! simdgroup (8 by 4 pixels) holding a discarded thread: measured in plain Metal on an M4 with
-//! macOS 27.0.1 (probes: MoltenVK's MSL of a storage-form fragment of our own lost its writes in
-//! whole 8-by-4 blocks; without the sample, with the `optnone` call plain, in straight-line code or
-//! in a branch live threads enter too, with direct binding, or with the discard recorded and taken
-//! after the write, every write landed, and color outputs landed in every form). MoltenVK binds
-//! through argument buffers, and on an Apple GPU it carries
-//! `DriverWorkaround::DiscardDropsSimdgroupStores`. There a function meets the
-//! defect ([`late_discards`]) where it samples (`sample` at any LOD, or `gather`), and after a site
-//! that would discard at once (a demote; a terminate outside an interlock, since inside one it
-//! records the discard and returns to the entry) it computes or returns a floating-point value (the
-//! lowering may decorate such arithmetic `NoContraction`: `x + -0.0` rounds every narrowed value
-//! and color write) and writes storage: a store, atomic or image write (buffer stores and atomics
-//! are not measured, and are counted), or the storage images its entry writes at its returns (a
-//! storage-form color, an imageblock, a shader-side stencil's shadow, an in-shader depth test's
-//! stand-in). A function that writes colors alone keeps its forms. In such a function those sites
-//! are predicated where predication holds (no store, atomic, image write or non-quad subgroup
-//! operation after such a site): the discarded invocation runs on, as Metal's discarded thread
-//! does, a lane of its quad, its outputs dropped and its storage writes at the returns skipped, and
-//! it is killed once past them, after the critical section. Its census names its discards
-//! `fragment.discard.deferred`. Where some such site cannot be predicated (the side-effect guard,
-//! is not threaded through the access and texture emitters yet), the function keeps its forms and
-//! records `PrecisionNote::DiscardDropsSimdgroupStores`: its storage writes may be lost as the
-//! defect loses them. The defect needs no discard: the quad helpers past a primitive's edges meet
-//! it alone, and the emitted module keeps every helper invocation, a demoted one included, out of
-//! the branches that hold such a call where that is exact (`spirv::helper_branches`).
-//!
 //! **A quad of helpers alone**. Metal drops a quad whose every thread is discarded from the
 //! simdgroup. Vulkan leaves that to the implementation: one whose four invocations are all helpers
 //! "may" be terminated, and under `RequireFullQuadsKHR` lavapipe keeps such a quad a lane of a
@@ -96,7 +65,6 @@ use crate::air::ir::{
 use crate::budget::Meter;
 use crate::device::requirements::VkFeature;
 use crate::device::subgroup::OpBits;
-use crate::device::DriverWorkaround;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::select::SelectCx;
 use crate::lower::simd::uniform::Uniformity;
@@ -127,9 +95,6 @@ impl Reach {
     const TANGLED: u8 = 1;
     const NON_QUAD: u8 = 2;
     const SIDE_EFFECT: u8 = 4;
-    /// A floating-point value computed or returned: where the lowering may emit arithmetic
-    /// decorated `NoContraction` (`late_discards`).
-    const FLOAT: u8 = 8;
 
     fn has(self, bit: u8) -> bool {
         self.0 & bit != 0
@@ -159,29 +124,11 @@ fn is_thread_ptr(cx: &SelectCx<'_>, v: Value) -> bool {
         })
 }
 
-/// Whether type `ty` holds a floating-point value (a scalar, or one in a vector, array or
-/// struct).
-fn floating(cx: &SelectCx<'_>, ty: TypeId) -> bool {
-    match cx.entry.module.types().get(ty) {
-        Some(Type::Half | Type::BFloat | Type::Float | Type::Double) => true,
-        Some(Type::Vector { elem, .. } | Type::Array { elem, .. }) => floating(cx, *elem),
-        Some(Type::Struct { fields, .. }) => fields.iter().any(|&f| floating(cx, f)),
-        _ => false,
-    }
-}
-
 /// What instruction `id` itself contributes.
 fn contribution(cx: &SelectCx<'_>, id: InstId, inst: &Inst) -> Reach {
     let mut r = 0u8;
     if cx.values.inst(id).is_some_and(|v| cx.tangled.contains(&v)) {
         r |= Reach::TANGLED;
-    }
-    let returned = match inst.kind {
-        InstKind::Ret(Some(v)) => cx.value_ty(v).is_some_and(|t| floating(cx, t)),
-        _ => false,
-    };
-    if returned || floating(cx, inst.ty) {
-        r |= Reach::FLOAT;
     }
     r |= match &inst.kind {
         InstKind::Store { ptr, .. } if !is_thread_ptr(cx, *ptr) => Reach::SIDE_EFFECT,
@@ -380,12 +327,6 @@ pub(super) struct DiscardPlan {
     pub forms: BTreeMap<InstId, DiscardForm>,
     pub quad_exits: BTreeSet<InstId>,
     pub counted_before: bool,
-    /// The sites that would discard at once were predicated against the store-dropping defect
-    /// ([`late_discards`]).
-    pub deferred: bool,
-    /// The function meets the store-dropping defect and some such site could not be predicated:
-    /// it keeps its forms (`PrecisionNote::DiscardDropsSimdgroupStores`).
-    pub exposed: bool,
     /// The side effects a predicated site reaches, each run only where the invocation was not
     /// discarded ([`guarded`]).
     pub guarded: BTreeSet<InstId>,
@@ -529,53 +470,6 @@ fn quad_exits_hold(
     Ok(held)
 }
 
-/// Whether the function meets the store-dropping defect (the module docs): its driver has
-/// `DriverWorkaround::DiscardDropsSimdgroupStores`; it samples; a floating-point value is
-/// computed or returned after some site of `exposed` (each with what is reachable after it),
-/// where the lowering may emit the `NoContraction` arithmetic the defect needs; and a storage
-/// write follows such a site: a store, atomic or image write, or one the entry makes at its
-/// returns ([`stores_at_return`]).
-fn late_discards(cx: &SelectCx<'_>, body: &Body, exposed: &[(InstId, Reach)]) -> bool {
-    cx.profile
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::DiscardDropsSimdgroupStores)
-        && exposed.iter().any(|(_, r)| r.has(Reach::FLOAT))
-        && (stores_at_return(cx) || exposed.iter().any(|(_, r)| r.has(Reach::SIDE_EFFECT)))
-        && samples(body)
-}
-
-/// Whether the function writes storage images at its returns, past every discard site: a color
-/// attachment it writes in the storage form, its imageblock, a shader-side stencil's shadow, or an
-/// in-shader depth test's stand-in.
-fn stores_at_return(cx: &SelectCx<'_>) -> bool {
-    let fp = &cx.families.fragment;
-    fp.fetch
-        .values()
-        .any(|c| c.writes && !c.view.stores_nothing())
-        || fp.imageblock.is_some()
-        || fp.stencil.is_some()
-        || fp.depth_test.is_some()
-}
-
-/// Whether the function samples a texture through a sampler (`sample`, at any LOD or with
-/// gradients, or `gather`), which the store-dropping defect needs ([`late_discards`]).
-fn samples(body: &Body) -> bool {
-    body.insts.values().any(|inst| match &inst.kind {
-        InstKind::Call(call) => matches!(
-            &call.callee,
-            Callee::Air {
-                op: AirIntrinsic::Texture(t),
-                ..
-            } if matches!(
-                t.op,
-                TexOp::Sample { .. } | TexOp::SampleGrad { .. } | TexOp::Gather { .. }
-            )
-        ),
-        _ => false,
-    })
-}
-
 /// Decide the form of every discard site in `sites`, and where whole quads exit. `interlocked`: the
 /// function runs inside an interlock.
 pub(super) fn plan(
@@ -663,34 +557,6 @@ pub(super) fn plan(
             .into());
         }
         planned.forms.insert(site, form);
-    }
-    // On a driver whose compiler drops a simdgroup's live threads' storage writes where one of
-    // them discards, a function that meets the defect discards no thread before those writes
-    // (the module docs): each site that would discard at once (a demote, or a terminate outside
-    // an interlock; inside one a terminate records the discard and returns to the entry) is
-    // predicated where that holds, and else the function keeps its forms, recorded.
-    let exposed: Vec<(InstId, Reach)> = placed
-        .iter()
-        .zip(&after)
-        .filter(|((site, _), _)| match planned.forms.get(site) {
-            Some(DiscardForm::Demote) => true,
-            Some(DiscardForm::Terminate) => !interlocked,
-            _ => false,
-        })
-        .map(|(&(site, _), &r)| (site, r))
-        .collect();
-    if late_discards(cx, body, &exposed) {
-        // A side effect after a site is guarded; a non-quad subgroup operation stops the
-        // predicate (the module docs).
-        let held = exposed.iter().all(|(_, r)| !r.has(Reach::NON_QUAD));
-        if held {
-            for (site, _) in exposed {
-                planned.forms.insert(site, DiscardForm::Predicate);
-            }
-            planned.deferred = true;
-        } else {
-            planned.exposed = true;
-        }
     }
     // Every side effect a predicated site reaches runs only where the invocation was not
     // discarded. No such site reaches a non-quad subgroup operation here, so no asynchronous

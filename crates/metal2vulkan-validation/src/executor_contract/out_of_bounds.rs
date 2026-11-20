@@ -447,13 +447,6 @@ pub fn containment(
 ) -> Result<Contained, String> {
     let ModuleFacts { stage, slots, .. } = *module;
     let robust = robust_check(profile)?;
-    // A descriptor view's atomic is checked in the shader where the driver's robustness leaves
-    // buffer atomics uncontained (`DeviceProfile::checks_atomics_in_shader`).
-    let atomic_check = if profile.checks_atomics_in_shader() {
-        Check::Shader
-    } else {
-        robust
-    };
     let slot = |class, index| {
         slots
             .get(&SlotRef {
@@ -502,7 +495,7 @@ pub fn containment(
                     BufferForm::Descriptor(view) => {
                         let (form, check) = match view {
                             DescriptorView::Storage if atomic => {
-                                (ContainmentForm::BufferAtomic, atomic_check)
+                                (ContainmentForm::BufferAtomic, robust)
                             }
                             DescriptorView::Storage => (ContainmentForm::StorageBuffer, robust),
                             DescriptorView::UniformWords | DescriptorView::UniformVec4 => {
@@ -678,8 +671,8 @@ pub fn containment(
 }
 
 /// The check `profile`'s leg gives every access its compiled modules leave to the device's buffer
-/// robustness (the two encodings): a descriptor view's loads and stores (and atomics, unless
-/// `DeviceProfile::checks_atomics_in_shader`) and fixed-function vertex input.
+/// robustness (the two encodings): a descriptor view's loads, stores and atomics and
+/// fixed-function vertex input.
 /// [`Check::Robust2`] under `robustBufferAccess2`, [`Check::Robust`] under `robustBufferAccess`
 /// alone, and [`Check::Shader`] without buffer robustness; `Err` for a containment validation
 /// never compiles (`Containment::UnsafeOff`) or does not know. The only source of

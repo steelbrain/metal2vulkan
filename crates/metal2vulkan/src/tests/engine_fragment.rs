@@ -207,7 +207,7 @@ fn simd_after_discard(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) {
 /// The `if !discarded` selections of `m`: conditional branches on the negation of a load of a
 /// `Private` variable, as the guard of a side effect a predicated site reaches is written.
 fn discard_guards(m: &TypedModule) -> usize {
-    use crate::spirv::ir::{BinOp, StorageClass, UnOp, ValueOrigin};
+    use crate::spirv::ir::{StorageClass, UnOp, ValueOrigin};
     let defs: std::collections::HashMap<_, _> = m
         .blocks()
         .iter()
@@ -224,16 +224,9 @@ fn discard_guards(m: &TypedModule) -> usize {
     let loaded = |v| matches!(defs.get(&v), Some(Inst::Load { ptr, .. }) if private(*ptr));
     let not_discarded =
         |v| matches!(defs.get(&v), Some(Inst::Unary { op: UnOp::LogicalNot, a }) if loaded(*a));
-    // Or the predicate and'ed with "not a helper" (`spirv::helper_branches`), which a guard takes
-    // on MoltenVK where its arm calls a routine SPIRV-Cross writes `optnone` code in.
     m.blocks()
         .iter()
-        .filter(|b| {
-            matches!(&b.term, Terminator::CondBranch { cond, .. }
-                if not_discarded(*cond)
-                    || matches!(defs.get(cond), Some(Inst::Binary { op: BinOp::LogicalAnd, a, .. })
-                        if not_discarded(*a)))
-        })
+        .filter(|b| matches!(&b.term, Terminator::CondBranch { cond, .. } if not_discarded(*cond)))
         .count()
 }
 
@@ -278,17 +271,14 @@ fn predication_guards_the_side_effects_after_a_site() {
 /// demote, as no whole-quad exit can be placed on a profile without fragment quad operations. A
 /// device that demotes (`moltenvk-m3`, `intel-arl-anv`) demotes each and guards nothing; the
 /// simdgroup sum, which counts the helpers Metal runs, is refused needing `shaderQuadControl`
-/// where the device lacks it (`moltenvk-m3`), as only full quads give those helpers. No module
-/// defers a discard (`fragment.discard.deferred`) or records
-/// `PrecisionNote::DiscardDropsSimdgroupStores`. Every module passes L3.
+/// where the device lacks it (`moltenvk-m3`), as only full quads give those helpers. Every module
+/// passes L3.
 #[test]
 fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
     use crate::spirv::ir::ValueOrigin;
     let Some(bc) = fixture("rch_guarded_effects") else {
         return;
     };
-    let noted = PrecisionNote::DiscardDropsSimdgroupStores;
-    let deferred = "fragment.discard.deferred";
     // (entry, its side effects after the discard)
     let cases = [
         ("rch_guarded_store", 1),
@@ -363,12 +353,6 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
                 assert!(zero_merged, "{what}: no merge of the atomic's result");
             }
             let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(
-                !a.strategies.entries.contains_key(deferred),
-                "{what}: {:?}",
-                a.strategies.entries.keys().collect::<Vec<_>>()
-            );
-            assert!(!a.precision.contains(&noted), "{what}: the note");
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         }
     }
@@ -5339,93 +5323,6 @@ fn a_blended_extended_range_output_records_its_blend_note() {
         );
     }
     assert!(checked > 0, "no interlock profile made the storage form");
-}
-
-/// The selection headers of `m` whose condition or selector asks whether the invocation is a
-/// helper, as `spirv::helper_branches` writes it: the condition or'ed with
-/// `OpIsHelperInvocationEXT`, and'ed with its negation, or a selector chosen by it.
-fn helper_guards(m: &TypedModule) -> usize {
-    use crate::spirv::ir::{BinOp, UnOp};
-    let defs: std::collections::HashMap<_, _> = m
-        .blocks()
-        .iter()
-        .flat_map(|b| &b.insts)
-        .filter_map(|n| n.result.map(|r| (r, &n.inst)))
-        .collect();
-    let helper = |v| matches!(defs.get(&v), Some(Inst::IsHelperInvocation));
-    let not_helper =
-        |v| matches!(defs.get(&v), Some(Inst::Unary { op: UnOp::LogicalNot, a }) if helper(*a));
-    m.blocks()
-        .iter()
-        .filter(|b| match &b.term {
-            Terminator::CondBranch { cond, .. } => match defs.get(cond) {
-                Some(Inst::Binary {
-                    op: BinOp::LogicalOr,
-                    b: x,
-                    ..
-                }) => helper(*x),
-                Some(Inst::Binary {
-                    op: BinOp::LogicalAnd,
-                    b: x,
-                    ..
-                }) => not_helper(*x),
-                _ => false,
-            },
-            Terminator::Switch { sel, .. } => {
-                matches!(defs.get(sel), Some(Inst::Select { cond, .. }) if helper(*cond))
-            }
-            _ => false,
-        })
-        .count()
-}
-
-/// A selection whose condition every invocation of a draw computes alike (a constant block's flag)
-/// holds no branch only helper invocations take, so an `optnone` call in its arm is neither guarded
-/// nor noted. The owned fixture `rch_uniform_branch` divides a coordinate by a texture's size and
-/// takes the high word of a product (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes
-/// through its `optnone` `spvMulExtended`) in a branch on a constant block's flag, then samples
-/// the texture at the coordinate and writes the sample and the product to a buffer. On
-/// `moltenvk-m3` the module holds the product, and no helper census entry, no guard, no
-/// `HelperBranchDropsSimdgroupStores`, and L3.
-#[test]
-fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
-    use crate::spirv::ir::BinOp;
-    let Some(bc) = fixture("rch_uniform_branch") else {
-        return;
-    };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    let what = "rch_uniform_branch on moltenvk-m3";
-    let inputs = LoweringInputs::new();
-    let (_, m) = typed_module_with(&bc, "rch_uniform_branch", &p, &inputs)
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let a = compile_with(&bc, "rch_uniform_branch", &p, &inputs)
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let helper: Vec<_> = a
-        .strategies
-        .entries
-        .keys()
-        .filter(|k| k.starts_with("fragment.helper"))
-        .collect();
-    let products = m
-        .blocks()
-        .iter()
-        .flat_map(|b| &b.insts)
-        .filter(|n| {
-            matches!(
-                n.inst,
-                Inst::Binary {
-                    op: BinOp::UMulExtended,
-                    ..
-                }
-            )
-        })
-        .count();
-    assert_eq!(products, 1, "{what}: the products");
-    assert!(helper.is_empty(), "{what}: {helper:?}");
-    assert_eq!(helper_guards(&m), 0, "{what}");
-    assert!(!a.precision.contains(&noted), "{what}: the note");
-    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
 }
 
 /// The opcodes of every instruction in `words`, and the capabilities it declares.

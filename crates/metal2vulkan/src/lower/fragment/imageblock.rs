@@ -64,7 +64,6 @@ use crate::air::abi::{ImageblockArg, ImageblockKind, Member, OutputRole, StructI
 use crate::air::container::Hash256;
 use crate::air::ir::{ArgIdx, Type, TypeId as AirTypeId, Value};
 use crate::device::requirements::VkFeature;
-use crate::device::DriverWorkaround;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -150,10 +149,6 @@ pub struct ImageblockPlan {
     /// The module declares early fragment tests, which the function does not, so that a depth or
     /// stencil test the fragment fails drops its write as Metal's does ([`plan_tests`]).
     pub early_tests: bool,
-    /// The module declares no early fragment tests, which the function does: its draws test
-    /// before its write as each one's plan chooses, on a driver that would drop its writes under
-    /// early tests ([`plan_tests`]).
-    pub late_tests: bool,
 }
 
 /// An upper estimate of the words one view's members add (each leaf read or written, and a
@@ -522,16 +517,8 @@ fn declared_early(cx: &SelectCx<'_>) -> bool {
 ///   early tests (where only a discard kept them away, `early_variant`), and one whose depth test
 ///   acts the variant that runs the draw's depth test itself, before the write
 ///   (`depth_test`), and its stencil test too where that acts (`bind::graphics`).
-///
-/// A driver that drops every image write of an early-tests fragment shader in a pass of more than
-/// one sample (`DriverWorkaround::EarlyTestsDropMultisampledImageWrites`, MoltenVK on Apple's
-/// GPU) takes no early tests at more than one sample: the function's draws test in the shader
-/// there, and one that declares early tests itself is refused as that defect.
 fn plan_tests(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
-    let defect = DriverWorkaround::EarlyTestsDropMultisampledImageWrites;
-    let drops = cx.inputs.multisampled && cx.profile.fields().workarounds.contains(&defect);
-    let declared = declared_early(cx);
-    if declared && !drops {
+    if declared_early(cx) {
         return Ok(false);
     }
     let outputs = &cx.entry.ep.outputs;
@@ -545,20 +532,6 @@ fn plan_tests(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
     let exported = exports.depth.is_some() || exports.stencil.is_some() || exports.mask.is_some();
     let body = super::fetch::body_facts(cx);
     let only_outputs = !exported && !body.side_effects;
-    if declared {
-        // Metal tests such a function early. One whose only effects are its outputs and its
-        // write, which does not discard, leaves the attachments under late tests as under early
-        // ones, so where the driver's defect would drop its writes the module declares none and
-        // its draws test before the write as below. Another (a discard, an export, or other
-        // memory writes after its early tests) has no form here.
-        if !only_outputs || body.discards {
-            return Err(Unsupported::driver_defect(Feature::Imageblocks, defect).into());
-        }
-        if let Some(plan) = cx.families.fragment.imageblock.as_mut() {
-            plan.late_tests = true;
-        }
-    }
-    let only_outputs = only_outputs && !drops;
     let fp = &cx.families.fragment;
     // A framebuffer fetch's storage form that declares early tests holds the function to them,
     // which keeps the write Metal's: it declares them only where the function would here.
@@ -572,21 +545,13 @@ fn plan_tests(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
         RuntimeFact::TestedStorageWrites { early_variant, .. } => Some(early_variant),
         _ => None,
     });
-    match stated {
-        // The storage form's early-tests variant (whose function writes no other memory and
-        // exports nothing) would lose this write to the driver's defect.
-        Some(true) if drops => {
-            return Err(Unsupported::driver_defect(Feature::Imageblocks, defect).into());
-        }
-        Some(_) => {}
-        None => {
-            cx.facts.insert(RuntimeFact::TestedStorageWrites {
-                early_tests: only_outputs && cx.inputs.read_only_tests,
-                early_variant: only_outputs,
-            });
-            if cx.inputs.shader_tests && cx.families.fragment.depth_test.is_none() {
-                super::depth_test::plan(cx, exports)?;
-            }
+    if stated.is_none() {
+        cx.facts.insert(RuntimeFact::TestedStorageWrites {
+            early_tests: only_outputs && cx.inputs.read_only_tests,
+            early_variant: only_outputs,
+        });
+        if cx.inputs.shader_tests && cx.families.fragment.depth_test.is_none() {
+            super::depth_test::plan(cx, exports)?;
         }
     }
     Ok(stated.is_none() && only_outputs && cx.inputs.read_only_tests)

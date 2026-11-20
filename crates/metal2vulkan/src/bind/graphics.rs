@@ -2384,17 +2384,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     }
     // The object function's arena with those lengths, within its stage's workgroup memory limit.
     if let (Some((static_bytes, payload)), Some(regions)) = (object_arena, object_regions) {
-        crate::lower::mesh::stage_workgroup_limit(
-            Stage::Object,
-            profile,
-            payload.map(u64::from),
-            0,
-        )
-        .check(u64::from(static_bytes).saturating_add(regions))
-        .map_err(|e| match e {
-            crate::error::Error::Unsupported(u) => BindError::Unsupported(u),
-            other => internal(format!("an object function's threadgroup memory: {other}")),
-        })?;
+        crate::lower::mesh::stage_workgroup_limit(Stage::Object, profile, payload.map(u64::from))
+            .check(u64::from(static_bytes).saturating_add(regions))
+            .map_err(|e| match e {
+                crate::error::Error::Unsupported(u) => BindError::Unsupported(u),
+                other => internal(format!("an object function's threadgroup memory: {other}")),
+            })?;
     }
     record_specialized(&push, shape, &mut resources)?;
     record_noted(&p.stages, shape, &mut resources, &heap_reach)?;

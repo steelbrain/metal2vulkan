@@ -100,10 +100,7 @@
 //!   sample from a loop over the coverage (`StageIo::coverage_loop`), its outputs the last pass's
 //!   (`PrecisionNote::LoopedSampleOutputs`); compiled without `multisampled` it is
 //!   `NeedsInput(Multisampled)`, and one the loop does not fit is refused for the reason its
-//!   interface records (`CoverageLoopRefusal`). On a driver that runs a
-//!   memory-writing function once per covered sample itself (`CoverageLoop::DriverRunsPerSample`,
-//!   MoltenVK on Apple's GPU) the function runs as written, without sample shading, and its other
-//!   reads are checked as below. A per-sample function reads the pixel values Vulkan has no pixel
+//!   interface records (`CoverageLoopRefusal`). A per-sample function reads the pixel values Vulkan has no pixel
 //!   form for where Vulkan evaluates them, as a pixel-rate function does: `[[position]]`'s z and w
 //!   (the interpolated depth and `1/w`, at a position Vulkan does not state), `[[point_coord]]`
 //!   ("the fragment center, or the location of a sample"), `[[barycentric_coord]]`, and a centroid
@@ -973,11 +970,7 @@ fn sample_invocations(
     // pixel's sample invocations: a quad holds one sample index, and no subgroup is promised to
     // hold the rest. The function runs once per pixel instead, compiled for the pipeline, and its
     // body once per covered sample, without sample shading; one the loop does not fit is refused
-    // for the reason its interface records. A driver that runs a
-    // memory-writing function once per covered sample whatever the pipeline's sample shading hands
-    // each run the pixel's coverage itself, as Metal does: the function's other reads are checked
-    // as any per-sample function's, and the pipeline enables no sample shading, under which that
-    // driver would mask the coverage.
+    // for the reason its interface records.
     if io.builtins.contains(&StageBuiltin::SampleMaskIn) {
         match io.coverage_loop {
             CoverageLoop::Looped => return Ok(false),
@@ -988,10 +981,8 @@ fn sample_invocations(
                     Unsupported::not_representable(Feature::PixelCoverageAtSampleRate).into(),
                 )
             }
-            CoverageLoop::DriverRunsPerSample => {}
         }
     }
-    let sample_shading = sample_shading && io.coverage_loop != CoverageLoop::DriverRunsPerSample;
     if sample_shading && !rate {
         return Err(refused());
     }

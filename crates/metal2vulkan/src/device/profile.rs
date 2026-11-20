@@ -194,13 +194,6 @@ impl DeviceProfile {
         crate::memory::contain::encoding(self) == Check::InShader
     }
 
-    /// Whether a module compiled for this profile checks a buffer atomic in the shader: as
-    /// [`DeviceProfile::checks_buffers_in_shader`], and also where the driver's robustness leaves a
-    /// storage buffer's atomics uncontained ([`DriverWorkaround::BufferAtomicsUncontained`]).
-    pub fn checks_atomics_in_shader(&self) -> bool {
-        crate::memory::contain::atomic_encoding(self) == Check::InShader
-    }
-
     /// Whether this profile leaves an out-of-bounds read of an image (`texel_buffer`: of a texel
     /// buffer) to the device, whose robustness answers Metal's out-of-bounds texel; elsewhere the
     /// shader checks the read.

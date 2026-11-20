@@ -1216,7 +1216,7 @@ codec_enum! {
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
     IoSampling { Center, Centroid, Sample, Interpolant { center, centroid, sample } }
-    CoverageLoop { NotNeeded, Looped, Unlooped, Refused(f0), DriverRunsPerSample }
+    CoverageLoop { NotNeeded, Looped, Unlooped, Refused(f0) }
     ChannelWrite {
         Unorm { bits }, Snorm { bits, blended }, Srgb, FloatTowardZero { mantissa, signed }, Device,
         FloatNearestEven { mantissa, signed }, BlendedNearestEven { mantissa, signed },
@@ -1497,8 +1497,6 @@ codec_enum! {
         ArgumentPixelSamplerScaling,
         HalfOutputPrecision,
         ExtendedRangeBlendSource,
-        DiscardDropsSimdgroupStores,
-        HelperBranchDropsSimdgroupStores,
         ExtendedRangeFloatBlendSource,
         AnisotropicFilter,
         DeviceAnisotropicFilter,

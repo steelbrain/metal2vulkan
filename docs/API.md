@@ -2405,12 +2405,6 @@ bound.
   steepest, in the conformance suite's extended-range and padded blend cases; and where the
   device's compiler regroups a padded format's blend, an infinite second source stores the end code
   its sign picks where Metal's sum is NaN, stored as code 0.
-- `metal2vulkan-degrade-discard-drops-simdgroup-stores` (precision).
-  `PrecisionNote::DiscardDropsSimdgroupStores`: Recorded by no device: its condition,
-  `DriverWorkaround::DiscardDropsSimdgroupStores`, is one no profile takes.
-- `metal2vulkan-degrade-helper-branch-drops-simdgroup-stores` (precision).
-  `PrecisionNote::HelperBranchDropsSimdgroupStores`: Recorded by no device: its condition,
-  `DriverWorkaround::DiscardDropsSimdgroupStores`, is one no profile takes.
 - `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
   `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
   `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range or

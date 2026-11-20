@@ -53,14 +53,8 @@
 //! A point mesh whose vertex type has no `point_size` culls every primitive (Metal draws none);
 //! it still writes `PointSize = 1.0` for each vertex, which a point topology needs.
 //!
-//! **Staged indices.** On a driver that misplaces a store into one component of an index vector
-//! (`DriverWorkaround::MeshIndexComponentStoresMisplaced`: lavapipe before Mesa 26.2), a line or
-//! triangle mesh keeps its indices in workgroup words, one per index ([`Declared::staged`]): the
-//! wrapper zeroes them where it would zero the indices, `set_index` and `set_indices` store into
-//! them, and after the body each invocation writes its slots' indices whole, one vector per
-//! primitive. They count among the wrapper's workgroup words ([`workgroup_limit`]). The wrapper's
-//! words (the grid, the count, the staged indices) take the function's coherence of shared
-//! memory (`NonPrivatePointer` under the Vulkan model), so its barriers order them.
+//! The wrapper's words (the grid, the count) take the function's coherence of shared memory
+//! (`NonPrivatePointer` under the Vulkan model), so its barriers order them.
 //!
 //! Each `set_*` writes straight to its output array: `set_position`, `set_point_size`,
 //! `set_clip_distance` and `set_vertex_data` at their vertex, `set_primitive_culled`,
@@ -120,7 +114,6 @@ use crate::air::intrinsics::{AirIntrinsic, Elem, MemFlags, Mesh as MeshOp, NumTy
 use crate::air::ir::{Callee, Const, Inst, InstId, InstKind, Value};
 use crate::air::Entry;
 use crate::bind::mesh_arguments::{METAL_MESH_GRID_AXIS, METAL_MESH_GRID_TOTAL};
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{VkExtension, VkFeature, VkLimit};
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -251,10 +244,6 @@ pub struct MeshPlan {
     pub outputs: Vec<Output>,
     /// A point mesh whose vertex type has no `point_size`: it draws nothing (the module docs).
     pub unsized_points: bool,
-    /// A line or triangle mesh on a driver that misplaces a store into one component of an
-    /// index vector (`DriverWorkaround::MeshIndexComponentStoresMisplaced`): its indices are
-    /// workgroup words ([`Declared::staged`]) that the wrapper writes to the indices whole.
-    pub staged_indices: bool,
     /// An object or mesh function on a device without `VK_EXT_mesh_shader`: a `GLCompute`
     /// entry, an object function writing its grid and payload to its slot of the draw's work
     /// buffer and a mesh function its outputs as records ([`records`], the module docs).
@@ -441,21 +430,14 @@ pub fn payload_extent(cx: &SelectCx<'_>) -> Option<u64> {
     Some(own.max(object))
 }
 
-/// The workgroup memory limit of the entry ([`stage_workgroup_limit`] of its stage, payload and
-/// staged indices).
+/// The workgroup memory limit of the entry ([`stage_workgroup_limit`] of its stage and payload).
 pub fn workgroup_limit(cx: &SelectCx<'_>) -> WorkgroupLimit {
-    stage_workgroup_limit(
-        cx.stage,
-        cx.profile,
-        payload_extent(cx),
-        staged_index_bytes(cx),
-    )
+    stage_workgroup_limit(cx.stage, cx.profile, payload_extent(cx))
 }
 
 /// The workgroup memory limit of a `stage` entry on `profile` ([`arena::workgroup_limit`]), with
 /// its payload arena's bytes where it has a payload of `payload` bytes (`arena::payload_bytes`):
-/// an object or mesh entry's workgroup memory and payload share a limit. `staged` is a mesh
-/// entry's staged index words' bytes ([`staged_index_bytes`]). An emulated object or mesh
+/// an object or mesh entry's workgroup memory and payload share a limit. An emulated object or mesh
 /// function's is the compute stage's, with its grid or count words and its payload. The binder
 /// checks an object function's arena with the encoder's lengths against it
 /// (`RuntimeFact::ObjectThreadgroupArena`).
@@ -463,7 +445,6 @@ pub fn stage_workgroup_limit(
     stage: Stage,
     profile: &DeviceProfile,
     payload: Option<u64>,
-    staged: u64,
 ) -> WorkgroupLimit {
     let limits = &profile.fields().limits;
     // An emulated entry's: the compute stage's, with its wrapper's words (an object function's
@@ -478,36 +459,10 @@ pub fn stage_workgroup_limit(
         };
     }
     let w = arena::workgroup_limit(stage, limits);
-    let w = WorkgroupLimit {
-        wrapper: w.wrapper.saturating_add(staged),
-        ..w
-    };
     match payload {
         Some(size) => w.with_payload(arena::payload_bytes(size)),
         None => w,
     }
-}
-
-/// The bytes of the workgroup words a mesh entry keeps its indices in on a driver that misplaces
-/// a store into one component of an index vector
-/// (`DriverWorkaround::MeshIndexComponentStoresMisplaced`, [`MeshPlan::staged_indices`]): a word
-/// per index of a line or triangle mesh there, and none elsewhere.
-fn staged_index_bytes(cx: &SelectCx<'_>) -> u64 {
-    let defect = DriverWorkaround::MeshIndexComponentStoresMisplaced;
-    if cx.stage != Stage::Mesh || !cx.profile.fields().workarounds.contains(&defect) {
-        return 0;
-    }
-    let Some(out) = mesh_outputs(cx) else {
-        return 0;
-    };
-    let k: u64 = match out.topology {
-        MeshTopology::Point => return 0,
-        MeshTopology::Line => 2,
-        MeshTopology::Triangle => 3,
-    };
-    u64::from(out.max_primitives)
-        .saturating_mul(k)
-        .saturating_mul(4)
 }
 
 /// The check of a payload of `size` bytes: its arena within `maxTaskPayloadSize`, and, with the
@@ -648,15 +603,8 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if point_size && shape.topology == MeshTopology::Point {
         crate::lower::stage_io::note_device_point_size(cx);
     }
-    // Staged indices are the wrapper's workgroup words, held to the stage's limit whether or not
-    // the function has threadgroup memory of its own.
-    let staged = !emulated && staged_index_bytes(cx) > 0;
-    if staged {
-        workgroup_limit(cx).check(0)?;
-    }
     let plan = &mut cx.families.mesh;
     plan.mesh = Some(shape);
-    plan.staged_indices = staged;
     plan.emulated = emulated;
     plan.payload_words = if emulated { payload_words } else { 0 };
     plan.unsized_points = shape.topology == MeshTopology::Point && !point_size;
@@ -1058,9 +1006,6 @@ pub struct Declared {
     pub count: Option<GlobalId>,
     /// The object function's mesh grid, a workgroup `uvec3`.
     pub grid: Option<GlobalId>,
-    /// A mesh function's staged indices ([`MeshPlan::staged_indices`]): a workgroup `uint` per
-    /// index.
-    pub staged: Option<GlobalId>,
     /// An emulated mesh function's records buffer (`SyntheticBinding::MeshRecords`).
     pub records: Option<GlobalId>,
     /// An emulated mesh function's first word of its threadgroup's records: a private `uint`
@@ -1312,11 +1257,6 @@ pub fn declare(
     let ty = array(mb, index, shape.primitives)?;
     d.indices = Some(mb.builtin(b, IoDir::Output, ty)?);
     d.count = Some(mb.plain_global(StorageClass::Workgroup, u32_, None)?);
-    if mp.staged_indices {
-        let n = shape.primitives.saturating_mul(shape.per_primitive());
-        let words = array(mb, u32_, n)?;
-        d.staged = Some(mb.plain_global(StorageClass::Workgroup, words, None)?);
-    }
     Ok(d)
 }
 
@@ -1366,7 +1306,7 @@ fn k32(fb: &mut FunctionBuilder<'_>, n: u32) -> BResult<SValue> {
 }
 
 /// The memory operands of a load or (`store`) a store of one of the wrapper's workgroup words
-/// (the grid, the count, the staged indices), which other invocations read after a barrier: the
+/// (the grid, the count), which other invocations read after a barrier: the
 /// function's coherence of shared memory (`NonPrivatePointer` under the Vulkan model).
 fn word_access(
     coherence: Coherence,
@@ -1691,18 +1631,6 @@ fn store_index(
     if k == 1 {
         return store_element(cx, fb, g, len, at, None, value);
     }
-    if let Some(w) = cx.decl.families.mesh.staged {
-        // The index's own workgroup word, which the wrapper writes to the indices whole.
-        let coherence = coherence(cx.plan);
-        let n = k32(fb, len)?;
-        let inside = fb.binary(BinOp::ULessThan, at, n)?;
-        return when(fb, cx, inside, move |fb, _| {
-            let base = fb.module().global_value(w)?;
-            let ptr = fb.access_chain(base, &[at])?;
-            let access = word_access(coherence, fb, true)?;
-            fb.store(ptr, value, access)
-        });
-    }
     let n = k32(fb, len)?;
     let inside = fb.binary(BinOp::ULessThan, at, n)?;
     let kk = k32(fb, k)?;
@@ -2019,28 +1947,12 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
     };
     let none = fb.module().constant(Constant::Null { ty: index_ty })?;
     let none = fb.module().const_value(none)?;
-    // Staged indices are zeroed in their words and written to the indices after the body; the
-    // others are zeroed in place.
-    let staged = d.staged;
-    let k = shape.per_primitive();
-    let kk = k32(&mut fb, k)?;
+    // The indices are zeroed in place.
     strided(cx, &mut fb, (lin, n), shape.primitives, move |fb, _, p| {
-        let unstaged = staged.is_none().then_some((indices, none));
-        for (g, v) in unstaged.into_iter().chain([(culled, no), (ids, p)]) {
+        for (g, v) in [(indices, none), (culled, no), (ids, p)] {
             let base = fb.module().global_value(g)?;
             let ptr = fb.access_chain(base, &[p])?;
             fb.store(ptr, v, MemAccess::default())?;
-        }
-        if let Some(w) = staged {
-            let at = fb.binary(BinOp::IMul, p, kk)?;
-            for j in 0..k {
-                let off = k32(fb, j)?;
-                let at = fb.binary(BinOp::IAdd, at, off)?;
-                let base = fb.module().global_value(w)?;
-                let ptr = fb.access_chain(base, &[at])?;
-                let access = word_access(coherence, fb, true)?;
-                fb.store(ptr, zero, access)?;
-            }
         }
         Ok(())
     })?;
@@ -2070,23 +1982,6 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
         fb.load(p, access)?
     };
     strided(cx, &mut fb, (lin, n), shape.primitives, move |fb, cx, p| {
-        if let Some(w) = staged {
-            // The primitive's staged indices, written whole.
-            let at = fb.binary(BinOp::IMul, p, kk)?;
-            let mut words = Vec::new();
-            for j in 0..k {
-                let off = k32(fb, j)?;
-                let at = fb.binary(BinOp::IAdd, at, off)?;
-                let base = fb.module().global_value(w)?;
-                let ptr = fb.access_chain(base, &[at])?;
-                let access = word_access(coherence, fb, false)?;
-                words.push(fb.load(ptr, access)?);
-            }
-            let whole = fb.composite_construct(index_ty, &words)?;
-            let base = fb.module().global_value(indices)?;
-            let ptr = fb.access_chain(base, &[p])?;
-            fb.store(ptr, whole, MemAccess::default())?;
-        }
         let past = fb.binary(BinOp::UGreaterThanEqual, p, drawn)?;
         when(fb, cx, past, move |fb, _| {
             let base = fb.module().global_value(culled)?;

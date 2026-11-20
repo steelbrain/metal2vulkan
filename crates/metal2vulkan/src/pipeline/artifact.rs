@@ -1427,47 +1427,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     ExtendedRangeBlendSource,
-    /// A fragment function meets the store-dropping defect of
-    /// [`DriverWorkaround::DiscardDropsSimdgroupStores`] (MoltenVK on an Apple GPU: Apple's
-    /// compiler drops the texture writes of every live thread of a simdgroup holding a discarded
-    /// thread, where the function discards, then writes storage, samples, and calls
-    /// SPIRV-Cross's `optnone` arithmetic helpers), and a discard site that would discard at
-    /// once cannot wait until after the writes: a store, atomic, image write or non-quad
-    /// subgroup operation follows it, which a predicated discard does not yet guard
-    /// (`lower::fragment::discard`). The module keeps its forms, so the live fragments of a
-    /// simdgroup (8 by 4 pixels) that holds a discarded one may lose their texture writes (and,
-    /// not measured, their buffer stores and atomics); color outputs are not affected.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
-    ///
-    /// [`DriverWorkaround::DiscardDropsSimdgroupStores`]: crate::device::DriverWorkaround::DiscardDropsSimdgroupStores
-    DiscardDropsSimdgroupStores,
-    /// A fragment function meets the store-dropping defect of
-    /// [`DriverWorkaround::DiscardDropsSimdgroupStores`] without a discard: SPIRV-Cross writes an
-    /// operation of the module as an `optnone` call (a sum, difference or product decorated
-    /// `NoContraction`, among others) where only helper invocations (the quad helpers past a
-    /// primitive's edges, or demoted invocations) may run it before a storage write (not in a
-    /// selection on a value every invocation of a draw computes alike), and keeping them out would
-    /// not be exact (`spirv::helper_branches`): a derivative or subgroup operation reads what they
-    /// compute there or after, an arm leaves its selection otherwise than at its merge, the call is
-    /// in a loop whose helper invocations may iterate alone, or it is in no branch at all but
-    /// SPIRV-Cross writes it in one (a `?:` arm, the right side of a `&&` or `||`, or a
-    /// selection's arm, where its value is read once). Only where a path from the call
-    /// ends without a tangled instruction (an implicit-LOD sample, an LOD query, a derivative, a
-    /// subgroup operation) that reads what it computes: one after it keeps the writes. And only
-    /// where no identity shuffle of the call's result can follow it, which the module places
-    /// elsewhere to keep the writes: the device has no fragment-stage subgroup shuffle, or the
-    /// result is a 64-bit or `bool` lane, or an 8- or 16-bit one without
-    /// `shaderSubgroupExtendedTypes`. The live fragments of a simdgroup (8 by 4 pixels) whose
-    /// helpers make the call alone may lose their texture writes (and, not measured, their buffer
-    /// stores and atomics); color outputs are not affected.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
-    ///
-    /// [`DriverWorkaround::DiscardDropsSimdgroupStores`]: crate::device::DriverWorkaround::DiscardDropsSimdgroupStores
-    HelperBranchDropsSimdgroupStores,
     /// [`PrecisionNote::ExtendedRangeBlendSource`] for a `float` color output (a scalar or vector
     /// of AIR's `float`): blended into an extended-range or padded 10-bit attachment in the shader
     /// in the device's arithmetic, which the device's compiler may contract and regroup, where

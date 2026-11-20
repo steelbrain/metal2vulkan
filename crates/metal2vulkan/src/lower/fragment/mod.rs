@@ -156,9 +156,6 @@ pub enum FragmentStrategy {
 impl FamilyStrategy for FragmentStrategy {
     fn name(&self, plans: &FamilyPlans) -> Cow<'static, str> {
         Cow::Borrowed(match self {
-            FragmentStrategy::Discard if plans.fragment.deferred_discards => {
-                "fragment.discard.deferred"
-            }
             FragmentStrategy::Discard => "fragment.discard",
             FragmentStrategy::NumSamples(_) => "fragment.num_samples",
             FragmentStrategy::IsHelperThread => "fragment.is_helper_thread",
@@ -191,10 +188,6 @@ pub struct FragmentPlan {
     /// or a helper exits, as Metal drops such a quad from the simdgroup: every site is then
     /// predicated, or, where a side effect follows one, every site demotes. Filled by [`finish`].
     pub quad_exits: BTreeSet<InstId>,
-    /// The sites that would discard at once are predicated against the driver's store-dropping
-    /// defect (`DriverWorkaround::DiscardDropsSimdgroupStores`), so the census names the
-    /// function's discards `fragment.discard.deferred`. Filled by [`finish`].
-    pub deferred_discards: bool,
     /// The stores, atomics, image writes and copies a predicated site reaches: each runs only
     /// where the invocation was not discarded ([`not_discarded`]). Filled by [`finish`].
     pub guarded: BTreeSet<InstId>,
@@ -387,17 +380,11 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
         forms,
         quad_exits,
         counted_before,
-        deferred,
-        exposed,
         guarded,
     } = discard::plan(cx, &sites, interlock.is_some(), m)?;
     if counted_before {
         cx.precision
             .insert(PrecisionNote::QuadsCountedBeforeDiscard);
-    }
-    if exposed {
-        cx.precision
-            .insert(PrecisionNote::DiscardDropsSimdgroupStores);
     }
     if !quad_exits.is_empty() {
         // The exits' quad swaps are quad operations of the simd family's class.
@@ -457,7 +444,6 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     let fp = &mut cx.families.fragment;
     fp.discards = forms;
     fp.quad_exits = quad_exits;
-    fp.deferred_discards = deferred;
     fp.guarded = guarded;
     fp.terminate_invocation = terminate;
     fp.interlock = interlock;
@@ -514,10 +500,6 @@ pub fn declare(
     let imageblock_early = fp.imageblock.as_ref().is_some_and(|p| p.early_tests);
     if fp.fetch_early_tests || imageblock_early {
         modes.push(ExecMode::EarlyFragmentTests);
-    }
-    // The function's own early tests, where the imageblock's write tests late instead.
-    if fp.imageblock.as_ref().is_some_and(|p| p.late_tests) {
-        modes.retain(|m| *m != ExecMode::EarlyFragmentTests);
     }
     if fp.records_discards() {
         let bool_ = mb.ty(SType::Bool)?;

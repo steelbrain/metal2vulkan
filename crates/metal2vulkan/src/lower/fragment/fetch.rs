@@ -127,14 +127,7 @@
 //! (`StorageAttachmentUse::view`). Either needs `sampleRateShading`. The pixel interlock orders
 //! every invocation covering the pixel, and so each sample's. A returned sample mask keeps an
 //! invocation's write exactly when it sets the invocation's sample's bit (measured), so each write
-//! is gated on that bit ([`sample_bit`]); at one sample on bit 0 (measured). A driver that drops
-//! the image writes of an early-tests fragment shader in a multisampled pass
-//! (`DriverWorkaround::EarlyTestsDropMultisampledImageWrites`: MoltenVK on Apple's GPU) refuses the
-//! per-sample form's writes where the module declares early tests (`Needs::DriverDefect`). Where
-//! only a depth or stencil attachment would have the module declare them, it declares none there:
-//! it stores before the tests and states `TestedStorageWrites` without the early-tests variant, so
-//! only a draw whose tests drop no fragment runs it; a function whose Metal source declares early
-//! tests keeps the refusal.
+//! is gated on that bit ([`sample_bit`]); at one sample on bit 0 (measured).
 //!
 //! **A write mask** short of the format's channels: Metal keeps the channels the mask leaves out.
 //! The write reads the texel at the pixel first and writes those channels back as it read them
@@ -316,7 +309,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, OutputRole, ParamRole};
 use crate::air::intrinsics::{AirIntrinsic, Fragment, PackDir, PackFormat};
 use crate::air::ir::{Callee, InstKind, Type as AirType, TypeId as AirTypeId, Value};
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
 use crate::error::{
@@ -1198,16 +1190,6 @@ pub(crate) fn storage_form(
     }
     let kept = crate::metal::state::color_write_mask(kept)?;
     let f = p.fields();
-    // The per-sample form's writes are storage image writes of the fragment shader; where it
-    // declares early tests, a driver that drops such writes in a pass of more than one sample
-    // would lose every one.
-    let defect = DriverWorkaround::EarlyTestsDropMultisampledImageWrites;
-    if multisampled && writes && use_.early_tests && f.workarounds.contains(&defect) {
-        return Ok(Err(Unsupported::driver_defect(
-            Feature::FramebufferFetch,
-            defect,
-        )));
-    }
     // What the form needs whatever view it takes, and what the view's own route lacks.
     let mut common = Vec::new();
     let mut route = Vec::new();
@@ -1397,25 +1379,23 @@ struct StoredBeforeTests {
     /// Only its discard keeps the function from early tests: its stores are Metal's where a
     /// draw's tests drop no fragment, and under early tests where they write and count nothing.
     tested: bool,
-    /// It writes other memory, or returns depth, stencil, or a sample mask, or early tests would
-    /// lose its writes (`dropped`): its stores are Metal's only where a draw's tests drop no
-    /// fragment.
+    /// It writes other memory, or returns depth, stencil, or a sample mask: its stores are Metal's
+    /// only where a draw's tests drop no fragment.
     untested: bool,
 }
 
 /// [`StoredBeforeTests`] of a function whose body holds `body`, that Metal runs under early tests
 /// where `declared_early` and returns depth, stencil, or a sample mask where `exports`, in a
-/// pipeline with a depth or stencil attachment where `depth_or_stencil`, where early tests would
-/// drop its storage writes where `dropped`.
+/// pipeline with a depth or stencil attachment where `depth_or_stencil`.
 fn stored_before_tests(
     body: &BodyFacts,
     (declared_early, exports): (bool, bool),
-    (depth_or_stencil, dropped): (bool, bool),
+    depth_or_stencil: bool,
 ) -> StoredBeforeTests {
     let testable = depth_or_stencil && !(exports || body.side_effects);
     StoredBeforeTests {
         tested: !declared_early && testable && body.discards,
-        untested: !declared_early && depth_or_stencil && (exports || body.side_effects || dropped),
+        untested: !declared_early && depth_or_stencil && (exports || body.side_effects),
     }
 }
 
@@ -1601,48 +1581,18 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // declaration would change nothing, and it is left out: Apple's GPU drops the image writes
     // of an early-tests fragment shader in a pass of more than one sample.
     let testable = inputs.depth_or_stencil && !(exports || body.side_effects);
-    // A driver that drops the image writes of an early-tests fragment shader in a pass of more
-    // than one sample would lose every storage write of a function that writes a fetched color
-    // beside a depth or stencil attachment under early tests: such a function declares none (unless
-    // Metal's does), and stores before the tests, Metal's where its draws' tests drop no fragment;
-    // it has no early-tests variant. (its form checks the driver's defect itself, and the device
-    // blends it where that blocks it)
-    let writes_read = read.iter().any(|&color| {
-        outputs.iter().any(|o| {
-            matches!(
-                o.role,
-                OutputRole::RenderTarget {
-                    attachment: AbiInt::Const(a),
-                    index: 0,
-                    ..
-                } if a == color
-            )
-        })
-    });
-    let dropped = cx.inputs.multisampled
-        && inputs.depth_or_stencil
-        && writes_read
-        && cx
-            .profile
-            .fields()
-            .workarounds
-            .contains(&DriverWorkaround::EarlyTestsDropMultisampledImageWrites);
     // A function that only its discard keeps from early tests, on a device that requires ordered
     // fetch (`tested`): its storage writes are Metal's where its draws' tests drop no fragment,
     // before the tests, and where they write neither attachment and count no visibility result,
     // under early tests (`LoweringInputs::read_only_tests`), which then drop no fragment Metal's
     // later tests keep and leave the attachments as Metal's do; the plan of each draw checks
     // which (`RuntimeFact::TestedStorageWrites`). One that writes other memory, or returns depth,
-    // stencil, or a sample mask, beside a depth or stencil attachment, or whose driver would drop
-    // its writes under early tests (`untested`): Metal runs its memory writes for every fragment,
+    // stencil, or a sample mask, beside a depth or stencil attachment (`untested`): Metal runs its memory writes for every fragment,
     // those its tests then drop included, and tests what it returns (measured on Apple's M4), which
     // early tests would not, so its storage writes before the tests are Metal's where its draws'
     // tests drop no fragment, which the plan of each draw checks; it has no early-tests variant.
-    let StoredBeforeTests { tested, untested } = stored_before_tests(
-        &body,
-        (declared_early, exports),
-        (inputs.depth_or_stencil, dropped),
-    );
+    let StoredBeforeTests { tested, untested } =
+        stored_before_tests(&body, (declared_early, exports), inputs.depth_or_stencil);
     let early_tests = declared_early
         || (testable && !body.discards && !untested)
         || (tested && cx.inputs.read_only_tests && !untested);

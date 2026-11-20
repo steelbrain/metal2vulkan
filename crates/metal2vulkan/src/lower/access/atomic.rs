@@ -74,8 +74,8 @@
 //! access, Mesa's RADV and ANV never showed a relaxed one a store that arrived after its first
 //! read.
 //!
-//! **Containment** is the plain access's (`contain::atomic_encoding`): robust descriptors emit no
-//! check, except on a driver whose robustness leaves buffer atomics uncontained; an in-shader check
+//! **Containment** is the plain access's (`contain::encoding`): robust descriptors emit no
+//! check; an in-shader check
 //! guards a view's atomic with `if_(inb)` (its result is 0 out of bounds, where Metal's is
 //! unmeasured); a device-address atomic out of bounds (a static slot's or a wide pointer's, checked
 //! against the root entry's size) operates on the write-only sink and yields 0; an arena atomic
@@ -697,7 +697,7 @@ pub fn select(
         }
     } else {
         let (mut targets, null) = static_roots(cx, r.ptr, m)?;
-        let check = contain::atomic_encoding(cx.profile);
+        let check = contain::encoding(cx.profile);
         let fixed = super::fixed_offset(cx, r.ptr);
         for t in &mut targets {
             t.check = check;

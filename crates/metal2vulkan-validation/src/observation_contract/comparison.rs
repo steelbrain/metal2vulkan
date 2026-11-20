@@ -333,8 +333,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::NativeDot
         | N::NativeMix
         | N::DevicePackConversion
-        | N::DiscardDropsSimdgroupStores
-        | N::HelperBranchDropsSimdgroupStores
         | N::UnorderedFetchWithinDraw
         | N::NativeLogicOperation
         | N::NativeFloat8

@@ -2194,16 +2194,6 @@ fn input_builtin(
             if !frag.barycentric {
                 return Err(cx.invariant("a barycentric builtin without the feature"));
             }
-            // A driver that rejects a shader reading both forms refuses the second.
-            let defect = DriverWorkaround::BothBarycentricFormsRejected;
-            let other = StageBuiltin::BaryCoord {
-                perspective: !perspective,
-            };
-            if cx.families.stage_io.interface.builtins.contains(&other)
-                && cx.profile.fields().workarounds.contains(&defect)
-            {
-                return Err(Unsupported::driver_defect(Feature::Barycentrics, defect).into());
-            }
             let b = if perspective {
                 B::BaryCoordKHR
             } else {

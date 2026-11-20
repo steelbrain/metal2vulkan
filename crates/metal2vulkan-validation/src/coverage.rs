@@ -443,8 +443,7 @@ impl HostClass {
     /// fetches, past their buffer read or wrote the next buffer's bytes; texel buffer accesses
     /// were contained. By user decision the product keeps the robust encoding there (no in-shader
     /// check), as native Metal bounds none of these either. SwiftShader's robustness leaves a
-    /// storage buffer's atomics uncontained too, but the product checks them in the shader there
-    /// (`DriverWorkaround::BufferAtomicsUncontained`). Under `robustBufferAccess` its storage
+    /// storage buffer's atomics uncontained too, below the floor. Under `robustBufferAccess` its storage
     /// buffer loads and stores and its storage texel buffer atomic add and store were measured
     /// contained, and OB1's cases (storage, uniform, and texel buffers, and buffer atomics with the
     /// check) matched. Its vertex-input fetches and index-buffer reads were not measured; like

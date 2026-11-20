@@ -115,10 +115,6 @@ pub enum Degradation {
     HalfOutputPrecision,
     /// `metal2vulkan-degrade-extended-range-blend-source`.
     ExtendedRangeBlendSource,
-    /// `metal2vulkan-degrade-discard-drops-simdgroup-stores`.
-    DiscardDropsSimdgroupStores,
-    /// `metal2vulkan-degrade-helper-branch-drops-simdgroup-stores`.
-    HelperBranchDropsSimdgroupStores,
     /// `metal2vulkan-degrade-extended-range-float-blend-source`.
     ExtendedRangeFloatBlendSource,
     /// `metal2vulkan-degrade-anisotropic-filter`.
@@ -242,8 +238,6 @@ impl Degradation {
         Degradation::ArgumentPixelSamplerScaling,
         Degradation::HalfOutputPrecision,
         Degradation::ExtendedRangeBlendSource,
-        Degradation::DiscardDropsSimdgroupStores,
-        Degradation::HelperBranchDropsSimdgroupStores,
         Degradation::ExtendedRangeFloatBlendSource,
         Degradation::AnisotropicFilter,
         Degradation::DeviceAnisotropicFilter,
@@ -360,12 +354,6 @@ impl Degradation {
             Degradation::ExtendedRangeBlendSource => {
                 "metal2vulkan-degrade-extended-range-blend-source"
             }
-            Degradation::DiscardDropsSimdgroupStores => {
-                "metal2vulkan-degrade-discard-drops-simdgroup-stores"
-            }
-            Degradation::HelperBranchDropsSimdgroupStores => {
-                "metal2vulkan-degrade-helper-branch-drops-simdgroup-stores"
-            }
             Degradation::ExtendedRangeFloatBlendSource => {
                 "metal2vulkan-degrade-extended-range-float-blend-source"
             }
@@ -469,10 +457,6 @@ impl Degradation {
             PrecisionNote::ArgumentPixelSamplerScaling => Degradation::ArgumentPixelSamplerScaling,
             PrecisionNote::HalfOutputPrecision => Degradation::HalfOutputPrecision,
             PrecisionNote::ExtendedRangeBlendSource => Degradation::ExtendedRangeBlendSource,
-            PrecisionNote::DiscardDropsSimdgroupStores => Degradation::DiscardDropsSimdgroupStores,
-            PrecisionNote::HelperBranchDropsSimdgroupStores => {
-                Degradation::HelperBranchDropsSimdgroupStores
-            }
             PrecisionNote::ExtendedRangeFloatBlendSource => {
                 Degradation::ExtendedRangeFloatBlendSource
             }

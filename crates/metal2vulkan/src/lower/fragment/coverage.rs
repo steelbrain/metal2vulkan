@@ -57,15 +57,6 @@
 //! pipeline that reads `[[sample_mask]]`, looped or not, or that reads a centroid varying and runs
 //! once per pixel, records `PrecisionNote::ClippedCoverageSplit` on a device whose rasterizer is
 //! not Apple's (`DriverWorkaround::ClippedCoverageNotMetals`).
-//!
-//! MoltenVK on Apple's GPU runs a shader that writes memory once per covered sample, as Metal
-//! does, sample shading or not (`DriverWorkaround::MemoryWritingFragmentsRunPerSample`), so the
-//! loop of a function that writes memory would repeat each pass there. Such a function is compiled
-//! as written there instead (`CoverageLoop::DriverRunsPerSample`), each of the driver's runs
-//! reading the pixel's coverage, its sample index and its sample-qualified varyings, with the
-//! pipeline's sample shading off; except where MoltenVK's SPIRV-Cross masks the coverage with the
-//! run's sample bit (a module with `SampleRateShading` that reads `FragCoord`), where it is refused
-//! as the driver's defect.
 
 use crate::air::abi::{
     Builtin, Interpolation as AirInterp, ParamRole, Sampling as AirSampling, Stage as AirStage,
@@ -73,7 +64,7 @@ use crate::air::abi::{
 use crate::air::ir::{ArgIdx, Body, Value};
 use crate::device::requirements::VkFeature;
 use crate::device::DriverWorkaround;
-use crate::error::{Error, Feature, InternalError, InternalKind, Unsupported};
+use crate::error::{Error, InternalError, InternalKind};
 use crate::lower::arith::legal::form_on;
 use crate::lower::emit::FamilyDecls;
 use crate::lower::select::{Plan, SelectCx};
@@ -97,13 +88,6 @@ pub struct CoveragePlan {
     /// Why the function cannot loop, as far as its interface shows before its body is selected:
     /// its early tests, its attachments, or the device's interpolation functions.
     pub refusal: Option<CoverageLoopRefusal>,
-    /// The function writes memory, which a driver with
-    /// `DriverWorkaround::MemoryWritingFragmentsRunPerSample` repeats per covered sample.
-    pub writes: bool,
-    /// Such a driver runs the function once per covered sample itself, each run reading the
-    /// pixel's coverage, so it is compiled as written, without the loop
-    /// (`CoverageLoop::DriverRunsPerSample`).
-    pub driver_runs: bool,
     /// Where the looping function reads a sample-qualified varying: the most samples a pipeline of
     /// the device may have, at each of which the entry reads every such varying before the loop.
     pub samples_before_loop: Option<u32>,
@@ -213,15 +197,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         && !p
             .enabled
             .portability_withholds(VkFeature::ShaderSampleRateInterpolationFunctions);
-    // A driver that runs a memory writer once per covered sample hands each run the pixel's
-    // coverage, unless its shader compiler masks the coverage with the run's sample bit: MoltenVK
-    // 1.4.1's SPIRV-Cross (`adec7acb`) does where the module declares `SampleRateShading` (it
-    // reads the sample index or a sample-qualified varying) and reads `FragCoord`.
-    let position = used(&|r| matches!(r, ParamRole::Builtin(Builtin::Position(_))));
-    let driver_runs = writes
-        && p.workarounds
-            .contains(&DriverWorkaround::MemoryWritingFragmentsRunPerSample)
-        && !((sample_id || sample_varying) && position);
     let attachments = super::rog::declared(cx)
         || used(&|r| matches!(r, ParamRole::ColorInput { .. } | ParamRole::Imageblock(_)));
     let refusal = if matches!(
@@ -233,12 +208,12 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         Some(CoverageLoopRefusal::EarlyFragmentTests)
     } else if attachments {
         Some(CoverageLoopRefusal::Attachments)
-    } else if sample_varying && !interpolation && !driver_runs {
+    } else if sample_varying && !interpolation {
         Some(CoverageLoopRefusal::InterpolationFunctions)
     } else {
         None
     };
-    let looped = cx.inputs.multisampled && refusal.is_none() && !driver_runs;
+    let looped = cx.inputs.multisampled && refusal.is_none();
     // Each pass's outputs land on every sample the passes keep, the last pass's (the module docs).
     if looped && !e.ep.outputs.is_empty() {
         cx.precision.insert(PrecisionNote::LoopedSampleOutputs);
@@ -251,8 +226,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.fragment.coverage = Some(CoveragePlan {
         looped,
         refusal,
-        writes,
-        driver_runs,
         samples_before_loop,
     });
     Ok(())
@@ -279,10 +252,7 @@ fn most_samples(limits: &crate::device::Limits) -> u32 {
 /// Complete the plan once every instruction is selected (`fragment::finish`): a discard, or a
 /// derivative, implicit-LOD sample, quad or simdgroup operation, or barrier, refuses the loop. A
 /// looping function is refused here; any other records in its interface how link treats it
-/// (`StageIo::coverage_loop`). On a driver that runs such a shader once per covered sample
-/// (`MemoryWritingFragmentsRunPerSample`) a function that writes memory runs as written, or, where
-/// that driver would mask its coverage, is refused as its defect: the loop would repeat each pass
-/// per covered sample there.
+/// (`StageIo::coverage_loop`).
 pub(super) fn finish(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
     let Some(plan) = cx.families.fragment.coverage else {
         return Ok(false);
@@ -299,20 +269,11 @@ pub(super) fn finish(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
     } else {
         None
     };
-    if plan.looped {
-        if let Some(r) = late {
-            return Err(r.error());
-        }
-        let per_sample = DriverWorkaround::MemoryWritingFragmentsRunPerSample;
-        if plan.writes && cx.profile.fields().workarounds.contains(&per_sample) {
-            return Err(
-                Unsupported::driver_defect(Feature::PixelCoverageAtSampleRate, per_sample).into(),
-            );
-        }
+    if let (true, Some(r)) = (plan.looped, late) {
+        return Err(r.error());
     }
     cx.families.stage_io.interface.coverage_loop = match (plan.looped, plan.refusal.or(late)) {
         (true, _) => CoverageLoop::Looped,
-        (false, None) if plan.driver_runs => CoverageLoop::DriverRunsPerSample,
         (false, None) => CoverageLoop::Unlooped,
         (false, Some(r)) => CoverageLoop::Refused(r),
     };

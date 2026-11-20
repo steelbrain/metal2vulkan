@@ -3285,10 +3285,6 @@ fn lower_bounded<K>(
         },
         crate::lower::emit::Emitted { mut module, merged },
     ) = stage_bound::emit(r, p, (word_cap, bounds), m)?;
-    // On a driver whose compiler loses a simdgroup's storage writes after an `optnone` call only
-    // its helper invocations make, those invocations take another arm where that is exact, and
-    // each such call left is fenced once every analysis below has read the module.
-    let (helper_guard, fences) = crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
     let function_tables = spec.function_tables.clone();
     let reaches_command_buffers = spec.may_encode_indirect_commands();
     let command_writes = spec.command_writes();
@@ -3429,10 +3425,6 @@ fn lower_bounded<K>(
             precision.sort_unstable();
         }
     }
-    if helper_guard.exposed {
-        precision.push(PrecisionNote::HelperBranchDropsSimdgroupStores);
-        precision.sort_unstable();
-    }
     if numbering_differs {
         precision.push(PrecisionNote::LinkedSamplerNumbering);
         precision.sort_unstable();
@@ -3449,8 +3441,6 @@ fn lower_bounded<K>(
         precision.push(PrecisionNote::DeviceSampling);
         precision.sort_unstable();
     }
-    // The fences are identities, which the analyses above would read as moves between lanes.
-    fences.apply(&mut module)?;
     let stats = crate::spirv::verify::verify(&module, p, m)?;
     let kept = keep(&module);
     let mut symbols =
@@ -3653,7 +3643,7 @@ fn lower_bounded<K>(
         subgroup: plan.subgroup,
         reconvergence,
         precision,
-        strategies: emitted_census(&plan, helper_guard),
+        strategies: census(&plan),
         stats,
         // The module's own blob (the identity domains) is in its words: the artifact carries a
         // bound blob's bytes alone.
@@ -3731,37 +3721,6 @@ fn census(plan: &Plan) -> StrategyCensus {
     let mut c = StrategyCensus::default();
     for (name, (uses, words)) in plan.census() {
         c.entries.insert(name, StrategyUse { uses, words });
-    }
-    c
-}
-
-/// [`census`] of the emitted module: the plan's, the selections whose helper invocations take
-/// another arm (`spirv::helper_branches`), each with its helper query and one or two logical
-/// operations (about 12 words), and the `optnone` calls an identity shuffle follows, each with
-/// its lane's load and its shuffle (about 10 words; a structure's two members and their
-/// construction about 30).
-fn emitted_census(
-    plan: &Plan,
-    helper_guard: crate::spirv::helper_branches::Guarded,
-) -> StrategyCensus {
-    let mut c = census(plan);
-    if helper_guard.selections > 0 {
-        c.entries.insert(
-            crate::spirv::helper_branches::STRATEGY.to_owned(),
-            StrategyUse {
-                uses: helper_guard.selections,
-                words: u64::from(helper_guard.selections) * 12,
-            },
-        );
-    }
-    if helper_guard.fences > 0 {
-        c.entries.insert(
-            crate::spirv::helper_branches::FENCE_STRATEGY.to_owned(),
-            StrategyUse {
-                uses: helper_guard.fences,
-                words: u64::from(helper_guard.fences) * 30,
-            },
-        );
     }
     c
 }

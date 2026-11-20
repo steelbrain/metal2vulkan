@@ -9,9 +9,6 @@
 //! - **In shader**: loads read at `select(inb, off, 0)` and yield `select(inb, v, 0)`; stores and
 //!   atomics sit in a builder-closed `if_(inb)`.
 //!
-//! An atomic takes [`atomic_encoding`]: the in-shader check also where a driver workaround says
-//! its robustness leaves buffer atomics uncontained.
-//!
 //! An image or texel buffer is contained by the texture family: its reads by
 //! [`device_reads_texels`], its writes by [`device_drops_texel_writes`], each in the shader where
 //! the device's robustness does not give Metal's answer. Validation labels its runs by the same two
@@ -22,7 +19,7 @@
 //! relative to the containment domain's base, so a wrapped GEP result is a huge offset and fails
 //! the check.
 
-use crate::device::profile::{Containment, DriverWorkaround, Robustness};
+use crate::device::profile::{Containment, Robustness};
 use crate::device::DeviceProfile;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
@@ -46,23 +43,6 @@ pub fn encoding(p: &DeviceProfile) -> Check {
             robust: Robustness::None,
         } => Check::InShader,
         _ => Check::None,
-    }
-}
-
-/// The descriptor-view encoding of an atomic on `p`: [`encoding`], except that where it relies on
-/// buffer robustness and the driver's robustness leaves a storage buffer's atomics uncontained
-/// (`DriverWorkaround::BufferAtomicsUncontained`), the atomic is checked in the shader.
-pub fn atomic_encoding(p: &DeviceProfile) -> Check {
-    let fields = p.fields();
-    match (encoding(p), fields.containment) {
-        (Check::None, Containment::On { .. })
-            if fields
-                .workarounds
-                .contains(&DriverWorkaround::BufferAtomicsUncontained) =>
-        {
-            Check::InShader
-        }
-        (check, _) => check,
     }
 }
 

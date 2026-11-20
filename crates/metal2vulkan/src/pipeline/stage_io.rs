@@ -455,13 +455,6 @@ pub enum CoverageLoop {
     /// The function cannot loop over its covered samples: link refuses it in a pipeline of more
     /// than one sample for this reason.
     Refused(CoverageLoopRefusal),
-    /// The driver runs the function, which writes memory, once per covered sample whatever the
-    /// pipeline's sample shading, each run reading the pixel's coverage, as Metal does
-    /// (`DriverWorkaround::MemoryWritingFragmentsRunPerSample`): it is compiled as written, without
-    /// the loop, its `[[sample_id]]` and sample-qualified varyings read per sample, and link
-    /// enables no sample shading, under which the driver would hand each run only its own sample's
-    /// bit of the coverage.
-    DriverRunsPerSample,
 }
 
 /// Why a fragment function that reads `[[sample_mask]]` and runs once per sample on Metal has no
