@@ -1117,7 +1117,10 @@ made, with no lock, and never rewritten for layouts.
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
   stores the format through a storage image declared without a format; its view maps each
-  channel to itself.
+  channel to itself. A multisampled texture has no storage element on any device, as Metal's
+  shaders only read one (the Metal Shading Language: "Multisampled textures only support the
+  read attribute"). Its image takes no storage usage, so its sample counts are the device's for
+  its other usages, whether or not the device has `shaderStorageImageMultisample`.
 - A format is made where the translator's format table maps it for the usage on the device
   (`vk_format`) to the format itself or to one whose view gives Metal's values (a swizzled or
   rotated view, alpha held in red, an RGBX format, a depth or stencil aspect of a combined

@@ -716,7 +716,7 @@ impl ComputeCommandEncoder {
     /// retires.
     ///
     /// A usage that writes a texture, or a view of one, made for shader writes with no storage
-    /// element makes every later dispatch of the encoder whose kernel may reach a texture through
+    /// element (not a multisampled one, which Metal's shaders only read) makes every later dispatch of the encoder whose kernel may reach a texture through
     /// its storage image beyond its bound slots (an argument buffer's `access::write` or
     /// `access::read_write` texture, a resource ID) [`Gap::StorageElement`], with no slot: Metal
     /// writes such a texture there, and the runtime would drop the writes. A kernel with no such

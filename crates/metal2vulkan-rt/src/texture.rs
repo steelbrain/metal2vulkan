@@ -933,7 +933,9 @@ impl Device {
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a
     /// format; elsewhere the texture has none, and a write through its index is dropped as
-    /// through a nil texture.
+    /// through a nil texture. A multisampled texture has none on any device, as Metal's shaders
+    /// only read one, so its image takes no storage usage and its sample counts are the device's
+    /// for its other usages.
     ///
     /// Err: what Metal refuses ([`Refusal::TextureZeroExtent`], [`Refusal::TextureExtentForType`],
     /// [`Refusal::TextureCubeNotSquare`], [`Refusal::TextureArrayLength`],
@@ -2144,10 +2146,7 @@ pub(crate) fn shape(d: &TextureDescriptor) -> Result<Shape, Error> {
             array_length: d.array_length,
         });
     }
-    let multisample = matches!(
-        d.texture_type,
-        T::Type2DMultisample | T::Type2DMultisampleArray
-    );
+    let multisample = multisampled(d.texture_type);
     if d.sample_count == 0 || (!multisample && d.sample_count != 1) {
         return refused(Refusal::TextureSampleCount {
             sample_count: d.sample_count,
@@ -2329,6 +2328,17 @@ fn view_formats(
     list
 }
 
+/// Whether textures of `texture_type` are multisampled, which Metal's shaders only read (the
+/// Metal Shading Language: "Multisampled textures only support the read attribute"). Such a
+/// texture has no storage view, so its image takes no storage usage, whose sample counts are the
+/// device's `storageImageSampleCounts` (one alone without `shaderStorageImageMultisample`).
+fn multisampled(texture_type: TextureType) -> bool {
+    matches!(
+        texture_type,
+        TextureType::Type2DMultisample | TextureType::Type2DMultisampleArray
+    )
+}
+
 /// Whether shaders reach a texture of `pf` and `usage` (Metal's unknown usage already its four
 /// bits), which takes an index exactly where they do ([`Refusal::TextureIndex`]): it is read or
 /// written, or it is a colour render target (a pixel format with no depth or stencil), which a
@@ -2368,7 +2378,10 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         aspects = vk::ImageAspectFlags::COLOR;
     }
     let read = usage.contains(TextureUsage::SHADER_READ);
+    // A multisampled texture has no storage view on any device, whatever its usage: Metal's
+    // shaders only read one (`multisampled`).
     let storage = usage.contains(TextureUsage::SHADER_WRITE)
+        && !multisampled(d.texture_type)
         && mapping.emulation == FormatEmulation::Direct
         && profile.supports_format(mapping.format, FormatUsage::StorageImage)
         && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat);
@@ -4480,10 +4493,12 @@ pub(crate) trait TextureObject {
 
     /// Where it is made for shader writes (`ShaderWrite`, or Metal's unknown usage) but has no
     /// storage element, which shaders write it and read it as storage through
-    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names.
+    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names. Never a
+    /// multisampled texture, which no shader writes (`multisampled`).
     fn unstored(&self) -> Option<PixelFormat> {
         let d = &self.object().descriptor;
-        let written = d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE);
+        let written = (d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE))
+            && !multisampled(d.texture_type);
         let storage = match &self.object().view {
             Some(view) => view.views.storage,
             None => self.object().image.storage,
