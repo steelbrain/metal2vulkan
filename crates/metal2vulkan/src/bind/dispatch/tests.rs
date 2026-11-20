@@ -475,9 +475,15 @@ fn local_sizes_are_checked_against_every_d4_limit() {
         fit(&r, std::iter::once([60, 1, 1])).expect("the subgroup limit is the flattened tier's"),
         Fit::EmulatedSimdgroups
     );
-    let e = fit(&r, std::iter::once([1, 1, 65])).expect_err("z of a partial region");
+    // The variant runs a region deeper than `DEEP_THREADGROUP` as one row (it declares
+    // `SpecKey::DeepThreadgroup`), so a z past the device's 64 is checked as `sn`.
+    assert_eq!(
+        fit(&r, std::iter::once([1, 1, 65])).expect("a partial region of z 65, as one row"),
+        Fit::EmulatedSimdgroups
+    );
+    let e = fit(&r, std::iter::once([1, 2, 600])).expect_err("sn of a deep partial region");
     assert!(
-        matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::Z) }),
+        matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::X) }),
         "{e:?}"
     );
     let e = fit(&r, std::iter::once([33, 33, 1])).expect_err("invocations of a partial region");
@@ -486,12 +492,12 @@ fn local_sizes_are_checked_against_every_d4_limit() {
         "{e:?}"
     );
     // The whole dispatch runs on the variant, so every region of a dispatch with a partial one
-    // is checked against the variant's limits, its whole-subgroup regions included: the z of
-    // [1, 1, 96] is past them, and [1, 1, 64], past the flattened tier's subgroups, is not.
-    let e = fit(&r, [[1, 1, 96], [1, 1, 4]].into_iter()).expect_err("z of a whole region");
-    assert!(
-        matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::Z) }),
-        "{e:?}"
+    // is checked against the variant's limits, its whole-subgroup regions included: [1, 1, 96]
+    // runs as one row of 96 there, and [1, 1, 64], past the flattened tier's subgroups, is within
+    // them.
+    assert_eq!(
+        fit(&r, [[1, 1, 96], [1, 1, 4]].into_iter()).expect("a deep whole region"),
+        Fit::EmulatedSimdgroups
     );
     assert!(
         fit(&r, std::iter::once([1, 1, 64])).is_err(),
@@ -624,31 +630,29 @@ fn a_partial_simdgroup_asks_for_the_emulated_simdgroups_variant() {
         Err(BindError::Unsupported(_))
     ));
     // A `dispatchThreads` grid whose edge is partial runs whole on the variant, so its interior
-    // is checked against the variant's per-axis limits (z at most 64 here), not the flattened
-    // `sn`: the answer is a refusal, not a variant whose plan refuses the interior.
+    // is checked against the variant's limits, not the flattened `sn`. The variant's own plan
+    // declares `SpecKey::DeepThreadgroup`, so an interior of z 96, past the device's 64 here, runs
+    // as one row, and one of z 64 runs as it is: the answer is the variant, whose plan runs both
+    // regions.
     let mixed = |tpg_z| Dispatch::Threads {
         threads: [1, 1, 100],
         threads_per_group: [1, 1, tpg_z],
     };
-    let variant = compute_plan(&template(), emulated.clone());
-    for r in [
-        plan.dispatch_variant(&mixed(96)).map(|_| ()),
-        plan.instantiate_dispatch(&state(0), &mixed(96)).map(|_| ()),
-        variant
-            .instantiate_dispatch(&state(0), &mixed(96))
-            .map(|_| ()),
-    ] {
-        let e = r.expect_err("z of the interior");
-        assert!(
-            matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::Z) }),
-            "{e:?}"
+    let mut deep = template();
+    deep.spec.push(spec(4, SpecKey::DeepThreadgroup));
+    deep.local.deep = true;
+    let variant = compute_plan(&deep, emulated.clone());
+    for z in [96, 64] {
+        assert_eq!(
+            plan.dispatch_variant(&mixed(z)),
+            Ok(emulated.clone()),
+            "{z}"
         );
+        let c = variant
+            .instantiate_dispatch(&state(0), &mixed(z))
+            .expect("the variant runs both regions");
+        assert_eq!(c.regions.len(), 2, "{z}");
     }
-    assert_eq!(plan.dispatch_variant(&mixed(64)), Ok(emulated.clone()));
-    let c = variant
-        .instantiate_dispatch(&state(0), &mixed(64))
-        .expect("the variant runs both regions");
-    assert_eq!(c.regions.len(), 2);
     // `Cluster32` runs whole 64-lane subgroups: one simdgroup of 32 threads is a partial
     // subgroup there.
     let mut cluster = flat_template();
