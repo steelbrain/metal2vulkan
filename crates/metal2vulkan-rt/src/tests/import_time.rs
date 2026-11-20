@@ -43,27 +43,52 @@ mod on_device {
     /// The imports timed each way, of each length, in each arm.
     const REPS: usize = 40;
 
-    /// `len` bytes of host memory of the test's own at a multiple of `alignment`, every page
-    /// written: from the allocator, or (`shared`) a shared mapping of a memfd, as a virtual
-    /// machine's RAM is mapped. Freed as it drops.
+    /// The kinds of host memory timed.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        /// The allocator's.
+        Anonymous,
+        /// One shared mapping of a memfd, as a virtual machine's RAM is mapped (Linux).
+        Shared,
+        /// The same bytes as one-page shared mappings of a memfd of twice their length, each at a
+        /// page of the memfd of its own scattered over it: as many mappings as pages (Linux).
+        Scattered,
+    }
+
+    /// The memory kinds timed, with their names: the allocator's, and on Linux one shared memfd
+    /// mapping and one-page mappings of scattered pages of a memfd.
+    fn kinds() -> &'static [(&'static str, Kind)] {
+        if cfg!(target_os = "linux") {
+            &[
+                ("anonymous", Kind::Anonymous),
+                ("one shared memfd mapping", Kind::Shared),
+                ("one-page memfd mappings, scattered", Kind::Scattered),
+            ]
+        } else {
+            &[("anonymous", Kind::Anonymous)]
+        }
+    }
+
+    /// `len` bytes of host memory of the test's own of `kind`, at a multiple of `alignment`,
+    /// every page written. Freed as it drops.
     struct Pages {
         pointer: NonNull<u8>,
         len: usize,
-        /// The allocator's layout; `None` for a mapping.
+        /// The allocator's layout; `None` for mappings.
         layout: Option<Layout>,
     }
 
     impl Pages {
-        fn new(len: u64, alignment: u64, shared: bool) -> Pages {
-            let (pointer, layout) = if shared {
-                (map_shared(len), None)
-            } else {
+        fn new(len: u64, alignment: u64, kind: Kind) -> Pages {
+            let (pointer, layout) = if kind == Kind::Anonymous {
                 let layout =
                     Layout::from_size_align(len as usize, alignment as usize).expect("a layout");
                 // SAFETY: the layout's size is not zero.
                 let pointer =
                     NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
                 (pointer, Some(layout))
+            } else {
+                (map_shared(len, kind == Kind::Scattered), None)
             };
             for at in (0..len as usize).step_by(4096) {
                 // SAFETY: `at` is inside the memory.
@@ -83,47 +108,63 @@ mod on_device {
                 // SAFETY: allocated with `layout`, and nothing uses it any more.
                 Some(layout) => unsafe { std::alloc::dealloc(self.pointer.as_ptr(), layout) },
                 None => {
-                    // SAFETY: mapped by `map_shared` at `len` bytes, and nothing uses it any more.
+                    // SAFETY: mapped by `map_shared` over `len` bytes, and nothing uses it any
+                    // more.
                     let unmapped = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.len) };
-                    assert_eq!(unmapped, 0, "the mapping's end");
+                    assert_eq!(unmapped, 0, "the mappings' end");
                 }
             }
         }
     }
 
-    /// A shared mapping of a new memfd of `len` bytes.
+    /// `len` bytes of shared mappings of a new memfd: one mapping of a memfd of `len` bytes, or
+    /// (`scattered`) one mapping a page, the pages of a memfd of twice `len` taken at a stride
+    /// prime to its page count, so no two neighbouring mappings merge.
     #[cfg(target_os = "linux")]
-    fn map_shared(len: u64) -> NonNull<u8> {
+    fn map_shared(len: u64, scattered: bool) -> NonNull<u8> {
         use std::os::fd::AsRawFd;
-        let memfd = memfd(len);
-        // SAFETY: a new mapping of the memfd's `len` bytes, which outlives the fd.
-        let at = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                memfd.as_raw_fd(),
-                0,
-            )
+        const PAGE: u64 = 4096;
+        const STRIDE: u64 = 7919;
+        let memfd = memfd(if scattered { 2 * len } else { len });
+        let map = |at: *mut libc::c_void, bytes: u64, flags: libc::c_int, offset: u64| {
+            // SAFETY: a mapping of the memfd's bytes at `offset`, inside its length, which
+            // outlives the fd; where `at` is not null, it is inside the test's own reservation.
+            let mapped = unsafe {
+                libc::mmap(
+                    at,
+                    bytes as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | flags,
+                    memfd.as_raw_fd(),
+                    offset as libc::off_t,
+                )
+            };
+            assert_ne!(mapped, libc::MAP_FAILED, "a mapping");
+            mapped
         };
-        assert_ne!(at, libc::MAP_FAILED, "a mapping");
-        NonNull::new(at.cast()).expect("a mapping")
+        if !scattered {
+            return NonNull::new(map(std::ptr::null_mut(), len, 0, 0).cast()).expect("a mapping");
+        }
+        let pages = len / PAGE;
+        assert_ne!(
+            (2 * pages) % STRIDE,
+            0,
+            "the stride is prime to the memfd's pages"
+        );
+        let base = map(std::ptr::null_mut(), len, 0, 0);
+        for page in 0..pages {
+            let from = (page * STRIDE) % (2 * pages);
+            // SAFETY: the page lies inside `base`'s `len` bytes, which the test mapped above.
+            let at = unsafe { base.cast::<u8>().add((page * PAGE) as usize) };
+            map(at.cast(), PAGE, libc::MAP_FIXED, from * PAGE);
+        }
+        NonNull::new(base.cast()).expect("a mapping")
     }
 
     /// Off Linux the test maps no memfd: its kinds there are the allocator's alone.
     #[cfg(not(target_os = "linux"))]
-    fn map_shared(_: u64) -> NonNull<u8> {
+    fn map_shared(_: u64, _: bool) -> NonNull<u8> {
         unreachable!("a memfd off Linux")
-    }
-
-    /// The memory kinds timed: the allocator's, and on Linux a shared memfd mapping.
-    fn kinds() -> &'static [(&'static str, bool)] {
-        if cfg!(target_os = "linux") {
-            &[("anonymous", false), ("a shared memfd mapping", true)]
-        } else {
-            &[("anonymous", false)]
-        }
     }
 
     /// The whole call's time over `len` bytes, in nanoseconds, and the memory type it took; the
@@ -133,9 +174,9 @@ mod on_device {
         device: &Device,
         len: u64,
         alignment: u64,
-        shared: bool,
+        kind: Kind,
     ) -> Result<(u128, u32), crate::Error> {
-        let pages = Pages::new(len, alignment, shared);
+        let pages = Pages::new(len, alignment, kind);
         let (release, released) = releasing();
         let start = Instant::now();
         // SAFETY: the memory is the test's, mapped until it frees it after the release.
@@ -154,14 +195,14 @@ mod on_device {
         device: &Device,
         len: u64,
         alignment: u64,
-        shared: bool,
+        kind: Kind,
         index: u32,
     ) -> [u128; PARTS.len()] {
         let core = device.core();
         let ash = &core.device;
         let (host, _) = (core.imports.host.as_ref()).expect("host memory imports");
         let handle = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
-        let pages = Pages::new(len, alignment, shared);
+        let pages = Pages::new(len, alignment, kind);
         let pointer = pages.pointer;
         let mut times = [0u128; PARTS.len()];
         let mut properties = vk::MemoryHostPointerPropertiesEXT::default();
@@ -499,8 +540,9 @@ mod on_device {
         });
     }
 
-    /// `Device::import_host_memory` of 12 KiB, 16 KiB and 29 MiB of host memory of each kind
-    /// (anonymous, and on Linux a shared memfd mapping, unless the device refuses it), whole and by
+    /// `Device::import_host_memory` of 12 KiB, 16 KiB, 17 MiB and 29 MiB of host memory of each
+    /// kind (anonymous; on Linux one shared memfd mapping, and one-page mappings of scattered pages
+    /// of a memfd; a kind the device refuses is printed and not timed), whole and by
     /// step, each `REPS` times, with the runtime's queue idle and then beside a thread committing
     /// small fills all along: each one's median and longest, printed. On an instance without the
     /// validation layer, whose own cost would be the count.
@@ -512,12 +554,12 @@ mod on_device {
                 println!("import time: {name}: imports no host memory; not timed");
                 return;
             };
-            for &(kind, shared) in kinds() {
-                if let Err(error) = whole(&device, 29 << 20, alignment, shared) {
-                    println!("import time: {name}: {kind}: refused: {error}; not timed");
+            for &(named, kind) in kinds() {
+                if let Err(error) = whole(&device, 17 << 20, alignment, kind) {
+                    println!("import time: {name}: {named}: refused: {error}; not timed");
                     continue;
                 }
-                for len in [12u64 << 10, 16 << 10, 29 << 20] {
+                for len in [12u64 << 10, 16 << 10, 17 << 20, 29 << 20] {
                     let len = len.next_multiple_of(alignment);
                     for arm in ["idle", "busy"] {
                         let stop = Arc::new(AtomicBool::new(false));
@@ -526,10 +568,10 @@ mod on_device {
                         let mut wholes = Vec::with_capacity(REPS);
                         let mut by_part = vec![Vec::with_capacity(REPS); PARTS.len()];
                         for _ in 0..REPS {
-                            let (took, index) = whole(&device, len, alignment, shared)
+                            let (took, index) = whole(&device, len, alignment, kind)
                                 .unwrap_or_else(|error| panic!("an import: {error}"));
                             wholes.push(took);
-                            let steps = parts(&device, len, alignment, shared, index);
+                            let steps = parts(&device, len, alignment, kind, index);
                             for (times, took) in by_part.iter_mut().zip(steps) {
                                 times.push(took);
                             }
@@ -541,14 +583,14 @@ mod on_device {
                             .map(|rep| by_part.iter().map(|times| times[rep]).sum())
                             .collect();
                         println!(
-                            "import time: {name}: {kind}, {len} bytes, {arm} ({commits} commits \
+                            "import time: {name}: {named}, {len} bytes, {arm} ({commits} commits \
                              beside): the whole call {}; its steps by hand summed {}",
                             shown(&wholes),
                             shown(&sums)
                         );
                         for (part, times) in PARTS.iter().zip(&by_part) {
                             println!(
-                                "import time: {name}: {kind}, {len} bytes, {arm}: {part} {}",
+                                "import time: {name}: {named}, {len} bytes, {arm}: {part} {}",
                                 shown(times)
                             );
                         }
