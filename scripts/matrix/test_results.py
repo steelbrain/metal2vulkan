@@ -280,7 +280,7 @@ class RuleTests(unittest.TestCase):
                          "its lowest of 4 processes, 79.9 us, over the base's lowest of 2, 10.0 us, is 7.99x "
                          "(samples 81.4, 81.2, 79.9, 80.6 us): high in every process")
 
-    def test_the_old_path_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
+    def test_the_golden_table_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
         # The golden test's two panics, as its captured output prints them.
         changed = ("    tests/golden_hashes.tsv: output changed under an unchanged key: 333 cell(s) "
                    "changed while their fixture source and profile fingerprint did not, so a")
@@ -291,17 +291,17 @@ class RuleTests(unittest.TestCase):
         new_rows = stale.replace("0 new", "4 new").replace("4 under a changed profile", "0 under a changed profile")
         for text, moved in ((changed, True), (stale, True), (new_rows, False), (NEXTEST, False)):
             leg = results.parse_job(job(("cpu", "workspace", 100, text)))["cpu"]
-            problems = results.old_path_moved(leg, ["translator: one stage bound on every device"])
+            problems = results.golden_table_moved(leg, ["translator: one stage bound on every device"])
             self.assertEqual(len(problems), int(moved), text)
             # A message that only quotes the phrase, as the check's own commit did, exempts nothing.
-            quoting = ['matrix: the old path moving fails a leg\n\nunless a commit says '
+            quoting = ['matrix: the golden table moving fails a leg\n\nunless a commit says '
                        '"old-runtime regression fix"']
-            self.assertEqual(len(results.old_path_moved(leg, quoting)), int(moved), text)
-            self.assertEqual(results.old_path_moved(
-                leg, ["Old-runtime regression fix: the stage bound returns to Device::new"]), [])
+            self.assertEqual(len(results.golden_table_moved(leg, quoting)), int(moved), text)
+            self.assertEqual(results.golden_table_moved(
+                leg, ["Old-runtime regression fix: the stage bound returns"]), [])
         leg = results.parse_job(job(("cpu", "workspace", 100, changed)))["cpu"]
         self.assertIn("333 cell(s) changed under an unchanged key and 0 under a changed profile",
-                      results.old_path_moved(leg, [])[0])
+                      results.golden_table_moved(leg, [])[0])
 
     def test_a_changed_harness_leaves_its_own_counts_uncompared(self):
         base = recs(metric={"harness-new/authored/pipelines_created": 8, "rt/submissions": 3})

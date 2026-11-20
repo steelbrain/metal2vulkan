@@ -1,4 +1,4 @@
-# The new runtime's user-space instructions per timed run that each frame and burst row
+# The runtime's user-space instructions per timed run that each frame and burst row
 # (results.WALL_ROWS) is held to by the instructions gate (results.STORED_INSTRUCTIONS): its own
 # threads' and the harness's thread's count (`own_per_run`, the threads a driver starts for itself
 # left out), the p50 over a row's timed runs. One count per row in the `all` column where every leg's count lies within 3%

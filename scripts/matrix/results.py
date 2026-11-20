@@ -15,7 +15,7 @@ from pathlib import Path
 KINDS = ("metric", "instructions", "gauge", "time", "size", "locks")
 #: A gauge's key ends in the point it was read at.
 GAUGE_POINTS = ("100", "200", "drop")
-#: The new runtime's memory pool's gauges, by their last key component: its `VkDeviceMemory`
+#: The runtime's memory pool's gauges, by their last key component: its `VkDeviceMemory`
 #: allocations. The pool frees an idle allocation once the most bytes in use over its window falls
 #: past it and the device has been quiet for 20 ms, so allocations an earlier workload left idle
 #: may go between a later one's iterations 100 and 200: the harness's long_4cb, whose runs leave
@@ -27,7 +27,7 @@ POOL_GAUGES = ("blocks",)
 INSTRUCTIONS_BAND = 0.01
 #: Record keys, by prefix, whose `metric` fails where it differs from the base's either way, and
 #: where the base has it and the leg does not: the replay player's judged totals of a play on the
-#: new runtime (`replay-rt/STREAM/RANGE/NAME`, the validation crate's `judged_records`), each shown
+#: runtime (`replay-rt/STREAM/RANGE/NAME`, the validation crate's `judged_records`), each shown
 #: equal between two plays of one stream at one commit on one card, which a play that did not
 #: finish its range does not print.
 EQUAL_METRICS = ("replay-",)
@@ -44,13 +44,13 @@ TIME_MIN_GPUS = 3
 #: judges.
 PARKED_RECORDS = ("harness-new-warm/", "harness-gpu-")
 
-#: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
-#: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the
+#: The phrase that opens the subject of a commit allowed to change the golden table's output: the
+#: translator's output through `Device::from_queries` moves only in such a commit. Only the
 #: subject's start counts, so a message that merely quotes the phrase exempts nothing.
-OLD_PATH_FIX = "old-runtime regression fix"
+GOLDEN_FIX = "old-runtime regression fix"
 #: The golden hash table's test (crates/metal2vulkan/src/tests/golden_hashes.rs) compiles through
-#: `Device::new`, the old runtime's path. Its failure names the cells that changed under an
-#: unchanged key and those under a changed profile fingerprint: either is the old path moving.
+#: `Device::from_queries`. Its failure names the cells that changed under an unchanged key and
+#: those under a changed profile fingerprint: either is the table's output moving.
 GOLDEN_CHANGED = re.compile(r"output changed under an unchanged key: (\d+) cell")
 GOLDEN_PROFILE = re.compile(r"(\d+) under a changed profile fingerprint")
 
@@ -277,17 +277,17 @@ def leg_problems(leg, records, base):
     return problems
 
 
-def old_path_moved(leg, messages):
-    """The old path's output moved: the golden table's test reports a cell changed under an
-    unchanged key or under a changed profile fingerprint, and none of MESSAGES (the commits since
-    the table's last bless) has a subject that starts with OLD_PATH_FIX. One problem per suite that
-    reports it."""
-    if any(message.lstrip().lower().startswith(OLD_PATH_FIX) for message in messages):
+def golden_table_moved(leg, messages):
+    """The golden table's output moved: its test reports a cell changed under an unchanged key or
+    under a changed profile fingerprint, and none of MESSAGES (the commits since the table's last
+    bless) has a subject that starts with GOLDEN_FIX. One problem per suite that reports it."""
+    if any(message.lstrip().lower().startswith(GOLDEN_FIX) for message in messages):
         return []
-    return [f"OLD PATH MOVED: suite {name}: the golden table, compiled through Device::new, has "
+    return [f"GOLDEN TABLE MOVED: suite {name}: the golden table, compiled through "
+            f"Device::from_queries, has "
             f"{s['golden']['changed']} cell(s) changed under an unchanged key and "
             f"{s['golden']['profile']} under a changed profile fingerprint, and no commit since "
-            f"its last bless has a subject starting \"{OLD_PATH_FIX}\""
+            f"its last bless has a subject starting \"{GOLDEN_FIX}\""
             for name, s in leg["suites"].items()
             if s.get("golden") and (s["golden"]["changed"] or s["golden"]["profile"])]
 
@@ -315,7 +315,7 @@ def outlier_keys(times, bases):
 
 def outliers_to_retime(found):
     """The legs of FOUND (outlier_keys) whose harness is timed once more before an outlier fails
-    them: those with an outlier of a harness row's time on the new runtime (HARNESS_NEW), one
+    them: those with an outlier of a harness row's time on the runtime (HARNESS_NEW), one
     pass of which never fails a leg on its own. Returns {leg: its outliers in FOUND}, time_outliers's
     FIRST once they are timed again."""
     return {leg: keys for leg, keys in found.items() if any(key.startswith(HARNESS_NEW) for key in keys)}
@@ -328,7 +328,7 @@ def outliers_to_retime(found):
 #: 6b535f55c9. So a harness row's outlier in both passes is judged by its lowest level: the second
 #: pass re-times each such row of the leg (alone_rows) alone in RETIME_PAIRS processes, each with a
 #: fresh driver cache and store, its times kept as `harness-alone/<row>/<pair>/<runtime>` (ALONE_KEEP);
-#: time_outliers compares the lowest of the new runtime's samples (both passes and the alone runs)
+#: time_outliers compares the lowest of the runtime's samples (both passes and the alone runs)
 #: with the lowest the base recorded of the row (levels). A real regression raises the low level and
 #: still fails; a row high in every process fails; a row the lowest brings back is named with every
 #: sample, as levels with no verdict, so a high level grown more frequent is still seen.
@@ -343,7 +343,7 @@ RETIME_ROWS = 8
 
 def alone_rows(keys):
     """The rows a leg's second pass re-times alone (HARNESS_ALONE) for KEYS, its first pass's
-    outliers (outliers_to_retime's {key: (slowdown, median, legs)}): its harness rows' on the new
+    outliers (outliers_to_retime's {key: (slowdown, median, legs)}): its harness rows' on the
     runtime (HARNESS_NEW), the furthest out first, at most RETIME_ROWS."""
     rows = sorted(((ratio / median, key[len(HARNESS_NEW):]) for key, (ratio, median, _) in keys.items()
                    if key.startswith(HARNESS_NEW)), reverse=True)
@@ -351,8 +351,8 @@ def alone_rows(keys):
 
 
 def levels(values, key):
-    """The samples of KEY, a harness row's time on the new runtime (HARNESS_NEW), in VALUES, a leg's
-    times: its own, then its alone runs' on the new runtime (HARNESS_ALONE), each one recorded."""
+    """The samples of KEY, a harness row's time on the runtime (HARNESS_NEW), in VALUES, a leg's
+    times: its own, then its alone runs' on the runtime (HARNESS_ALONE), each one recorded."""
     row = key[len(HARNESS_NEW):]
     alone = (values.get(f"{HARNESS_ALONE}{row}/{pair}/new") for pair in range(1, RETIME_PAIRS + 1))
     return [value for value in (values.get(key), *alone) if value]
@@ -406,9 +406,9 @@ def time_outliers(times, bases, first=None):
     return out, parked
 
 
-#: A harness row's time on the new runtime, `harness-new/<row>`. Its time is judged only as a
-#: cross-GPU outlier (time_outliers); the frame and burst rows (WALL_ROWS) are also held to their
-#: stored instruction counts (instruction_gate).
+#: A harness row's time on the runtime, `harness-new/<row>` (the harness's `--runtime new`). Its
+#: time is judged only as a cross-GPU outlier (time_outliers); the frame and burst rows
+#: (WALL_ROWS) are also held to their stored instruction counts (instruction_gate).
 HARNESS_NEW = "harness-new/"
 #: A harness row's GPU time, `harness-gpu-<runtime>/<row>`: the p50 over its timed runs of a run's
 #: first GPU start to its last GPU end, scaled like its time where the device sizes the row, and
@@ -423,7 +423,7 @@ WALL_ROWS = ("frame", "burst")
 #: The instructions gate of the frame and burst rows (WALL_ROWS), on Linux's user-space
 #: instructions per timed run, each the p50 over the row's timed runs. The harness records the
 #: whole process's (`instructions harness-<runtime>/<row>/per_run`), and where the runtime names
-#: the threads it started (the new runtime's `Gauges::threads`), the count of those and the
+#: the threads it started (the runtime's `Gauges::threads`), the count of those and the
 #: harness's own thread (`.../own_per_run`) and the rest, the threads a driver started for itself
 #: (`.../others_per_run`). A driver's threads swing by millions of instructions per run between
 #: processes (NVIDIA's on burst_160: 0 to 25 million), the runtime's own do not. The gate is on the
@@ -432,7 +432,7 @@ WALL_ROWS = ("frame", "burst")
 #: them. A leg that records no instructions (the kernel refused the counter, or Windows) has no
 #: gate. Every row records its counts; only these are gated on them.
 INSTRUCTIONS_PER_RUN = "/per_run"
-#: The new runtime's own threads' count of a row, and the rest of the process's.
+#: The runtime's own threads' count of a row, and the rest of the process's.
 OWN_PER_RUN, OTHERS_PER_RUN = "/own_per_run", "/others_per_run"
 #: The instructions gate's allowance: a row's own count is at most this times its stored count.
 HARNESS_BUDGET = 1.03
@@ -456,7 +456,7 @@ def read_counts(text):
     return counts
 
 
-#: The new runtime's own threads' instructions per timed run (OWN_PER_RUN) that each WALL_ROWS
+#: The runtime's own threads' instructions per timed run (OWN_PER_RUN) that each WALL_ROWS
 #: row is held to (`instructions.tsv`, beside this file): one count per row where the legs' counts
 #: lie within 3% of each other, else one per driver family. A count only ratchets down: a landing
 #: that lowers a row's count by more than 1% stores the lower one, and nothing raises it without a
@@ -475,9 +475,9 @@ def stored_count(leg_id, row):
 
 def instruction_gate(leg_id, row, records):
     """ROW's instructions gate on LEG_ID from the leg's RECORDS: (problems, parked), both empty
-    where ROW is not a WALL_ROWS row or the new runtime recorded no whole count. The new runtime's
+    where ROW is not a WALL_ROWS row or the runtime recorded no whole count. The runtime's
     own count past HARNESS_BUDGET times the stored count is a problem; one more than
-    INSTRUCTIONS_BAND under it, or a row with none stored, is named. A new runtime that recorded
+    INSTRUCTIONS_BAND under it, or a row with none stored, is named. A runtime that recorded
     its whole count but not its own is a problem: the gate could not run."""
     counted = records["instructions"]
     new = counted.get(f"harness-new/{row}{INSTRUCTIONS_PER_RUN}")

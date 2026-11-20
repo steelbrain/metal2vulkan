@@ -300,7 +300,7 @@ where the leg counted them, its instructions per run (with the runtime's own).
 
 The golden hash table's translations do not move. The table compiles through
 `Device::from_queries`. When its test reports a cell that changed under an unchanged
-key, or one under a changed profile fingerprint, the leg fails with `OLD PATH MOVED`. The one
+key, or one under a changed profile fingerprint, the leg fails with `GOLDEN TABLE MOVED`. The one
 exception is a range where a commit since the table's last bless has a subject that starts with
 `old-runtime regression fix`. New, gone and re-keyed fixture rows only need a bless.
 

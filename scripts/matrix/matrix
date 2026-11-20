@@ -51,7 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import results  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
-#: The golden hash table, compiled through `Device::new`: results.old_path_moved.
+#: The golden hash table, compiled through `Device::from_queries`: results.golden_table_moved.
 GOLDEN_TABLE = "crates/metal2vulkan/tests/golden_hashes.tsv"
 CONFIG = Path.home() / ".config/metal2vulkan/matrix.json"
 STATE = Path.home() / ".cache/metal2vulkan-matrix"
@@ -513,7 +513,7 @@ class Run:
         #: The validation layer's carry: (--carry value, mirror variable, commit), or None.
         self.layer = layer_carry(Path(cfg.get("validation_layer", LAYER)).expanduser())
         #: The messages of the commits since the golden table's last bless, which
-        #: results.old_path_moved reads for the one phrase that lets the old path move.
+        #: results.golden_table_moved reads for the one phrase that lets the table's output move.
         blessed = git("log", "-1", "--format=%H", sha, "--", GOLDEN_TABLE)
         self.since_bless = [m for m in git("log", "--format=%B%x00", f"{blessed}..{sha}").split("\0")
                             if m.strip()]
@@ -862,7 +862,7 @@ def leg_entry(run, leg):
     problems += run.failures.get(leg.id, [])
     base_records = base and results.base_records(base["records"], harness_tree(base_sha) == harness_tree(run.sha))
     problems += results.leg_problems(parsed, records, base_records)
-    problems += results.old_path_moved(parsed, run.since_bless)
+    problems += results.golden_table_moved(parsed, run.since_bless)
     if leg.id not in CPU_LEGS and run.lock_budget:
         problems += results.lock_budget_missing(records, results.names_lock_event(run.setup(leg.node)))
     cpu = run.nodes.get(leg.node, {}).get("cpu_model")
