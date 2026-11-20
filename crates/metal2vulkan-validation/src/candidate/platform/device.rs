@@ -462,15 +462,89 @@ pub fn echo_validation_messages() {
 /// own reports, at `vkCreateInstance`, of the driver manifests it ignored are the host's listing
 /// of its drivers, not the run's work: they pass ([`MessageSink::take`]).
 ///
-/// But for one message about the driver: on a device whose driver runs the set layouts its
-/// support query refuses ([`MessageSink::unsupported_sets`]), the layer's report of such a layout
+/// But for MoltenVK's own reports: a warning it is measured to report as it makes every pipeline
+/// of the opened device ([`MessageSink::making`]) fails nothing, nor, inside the call that makes
+/// it, its warning of a pipeline whose primitive restart is dynamic ([`expecting_diagnostics`]);
+/// and on a device whose driver runs the set layouts its support query refuses
+/// ([`MessageSink::unsupported_sets`]), the layer's report of such a layout
 /// (`candidate/unsupported_set.rs`) fails nothing.
 pub(super) struct MessageSink {
     messages: Mutex<Vec<Recorded>>,
+    /// The warnings MoltenVK reports as it makes every pipeline of the opened device, whatever its
+    /// state: one for each format the device lists as a color attachment without blending
+    /// ([`blendless_warnings`]). It names the format, so a message of exactly one of them fails no
+    /// row; set once the opened description is known, empty off MoltenVK.
+    making: OnceLock<Vec<DriverDiagnostic>>,
     /// Whether the opened device's driver runs the descriptor set layouts its
     /// `vkGetDescriptorSetLayoutSupport` refuses ([`makes_layouts_past_support`]: a heap's set 1
     /// on MoltenVK), set once the opened description is known.
     unsupported_sets: AtomicBool,
+}
+
+/// A message MoltenVK reports through `VK_EXT_debug_utils` where Vulkan states nothing wrong, at
+/// `WARNING` severity as a `VALIDATION` message: the sink passes it only where it is expected
+/// ([`MessageSink::making`], [`expecting_diagnostics`]) and it matches every field exactly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DriverDiagnostic {
+    /// The message's id name.
+    pub(super) id_name: &'static str,
+    /// The message's id number.
+    pub(super) id: i32,
+    /// The message's text.
+    pub(super) text: String,
+}
+
+/// MoltenVK's id name for its own warnings.
+const MVK_WARN: &str = "mvk-warn";
+
+/// Whether the device `description` names runs MoltenVK.
+pub(super) fn runs_moltenvk(description: &DeviceDescription) -> bool {
+    description.driver_id == Some(metal2vulkan::vk::DriverId::MOLTENVK)
+}
+
+/// MoltenVK's warning of a pipeline whose primitive restart may be disabled, which MoltenVK 1.4.1
+/// reports inside `vkCreateGraphicsPipelines` where the pipeline makes `PRIMITIVE_RESTART_ENABLE`
+/// dynamic and draws a strip or a fan, or makes its topology dynamic too: Metal cannot disable
+/// restart.
+pub(super) fn restart_warning(
+    dynamic_states: &[metal2vulkan::vk::DynamicState],
+    topology: metal2vulkan::vk::PrimitiveTopology,
+) -> Option<DriverDiagnostic> {
+    use metal2vulkan::vk::{DynamicState as D, PrimitiveTopology as T};
+    let strip = matches!(
+        topology,
+        T::LINE_STRIP | T::TRIANGLE_STRIP | T::TRIANGLE_FAN
+    );
+    (dynamic_states.contains(&D::PRIMITIVE_RESTART_ENABLE)
+        && (strip || dynamic_states.contains(&D::PRIMITIVE_TOPOLOGY)))
+    .then(|| DriverDiagnostic {
+        id_name: MVK_WARN,
+        id: 0,
+        text: "VK_ERROR_FEATURE_NOT_PRESENT: Metal does not support disabling primitive restart."
+            .to_owned(),
+    })
+}
+
+/// MoltenVK's warnings of each format the device `description` lists as a color attachment of
+/// optimal tiling without `COLOR_ATTACHMENT_BLEND`, which MoltenVK 1.4.1 reports as it makes every
+/// pipeline, naming the format.
+fn blendless_warnings(description: &DeviceDescription) -> Vec<DriverDiagnostic> {
+    use metal2vulkan::vk::FormatFeatureFlags2 as F;
+    (description.formats.formats.iter())
+        .filter(|(_, p)| {
+            p.optimal_tiling.contains(F::COLOR_ATTACHMENT)
+                && !p.optimal_tiling.contains(F::COLOR_ATTACHMENT_BLEND)
+        })
+        .filter_map(|(format, _)| format.name())
+        .map(|name| DriverDiagnostic {
+            id_name: MVK_WARN,
+            id: 0,
+            text: format!(
+                "VK_ERROR_FEATURE_NOT_PRESENT: Blending is enabled for attachment with format \
+                 {name}, which does not support it."
+            ),
+        })
+        .collect()
 }
 
 /// Whether the driver of the device `description` names runs a descriptor set layout its
@@ -478,7 +552,7 @@ pub(super) struct MessageSink {
 /// refuses. The executor makes its own heap sets so there, and its sink passes the validation
 /// layer's report of such a layout ([`MessageSink::unsupported_sets`]).
 fn makes_layouts_past_support(description: &DeviceDescription) -> bool {
-    description.driver_id == Some(metal2vulkan::vk::DriverId::MOLTENVK)
+    runs_moltenvk(description)
 }
 
 /// One message the sink kept: its id name and text, which tell the loader's reports apart
@@ -578,6 +652,10 @@ unsafe extern "system" fn record_validation_message(
     if !fails_row(severity, types) || user.is_null() || data.is_null() {
         return vk::FALSE;
     }
+    // SAFETY: the layer passes a live callback-data struct.
+    if withholds(severity, types, unsafe { &*data }) {
+        return vk::FALSE;
+    }
     // SAFETY: `user` is the `&'static MessageSink` the messenger was created with, and the layer
     // passes a live callback-data struct.
     let (sink, data) = unsafe { (&*user.cast::<MessageSink>(), &*data) };
@@ -599,6 +677,17 @@ unsafe extern "system" fn record_validation_message(
     {
         return vk::FALSE;
     }
+    if severity == vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+        && types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION)
+        && sink.making.get().is_some_and(|making| {
+            let (id_name, text) = (text(data.p_message_id_name), text(data.p_message));
+            making
+                .iter()
+                .any(|d| d.id_name == id_name && d.id == data.message_id_number && d.text == text)
+        })
+    {
+        return vk::FALSE;
+    }
     let level = if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         "error"
     } else {
@@ -606,6 +695,70 @@ unsafe extern "system" fn record_validation_message(
     };
     sink.record(level, text(data.p_message_id_name), text(data.p_message));
     vk::FALSE
+}
+
+thread_local! {
+    /// The MoltenVK diagnostics the thread's current driver call is expected to report
+    /// ([`expecting_diagnostics`]).
+    static EXPECTED_DIAGNOSTICS: RefCell<Vec<DriverDiagnostic>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Run `call`, a driver call on this thread that MoltenVK is measured to report `diagnostics`
+/// in ([`restart_warning`]), withholding exactly those messages from the context's sink while it
+/// runs: the driver reports them from the calling thread inside the call, so a message reported on
+/// another thread, or after the call returns, still fails the row.
+pub(super) fn expecting_diagnostics<T>(
+    diagnostics: Vec<DriverDiagnostic>,
+    call: impl FnOnce() -> T,
+) -> T {
+    if diagnostics.is_empty() {
+        return call();
+    }
+    /// Clears the thread's expectation however `call` ends.
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            let _ = EXPECTED_DIAGNOSTICS.try_with(|expected| expected.borrow_mut().clear());
+        }
+    }
+    EXPECTED_DIAGNOSTICS.with(|expected| *expected.borrow_mut() = diagnostics);
+    let _clear = Clear;
+    call()
+}
+
+/// Whether the message is a diagnostic the thread's current driver call is expected to report
+/// ([`expecting_diagnostics`]): a warning of the validation kind whose name, number and text are
+/// the diagnostic's exactly.
+fn withholds(
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    types: vk::DebugUtilsMessageTypeFlagsEXT,
+    data: &vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+) -> bool {
+    if severity != vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+        || !types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION)
+        || data.p_message_id_name.is_null()
+        || data.p_message.is_null()
+    {
+        return false;
+    }
+    // SAFETY: non-null strings of the callback data are NUL-terminated (Vulkan spec).
+    let (id_name, text) = unsafe {
+        (
+            CStr::from_ptr(data.p_message_id_name),
+            CStr::from_ptr(data.p_message),
+        )
+    };
+    EXPECTED_DIAGNOSTICS
+        .try_with(|expected| {
+            expected.try_borrow().is_ok_and(|expected| {
+                expected.iter().any(|d| {
+                    id_name.to_bytes() == d.id_name.as_bytes()
+                        && data.message_id_number == d.id
+                        && text.to_bytes() == d.text.as_bytes()
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// How many messages this process has echoed ([`echo_validation_messages`]).
@@ -643,6 +796,7 @@ fn only_errors_and_validation_warnings_fail_a_row() {
     assert!(!fails_row(S::VERBOSE, T::VALIDATION));
     let sink = MessageSink {
         messages: Mutex::new(Vec::new()),
+        making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
     };
     for n in 0..100 {
@@ -661,6 +815,7 @@ fn only_errors_and_validation_warnings_fail_a_row() {
 fn the_loaders_reports_of_ignored_drivers_fail_no_row() {
     let sink = MessageSink {
         messages: Mutex::new(Vec::new()),
+        making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
     };
     let loader = "Loader Message";
@@ -677,6 +832,64 @@ fn the_loaders_reports_of_ignored_drivers_fail_no_row() {
     sink.record("error", loader.into(), ignored.into());
     let kept = sink.take();
     assert_eq!(kept, [format!("error VUID-test: {ignored}")]);
+}
+
+/// The executor's callback withholds MoltenVK's warning of a pipeline whose restart is dynamic
+/// inside the call that expects it alone: the same message outside it, from another thread while
+/// it runs, at another severity, or with another text fails the row.
+#[test]
+fn an_expected_diagnostic_fails_no_row_inside_its_call_alone() {
+    use metal2vulkan::vk::{DynamicState as D, PrimitiveTopology as P};
+    use std::ffi::CString;
+    use vk::DebugUtilsMessageSeverityFlagsEXT as S;
+    use vk::DebugUtilsMessageTypeFlagsEXT as T;
+    let warning = restart_warning(&[D::PRIMITIVE_RESTART_ENABLE], P::TRIANGLE_STRIP)
+        .expect("the warning of a dynamic restart");
+    assert_eq!(
+        restart_warning(&[D::PRIMITIVE_RESTART_ENABLE], P::TRIANGLE_LIST),
+        None
+    );
+    let sink = MessageSink {
+        messages: Mutex::new(Vec::new()),
+        making: OnceLock::new(),
+        unsupported_sets: AtomicBool::new(false),
+    };
+    let user = std::ptr::from_ref(&sink) as usize;
+    let report = |severity: S, text: &str| {
+        let id_name = CString::new(warning.id_name).unwrap();
+        let text = CString::new(text).unwrap();
+        let data = vk::DebugUtilsMessengerCallbackDataEXT::default()
+            .message_id_name(&id_name)
+            .message_id_number(warning.id)
+            .message(&text);
+        // SAFETY: the callback data and its strings live for the call, and `user` is the sink,
+        // alive for the test.
+        unsafe {
+            record_validation_message(
+                severity,
+                T::VALIDATION,
+                &data,
+                user as *mut std::ffi::c_void,
+            )
+        };
+    };
+    report(S::WARNING, &warning.text);
+    assert_eq!(sink.take().len(), 1, "outside the call");
+    expecting_diagnostics(vec![warning.clone()], || {
+        report(S::WARNING, &warning.text);
+        assert_eq!(sink.take().len(), 0, "inside the call");
+        std::thread::scope(|scope| {
+            scope.spawn(|| report(S::WARNING, &warning.text));
+        });
+        report(S::ERROR, &warning.text);
+        report(
+            S::WARNING,
+            "VK_ERROR_FEATURE_NOT_PRESENT: Metal does not support something else.",
+        );
+        assert_eq!(sink.take().len(), 3, "another thread, severity or text");
+    });
+    report(S::WARNING, &warning.text);
+    assert_eq!(sink.take().len(), 1, "after the call");
 }
 
 /// Refuse unless `VK_LAYER_KHRONOS_validation` is installed with the three instance extensions a
@@ -1225,6 +1438,12 @@ fn presented_extensions(
 }
 
 impl VulkanContext {
+    /// Whether the driver that executes is MoltenVK: its queried description's (false where the
+    /// query failed).
+    pub(super) fn executes_moltenvk(&self) -> bool {
+        self.queried_description.as_ref().is_ok_and(runs_moltenvk)
+    }
+
     /// Open a device of `device_type` for `purpose`: the only Vulkan device creation in this crate,
     /// and with its probes the only caller of [`create_instance`].
     fn new(device_type: DeviceType, purpose: Purpose) -> Result<Self, String> {
@@ -1260,6 +1479,7 @@ impl VulkanContext {
         // the messenger's user pointer can never dangle, whatever path creation takes.
         let messages: &'static MessageSink = Box::leak(Box::new(MessageSink {
             messages: Mutex::new(Vec::new()),
+            making: OnceLock::new(),
             unsupported_sets: AtomicBool::new(false),
         }));
         let messenger_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
@@ -1468,6 +1688,11 @@ impl VulkanContext {
                 description
             });
         if let Ok(description) = &opened_description {
+            let making = match runs_moltenvk(description) {
+                true => blendless_warnings(description),
+                false => Vec::new(),
+            };
+            let _ = messages.making.set(making);
             messages
                 .unsupported_sets
                 .store(makes_layouts_past_support(description), Ordering::Relaxed);

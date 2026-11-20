@@ -426,9 +426,11 @@ pub(super) fn front_face(state: &DrawDepthStencil) -> vk::FrontFace {
 
 /// Create the graphics pipeline of `pipeline` as `consumer` decides it: the pipeline and the
 /// duration of the `vkCreateGraphicsPipelines` call alone. The caller owns (and destroys) the
-/// pipeline.
+/// pipeline. On MoltenVK (`moltenvk`) the warning it reports inside that call of a pipeline whose
+/// primitive restart is dynamic fails no row (`device::restart_warning`).
 pub(super) fn create_graphics_pipeline(
     device: &ash::Device,
+    moltenvk: bool,
     pipeline: &RenderPipeline,
     consumer: &Consumer<'_>,
 ) -> Result<(vk::Pipeline, Duration), GraphicsError> {
@@ -618,10 +620,15 @@ pub(super) fn create_graphics_pipeline(
     if let Some(tessellation) = &tessellation {
         info = info.tessellation_state(tessellation);
     }
+    let expected = (super::device::restart_warning(&graphics.dynamic_states, topology))
+        .filter(|_| moltenvk)
+        .into_iter()
+        .collect();
     let clock = crate::budgets::CreationClock::start();
-    // SAFETY: every pointer in `info` outlives the call; the caller destroys the result.
-    let created =
-        unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) };
+    let created = super::device::expecting_diagnostics(expected, || {
+        // SAFETY: every pointer in `info` outlives the call; the caller destroys the result.
+        unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) }
+    });
     let elapsed = clock.read();
     match created {
         Ok(pipelines) => Ok((pipelines.first().copied().unwrap_or_default(), elapsed)),

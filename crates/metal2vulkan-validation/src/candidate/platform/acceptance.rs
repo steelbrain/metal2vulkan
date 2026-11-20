@@ -242,6 +242,7 @@ fn create(context: &VulkanContext, pipeline: &RowPipeline) -> Result<Acceptance,
                 };
             let created = graphics_pipeline::create_graphics_pipeline(
                 &context.device,
+                context.executes_moltenvk(),
                 p,
                 &graphics_pipeline::Consumer {
                     modules: &objects.modules,
