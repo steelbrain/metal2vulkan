@@ -26,8 +26,10 @@
 //! [`MetalSource::did_not_return`]: its recording is written by hand, record mode refuses it, and
 //! [`crate::buffer_texture::ends_metals_process`] refuses the call on the Metal side as the second
 //! line of defence. What the case pins is the one fact there is — Metal did not come back — against
-//! our typed refusal (`BufferTextureProblem::RowPitch`) at the same site, so a release where we
-//! stop refusing it reads as a divergence rather than as a pass.
+//! the runtime's typed error at the same site, so a release where it answers reads as a divergence
+//! rather than as a pass. The row is a texture buffer, which the runtime does not build
+//! (`Gap::TextureBuffer`); a 2D texture whose rows are closer than a row is
+//! `Refusal::BufferTextureLayout`.
 //!
 //! # What is deliberately not a case, and why
 //!
@@ -74,9 +76,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
 
 /// The shapes the making case asks about, in the order it asks them.
 ///
-/// Every row is one the runtime answers — a texture or Metal's own nil — and a device test of this
-/// module holds the table to that, because a row the runtime answers `Invalid` for is a row
-/// record mode would hand to Metal's assertion.
+/// No row is a shape the guard refuses ([`crate::buffer_texture::ends_metals_process`]), and a
+/// test of this module holds the table to that (`no_recorded_shape_would_end_metals_process`),
+/// because such a row is one record mode would hand to Metal's assertion.
 fn requests() -> Vec<Request> {
     let mut rows = Vec::new();
     // A texture buffer of 64 `R32Uint` texels: its row is 256 bytes.
@@ -135,11 +137,10 @@ fn requests() -> Vec<Request> {
     rows.push(
         Request::texture_2d(BUFFER, PixelFormat::R32Uint, [3, 2], 4, 256, 32).used(READ_WRITE),
     );
-    // A one-byte format at a pitch far wider than its row. Measured while writing this table: a
-    // pitch of 8 — the row exactly — is refused `Invalid` by the runtime, which by its own model
-    // means Metal stops the call, so the row that reached Metal is the padded one. Which pitches a
-    // 2D linear texture takes is Metal's own rule and belongs in the refusal surface rather than
-    // here, where it cannot be asked safely.
+    // A one-byte format at a pitch far wider than its row. The runtime takes any pitch of whole
+    // texels at least a row long (`Refusal::BufferTextureLayout` refuses the rest); which pitches
+    // Metal takes for a 2D linear texture is Metal's own rule and belongs in the refusal surface
+    // rather than here, where it cannot be asked safely, so the row asks a padded one.
     rows.push(
         Request::texture_2d(BUFFER, PixelFormat::R8Unorm, [8, 8], 1, 0, 256).used(READ_WRITE),
     );
@@ -223,8 +224,8 @@ const ASSERTED_IN: &str = "AGX's own assertion text, which this suite's own whol
 const ASSERTED_SAYS: &str =
     "a texture over a buffer whose bytesPerRow is below the texture's own row fails AGX's \
      assertion `bytes_per_row >= used_bytes_per_row`, which ends Metal's process in the call; the \
-     runtime refuses it typed (BufferTextureProblem::RowPitch) and that refusal is what the row \
-     pins";
+     runtime refuses it typed (it builds no texture buffer, Gap::TextureBuffer) and that refusal \
+     is what the row pins";
 
 /// The runs behind the answer: the finding met the assertion once and the process ended with it.
 const ASSERTED_RUNS: u32 = 1;
@@ -767,8 +768,8 @@ mod tests {
         assert_eq!(sites.len(), total, "two shapes of the table share a site");
     }
 
-    /// Every shape the bytes case lays over a buffer is also a row of the making table, whose
-    /// device guard has shown the runtime answers it.
+    /// Every shape the bytes case lays over a buffer is also a row of the making table, which the
+    /// guard holds away from Metal's assertion (`no_recorded_shape_would_end_metals_process`).
     ///
     /// Without this, the bytes case's safety would be a coincidence: its program makes its
     /// textures as resources, and a resource Metal stops would end the recorder's process before
@@ -788,8 +789,8 @@ mod tests {
             });
             assert!(
                 found,
-                "{}: its shape is not a row of the making table, so nothing has shown the runtime \
-                 answers it and record mode would hand it to Metal unguarded",
+                "{}: its shape is not a row of the making table, so no test holds it away from \
+                 Metal's assertion and record mode would hand it to Metal unguarded",
                 row.key
             );
         }

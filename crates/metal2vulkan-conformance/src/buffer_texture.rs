@@ -175,8 +175,9 @@ impl BufferTextureRequest {
 ///
 /// The one shape: a row pitch below the texture's own row. The AGX driver fails
 /// `bytes_per_row >= used_bytes_per_row` and ends the process, so the suite's standing rule — no
-/// case may end Metal's process — forbids the call outright. The runtime refuses it typed
-/// (`BufferTextureProblem::RowPitch`), which is what a case of this shape pins.
+/// case may end Metal's process — forbids the call outright. The runtime refuses it typed, which
+/// is what a case of this shape pins: a 2D texture whose rows are closer than a row is
+/// `Refusal::BufferTextureLayout`, and the texture buffer the case asks is `Gap::TextureBuffer`.
 ///
 /// A pitch **at or above** the row is refused by nothing here: a texture buffer takes any pitch
 /// that covers its texels (measured: 300 bytes over a 256-byte row), and a 2D texture's own rules

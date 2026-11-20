@@ -9,11 +9,10 @@
 //! (`probes/texture_buffer_past_length.m`, an Apple M3 Max under macOS 27.0.1). Over a 4096-byte
 //! buffer, whose `allocatedSize` is its length, that memory is the buffer allocated next, which no
 //! case can state; over a 20000-byte buffer, whose `allocatedSize` is 32768, it is the rest of the
-//! buffer's own allocation, and it reads zero. The runtime's lie in the buffer's memory too, as a
-//! buffer of 16 KiB or more holds its allocation, its length rounded up to 16 KiB, zero when
-//! made, which its functions view in place. So the case asks the second shape: 1024 `R32Uint`
-//! texels from byte 16384 of a 20000-byte buffer, the first 904 inside the
-//! length and the last 120 past it.
+//! buffer's own allocation, and it reads zero. So the case asks the second shape, where Metal's
+//! answer is one a case can compare: 1024 `R32Uint` texels from byte 16384 of a 20000-byte
+//! buffer, the first 904 inside the length and the last 120 past it. The runtime builds no texture
+//! buffer (`Gap::TextureBuffer`, its README, Textures), so no run of it reaches the texels.
 //!
 //! `buffer-tails-texture-buffer` reads texels through `ob1_texel_buffer` (the owned fixture whose
 //! thread `t` of eight reads texel `idx[t]` of its first texture buffer and writes `0xA0000000 |
