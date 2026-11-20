@@ -1818,8 +1818,9 @@ fn a_refused_stage_in_row_is_its_refusal_alone() {
             continue;
         }
         let recording = crate::recording::read(case.name()).unwrap();
+        // The stub answers every pipeline call by the one name `pipeline`.
         let mut side = StubSide::new(Vec::new()).refusing(
-            "compute_pipeline_with_stage_input",
+            "pipeline",
             Failure::named(
                 "Error::Unsupported",
                 "the kernel reads an input the compute encoder does not supply yet",
