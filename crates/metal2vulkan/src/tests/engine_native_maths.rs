@@ -1,5 +1,4 @@
-//! The device's forms of Metal's maths: on a device whose `float` functions are not Metal's own,
-//! the maths functions, divisions and fused multiply-adds (`NativeTranscendentals`,
+//! The device's forms of Metal's maths: on every device the maths functions, divisions and fused multiply-adds (`NativeTranscendentals`,
 //! `NativeDivision`, `NativeFma`) and `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`,
 //! `NativeTranscendentals`) are the device's instructions, each recording its kinds; and on every
 //! device not measured to answer Metal's, the NaN and the minimum and maximum are the device's
@@ -9,9 +8,8 @@
 //! `sin`, `exp`, `atan2` and `pow`, a precise and an `arcp` division, a `half` `fma`, an addition,
 //! an `fmin`, a `saturate`, a `fast::sqrt`, a `dot` and a `float` and a `half` `mix`. On lavapipe
 //! each records its kind; the interpreter's answers stay within the bound the kind's docs state.
-//! `dot`, `mix` and `fast::sqrt` are the device's instructions on MoltenVK too, where a `float`
-//! one is MSL's own function and records no note. `llvm-as` assembles the module; without it the
-//! tests skip visibly.
+//! `dot`, `mix` and `fast::sqrt` are the device's instructions on MoltenVK too, each noted.
+//! `llvm-as` assembles the module; without it the tests skip visibly.
 
 use crate::air::{self, SpecRequest};
 use crate::device::profile::{DeviceProfile, FloatFunctions};
@@ -26,7 +24,7 @@ use crate::pipeline::testing::{
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run, Buffer, Config, Resources};
-use crate::spirv::testing::{committed_profiles_with, is_moltenvk_capture};
+use crate::spirv::testing::committed_profiles_with;
 
 const OP_FUNCTION: u32 = 54;
 
@@ -213,18 +211,13 @@ fn ulps(got: f32, want: f64) -> f64 {
     (f64::from(got) - want).abs() / ulp
 }
 
-/// On every committed profile but the MoltenVK captures, whose functions are Metal's own, the maths
-/// functions are the device's.
+/// On every committed profile the maths functions are the device's.
 #[test]
-fn the_maths_functions_are_the_device_s_but_on_moltenvk() {
+fn the_maths_functions_are_the_device_s() {
     let profiles = committed_profiles_with(DevicePolicy::default()).expect("profiles");
     assert!(profiles.len() >= 10, "{} profiles", profiles.len());
     for (stem, p) in &profiles {
-        assert_eq!(
-            p.fields().float_functions == FloatFunctions::Native,
-            !is_moltenvk_capture(stem),
-            "{stem}"
-        );
+        assert_eq!(p.fields().float_functions, FloatFunctions::Native, "{stem}");
     }
 }
 
@@ -326,9 +319,8 @@ fn instructions(words: &[u32]) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// `dot` is the device's `OpDot` and `mix` its `FMix` (a `half` one rounded once), with no fused
-/// multiply-add, and `fast::sqrt` the device's `Sqrt`, on lavapipe and on MoltenVK alike. On
-/// lavapipe each records its note; on MoltenVK a `float` `dot` and `mix` are MSL's own and record
-/// none, and a `half` `mix` records `NativeMix`. On the interpreter's model of the instructions each
+/// multiply-add, and `fast::sqrt` the device's `Sqrt`, on lavapipe and on MoltenVK alike, each
+/// recording its note. On the interpreter's model of the instructions each
 /// answer is within the bound its note states (`fast::sqrt` within Vulkan's `1 / InverseSqrt`, 4.5
 /// ulp, on lavapipe).
 #[test]
@@ -344,16 +336,11 @@ fn dot_mix_and_fast_sqrt_are_the_device_s_on_every_profile() {
         crate::spv::GlslStd450Op::Sqrt as u32,
     );
     for (p, stem) in [(&on, "lavapipe"), (&metal, "moltenvk-m3")] {
-        let own = p.fields().float_functions == FloatFunctions::Metal;
-        for (name, note, float) in [
-            ("native_dot", PrecisionNote::NativeDot, true),
-            ("native_mix", PrecisionNote::NativeMix, true),
-            ("native_half_mix", PrecisionNote::NativeMix, false),
-            (
-                "native_fast_sqrt",
-                PrecisionNote::NativeTranscendentals,
-                true,
-            ),
+        for (name, note) in [
+            ("native_dot", PrecisionNote::NativeDot),
+            ("native_mix", PrecisionNote::NativeMix),
+            ("native_half_mix", PrecisionNote::NativeMix),
+            ("native_fast_sqrt", PrecisionNote::NativeTranscendentals),
         ] {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -368,12 +355,7 @@ fn dot_mix_and_fast_sqrt_are_the_device_s_on_every_profile() {
                 "native_fast_sqrt" => assert!(ext.contains(&sqrt), "{what}: {ext:?}"),
                 _ => assert!(ext.contains(&fmix), "{what}: {ext:?}"),
             }
-            assert_eq!(
-                a.precision.contains(&note),
-                !(own && float),
-                "{what}: {:?}",
-                a.precision
-            );
+            assert!(a.precision.contains(&note), "{what}: {:?}", a.precision);
         }
     }
     for p in [&on, &metal] {

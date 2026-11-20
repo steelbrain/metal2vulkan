@@ -7,27 +7,23 @@
 //! variable); `fixed` keeps an array of `N` words it reaches only at constant indices; `plain`
 //! keeps no private memory.
 //!
-//! - On a measured device (the RTX 5080: 32 KiB a thread) an array of exactly 32 KiB compiles
-//!   with no note, and 64 bytes more is `Unsupported{PrivateMemory}` needing that much, in a
-//!   kernel, a vertex and a fragment function alike. The RTX 3090, measured at 128 KiB, holds an
-//!   array of 128 KiB alike, with no note, and the RX 7900 XTX, measured at 96 KiB, one of 96 KiB.
-//! - On a device not measured (`amd-rdna3-radv`) the floor, 16 KiB, holds with no note: an array
-//!   of 16 KiB, the constant table, a kernel without private memory. Past it a kernel is refused
-//!   needing it, and a vertex or fragment function runs, recording
+//! - Every device's Function storage is the floor, 16 KiB, which holds with no note: an array of
+//!   16 KiB, the constant table, a kernel without private memory (`amd-rdna3-radv`). Past it a
+//!   kernel is refused needing it, and a vertex or fragment function runs, recording
 //!   `PrecisionNote::FunctionStorageAssumed`, up to the 192 KiB Metal was measured to hold; 64
 //!   bytes more is refused needing that.
-//! - An array reached only at constant indices counts nothing: three times the RTX 5080's 32 KiB
-//!   compiles there, and records no note on a device not measured.
+//! - An array reached only at constant indices counts nothing: six times the floor compiles with
+//!   no note on the RTX 5080's profile and RDNA 3's.
 //! - An array whose every index the constants bound counts only what they reach: the kernel
-//!   `reached` declares 256 KiB and reaches 128 bytes of it, which both devices hold with no note;
-//!   with one index unbounded it keeps the 256 KiB and is refused on both. So do the owned MSL
-//!   fixtures `engine/private_reach_tiles`'s kernels on the RX 7900 XTX: one whose tile sizes,
+//!   `reached` declares 256 KiB and reaches 128 bytes of it, which both profiles hold with no
+//!   note; with one index unbounded it keeps the 256 KiB and is refused on both. So do the owned
+//!   MSL fixtures `engine/private_reach_tiles`'s kernels on RDNA 3's profile: one whose tile sizes,
 //!   function constants, reach 128 bytes of its 256 KiB, and one whose loop a buffer word bounds.
 //!
 //! `llvm-as` assembles the functions; a missing tool skips visibly.
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, VkLimit};
+use crate::device::{DeviceProfile, VkLimit};
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::library::{FunctionConstantValue, FunctionConstantValues};
 use crate::lower::select::LowerInputs;
@@ -202,20 +198,6 @@ fn notes_on(
     }))
 }
 
-/// The profile of the committed capture `stem` under the device ID `id`: a device of no committed
-/// capture, through the capture of one of its driver and kind.
-fn captured_as(stem: &str, id: u32) -> DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut d = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    d.device_id = id;
-    Device::from_queries(d, DevicePolicy::default())
-        .expect("device")
-        .profile()
-        .clone()
-}
-
 /// On a device not measured the floor holds with no note: 4096 words, the constant table and a
 /// kernel without private memory record nothing, in a kernel, a vertex and a fragment function
 /// alike. A kernel of 4112 words does not fit.
@@ -262,8 +244,8 @@ fn render_stages_past_the_floor_of_a_device_not_measured_run_noted_up_to_metal_s
 }
 
 /// An array reached only at constant indices counts nothing: a driver holds its parts in registers.
-/// Three times the RTX 5080's measured 32 KiB compiles there, and on a device not measured it
-/// records no note; the same array indexed at run time is refused.
+/// Six times the floor's 16 KiB compiles with no note on the RTX 5080's profile and on RDNA 3's;
+/// the same array indexed at run time is refused.
 #[test]
 fn an_array_reached_only_at_constant_indices_counts_nothing() {
     let n = 3 * 8192;
@@ -282,7 +264,7 @@ fn an_array_reached_only_at_constant_indices_counts_nothing() {
         "{floor:?}"
     );
     let indexed = notes("nvidia-rtx5080-laptop", n, "words").expect("assembled");
-    assert_eq!(indexed.map(|_| ()), needs(u64::from(n) * 4, 32 * 1024));
+    assert_eq!(indexed.map(|_| ()), needs(u64::from(n) * 4, 16 * 1024));
 }
 
 /// The kernel `reached` keeps `float a[64][64][16]`, 256 KiB a thread, as a kernel written for its
@@ -343,9 +325,9 @@ done:
 
 /// An array whose every index the constants bound keeps only what its indices reach: `float
 /// a[64][64][16]` (256 KiB) reached at `a[0..2][0..4][3]` and `a[gid & 1][3][3]` is allocated as
-/// `float a[2][4][4]`, 128 bytes a thread, which the RTX 5080's 32 KiB and the floor of a device
-/// not measured hold with no note. Read at `a[gid][3][3]`, an index with no bound, it keeps its
-/// 256 KiB and is refused on both, needing them.
+/// `float a[2][4][4]`, 128 bytes a thread, which the floor's 16 KiB holds with no note on the RTX
+/// 5080's profile and RDNA 3's. Read at `a[gid][3][3]`, an index with no bound, it keeps its 256
+/// KiB and is refused on both, needing them.
 #[test]
 fn an_array_its_bounded_indices_reach_in_part_keeps_only_that_part() {
     let assumed = PrecisionNote::FunctionStorageAssumed;
@@ -353,17 +335,14 @@ fn an_array_its_bounded_indices_reach_in_part_keeps_only_that_part() {
         return;
     };
     let unbounded = reached("add i32 %gid, 0").expect("assembled");
-    for (stem, available) in [
-        ("nvidia-rtx5080-laptop", 32 * 1024),
-        ("amd-rdna3-radv", 16 * 1024),
-    ] {
+    for stem in ["nvidia-rtx5080-laptop", "amd-rdna3-radv"] {
         let p = profile(stem, Default::default()).expect("profile");
         let a = compile(&bounded, "reached", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         assert_eq!(a.interface.private_bytes, 2 * 4 * 4 * 4, "{stem}");
         assert!(!a.precision.contains(&assumed), "{stem}: {:?}", a.precision);
         let declared = compile(&unbounded, "reached", &p).map(|_| ());
-        assert_eq!(declared, needs(64 * 64 * 16 * 4, available), "{stem}");
+        assert_eq!(declared, needs(64 * 64 * 16 * 4, 16 * 1024), "{stem}");
     }
 }
 
@@ -383,8 +362,8 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 /// thread keeping `float acc[32][32][4][4][4]`, 256 KiB, and calling the visible function
 /// `postfix`) and `engine/private_reach_functions` (`postfix`), compiled from MSL by the Metal
 /// compiler. With the tile sizes 2 and 4 (function constants 0 and 1) `private_reach_tiles`
-/// reaches `acc[0..2][0..4][0..4][0][0]`: it holds 128 bytes a thread, which the RX 7900 XTX's 96
-/// KiB holds with no note, and validates. `private_reach_rows`, whose outer loop runs as often as
+/// reaches `acc[0..2][0..4][0..4][0][0]`: it holds 128 bytes a thread, which the floor's 16 KiB
+/// holds with no note on RDNA 3's profile, and validates. `private_reach_rows`, whose outer loop runs as often as
 /// a word of its input says, keeps the 256 KiB and is refused needing them.
 #[test]
 fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
@@ -400,7 +379,7 @@ fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
         .with_index(1, uint(4));
     let none = FunctionConstantValues::defaults();
     let linked = [LinkedSource::new("postfix", &functions, &none)];
-    let p = captured_as("amd-rdna3-radv", 0x744c);
+    let p = profile("amd-rdna3-radv", Default::default()).expect("profile");
     let kernel = |name| {
         compile_bitcode_linked(
             &tiles,
@@ -421,5 +400,5 @@ fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
         a.precision
     );
     let rows = kernel("private_reach_rows").map(|_| ());
-    assert_eq!(rows, needs(32 * 32 * 4 * 4 * 4 * 4, 96 * 1024));
+    assert_eq!(rows, needs(32 * 32 * 4 * 4 * 4 * 4, 16 * 1024));
 }

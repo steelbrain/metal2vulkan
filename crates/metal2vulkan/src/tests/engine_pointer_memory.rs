@@ -2308,10 +2308,20 @@ fn accesses_through_a_loaded_pointer_read_no_root_entry_in_a_loop() {
                 continue;
             }
             kernel_loops += 1;
-            let loads = insts()
+            let loads: Vec<_> = insts()
                 .filter(|n| matches!(&n.inst, Inst::Load { ptr, .. } if is_entry_load(*ptr)))
-                .count();
-            assert_eq!(loads, 0, "{what}: root-entry loads in the loop");
+                .map(|n| {
+                    // The load and the instruction that forms its pointer.
+                    let formed = m.blocks().iter().flat_map(|b| &b.insts).find(
+                        |d| matches!(&n.inst, Inst::Load { ptr, .. } if d.result == Some(*ptr)),
+                    );
+                    format!("{n:?} <- {formed:?}")
+                })
+                .collect();
+            assert!(
+                loads.is_empty(),
+                "{what}: root-entry loads in the loop: {loads:#?}"
+            );
         }
         assert_eq!(kernel_loops, 1, "{what}: the kernel's loop");
     }

@@ -863,11 +863,10 @@ fn a_stack_past_metals_is_refused() {
 /// Stacks past the device's Function storage are `Unsupported{Recursion}` needing more, counted
 /// with the rest of the kernel's run-time-indexed private memory: a stack is indexed by its depth,
 /// and the 4-byte variable each machine keeps its depth in is reached at a constant offset, so it
-/// counts nothing. On the RTX 5080's measured 32 KiB a thread: `drec`'s `k` 8-byte frames fit to
-/// depth 4096; the table kernel's two stacks of `3k` 8-byte frames fit at depth 682 and not at 683;
-/// the large frame's `k` of 264 bytes fit at depth 124 and not at 125. On a device not measured,
-/// such as another RADV GPU than the Radeon 780M, the floor of 16 KiB holds: `drec`'s frames fit to
-/// depth 2048.
+/// counts nothing. Every device holds the floor's 16 KiB a thread: on the RTX 5080's profile
+/// `drec`'s `k` 8-byte frames fit to depth 2048; the table kernel's two stacks of `3k` 8-byte frames
+/// fit at depth 341 and not at 342; the large frame's `k` of 264 bytes fit at depth 62 and not at
+/// 63; on RDNA 3's `drec`'s frames fit to depth 2048 too.
 #[test]
 fn stacks_past_the_device_s_function_storage_are_refused() {
     let Some(bitcode) = module() else {
@@ -875,9 +874,9 @@ fn stacks_past_the_device_s_function_storage_are_refused() {
     };
     let (nv, radv, kib) = ("nvidia-rtx5080-laptop", "amd-rdna3-radv", 1024);
     let cases = [
-        (nv, DIRECT, 4096, 4097 * 8, 32 * kib),
-        (nv, TABLE, 682, 2 * 3 * 683 * 8, 32 * kib),
-        (nv, BIG, 124, 125 * 264, 32 * kib),
+        (nv, DIRECT, 2048, 2049 * 8, 16 * kib),
+        (nv, TABLE, 341, 2 * 3 * 342 * 8, 16 * kib),
+        (nv, BIG, 62, 63 * 264, 16 * kib),
         (radv, DIRECT, 2048, 2049 * 8, 16 * kib),
     ];
     let mut wrong = Vec::new();

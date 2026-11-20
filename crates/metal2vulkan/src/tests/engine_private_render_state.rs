@@ -22,8 +22,7 @@
 //!   sample mask: alike at every place the Vulkan mask, else applied by the fragment function from
 //!   its pixel.
 //! - A single-sampled attachment of a signed normalized format notes the minimum code Metal's
-//!   pass rewrites (`PrecisionNote::SnormMinimumKept`) on the fragment stage through
-//!   `Device::from_queries`, and nowhere through `Device::new`.
+//!   pass rewrites (`PrecisionNote::SnormMinimumKept`) on the fragment stage.
 //! - Each property not built refuses a value other than Metal's default `NotImplemented`, naming
 //!   it (the coverage at 8 samples, where Metal was not measured). A compute pipeline's `needs_custom_border_color_samplers`, which changes nothing, keeps
 //!   its key.
@@ -521,9 +520,8 @@ fn each_property_not_built_refuses_a_value_other_than_metals_default() {
 }
 
 /// A pipeline that draws single-sampled into an attachment of each signed normalized format
-/// records `PrecisionNote::SnormMinimumKept` on its fragment stage alone through
-/// `Device::from_queries`; through `Device::new`, whose note `metal2vulkan-runtime` announces at
-/// the draw, at four samples, and into an unsigned or float attachment, no stage records it.
+/// records `PrecisionNote::SnormMinimumKept` on its fragment stage alone; at four samples, and into
+/// an unsigned or float attachment, no stage records it.
 #[test]
 fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -542,9 +540,7 @@ fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
         })
     };
     for stem in STEMS {
-        let new = device(stem);
-        let desc = crate::pipeline::testing::description(stem).expect("description");
-        let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let queries = device(stem);
         for pf in [
             PixelFormat::R8Snorm,
             PixelFormat::RG8Snorm,
@@ -557,11 +553,6 @@ fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
             let p = compile(&queries, &with(pf, 1), &what);
             assert!(noted(&p, ShaderStage::FRAGMENT), "{what}");
             assert!(!noted(&p, ShaderStage::VERTEX), "{what}");
-            let p = compile(&new, &with(pf, 1), &what);
-            assert!(
-                !noted(&p, ShaderStage::FRAGMENT),
-                "{what} through Device::new"
-            );
         }
         let p = compile(&queries, &with(PixelFormat::RGBA8Snorm, 4), stem);
         assert!(!noted(&p, ShaderStage::FRAGMENT), "{stem} at four samples");
@@ -573,9 +564,8 @@ fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
 }
 
 /// A pipeline that draws single-sampled into an `RGB9E5Float` attachment records
-/// `PrecisionNote::SharedExponentKept` on its fragment stage alone through `Device::from_queries`;
-/// through `Device::new`, whose note `metal2vulkan-runtime` announces at the draw, and into another
-/// float or a signed normalized attachment, no stage records it, nor at four samples where the
+/// `PrecisionNote::SharedExponentKept` on its fragment stage alone; into another float or a signed
+/// normalized attachment no stage records it, nor at four samples where the
 /// profile builds that pipeline: lavapipe renders the format through an `R32_UINT` word view and
 /// refuses four samples for want of a 4-sample integer color count, so MoltenVK's profile is the
 /// one that holds the sample-count gate here.
@@ -600,18 +590,11 @@ fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
     };
     let mut multisampled = 0;
     for stem in STEMS {
-        let new = device(stem);
-        let desc = crate::pipeline::testing::description(stem).expect("description");
-        let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let queries = device(stem);
         let what = format!("{stem} RGB9E5Float");
         let p = compile(&queries, &with(PixelFormat::RGB9E5Float, 1), &what);
         assert!(noted(&p, ShaderStage::FRAGMENT), "{what}");
         assert!(!noted(&p, ShaderStage::VERTEX), "{what}");
-        let p = compile(&new, &with(PixelFormat::RGB9E5Float, 1), &what);
-        assert!(
-            !noted(&p, ShaderStage::FRAGMENT),
-            "{what} through Device::new"
-        );
         match queries
             .compile_render_pipeline(&with(PixelFormat::RGB9E5Float, 4), &Budget::standard())
         {

@@ -34,7 +34,7 @@ use crate::bind::BindState;
 use crate::budget::Budget;
 use crate::device::requirements::{VkExtension, VkFeature, VkProperty};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
+use crate::error::{Capability, Error, Feature, LowerFamily, Needs, Unsupported};
 use crate::library::Library;
 use crate::metal::{PixelFormat, VertexFormat};
 use crate::pipeline::artifact::PrecisionNote;

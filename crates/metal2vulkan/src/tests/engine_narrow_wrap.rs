@@ -4,10 +4,10 @@
 //! the low bits (another wrapping operation, a truncation, a sign extension, a signed divide's
 //! operand), one that passes the bits on (a `select`, a phi, a bitwise and or or) and one that
 //! reads them (a zero extension, a comparison, a logical shift right). `Device::from_queries`
-//! drops the wrap of every result whose bits above its width no use reads and keeps every other;
-//! `Device::new` keeps them all. Both translate and validate on every committed profile, and both
-//! answer the same words, LLVM's, on the CPU interpreter. `llvm-as` assembles the kernel; without it
-//! the tests skip visibly. No GPU is used.
+//! drops the wrap of every result whose bits above its width no use reads and keeps every other.
+//! The kernel translates and validates on every committed profile, and answers LLVM's words on the
+//! CPU interpreter. `llvm-as` assembles the kernel; without it the tests skip visibly. No GPU is
+//! used.
 
 use std::collections::BTreeMap;
 
@@ -223,20 +223,11 @@ fn bitcode() -> Option<Vec<u8>> {
     }
 }
 
-/// The two profiles of committed description `stem`: `Device::new`'s and `Device::from_queries`'.
-fn both(stem: &str) -> [(&'static str, DeviceProfile); 2] {
-    let new = Device::from_queries(
-        description(stem).expect("description"),
-        DevicePolicy::default(),
-    );
-    let queries = Device::from_queries(
-        description(stem).expect("description"),
-        DevicePolicy::default(),
-    );
-    [
-        ("new", new.expect("device").profile().clone()),
-        ("from_queries", queries.expect("device").profile().clone()),
-    ]
+/// `Device::from_queries`' profile of committed description `stem`.
+fn queried(stem: &str) -> DeviceProfile {
+    let desc = description(stem).expect("description");
+    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    device.profile().clone()
 }
 
 /// Each narrow integer operation of `plan`, in the kernel's order, with whether it masks.
@@ -254,29 +245,23 @@ fn wraps(plan: &Plan) -> Vec<(BinOp, bool)> {
         .collect()
 }
 
-/// On every committed profile, `Device::new`'s keeps every narrow result's wrap and
-/// `Device::from_queries`' drops exactly the unread ones; both translate and validate.
+/// On every committed profile, `Device::from_queries`' drops exactly the unread narrow results'
+/// wraps; the kernel translates and validates.
 #[test]
 fn from_queries_masks_only_the_narrow_bits_a_use_reads() {
     let Some(bc) = bitcode() else {
         return;
     };
     let read: Vec<_> = READ_WRAPS.to_vec();
-    let every: Vec<_> = READ_WRAPS.iter().map(|&(op, _)| (op, true)).collect();
-    for (stem, _) in &committed_profiles().expect("profiles") {
-        for (ctor, p) in both(stem) {
-            let what = format!("{ctor} on {stem}");
-            let (plan, _) =
-                typed_module(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let want = if ctor == "new" { &every } else { &read };
-            assert_eq!(&wraps(&plan), want, "{what}");
-            let a = compile(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        }
+    for (stem, p) in &committed_profiles().expect("profiles") {
+        let (plan, _) = typed_module(&bc, ENTRY, p).unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        assert_eq!(wraps(&plan), read, "{stem}");
+        let a = compile(&bc, ENTRY, p).unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: {e}"));
     }
 }
 
-/// Both profiles' modules answer LLVM's words over every pair of edges on the CPU interpreter.
+/// The module answers LLVM's words over every pair of edges on the CPU interpreter.
 #[test]
 fn unmasked_narrow_results_answer_the_same_words() {
     let Some(bc) = bitcode() else {
@@ -284,45 +269,45 @@ fn unmasked_narrow_results_answer_the_same_words() {
     };
     let input: Vec<u8> = EDGES.iter().flat_map(|w| w.to_le_bytes()).collect();
     let expected: Vec<u32> = (0..THREADS).flat_map(want).collect();
-    for (ctor, p) in both("nvidia-rtx50-linux") {
-        let (plan, m) = typed_module(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{ctor}: {e:?}"));
-        let mut spec = BTreeMap::new();
-        for (axis, v) in [(Axis::X, THREADS), (Axis::Y, 1), (Axis::Z, 1)] {
-            spec.insert(SpecKey::LocalSize(axis), u64::from(v));
-        }
-        spec.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
-        let buffers = [input.clone(), vec![0xAB; THREADS as usize * WORDS * 4]];
-        let res = Resources {
-            buffers: buffers
-                .iter()
-                .enumerate()
-                .map(|(i, bytes)| Buffer {
-                    slot: Some(ResourceSlot {
-                        stage: Stage::Kernel,
-                        kind: ResourceKind::Buffer,
-                        index: i as u32,
-                    }),
-                    address: None,
-                    bytes: bytes.clone(),
-                })
-                .collect(),
-            push: vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)],
-            spec,
-        };
-        let cfg = Config {
-            order: Order::Forward,
-            ..Config::default()
-        };
-        let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{ctor}: {e:?}"));
-        let got: Vec<u32> = out.buffers[1]
-            .as_chunks::<4>()
-            .0
+    let ctor = "nvidia-rtx50-linux";
+    let p = queried(ctor);
+    let (plan, m) = typed_module(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{ctor}: {e:?}"));
+    let mut spec = BTreeMap::new();
+    for (axis, v) in [(Axis::X, THREADS), (Axis::Y, 1), (Axis::Z, 1)] {
+        spec.insert(SpecKey::LocalSize(axis), u64::from(v));
+    }
+    spec.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
+    let buffers = [input, vec![0xAB; THREADS as usize * WORDS * 4]];
+    let res = Resources {
+        buffers: buffers
             .iter()
-            .map(|w| u32::from_le_bytes(*w))
-            .collect();
-        for (i, (g, w)) in got.iter().zip(&expected).enumerate() {
-            let (gid, k) = (i / WORDS, i % WORDS);
-            assert_eq!(g, w, "{ctor}: thread {gid} word {k}");
-        }
+            .enumerate()
+            .map(|(i, bytes)| Buffer {
+                slot: Some(ResourceSlot {
+                    stage: Stage::Kernel,
+                    kind: ResourceKind::Buffer,
+                    index: i as u32,
+                }),
+                address: None,
+                bytes: bytes.clone(),
+            })
+            .collect(),
+        push: vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)],
+        spec,
+    };
+    let cfg = Config {
+        order: Order::Forward,
+        ..Config::default()
+    };
+    let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{ctor}: {e:?}"));
+    let got: Vec<u32> = out.buffers[1]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
+        .collect();
+    for (i, (g, w)) in got.iter().zip(&expected).enumerate() {
+        let (gid, k) = (i / WORDS, i % WORDS);
+        assert_eq!(g, w, "{ctor}: thread {gid} word {k}");
     }
 }

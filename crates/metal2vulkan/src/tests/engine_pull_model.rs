@@ -4,27 +4,19 @@
 //!
 //! - An `interpolant` read at the center alone compiles everywhere, as a center varying is read:
 //!   at four samples through its pixel-center form (`InterpolateAtOffset` at offset 0) where the
-//!   device has one and does not read center varyings at the pixel itself.
+//!   device has one.
 //! - A read at the centroid, a sample or an offset is `GLSL.std.450`'s `InterpolateAtCentroid`,
 //!   `InterpolateAtSample` or `InterpolateAtOffset`, which need `sampleRateShading` (and on a
 //!   portability-subset device `shaderSampleRateInterpolationFunctions`): a device without them
 //!   refuses the function, `Unsupported(PullModelInterpolation)` naming what it lacks.
 //! - A sample's index is masked to the pipeline's sample count (`SpecKey::SampleCount`, which the
 //!   plan sets), as Metal reads sample `i mod n`.
-//! - An offset is moved to the device's origin and clamped (`NClamp`) to its interpolation offset
-//!   range: by 7/16 on MoltenVK, whose SPIRV-Cross adds 7/16 back, requiring
-//!   `InterpolateAtOffsetFromSevenSixteenths`; by a half elsewhere, requiring
-//!   `InterpolateAtOffsetCentered`. The function records `PrecisionNote::DeviceInterpolationOffset`.
-//! - On RADV, whose driver answers a perspective read at a sample or an offset with the pixel
-//!   center's value extrapolated along the quad's derivatives
-//!   (`DriverWorkaround::PerspectiveReadsExtrapolated`), a function that reads a perspective
-//!   interpolant at a sample or an offset records `PrecisionNote::ExtrapolatedInterpolation`, and
-//!   one that reads its no-perspective interpolants alone so (`pm_linear`), or reads only at the
-//!   center or the centroid, records nothing; no other profile records it.
-//! - On RADV (`DriverWorkaround::InterpolationNeedsTheWholeQuad`) an offset read after a discard
-//!   is refused, where some of the quad's invocations may have left; on a driver that shades a
-//!   triangle it clips as several (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`:
-//!   lavapipe) a centroid read of a multisampled pixel is refused as a centroid varying is.
+//! - An offset is moved to the device's origin, a half, and clamped (`NClamp`) to its interpolation
+//!   offset range, requiring `InterpolateAtOffsetCentered`. The function records
+//!   `PrecisionNote::DeviceInterpolationOffset`, and no profile records
+//!   `PrecisionNote::ExtrapolatedInterpolation`.
+//! - An offset read after a discard and a centroid read of a multisampled pixel compile on every
+//!   profile whose reads they need.
 //! - An interpolant chosen at run time (a `select` of two) is not lowered,
 //!   `NotImplemented(PullModelInterpolation)`.
 //!
@@ -32,13 +24,12 @@
 //! stage module. `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
 use super::engine_multisample::{
-    description, ext_insts, fragment_words, library, pixel_form, planned, reads_center_at_pixel,
-    stems, validate,
+    description, ext_insts, fragment_words, library, pixel_form, planned, stems, validate,
 };
 use crate::bind::BindState;
 use crate::budget::Budget;
 use crate::device::requirements::{VkExtension, VkFeature, VkProperty};
-use crate::device::{Device, DevicePolicy, DriverWorkaround};
+use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::metal::PixelFormat;
 use crate::pipeline::artifact::PrecisionNote;
@@ -61,7 +52,7 @@ const INTERPOLATE_AT_SAMPLE: u32 = 77;
 const INTERPOLATE_AT_OFFSET: u32 = 78;
 const N_CLAMP: u32 = 81;
 
-/// The bits of 7/16, MoltenVK's offset origin.
+/// The bits of 7/16, where an interpolation offset range may end.
 const SEVEN_SIXTEENTHS: u32 = 0x3EE0_0000;
 
 /// Where a fragment function reads its interpolants.
@@ -182,31 +173,15 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
         return;
     };
     let mut compiled = 0usize;
-    let mut extrapolations = 0usize;
     let mut refused = Vec::new();
     for stem in stems() {
         let dev =
             Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         let functions = interpolation_functions(&dev);
         let fields = dev.profile().fields();
-        let centered = fields
-            .enabled
-            .properties
-            .contains(&VkProperty::InterpolateAtOffsetCentered);
-        let origin = match centered {
-            true => VkProperty::InterpolateAtOffsetCentered,
-            false => VkProperty::InterpolateAtOffsetFromSevenSixteenths,
-        };
-        let whole_quad = fields
-            .workarounds
-            .contains(&DriverWorkaround::InterpolationNeedsTheWholeQuad);
-        let extrapolates = fields
-            .workarounds
-            .contains(&DriverWorkaround::PerspectiveReadsExtrapolated);
+        let origin = VkProperty::InterpolateAtOffsetCentered;
+        assert!(fields.enabled.properties.contains(&origin), "{stem}");
         let ends_at_seven = fields.limits.max_interpolation_offset_bits == SEVEN_SIXTEENTHS;
-        let split = fields
-            .workarounds
-            .contains(&DriverWorkaround::ClippedTrianglesSplitPixelFragments);
         for (fragment, format, count, reads) in FRAGMENTS {
             let reads_at = |at| reads.contains(&at);
             let beyond_center = reads.iter().any(|&at| at != At::Center);
@@ -224,32 +199,6 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
                     refused.push(what);
                     continue;
                 }
-                if fragment == "pm_offset_after_discard" && whole_quad {
-                    let e = result.expect_err(&what);
-                    let defect =
-                        Needs::DriverDefect(DriverWorkaround::InterpolationNeedsTheWholeQuad);
-                    assert!(
-                        matches!(&e, Error::Unsupported(u)
-                            if u.feature == Feature::PullModelInterpolation && u.needs == defect),
-                        "{what}: {e:?}"
-                    );
-                    refused.push(what);
-                    continue;
-                }
-                // A centroid read of a multisampled pixel, refused as a centroid varying is on a
-                // driver that shades a triangle it clips as several.
-                if reads_at(At::Centroid) && samples > 1 && split {
-                    let e = result.expect_err(&what);
-                    let defect =
-                        Needs::DriverDefect(DriverWorkaround::ClippedTrianglesSplitPixelFragments);
-                    assert!(
-                        matches!(&e, Error::Unsupported(u)
-                            if u.feature == Feature::CentroidVarying && u.needs == defect),
-                        "{what}: {e:?}"
-                    );
-                    refused.push(what);
-                    continue;
-                }
                 let p = match result {
                     // A sample count the profile's attachments do not take.
                     Err(Error::Unsupported(u)) if u.feature == Feature::RasterSampleCount => {
@@ -261,10 +210,7 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
                 validate(&p, &dev, &what);
                 let words = fragment_words(&p);
                 let ext = ext_insts(words);
-                let pixel_center = reads_at(At::Center)
-                    && samples > 1
-                    && pixel_form(&dev)
-                    && !reads_center_at_pixel(&dev);
+                let pixel_center = reads_at(At::Center) && samples > 1 && pixel_form(&dev);
                 assert_eq!(
                     ext.contains(&INTERPOLATE_AT_CENTROID),
                     reads_at(At::Centroid),
@@ -290,28 +236,18 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
                     reads_at(At::Offset),
                     "{what}: the offset note"
                 );
-                let perspective_beyond =
-                    fragment != LINEAR && (reads_at(At::Sample) || reads_at(At::Offset));
-                let extrapolation_noted = noted(&p, PrecisionNote::ExtrapolatedInterpolation);
-                assert_eq!(
-                    extrapolation_noted,
-                    extrapolates && perspective_beyond,
+                assert!(
+                    !noted(&p, PrecisionNote::ExtrapolatedInterpolation),
                     "{what}: the extrapolation note"
                 );
-                extrapolations += usize::from(extrapolation_noted);
                 assert_eq!(
                     p.requirements.properties.contains(&origin),
-                    reads_at(At::Offset) || (pixel_center && centered),
+                    reads_at(At::Offset) || pixel_center,
                     "{what}: {origin:?}"
                 );
-                // 7/16 is the origin a MoltenVK offset moves by, and no centered device's (whose
-                // range may end at 7/16: then the clamp holds it).
+                // 7/16 is no device's origin; a range may end there, and then the clamp holds it.
                 let seven = holds_constant(words, SEVEN_SIXTEENTHS);
-                if centered {
-                    assert!(!seven || ends_at_seven, "{what}: the 7/16 origin");
-                } else {
-                    assert_eq!(seven, reads_at(At::Offset), "{what}: the 7/16 origin");
-                }
+                assert!(!seven || ends_at_seven, "{what}: the 7/16 origin");
                 if reads_at(At::Sample) && fragment != "pm_sample_id" {
                     let plan = p.plan(&dev, &BindState::default().shape()).expect("plan");
                     assert_eq!(
@@ -332,18 +268,6 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
     assert!(
         refused.iter().any(|r| r.starts_with("vk12-floor ")),
         "a profile without sampleRateShading refuses: {refused:?}"
-    );
-    assert!(
-        refused
-            .iter()
-            .any(|r| r.starts_with("amd-780m-radv pm_offset_after_discard")),
-        "RADV refuses an offset read after a discard: {refused:?}"
-    );
-    // pm_sample, pm_sample_id, pm_offset, pm_offset_sweep, pm_narrow and pm_half at 1 and 4
-    // samples on the RADV profile.
-    assert!(
-        extrapolations >= 12,
-        "{extrapolations} pipelines recorded the extrapolation"
     );
 }
 
