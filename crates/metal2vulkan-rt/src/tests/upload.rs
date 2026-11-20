@@ -654,7 +654,10 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let texture = (device.new_texture(&square(side), Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let queue = device.new_command_queue(4).expect("a queue");
+            // The busy work's command buffers and the test's two are made and not completed at
+            // once: a queue of 4 would hold the second `command_buffer` until a busy one
+            // completed, which only `busy.open` after it lets happen.
+            let queue = device.new_command_queue(8).expect("a queue");
             let mut points = Vec::new();
             let mut held = Vec::new();
             behind_busy(name, &device, &queue, |busy, _, _| {
