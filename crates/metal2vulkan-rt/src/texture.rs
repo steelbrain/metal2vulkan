@@ -102,7 +102,11 @@ pub struct TextureDescriptor {
     /// `arrayLength`: the slices of an array type (a cube array's cubes); 1 otherwise.
     pub array_length: u32,
     /// `usage`. `Unknown` (no bits) is taken as Metal takes it: shader read, shader write,
-    /// render target and pixel-format view.
+    /// render target and pixel-format view. The runtime keeps the field as given and answers no
+    /// `usage` getter; Metal's texture reports its usage by three rules (measured on an Apple M3
+    /// Max under macOS 27.0.1): no bits report those four usages (`0x17`), bits that name no
+    /// usage are dropped (`0x8` reports `0`), and `ShaderAtomic` is dropped (an `R32Uint`
+    /// texture of `0x21` reports `0x1`).
     pub usage: TextureUsage,
     /// `storageMode`.
     pub storage_mode: StorageMode,
