@@ -1,6 +1,6 @@
-//! A description's workloads over a metallib run on the old runtime and on the new, from the same
-//! starting contents, and their outputs match, where the new runtime does not refuse one with a
-//! typed refusal, which the test prints; one of them matches its CPU reference too. The metallib
+//! A description's workloads over a metallib run on the runtime from their starting contents, and
+//! where the runtime does not refuse one with a typed refusal, which the test prints, the outputs
+//! of those the test knows match its CPU reference. The metallib
 //! is the authored fixture's kernels in a synthetic container, so the path a described workload
 //! takes runs without any kernel the repository does not own. Each function's bitcode is a module
 //! holding that kernel alone, as a metallib's is: the translator checks that a metallib function's
@@ -12,7 +12,7 @@ use metal2vulkan_devtools::scratch::Owned;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble_text};
 use metal2vulkan_harness::plan::seeded_words;
 use metal2vulkan_harness::run::{run_each, Harness, Runs, Session};
-use metal2vulkan_harness::{authored, description, old, rt};
+use metal2vulkan_harness::{authored, description, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
 /// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
@@ -153,7 +153,7 @@ check 0 exact
 ";
 
 #[test]
-fn described_workloads_match_between_the_old_runtime_and_the_new() {
+fn described_workloads_match_their_references() {
     let air = authored::library_air().unwrap();
     let ll = std::fs::read_to_string(fixtures_dir().join("harness/workloads.ll")).unwrap();
     let functions: Vec<MtlbFunction> = [
@@ -181,45 +181,40 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
     )
     .unwrap();
     let described = description::parse(DESCRIPTION, scratch.path()).unwrap();
-    let mut sessions: [(&str, Box<dyn Session>); 2] = [
-        (
-            "old",
-            Box::new(Harness::new(old::system_default(None).unwrap(), &air).unwrap()),
-        ),
-        (
-            "new",
-            Box::new(Harness::new(rt::system_default(None).unwrap(), &air).unwrap()),
-        ),
-    ];
+    let mut sessions: [(&str, Box<dyn Session>); 1] = [(
+        "new",
+        Box::new(Harness::new(rt::system_default(None).unwrap(), &air).unwrap()),
+    )];
     let runs = Runs {
         warmup: 1,
         settle: false,
         timed: 2,
     };
-    let mut texels = None;
     for workload in &described {
         let plan = workload.plan().unwrap();
         let each = (run_each(&plan, &mut sessions, runs, None))
             .unwrap_or_else(|why| panic!("{}: {why}", plan.name));
-        let first = (each[0].as_ref())
-            .unwrap_or_else(|refused| panic!("{}: the old runtime refused: {refused}", plan.name));
-        if let Err(refused) = &each[1] {
-            println!("{}: REFUSED on the new runtime: {refused}", plan.name);
-        }
-        // The new runtime makes no heap and no texture over a buffer yet.
+        // The runtime makes no heap and no texture over a buffer yet.
         let missing = match plan.name.as_str() {
             "heaped" => Some("makes no heap"),
             "over" => Some("makes no texture over a buffer"),
             _ => None,
         };
         if let Some(missing) = missing {
-            let refused = (each[1].as_ref().err()).map(ToString::to_string);
+            let refused = (each[0].as_ref().err()).map(ToString::to_string);
             assert!(
                 refused.as_deref().is_some_and(|why| why.contains(missing)),
                 "{}: {refused:?}",
                 plan.name
             );
         }
+        let first = match &each[0] {
+            Ok(first) => first,
+            Err(refused) => {
+                println!("{}: REFUSED: {refused}", plan.name);
+                continue;
+            }
+        };
         assert_eq!(first.gpu_us.len(), 2, "{}", plan.name);
         if plan.name == "chain" {
             // 64 steps of the generator, each with the one increment set before the first.
@@ -249,7 +244,6 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
                 let want = f32::from(byte) / 255.0;
                 assert!((got - want).abs() <= 1e-6, "channel {at}: {got} for {want}");
             }
-            texels = Some(first.outputs[0].clone());
         }
         if plan.name == "viewed" {
             // Slice 1 of the array: its second 2048 bytes.
@@ -314,10 +308,6 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
                     "copied: channel {at}: {got} for {want}"
                 );
             }
-        }
-        if plan.name == "heaped" || plan.name == "over" {
-            // The same texels as the device's own texture of them, on the old runtime.
-            assert_eq!(Some(&first.outputs[0]), texels.as_ref(), "{}", plan.name);
         }
         if plan.name == "groups" {
             // Each threadgroup of 256 threads sums its words through the length the host set.

@@ -1,12 +1,12 @@
-//! Every authored workload's first run matches its CPU reference on each runtime, or the runtime
+//! Every authored workload's first run matches its CPU reference on the runtime, or the runtime
 //! refuses it with a typed refusal, which the test prints; every creation workload's buffers
 //! start zero, and its pipeline states are made, the first with its VkPipeline made within its
-//! timed first, on the device the cfg names (docs/VALIDATION.md). On the new runtime, every gauge
-//! reads zero once the device is dropped.
+//! timed first, on the device the cfg names (docs/VALIDATION.md). Every gauge reads zero once the
+//! device is dropped.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::run::{Harness, Runs, Session};
-use metal2vulkan_harness::{authored, old, rt, Refused};
+use metal2vulkan_harness::{authored, rt, Refused};
 
 /// Each authored and creation workload on `session`, with one timed run each.
 fn every_workload(session: &mut dyn Session) {
@@ -54,7 +54,7 @@ fn every_workload(session: &mut dyn Session) {
                 assert!(report.first_us.is_some(), "{name}");
                 let compute = matches!(create.makes, authored::Makes::States { .. });
                 assert_eq!(report.one_thread_first_us.is_some(), compute, "{name}");
-                // The first state's timed work holds its VkPipeline's compile on either runtime:
+                // The first state's timed work holds its VkPipeline's compile:
                 // in the creation, or at its one dispatch. (The warm-up's kernel is one the
                 // authored workloads made already here.)
                 assert!(
@@ -64,12 +64,6 @@ fn every_workload(session: &mut dyn Session) {
             }
         }
     }
-}
-
-#[test]
-fn every_authored_workload_matches_its_reference_on_the_old_runtime() {
-    let air = authored::library_air().unwrap();
-    every_workload(&mut Harness::new(old::system_default(None).unwrap(), &air).unwrap());
 }
 
 #[test]
