@@ -1203,15 +1203,11 @@ pub struct FormatTable {
 /// pointer model or a semantic; or a measured answer of the driver's that the specifications allow
 /// and Metal's differs from, which a module records as the precision note it names; or a measured
 /// cost of the driver's that chooses between two exact encodings. Each variant comes with a test.
-/// The profile derives them from the description's driver identity (`driver_id`, with the vendor
-/// where the defect is the GPU's), never from a shader, and takes those the consumer measured on
-/// the device itself ([`DeviceDescription::measured`]): the two view costs
-/// [`UniformBufferPerLaneReadsSerialize`](Self::UniformBufferPerLaneReadsSerialize) and
-/// [`ExternalUniformReadsSkipACache`](Self::ExternalUniformReadsSkipACache) come from such a
-/// measurement alone (the runtime's view check), never from an identity.
+/// A profile takes the workarounds every device takes alike
+/// ([`ClippedCoverageNotMetals`](Self::ClippedCoverageNotMetals),
+/// [`TessellatorNotMetals`](Self::TessellatorNotMetals)), never from an identity or a shader.
 ///
 /// [`Needs::DriverDefect`]: crate::error::Needs::DriverDefect
-/// [`DeviceDescription::measured`]: crate::device::DeviceDescription::measured
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1619,7 +1615,7 @@ pub enum DriverWorkaround {
     /// many times as long as the same read of a storage buffer, while one address for every lane
     /// is read faster through the uniform buffer: a measured cost fact that chooses between two
     /// exact encodings of a `constant` slot. Never keyed on an identity: the profile takes it where
-    /// the description's [`measured`](crate::device::DeviceDescription::measured) set holds it,
+    /// the description's `measured` set holds it,
     /// which the runtime's view check decides on each driver (its storage view's time over its
     /// uniform buffer's for per-lane reads below 0.3). Measured with a bare Vulkan program (256
     /// workgroups of 64 invocations, each adding 64 or 1024 `uvec4` reads of a window of 1 to
@@ -1639,7 +1635,7 @@ pub enum DriverWorkaround {
     /// Uniform-buffer reads of external memory skip a cache that the same reads through a uniform
     /// texel buffer keep: a measured cost fact that chooses between two exact encodings of a
     /// uniform view. Never keyed on an identity: the profile takes it where the description's
-    /// [`measured`](crate::device::DeviceDescription::measured) set holds it, which the runtime's
+    /// `measured` set holds it, which the runtime's
     /// view check decides on each driver (a uniform texel buffer's time over a uniform buffer's
     /// for the reads it moves, over imported host memory: below 1 in every one, below 0.7 in at
     /// least one). ANV, Mesa 26.2.6, on the Iris Xe of RPL-P gives imported and exported memory

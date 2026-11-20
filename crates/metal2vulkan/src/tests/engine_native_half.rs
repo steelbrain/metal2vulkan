@@ -50,28 +50,6 @@ const KERNELS: [(&str, &str); 2] = [
     ),
 ];
 
-/// Kernels that round `float` arithmetic to `half`: the sum and the product of the two `float`s, and
-/// their fused multiply-add (the second added to the product of the two), each narrowed and widened
-/// back, and the first narrowed alone.
-const ARITHMETIC: [(&str, &str); 4] = [
-    (
-        "float_sum",
-        "  %s = fadd float %a, %b\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
-    ),
-    (
-        "float_product",
-        "  %s = fmul float %a, %b\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
-    ),
-    (
-        "float_fma",
-        "  %s = call float @air.fma.f32(float %a, float %b, float %b)\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
-    ),
-    (
-        "float_narrow",
-        "  %h = fptrunc float %a to half\n  %r = fpext half %h to float\n",
-    ),
-];
-
 /// The module of every kernel.
 fn module() -> String {
     module_of(&KERNELS)

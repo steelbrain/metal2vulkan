@@ -90,22 +90,12 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   fast-math sums and products (each operation in the AIR's order, its own fast-math flags its
   decoration), NaN bits, and the operand of `fmin`, `fmax`, `min3`, `max3`, `clamp` and
   `saturate`, on every device and with no exact form.
-  Each records a precision note with its bound; on MoltenVK on an Apple GPU, whose `float`
-  functions are Metal's own, they are Metal's answers, but for a NaN's bits where the device is
-  not measured to answer Metal's.
-- **Fast native forms off Apple's GPUs.** The device's own sampler (its filter, footprint, level,
+  Each records a precision note with its bound, on every device.
+- **The device's native forms.** The device's own sampler (its filter, footprint, level,
   anisotropy, texel conversion and comparison, a two-plane YCbCr texture's filter among them),
   with no switch: the device's answer is the contract, recorded as `PrecisionNote::DeviceSampling`
   with its measured bound. The device's own `half` rounding and its blend of a `half` color have
-  no switch either: each records its note. [FAST-PATHS.md](FAST-PATHS.md) lists these device gaps
-  with their bounds. On MoltenVK on an Apple GPU, whose sampler and `float` functions are Metal's
-  own, most of them change nothing.
-- `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
-  offers one (the batch order, render lowering, wide lines and extended-range blits below, the
-  heap texture compression, command buffer completion and textures over host pages), the AIR's
-  rounding of each `half` operation
-  on a device without `shaderFloat16` and Metal's filter of planes read in place (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
-  with its bound and the measured cost of its exact form.
+  no switch either: each records its note.
 - **The resident-table and handle-table domains** (`PointerDomain::ResidentTable`,
   `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
   `HandleDomain::Identity`, taken together) are the new runtime's form: pointers are device
@@ -139,9 +129,8 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `PushField::ArgumentTableAddress`, which the window always holds. The function reads the block
   16 bytes at a time at multiples of 16 (its size, `argument_table_size`, is a multiple of 16) and
   never writes it, so the consumer places it at a multiple of 16 and leaves it unchanged while
-  the command reads it. A kernel's window is 128 bytes
-  (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
-  `maxPushConstantsSize`: a dispatch region and 24 buffer addresses below its tail). On such a device a render
+  the command reads it. A kernel's window is 256 bytes, as the runtime's floor requires that much
+  `maxPushConstantsSize`: a dispatch region and 24 buffer addresses below its tail. A render
   pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
   and the fragment function's runs from the vertex function's end to 256. A
   vertex function is lowered without knowing its fragment function, so it leaves the last 8
@@ -149,8 +138,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   costs only a vertex function whose own fields pass 248 bytes, which spills where it would have
   filled them. The fields only a checked access reads
   (`PushField::ZeroAddress` and each `PushField::SlotBounds`) come last in the order, so they
-  are the first to move to the block. On a device made by `Device::from_queries` each function's
-  push ends with its tail, 24 bytes or more above its other pushed fields: its highest
+  are the first to move to the block. Each function's push ends with its tail, 24 bytes or more above its other pushed fields: its highest
   `PushField::SlotBounds` or `PushField::ZeroAddress`, moved there, or where it pushes neither, the
   zero word `PushField::TailWord` at `PushPlacement::tail_word`, with which its `push_range` ends;
   a function that pushes one field of 8 bytes or fewer has none. A driver that uploads a stage's
@@ -161,18 +149,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   bytes of the hole are not read. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
   there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
-  workgroup size. On a device made by `Device::new` it declares no `MultiRegion` constant. On one
-  made by `Device::from_queries` it reads its first threadgroup from every region (0 where the
+  workgroup size. It reads its first threadgroup from every region (0 where the
   dispatch is not split, and for an indirect one) and declares `MultiRegion`, default 0: at 0
   Metal's threadgroup size is the pipeline's workgroup size; at 1 it is the region's, for a region
-  whose workgroup size is not Metal's (an edge region). There a kernel whose workgroup is its
+  whose workgroup size is not Metal's (an edge region). A kernel whose workgroup is its
   threadgroup (one outside the flattened SIMD-group tiers, without compute derivatives) also
   declares `SpecKey::DeepThreadgroup`, default false: at true its workgroup is one row of the
   threadgroup's threads, `(sx·sy·sz, 1, 1)`, each thread's position its `LocalInvocationIndex`
   unflattened in Metal's order, so a threadgroup deeper than a device's
   `maxComputeWorkGroupSize[2]` runs; the binder sets it for a region deeper than
   `pipeline::DEEP_THREADGROUP` (64) alone, and so does a runtime, so every other pipeline
-  specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` on that profile is
+  specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` is
   the capped `maxComputeWorkGroupInvocations` on every axis. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
@@ -1111,7 +1098,7 @@ through buffer arguments it reads at any index.
   stitched library itself. A module whose linkage signature has no reading (a linked-constants
   signature on a module that still declares function constants) refuses the pipeline at a call
   that survives specialization, `Unsupported` with `Feature::Linking`.
-- **Threadgroup memory.** On `Device::from_queries`' profile no threadgroup memory access is
+- **Threadgroup memory.** No threadgroup memory access is
   contained: a load or store, atomic, memory intrinsic, pointer cell or imageblock access of a
   threadgroup arena, and a typed threadgroup object's index, run as the program states them, and
   one past the memory is undefined, as in Metal. A kernel whose every threadgroup access is a
@@ -1122,11 +1109,9 @@ through buffer arguments it reads at any index.
   memory's own words (the static part and the specialized `[[threadgroup(n)]]` lengths), at least
   four: the memory Metal allocates, so its threadgroup memory is Metal's static length and lengths,
   and a length filling the limit runs. The strategy census names its accesses
-  `access.threadgroup.load.floats` and `access.threadgroup.store.floats`. Every other kernel, and
-  every kernel on `Device::new`'s profile, holds `u32` words; on `Device::new`'s profile each
-  access is contained, a load past the memory reading 0 and its store dropped.
-- **Threadgroup memory before the program writes it.** On `Device::from_queries`' profile a
-  function's threadgroup memory reads zero until the program writes it: the `Workgroup` variables
+  `access.threadgroup.load.floats` and `access.threadgroup.store.floats`. Every other kernel holds
+  `u32` words.
+- **Threadgroup memory before the program writes it.** A function's threadgroup memory reads zero until the program writes it: the `Workgroup` variables
   that hold it, its threadgroup arena (declared threadgroup variables, `[[threadgroup(n)]]`
   arguments and an explicit imageblock) and its typed threadgroup objects, have a null
   initializer, in every threadgroup of every dispatch. That needs
@@ -1148,8 +1133,7 @@ through buffer arguments it reads at any index.
   `[[threadgroup(n)]]` argument alike, in the later threadgroups of a dispatch of 2048
   threadgroups of 16 KiB each, many more than its cores hold at once, and in a second dispatch
   (the conformance case `compute-threadgroup-memory-reads-zero`); recorded programs read entries of
-  it they have not written. On `Device::new`'s profile no `Workgroup` variable has an initializer, and such a read
-  gives what the device's memory holds.
+  it they have not written.
 - **Binary functions, required threadgroup sizes, buffer mutability.** Whether a binary function
   was compiled to a binary (`LinkedFunction::precompiled`), required threadgroup sizes and buffer
   mutability change no translation and are in no compile key; the runtime checks them as Metal
@@ -1276,7 +1260,7 @@ A `RenderPipeline` holds:
   `robustBufferAccess` (unless containment is off). A `FloatRGB9E5` attribute is pulled on every
   device: no device must fetch the shared-exponent format as vertex input, and its decode is
   exact, so the shader's is the answer a conformant fetch gives. Under the identity domains
-  (`Device::from_queries`' profile) nothing is pulled, as the pulled fetch reads through a
+  nothing is pulled, as the pulled fetch reads through a
   descriptor: every attribute is fetched in fixed function, with or without buffer robustness
   (a fetch outside its buffer reads what the device gives), an unnormalized signed-integer format
   into a variable declared `int`, the constant step at vertex rate on a binding of stride 0 (no
@@ -1664,9 +1648,8 @@ for dependency in &pipeline.dependencies {
   `HeapElement::TexelBuffer` for a texture buffer such a class holds, the format of its texel
   buffer view; a planned heap's members are textures with images, so only a heap set the consumer
   keeps for every command (each live texture at its resource ID) holds texture buffers. Push constants carry the values the
-  binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (an absent
-  argument's read on `Device::new`'s profile, a `seq_cst` fence, an argument buffer's cubic
-  sampler) reaches it by device address, a push hole, where the device addresses buffers
+  binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (a
+  `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device address, a push hole, where the device addresses buffers
   (`bufferDeviceAddress` and `shaderInt64`), and through a set-0 storage buffer of its own
   (`SyntheticBinding::ExecutionStatus`) where it does not. That binding counts against the
   stage's storage-buffer limits: past one, an absent read or a fence is refused
@@ -2048,7 +2031,7 @@ threads fill at the dispatch's threadgroup size instead, the last along an axis 
 threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
 exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
 refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. On
-`Device::from_queries`' profile under the identity domains the variant of a kernel that does not
+the identity domains the variant of a kernel that does not
 observe its threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles
 instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in
 `pipeline::grid_tile`'s tiles, one workgroup of `pipeline::GRID_TILE_THREADS` each with the tile
@@ -2350,11 +2333,9 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 - `NotImplemented`: a gap of this version. `NotRepresentable`: no Vulkan mechanism exists.
 - `DriverDefect`: a defect the device's driver is measured to have. `RuntimeDriverDefect`: one in a
   command the runtime records.
-- `StageBound`: on a device `Device::from_queries` made, a stage that the device's plan writes
-  heavier than the translator hands any driver (the heaviest measured to compile within
-  host-sized memory); `symbol` names its entry weight and the bound. A device whose plan writes it
-  lighter compiles it. A device `Device::new` made bounds a stage only where its driver is measured
-  to need it (`DriverDefect`).
+- `StageBound`: a stage that the device's plan writes heavier than the translator hands any
+  driver (the heaviest measured to compile within host-sized memory); `symbol` names its entry
+  weight and the bound. A device whose plan writes it lighter compiles it.
 - `MetalGpuFamily`: a Metal GPU family the device does not claim, where Metal itself refuses the
   input without it.
 
@@ -3160,11 +3141,7 @@ bound.
   and records nothing; so does the blend of a fetched 8-bit unorm attachment it computes there
   (every factor, operation, write mask and blend color it builds), which Metal reads the output
   into clamped, folding none of it (the storage image's store of its result is the device's
-  conversion, `DeviceColorConversion`). On a device that enables `storageInputOutput16` the output
-  reaches the device as a 16-bit `half` under `Device::new` (`StageIo::half_outputs`; under
-  `Device::from_queries` every device receives it widened to `float`); MoltenVK 1.4.2 on an Apple M3
-  Max then stores Metal's codes for a loaded `half4` under every blend measured (21, into 16- and
-  32-bit float formats).
+  conversion, `DeviceColorConversion`). Every device receives the output widened to `float`.
 - `metal2vulkan-degrade-device-sampling` (precision). `PrecisionNote::DeviceSampling`: Native device
   sampling: the module hands a sample, gather, comparison or level query to the device's own
   sampler on a device whose sampler is not Metal's (the module requires
