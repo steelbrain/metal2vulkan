@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7478 |
+| ledger rows (a case whose gap is recorded) | 7490 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -9520,4 +9520,16 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 
