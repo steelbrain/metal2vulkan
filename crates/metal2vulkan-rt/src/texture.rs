@@ -54,7 +54,7 @@ use crate::staging::Stage;
 use crate::submit::Held;
 use ash::vk;
 use metal2vulkan::device::FormatUsage;
-use metal2vulkan::metal::format::{self as formats, FormatEmulation};
+use metal2vulkan::metal::format::{self as formats, bicubic_texels_word, FormatEmulation};
 use metal2vulkan::metal::resource_word::TextureWord;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
@@ -4280,6 +4280,13 @@ pub(crate) trait TextureObject {
     /// Whether it reads through a swizzle other than each channel's own.
     fn swizzled(&self) -> bool {
         TextureInner::reads(self.object()) != TextureSwizzleChannels::DEFAULT
+    }
+
+    /// How Metal's bicubic filter treats its texels, under the swizzle it is sampled through
+    /// (`metal::format::bicubic_texels_word`): `None` for a format with no such treatment.
+    pub(crate) fn bicubic_texels(&self) -> Option<u32> {
+        let inner = self.object();
+        bicubic_texels_word(inner.descriptor.pixel_format, inner.reads())
     }
 
     /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a

@@ -2161,6 +2161,29 @@ pub fn integer_channels_word(pf: PixelFormat) -> u32 {
         })
 }
 
+/// The word `PushField::BicubicTexels` carries for a texture of pixel format `pf` sampled
+/// through swizzle `swizzle` (the texture's own over its parent's, for a view): how Metal's
+/// bicubic filter treats its texels, the value the binder specializes `SpecKey::BicubicTexels`
+/// to for such a texture. Its bits select the bilinear inner taps (32-bit float channels), the
+/// clamp into `[0, 1]` or `[-1, 1]` (normalized channels) or neither (half and small-float
+/// channels), and the border texels of the format's channels under `swizzle`.
+///
+/// `None` for a format of no measured family (compressed, YUV, stencil, integer and
+/// extended-range formats), whose bicubic sample Metal does not establish, and for a format of
+/// 8-bit sRGB codes, whose decode before the sum the identity domains do not establish (the
+/// binder's form of a texture held as its UNORM twin decodes the codes a UNORM view reads): a
+/// consumer refuses a bicubic sample of such a texture.
+pub fn bicubic_texels_word(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> Option<u32> {
+    if crate::metal::texel_format::srgb_coded(pf) {
+        return None;
+    }
+    crate::metal::bicubic::texels(pf).map(|t| t.with_border(pf, swizzle).0)
+}
+
+/// The word `PushField::BicubicTexels` carries for a slot bound to nothing, whose neutral texture
+/// reads zero: every channel present, the sum unchanged, a four-channel format's border texels.
+pub const BICUBIC_TEXELS_UNBOUND: u32 = crate::metal::bicubic::BicubicTexels::NEUTRAL.0;
+
 /// The class of pixel format `pf` (`metal::texel_format::TexelFormat`'s word, as its `half`
 /// conversion takes it): the value a specialized note's test of
 /// `SpecKey::BoundTexelFormat` reads for a texture of `pf` bound at its slot

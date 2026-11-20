@@ -1171,6 +1171,7 @@ const	metal2vulkan::cache::RUNTIME_VERSION	pub const RUNTIME_VERSION: u32
 const	metal2vulkan::cache::SEMANTICS_VERSION	pub const SEMANTICS_VERSION: u32
 const	metal2vulkan::cache::SOURCE_DIGEST	pub const SOURCE_DIGEST: &str
 const	metal2vulkan::device::NVIDIA_AMPERE_GA10X	pub const NVIDIA_AMPERE_GA10X: &[u32]
+const	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	pub const BICUBIC_TEXELS_UNBOUND: u32
 const	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	pub const NOT_MIPMAPPED_MAX_LOD: f32
 const	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	pub const MAX_VERTEX_ALIGNMENT: u32
 const	metal2vulkan::pipeline::DEEP_THREADGROUP	pub const DEEP_THREADGROUP: u32
@@ -1276,6 +1277,7 @@ const-value	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_C
 const-value	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	4
 const-value	metal2vulkan::cache::SOURCE_DIGEST	env!("M2V_SOURCE_DIGEST")
 const-value	metal2vulkan::device::NVIDIA_AMPERE_GA10X	&[0x2200, 0x2203, 0x2204, 0x2205, 0x2206, 0x2207, 0x2208, 0x220a, 0x220d, 0x2216, 0x222b, 0x222f, 0x2230, 0x2231, 0x2232, 0x2233, 0x2235, 0x2236, 0x2237, 0x2238, 0x223f, 0x2414, 0x2420, 0x2438, 0x2460, 0x2480, 0x2482, 0x2483, 0x2484, 0x2486, 0x2487, 0x2488, 0x2489, 0x248a, 0x248c, 0x248d, 0x248e, 0x249c, 0x249d, 0x249f, 0x24a0, 0x24a4, 0x24ac, 0x24ad, 0x24af, 0x24b0, 0x24b1, 0x24b6, 0x24b7, 0x24b8, 0x24b9, 0x24ba, 0x24bb, 0x24bf, 0x24c0, 0x24c7, 0x24c8, 0x24c9, 0x24dc, 0x24dd, 0x24df, 0x24e0, 0x24fa, 0x2501, 0x2503, 0x2504, 0x2505, 0x2507, 0x2508, 0x2509, 0x2520, 0x2521, 0x2523, 0x252f, 0x2531, 0x2544, 0x2560, 0x2561, 0x2563, 0x2571, 0x2582, 0x2583, 0x2584, 0x25a0, 0x25a2, 0x25a3, 0x25a4, 0x25a5, 0x25a6, 0x25a7, 0x25a9, 0x25aa, 0x25ab, 0x25ac, 0x25ad, 0x25af, 0x25b0, 0x25b2, 0x25b5, 0x25b6, 0x25b8, 0x25b9, 0x25ba, 0x25bb, 0x25bc, 0x25bd, 0x25e0, 0x25e2, 0x25e5, 0x25ec, 0x25ed, 0x25f9, 0x25fa, 0x25fb]
+const-value	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	crate::metal::bicubic::BicubicTexels::NEUTRAL.0
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
 const-value	metal2vulkan::pipeline::DEEP_THREADGROUP	64
@@ -6313,6 +6315,7 @@ fn	metal2vulkan::device::vk_stage	pub fn vk_stage(stage: Stage) -> vk::ShaderSta
 fn	metal2vulkan::metal::format::alpha_in_red	pub fn alpha_in_red(pf: PixelFormat, profile: &DeviceProfile) -> bool
 fn	metal2vulkan::metal::format::alpha_in_red_format	pub fn alpha_in_red_format(pf: PixelFormat) -> Option<vk::Format>
 fn	metal2vulkan::metal::format::aspects	pub fn aspects(pf: PixelFormat) -> Option<vk::ImageAspectFlags>
+fn	metal2vulkan::metal::format::bicubic_texels_word	pub fn bicubic_texels_word(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> Option<u32>
 fn	metal2vulkan::metal::format::block_extent	pub fn block_extent(pf: PixelFormat) -> Option<[u32; 2]>
 fn	metal2vulkan::metal::format::bound_texel_format	pub fn bound_texel_format(pf: PixelFormat) -> u32
 fn	metal2vulkan::metal::format::byte_format	pub fn byte_format(pf: PixelFormat) -> Option<vk::Format>
@@ -13921,6 +13924,7 @@ variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::
 variant	metal2vulkan-rt::ExportHandle::DmaBuf	DmaBuf
 variant	metal2vulkan-rt::ExportHandle::OpaqueFd	OpaqueFd
 variant	metal2vulkan-rt::ExportHandle::OpaqueWin32	OpaqueWin32
+variant	metal2vulkan-rt::Gap::BicubicTexels	BicubicTexels { slot: u32, pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
 variant	metal2vulkan-rt::Gap::CubeArrayTexture	CubeArrayTexture
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
@@ -17061,6 +17065,7 @@ variant	metal2vulkan::pipeline::PushField::AmplificationLayerOffset	Amplificatio
 variant	metal2vulkan::pipeline::PushField::AmplificationViewportOffset	AmplificationViewportOffset
 variant	metal2vulkan::pipeline::PushField::ArgumentTableAddress	ArgumentTableAddress
 variant	metal2vulkan::pipeline::PushField::BaseVertexInstance	BaseVertexInstance
+variant	metal2vulkan::pipeline::PushField::BicubicTexels	BicubicTexels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::CaptureIndexAddress	CaptureIndexAddress
 variant	metal2vulkan::pipeline::PushField::CaptureLayout	CaptureLayout
 variant	metal2vulkan::pipeline::PushField::CommandRecordsAddress	CommandRecordsAddress

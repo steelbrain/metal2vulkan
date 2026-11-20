@@ -20,7 +20,7 @@ use crate::ring::CHUNK;
 use crate::sampler::SamplerState;
 use crate::texture::{Region, Texture, TextureObject};
 use ash::vk;
-use metal2vulkan::metal::format::integer_channels_word;
+use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
@@ -844,7 +844,7 @@ impl ComputeCommandEncoder {
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`] past Metal's limit for the
     /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
-    /// alignment, which nothing records; [`Gap::SwizzledReadWrite`];
+    /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
@@ -957,6 +957,19 @@ impl ComputeCommandEncoder {
                 }
             }
             let interface = &inner.whole.interface;
+            // A bicubic sample's texture, of a format the filter's treatment is known for.
+            for field in &interface.fields {
+                if let FieldValue::BicubicTexels(slot) = field.value {
+                    if let Some(Some(texture)) = self.textures.get(slot as usize) {
+                        if texture.bicubic_texels().is_none() {
+                            return Err(Error::Unsupported(Gap::BicubicTexels {
+                                slot,
+                                pixel_format: texture.descriptor().pixel_format,
+                            }));
+                        }
+                    }
+                }
+            }
             for &(slot, access) in &interface.textures {
                 let read = interface.storage_reads.contains(&slot);
                 let stored = access != Access::Read || read;
@@ -1409,6 +1422,16 @@ impl Parameters {
                     };
                     bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
                 }
+                // A texture of no bicubic treatment was refused at the dispatch's checks.
+                FieldValue::BicubicTexels(slot) => {
+                    let word = match textures.get(slot as usize) {
+                        Some(Some(texture)) => {
+                            texture.bicubic_texels().unwrap_or(BICUBIC_TEXELS_UNBOUND)
+                        }
+                        _ => BICUBIC_TEXELS_UNBOUND,
+                    };
+                    bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                }
                 FieldValue::ConstexprSampler(place) => {
                     let index = sampler_ids.get(place).copied().unwrap_or(0);
                     bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
@@ -1427,6 +1450,15 @@ impl Parameters {
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);
+    }
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl ComputeCommandEncoder {
+    /// The push bytes the encoder's last dispatch filled, which `tests::bicubic` reads its
+    /// fields' words from.
+    pub(crate) fn pushed(&self) -> &[u8] {
+        &self.parameters.push
     }
 }
 

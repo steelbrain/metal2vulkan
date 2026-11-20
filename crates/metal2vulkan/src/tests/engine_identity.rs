@@ -58,9 +58,13 @@
 //!   the Iris Xe, which reads storage so by the formats' own bits alone, is declared without a
 //!   format where every read-write tier format has the read bit, and refused where one lacks it;
 //!   `Device::new`'s answer there is unchanged.
-//! - A kernel that samples through a bicubic constexpr sampler (`engine/a2_bicubic_weights`) is
-//!   still refused as `Unsupported{IdentityDomains}`, not implemented, where the default domains
-//!   compile it.
+//! - A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
+//!   coordinates (`engine/bcu_formats`, `float` and `half` results) reads how the filter treats
+//!   each slot's bound format from the slot's pushed field (`PushField::BicubicTexels`): no
+//!   specialization constant and no fact, where the default domains specialize
+//!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. A
+//!   bicubic sample of a 1D texture (`engine/bcu_forms`) or at pixel coordinates
+//!   (`engine/bcu_address`) is still refused as `Unsupported{IdentityDomains}`, not implemented.
 //! - A kernel that encodes compute commands into an indirect command buffer it reaches through an
 //!   argument buffer (`engine/icb_replay_encode`) is refused as
 //!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
@@ -733,35 +737,98 @@ fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
     ]
 }
 
-/// A kernel that samples a texture through a bicubic constexpr sampler is not lowered under the
-/// identity domains yet.
+/// `bcu_formats`' texture slots: ten 2D textures, the last two sampled with `half` results.
+fn bicubic_slots() -> BTreeSet<SlotRef> {
+    (0..10)
+        .map(|index| SlotRef {
+            stage: Stage::Kernel,
+            class: SlotClass::Texture,
+            index,
+        })
+        .collect()
+}
+
+/// A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
+/// coordinates reads how the filter treats each slot's bound format from the slot's push field
+/// under the identity domains, where the default domains specialize it and state its fact; a
+/// bicubic sample of a 1D texture or at pixel coordinates is still refused there.
 #[test]
-fn a_bicubic_kernel_is_refused_under_the_identity_domains() {
-    let Some(bc) = assemble("a2_bicubic_weights") else {
+fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
+    use crate::pipeline::artifact::PrecisionNote;
+    let (Some(formats), Some(forms), Some(address)) = (
+        assemble("bcu_formats"),
+        assemble("bcu_forms"),
+        assemble("bcu_address"),
+    ) else {
         return;
     };
+    let slots = bicubic_slots();
     for stem in PROFILES {
         let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-        compile(&bc, "a2_bicubic_weights", &default)
+        let (a, plan, _) = compile_kept(&formats, "bcu_formats", &default)
             .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+        let facts: BTreeSet<SlotRef> = (plan.facts.iter())
+            .filter_map(|f| match f {
+                RuntimeFact::BicubicTexels { slot } => Some(*slot),
+                _ => None,
+            })
+            .collect();
+        let specialized: BTreeSet<SlotRef> = (a.interface.spec.iter())
+            .filter_map(|c| match c.key {
+                SpecKey::BicubicTexels(slot) => Some(slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            (&facts, &specialized),
+            (&slots, &slots),
+            "{stem}: default domains"
+        );
+        assert!(
+            !(plan.push.fields.iter()).any(|f| matches!(f.field, PushField::BicubicTexels(_))),
+            "{stem}: default domains"
+        );
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        match compile(&bc, "a2_bicubic_weights", &p) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(
+        let (a, plan, _) =
+            compile_kept(&formats, "bcu_formats", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let pushed: BTreeSet<SlotRef> = (plan.push.fields.iter())
+            .filter_map(|f| match f.field {
+                PushField::BicubicTexels(slot) => Some(slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushed, slots, "{stem}");
+        assert!(
+            !(a.interface.spec.iter()).any(|c| matches!(c.key, SpecKey::BicubicTexels(_))),
+            "{stem}: {:?}",
+            a.interface.spec
+        );
+        assert!(
+            !(plan.facts.iter()).any(|f| matches!(f, RuntimeFact::BicubicTexels { .. })),
+            "{stem}: {:?}",
+            plan.facts
+        );
+        assert!(
+            a.precision
+                .contains(&PrecisionNote::BicubicFilterArithmetic),
+            "{stem}"
+        );
+        for (bc, entry) in [(&forms, "bcu_forms"), (&address, "bcu_address")] {
+            compile(bc, entry, &default)
+                .unwrap_or_else(|e| panic!("{stem}: {entry}: default domains: {e}"));
+            match compile(bc, entry, &p) {
+                Err(Error::Unsupported(u)) => assert_eq!(
                     (u.feature, u.needs),
                     (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}"
-                );
+                    "{stem}: {entry}"
+                ),
+                other => panic!("{stem}: {entry}: {other:?}"),
             }
-            other => panic!("{stem}: {other:?}"),
         }
     }
 }
 
-/// What the identity domains' refusal of argument buffers tier 2's pointer-indexed form names, the
-/// first form of the gate `ab_indexed` holds (`lower::select`'s `identity_refusal`): the texture
-/// handle a pointer member's argument buffer holds is read through the root table, whose address
-/// the identity domains do not push.
 const POINTER_INDEXED_FORM: &str = "an encoder value the function reads as RootTableAddress";
 
 /// Argument buffers tier 2's forms under the identity domains (`engine/ab_tier2`): a kernel that

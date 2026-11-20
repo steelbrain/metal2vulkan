@@ -1243,6 +1243,12 @@ pub enum PushField {
     /// signedness, as Metal stores it (`RuntimeFact::StorageTextureIntegerChannels`, a slot whose
     /// storage choice declares no format).
     TextureIntegerChannels(SlotRef),
+    /// Under the identity domains, how Metal's bicubic filter treats the texels of the texture
+    /// bound to the slot (`u32`; `metal::format::bicubic_texels_word`, the bits the binder
+    /// specializes `SpecKey::BicubicTexels` to elsewhere, `metal::format::BICUBIC_TEXELS_UNBOUND`
+    /// where the slot is bound to nothing): a bicubic sample of the slot selects its filter, clamp
+    /// and border texels on it at run time, so one module serves every bound format.
+    BicubicTexels(SlotRef),
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
     /// function that computes a blend in the shader under a blend that reads it (an
     /// extended-range attachment's, or a fetched attachment's in the storage form): one `uvec4`

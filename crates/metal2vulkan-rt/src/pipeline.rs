@@ -629,6 +629,11 @@ pub(crate) enum FieldValue {
     /// A `u32`: the channel widths of the texture bound at the slot, as an integer write
     /// saturates to them (`metal::format::integer_channels_word`), 0 where none is.
     IntegerChannels(u32),
+    /// A `u32`: how Metal's bicubic filter treats the texels of the texture bound at the slot
+    /// (`metal::format::bicubic_texels_word`, under the swizzle it is sampled through),
+    /// `metal::format::BICUBIC_TEXELS_UNBOUND` where none is; a texture of a format with no
+    /// such treatment is refused at the dispatch ([`Gap::BicubicTexels`]).
+    BicubicTexels(u32),
     /// A `u32`: the sampler index the consumer gave the constexpr sampler at this place of the
     /// state's numbered samplers (a render state's: the vertex function's, then the fragment
     /// function's).
@@ -1150,6 +1155,14 @@ fn interface(
                     }),
                     _,
                 ) => FieldValue::IntegerChannels(index),
+                (
+                    PushField::BicubicTexels(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::BicubicTexels(index),
                 (PushField::ConstexprSampler(sampler), _) => {
                     let SamplerRef::Constexpr(words) = sampler.sampler else {
                         return Err(gap());

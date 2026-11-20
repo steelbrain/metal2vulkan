@@ -178,8 +178,18 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   consumer pushes for it (`PushField::ConstexprSampler`), where the consumer places the device
   sampler `CombinedSampler::constexpr_sampler` describes, normalized: the shader scales a pixel
   sampler's coordinate. An integer write to a storage slot without a format saturates to the channel
-  widths the consumer pushes (`PushField::TextureIntegerChannels`). A fragment function under the
-  pipeline's private alpha test (`PrivateRenderState::alpha_test_enabled`, a compare function other
+  widths the consumer pushes (`PushField::TextureIntegerChannels`). A sample of a 2D texture
+  slot through a bicubic constexpr sampler at normalized coordinates reads how Metal's bicubic
+  filter treats the bound texture's texels (its inner taps, its clamp and its border texels) from
+  the word the consumer pushes for that slot (`PushField::BicubicTexels`:
+  `metal::format::bicubic_texels_word` of the bound texture's format and swizzle,
+  `metal::format::BICUBIC_TEXELS_UNBOUND` for a slot bound to nothing), the bits the default
+  domains specialize `SpecKey::BicubicTexels` to. `bicubic_texels_word` has no word for a
+  compressed, YUV, stencil, integer, extended-range or 8-bit sRGB format, so such a texture has
+  no bicubic sample there (the new runtime refuses the dispatch, `Gap::BicubicTexels`). Its
+  arithmetic is noted `PrecisionNote::BicubicFilterArithmetic`, as on the default domains. A
+  fragment function under the pipeline's private alpha test
+  (`PrivateRenderState::alpha_test_enabled`, a compare function other
   than `Never` or `Always`) compares its color 0's alpha with the code the consumer pushes
   (`PushField::AlphaTestReference`): `bind::alpha_test_code` of the encoder's
   `setAlphaTestReferenceValue:`, 1 until the encoder sets it. It is Metal's 8-bit unorm code of the
@@ -197,8 +207,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   and its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`,
   whose symbol names the first such form the function holds: one that samples through an
   argument buffer's sampler or an array of samplers or samples an argument buffer's texture,
-  emulates a sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or
-  swizzle, a two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture
+  emulates a sampler's anisotropy, samples a 1D texture or at pixel coordinates through a bicubic
+  filter, uses a texture buffer, a slot's levels or swizzle, a two-plane, extended-range or
+  sRGB-twin form, reads an argument buffer's texture
   through another numeric type or as raw texels, reads the texture of an argument buffer that a
   pointer another argument buffer holds reaches (it reads the root table, `RootTableAddress`), or
   uses any other state of a texture or sampler beyond its ID.

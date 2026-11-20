@@ -1243,8 +1243,11 @@ pub struct SamplerPlan {
     /// The use each one's binding is made for, set by [`finish`]: one binding per distinct array
     /// and use.
     pub heap_array_decls: BTreeMap<HeapArrayKey, SamplerUse>,
-    /// The texture slots a bicubic sample reads, each with its `BicubicTexels` specialization.
+    /// The texture slots a bicubic sample reads, each with its `BicubicTexels` specialization,
+    /// or under the identity domains its `PushField::BicubicTexels` field.
     pub bicubic: BTreeSet<u32>,
+    /// A bicubic sample reads pixel coordinates.
+    pub bicubic_pixel: bool,
     /// The bicubic routines the samples call, by dimension, an extended-range sample's among them.
     pub bicubic_routines: BTreeSet<bicubic::routines::Routine>,
     /// A sample relies on the device's sampler: the module requires `VkProperty::MetalSampler`
@@ -1336,7 +1339,8 @@ pub struct Declared {
     /// sample at its texel's centre reads ([`PixelPosition::TexelBySpec`]).
     pub nearest: BTreeMap<u32, SValue>,
     /// The `BicubicTexels` specialization constant (`u32`) of each texture slot a bicubic sample
-    /// reads.
+    /// reads; none under the identity domains, where the sample reads the slot's
+    /// `PushField::BicubicTexels`.
     pub bicubic: BTreeMap<u32, ConstId>,
     /// The 2D bicubic samples' routine, when the module has one.
     pub bicubic_plane: Option<bicubic::routines::Plane>,
@@ -1536,7 +1540,9 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             SamplerUse::new(key.compare, texel != TexelClass::Float),
         );
     }
-    // The bound format's treatment under the bicubic filter.
+    // The bound format's treatment under the bicubic filter: a specialization the binder sets, or
+    // under the identity domains a push field the consumer writes from the bound texture, as for
+    // any slot's push field.
     for index in &cx.families.sampler.bicubic {
         let s = cx
             .families
@@ -1544,7 +1550,12 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .slots
             .get(index)
             .ok_or_else(|| invariant("a bicubic sample of an unplanned texture slot"))?;
-        cx.facts.insert(RuntimeFact::BicubicTexels { slot: s.slot });
+        if crate::lower::access::identity(cx.profile) {
+            cx.push
+                .insert(crate::pipeline::sym::PushField::BicubicTexels(s.slot));
+        } else {
+            cx.facts.insert(RuntimeFact::BicubicTexels { slot: s.slot });
+        }
     }
     // Under the identity domains a runtime sampler slot's resource ID is pushed, and the shader
     // reads the sampler's word from it (`emit::sampler_word`): the consumer makes the device's
@@ -1816,7 +1827,9 @@ pub fn declare(
             d.nearest.insert(*n, mb.const_value(c)?);
         }
     }
-    for index in &plan.families.sampler.bicubic {
+    // Under the identity domains a bicubic sample reads its slot's push field instead
+    // (`bicubic::emit`).
+    for index in plan.families.sampler.bicubic.iter().filter(|_| !identity) {
         let Some(s) = plan.families.texture.slots.get(index) else {
             continue;
         };

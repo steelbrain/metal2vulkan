@@ -1971,6 +1971,7 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
                 | PushField::ZeroAddress
                 | PushField::DispatchRegion
                 | PushField::TextureIntegerChannels(_)
+                | PushField::BicubicTexels(_)
                 | PushField::ConstexprSampler(_)
                 | PushField::StageInRegion
                 | PushField::VertexBufferStride(_)
@@ -2054,9 +2055,11 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
         ));
     }
     // Samples only of a texture slot through a runtime sampler slot or a constexpr sampler
-    // (`sampler::IdentitySampling`), a runtime sampler's word read from its resource ID: no
-    // argument buffer's sampler, array of samplers, bicubic filter or specialization of a slot's
-    // state.
+    // (`sampler::IdentitySampling`), a runtime sampler's word read from its resource ID, and a 2D
+    // texture slot's bicubic sample at normalized coordinates, the bound format's treatment read
+    // from its push field (`PushField::BicubicTexels`): no argument buffer's sampler, array of
+    // samplers, bicubic sample of a 1D texture or at pixel coordinates, two-plane texture's linear
+    // sample read in place, or specialization of a slot's state.
     let sampled = &plan.families.sampler;
     let refused = [
         (
@@ -2077,8 +2080,11 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
             "an array of samplers",
         ),
         (
-            !sampled.bicubic.is_empty() || !sampled.bicubic_routines.is_empty(),
-            "a bicubic filter",
+            sampled.bicubic_pixel
+                || (sampled.bicubic_routines.iter())
+                    .any(|r| *r != crate::lower::sampler::bicubic::routines::Routine::Plane),
+            "a bicubic filter of a 1D texture or at pixel coordinates, or a two-plane texture's \
+             linear sample read in place",
         ),
         (
             (sampled.slots.values()).any(|r| r.min_level || r.emulated),

@@ -2606,8 +2606,11 @@ fn fill_push(
                     .map_or(0, |target| target.texture.second_resource_id().index);
                 bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
-            // A render content has no dispatch or stage-in region (`render::draws`).
-            FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
+            // A render content has no dispatch or stage-in region, and no bicubic slot's field
+            // (`render::draws`).
+            FieldValue::DispatchRegion
+            | FieldValue::StageInRegion
+            | FieldValue::BicubicTexels(_) => {}
         }
     }
 }

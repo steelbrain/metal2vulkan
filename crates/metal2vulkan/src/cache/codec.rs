@@ -908,6 +908,7 @@ codec_enum! {
         StorageKeptChannels,
         ShaderStencilState,
         TextureIntegerChannels(f0),
+        BicubicTexels(f0),
         Specialized(f0),
         HalfBlendColor,
         SnapshotPhase,

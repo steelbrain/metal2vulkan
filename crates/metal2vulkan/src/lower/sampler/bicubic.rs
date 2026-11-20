@@ -15,10 +15,12 @@
 //! `clamp_to_zero` reads the border color too). The level is always the base level (Metal's bicubic
 //! sampler has no mip filter, so the level, bias, gradients, and fragment derivatives select
 //! nothing), a 2D array's layer is clamped into the array, and what is done with the sum depends on
-//! the bound format: the [`SpecKey::BicubicTexels`] specialization of the texture slot selects the
-//! bilinear inner 2x2 instead (32-bit float channels), clamps the sum into `[0, 1]` or `[-1, 1]`
-//! (normalized channels), or rounds it to `half` (half and small-float channels). A 1D texture is
-//! filtered bilinearly over taps `i` and `i + 1` whatever its format, with the same fraction.
+//! the bound format: the [`SpecKey::BicubicTexels`] specialization of the texture slot (under the
+//! identity domains the same bits, read at run time from the slot's `PushField::BicubicTexels`)
+//! selects the bilinear inner 2x2 instead (32-bit float channels), clamps the sum into `[0, 1]` or
+//! `[-1, 1]` (normalized channels), or rounds it to `half` (half and small-float channels). A 1D
+//! texture is filtered bilinearly over taps `i` and `i + 1` whatever its format, with the same
+//! fraction.
 //!
 //! **Small levels and mirrored axes** (Apple M3 Max, macOS 26.7, the primary Metal reference; the
 //! probes probes, every lane of each run with and without Metal's validation layer,
@@ -89,7 +91,7 @@ use crate::lower::texture::{OffsetBase, TexelConv};
 use crate::metal::bicubic::BicubicTexels;
 use crate::metal::sampler::SamplerWord;
 use crate::metal::{SamplerAddressMode, SamplerBorderColor};
-use crate::pipeline::sym::SamplerRef;
+use crate::pipeline::sym::{PushField, SamplerRef};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, OperandRule};
 use crate::spirv::ids::{ConstId, TypeId, Value as SValue};
@@ -124,7 +126,8 @@ pub enum TapAddress {
 /// docs state.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Bicubic {
-    /// The texture slot whose `BicubicTexels` specialization states the bound format's treatment.
+    /// The texture slot whose `BicubicTexels` specialization (under the identity domains, push
+    /// field) states the bound format's treatment.
     pub texture: u32,
     /// The addressing of each plane axis (`s`, then `t` for a 2D texture).
     pub address: Vec<TapAddress>,
@@ -1277,11 +1280,22 @@ pub(super) fn emit(
     image: CombinedImage,
     b: &Bicubic,
 ) -> BResult<SValue> {
-    let Some(&spec) = cx.decl.families.sampler.bicubic.get(&b.texture) else {
-        return Err(cx.fail(format!(
-            "texture slot {} has no bicubic specialization",
-            b.texture
-        )));
+    let bits = match cx.decl.families.sampler.bicubic.get(&b.texture) {
+        Some(&spec) => Bits::Spec(spec),
+        // Under the identity domains the slot's push field, which the consumer writes from the
+        // bound texture.
+        None if cx.plan.families.access.identity => {
+            let Some(slot) = cx.plan.families.texture.slots.get(&b.texture) else {
+                return Err(cx.fail(format!("texture slot {} is not planned", b.texture)));
+            };
+            Bits::Value(cx.push_field(fb, PushField::BicubicTexels(slot.slot))?)
+        }
+        None => {
+            return Err(cx.fail(format!(
+                "texture slot {} has no bicubic specialization",
+                b.texture
+            )))
+        }
     };
     let half = half_result(cx, s)?;
     let t = Tys::new(fb)?;
@@ -1291,7 +1305,6 @@ pub(super) fn emit(
     let zero_u = fb.u32_const(0)?;
     let zero_u = value(fb, zero_u)?;
     let size = fb.query(ImageQuery::SizeLod(zero_u), img)?;
-    let bits = Bits::Spec(spec);
     let fp = footprint_on(cx, fb, &t, s, (size, image), bits, &taps)?;
     let x = filter(cx, fb, (&t, &fp, size), b, bits, Texels::Own(img))?;
     narrowed(fb, x, half)

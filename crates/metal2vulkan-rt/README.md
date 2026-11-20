@@ -1321,6 +1321,13 @@ made, with no lock, and never rewritten for layouts.
   changes: its read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
+- A kernel samples a 2D texture slot through a bicubic constexpr sampler at normalized
+  coordinates by the arm its slot's pushed word selects, which the runtime writes from the bound
+  texture's format and swizzle (`metal2vulkan::metal::format::bicubic_texels_word`). A dispatch
+  whose slot holds a texture of a format with no such word (a compressed, YUV, stencil, integer
+  or extended-range format, or one of 8-bit sRGB codes such as `RGBA8Unorm_sRGB`, whose taps
+  Metal filters decoded) is `Gap::BicubicTexels`, naming the slot and the format, found when the
+  pipeline state or a binding changes: each such format's arm is built when a guest binds one.
 - An opaque-black border sampled through a view whose component mapping is not the identity (a
   swizzle, or the mapping a pixel format takes: `A8Unorm` is held in `R8_UNORM` read through
   `(0, 0, 0, r)` on every device, as rt uses Vulkan 1.3 and does not enable
@@ -2246,6 +2253,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
     both compared and sampled without comparison: no test yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;
+  - a bicubic sample of a 1D texture or at pixel coordinates ("a bicubic filter of a 1D texture
+    or at pixel coordinates, or a two-plane texture's linear sample read in place"): the
+    translator test
+    `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts it;
   - an argument buffer's texture of a type the identity arrays hold no element of (a texture
     buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
     form, or a storage texture with a format), one read through another numeric type than its

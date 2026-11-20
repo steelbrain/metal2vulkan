@@ -2,6 +2,7 @@ mod ahead;
 mod alpha_test;
 mod argument_tier;
 mod arrays;
+mod bicubic;
 mod blit;
 mod border;
 mod cache;
