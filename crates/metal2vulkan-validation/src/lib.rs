@@ -28,7 +28,7 @@ pub mod jsonl;
 pub mod l3;
 pub mod library_module;
 pub mod literal;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos", m2v_gpu))]
 mod mesh_cases;
 pub mod metal;
 pub mod msl_portability;
