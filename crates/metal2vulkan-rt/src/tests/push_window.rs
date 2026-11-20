@@ -4,11 +4,12 @@
 //! buffer's bounds (its bytes before the bind offset and its length, 8 bytes), which come last in
 //! the order, so they are the first to go to a parameter block. A kernel of 12 buffers (232
 //! bytes) pushes them all and writes nothing into the parameter ring, and its dispatches after
-//! the first push nothing, their bytes held. One of 24 buffers pushes its block's address, every
-//! buffer's address, the zero range's and one buffer's bounds, and the other 23 bounds go to a
-//! block; one of 30 pushes 26 addresses, and the other 4, the zero range's and the 30 bounds go
-//! to a block. Each of those two writes one block a dispatch, whose
-//! new address each dispatch pushes. All answer the fold of their inputs.
+//! the first push nothing, their bytes held. One of 24 buffers pushes its block's address, the
+//! region, 22 buffers' addresses and the zero tail word 24 bytes above them (`docs/API.md` section
+//! 5), and the other 2 addresses, the zero range's and the 24 bounds go to a block; one of 30
+//! pushes the same 22 addresses, and the other 8, the zero range's and the 30 bounds go to a
+//! block. Each of those two writes one block a dispatch, whose new address each dispatch pushes.
+//! All answer the fold of their inputs.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
@@ -82,18 +83,18 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
     }
 
     /// The kernel of 12 buffers writes nothing into the ring, and pushes once for its three
-    /// dispatches of the same bindings; the kernel of 24 pushes every address and has only check
-    /// fields in its block, and the kernel of 30 has 4 addresses there too; each of those writes
-    /// one block a dispatch, whose new address each dispatch pushes. Each answers the fold of its
-    /// inputs.
+    /// dispatches of the same bindings; the kernels of 24 and 30 push 22 addresses below their
+    /// tail and have the other 2 and 8 in their block with every check field; each of those
+    /// writes one block a dispatch, whose new address each dispatch pushes. Each answers the fold
+    /// of its inputs.
     #[test]
-    fn every_device_pushes_24_buffer_addresses_and_rings_30() {
+    fn every_device_pushes_12_buffers_and_rings_24_and_30() {
         // Each kernel's buffers, its addresses and check fields in the block, its blocks a
         // dispatch, and its pushes over the dispatches.
         for (buffers, (addresses, checks), blocks, pushes) in [
             (12u32, (0usize, 0usize), 0u64, 1u64),
-            (24, (0, 23), 1, DISPATCHES),
-            (30, (4, 31), 1, DISPATCHES),
+            (24, (2, 25), 1, DISPATCHES),
+            (30, (8, 31), 1, DISPATCHES),
         ] {
             let bitcode = match llvm_assemble_text(&kernel(buffers)) {
                 Ok(bitcode) => bitcode,

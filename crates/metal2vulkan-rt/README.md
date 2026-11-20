@@ -1879,9 +1879,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   on a Radeon 780M; `dispatch_chain` 3.0% slower on the RTX 3090; `bind_2000` 25.4% slower in
   GPU time on the RTX 3090 with host time level; the other eight harness rows level on all three
   cards (jobs m3-max-58429, m3-max-58430, m3-max-58431). Fields past the window go to a 16-byte
-  aligned block in the parameter ring, whose address is a field in the window: a kernel with more
-  than 24 buffers. `Counters::metrics`' `ring_writes` counts each block and each `set_bytes`
-  copy.
+  aligned block in the parameter ring, whose address is a field in the window. A kernel whose
+  buffers' bounds do not all fit beside its addresses rings one: one of 12 buffers pushes all of
+  its fields, and one of 24 or 30 pushes 22 addresses beside the block's. `Counters::metrics`'
+  `ring_writes` counts each block and each `set_bytes` copy.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
