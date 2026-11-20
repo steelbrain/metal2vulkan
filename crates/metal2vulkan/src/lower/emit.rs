@@ -58,7 +58,7 @@ use crate::spirv::ids::{
 };
 use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, ExecMode, ExecModel, MemAccess, PushMember, Type,
-    TypedModule,
+    TypedModule, ValueOrigin,
 };
 use crate::structurize::emit::{CodeEmitter, StructVars};
 use crate::structurize::promote::promote_single_store;
@@ -252,6 +252,8 @@ enum Invariant {
     /// A checked slot's `PushField::SlotBounds` split ([`EmitCx::slot_bounds`]): its buffer's
     /// bytes before the bind offset (`false`) or its length (`true`).
     Bounds(SlotRef, bool),
+    /// A checked slot's limit for accesses of a size in bytes ([`EmitCx::slot_limit`]).
+    Limit(SlotRef, u32),
 }
 
 impl<'a> EmitCx<'a> {
@@ -321,6 +323,18 @@ impl<'a> EmitCx<'a> {
         match self.memo.iter_mut().find(|(k, _, _)| *k == key) {
             Some(e) => *e = (key, v, here),
             None => self.memo.push((key, v, here)),
+        }
+    }
+
+    /// Record `v`, made in the function's entry block, as the value of `key` there, so every
+    /// block recalls it.
+    fn remember_at_entry(&mut self, fb: &FunctionBuilder<'_>, key: Invariant, v: SValue) {
+        let Some(entry) = fb.entry_block() else {
+            return;
+        };
+        match self.memo.iter_mut().find(|(k, _, _)| *k == key) {
+            Some(e) => *e = (key, v, entry),
+            None => self.memo.push((key, v, entry)),
         }
     }
 
@@ -468,6 +482,39 @@ impl<'a> EmitCx<'a> {
         self.remember(fb, before, b);
         self.remember(fb, length, l);
         Ok((b, l))
+    }
+
+    /// Checked slot `slot`'s buffer bytes before the bind offset and its limit for `n`-byte
+    /// accesses (`psb::limit`), where they dominate the open block: the pair an access checks
+    /// with (`psb::in_buffer`). The limit is made once per slot and size, in the function's first
+    /// block where the bounds are split there ([`EmitCx::load_push_fields`]), so every checked
+    /// access of that size anywhere in the function adds one add and one compare.
+    pub(crate) fn slot_limit(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        slot: SlotRef,
+        n: u32,
+    ) -> BResult<(SValue, SValue)> {
+        let (before, length) = self.slot_bounds(fb, slot)?;
+        let key = Invariant::Limit(slot, n);
+        if let Some(limit) = self.recall(fb, key) {
+            return Ok((before, limit));
+        }
+        let entry = fb.entry_block();
+        let at_entry = matches!(fb.origin(length)?, ValueOrigin::Inst(b) if Some(b) == entry);
+        let limit = match at_entry && fb.current_block() != entry {
+            true => {
+                let limit = fb.in_entry_block(|fb| access::psb::limit(fb, length, n))?;
+                self.remember_at_entry(fb, key, limit);
+                limit
+            }
+            false => {
+                let limit = access::psb::limit(fb, length, n)?;
+                self.remember(fb, key, limit);
+                limit
+            }
+        };
+        Ok((before, limit))
     }
 
     /// Load push field `field` in the open block.

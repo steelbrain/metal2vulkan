@@ -109,7 +109,7 @@ pub mod index;
 pub mod local;
 pub(crate) mod phis;
 pub mod pointer;
-mod psb;
+pub(crate) mod psb;
 pub mod pulled;
 pub(crate) mod root_sets;
 pub mod table;

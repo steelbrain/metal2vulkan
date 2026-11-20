@@ -269,8 +269,9 @@ pub(super) struct Prepared {
 /// Under the identity domains a slot an access may reach at an offset that is not a
 /// translation-time constant (`AccessPlan::variable`) is checked where `m` is not a constant,
 /// against its buffer (`psb::in_buffer`): `m`, read as signed, plus the bytes before the bind
-/// offset, against the buffer's length, both from the slot's `SlotBounds`, with the normative
-/// check (`contain::in_bounds`) in `u32`. So an offset before the bind offset is inside where the
+/// offset, under the slot's limit for `n` bytes (`psb::limit`), both from the slot's `SlotBounds`
+/// and made once per function (`EmitCx::slot_limit`), the normative check (`contain::in_bounds`)
+/// in `u32`. So an offset before the bind offset is inside where the
 /// buffer holds it, as Metal reads it, and outside before the buffer's start. A load outside reads
 /// each unit at `ZeroAddress`, 16 bytes of zeros, with one select of the unit's address and none
 /// of its value; a store or atomic outside is in the closed `if_(inb)` and runs nothing. Nil and a
@@ -321,8 +322,8 @@ pub(super) fn prepare(
         let checked = cx.plan.families.access.variable.contains(&choice.slot)
             && leaf::known(fb, m)?.is_none();
         if checked {
-            let bounds = cx.slot_bounds(fb, choice.slot)?;
-            let inb = psb::in_buffer(fb, m, bounds, n)?;
+            let limit = cx.slot_limit(fb, choice.slot, n)?;
+            let inb = psb::in_buffer(fb, m, limit)?;
             if read {
                 let zero = cx.push_field(fb, PushField::ZeroAddress)?;
                 mem = mem.outside(inb, zero);

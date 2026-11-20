@@ -7,7 +7,9 @@
 //!   offset, and one `ZeroAddress`. In its module every device-address load at a run-time offset
 //!   reads through an address selected in the shader (one select, toward the zero range), the
 //!   constant-offset load through an address no select makes, and every device-address store and
-//!   atomic sits in the true arm of a conditional branch.
+//!   atomic sits in the true arm of a conditional branch. Each checked slot's limit for 4-byte
+//!   accesses is made once, in its function's first block, and the three checked accesses
+//!   compare under the two limits.
 //! - On the CPU interpreter, with each slot's pushed bounds (the bytes before its bind offset and
 //!   its buffer's length): in bounds it moves the program's words; past `data`'s length its loads
 //!   read zero; past `out`'s pushed length (shorter than the buffer the interpreter holds) its
@@ -96,6 +98,18 @@ fn slot(index: u32) -> SlotRef {
     }
 }
 
+/// The instructions of serialized module `words`: each opcode with its words.
+fn insts(words: &[u32]) -> impl Iterator<Item = (u32, &[u32])> {
+    let mut at = 5;
+    std::iter::from_fn(move || {
+        let w = *words.get(at)?;
+        let len = ((w >> 16) as usize).max(1);
+        let inst = &words[at..(at + len).min(words.len())];
+        at += len;
+        Some((w & 0xFFFF, inst))
+    })
+}
+
 /// The device-address accesses of serialized module `words`: the loads through an address an
 /// `OpSelect` makes and through one it does not, and the stores and atomics in the true arm of
 /// an `OpBranchConditional` and elsewhere.
@@ -110,16 +124,7 @@ fn accesses(words: &[u32]) -> ([usize; 2], [usize; 2]) {
     const ATOMIC_IADD: u32 = 234;
     const LABEL: u32 = 248;
     const BRANCH_CONDITIONAL: u32 = 250;
-    let insts = || {
-        let mut at = 5;
-        std::iter::from_fn(move || {
-            let w = *words.get(at)?;
-            let len = ((w >> 16) as usize).max(1);
-            let inst = &words[at..(at + len).min(words.len())];
-            at += len;
-            Some((w & 0xFFFF, inst))
-        })
-    };
+    let insts = || insts(words);
     let pointers: BTreeSet<u32> = insts()
         .filter(|(op, i)| *op == TYPE_POINTER && i.get(2) == Some(&PHYSICAL_STORAGE_BUFFER))
         .map(|(_, i)| i[1])
@@ -198,6 +203,50 @@ fn every_run_time_offset_access_of_a_slot_carries_the_check() {
         // The run-time load is selected, the constant-offset one is not; the store and the
         // atomic are guarded.
         assert_eq!(accesses(&a.module.words), ([1, 1], [2, 0]), "{stem}");
+    }
+}
+
+/// The limits of serialized module `words` made in a function's first block (`psb::limit`: an
+/// `OpISub` of a length less its `GLSL.std.450 UMin` with a constant), and the `OpULessThan`
+/// compares under them. A limit made in another block counts as none.
+fn first_block_limits(words: &[u32]) -> (usize, usize) {
+    const EXT_INST: u32 = 12;
+    const FUNCTION: u32 = 54;
+    const ISUB: u32 = 130;
+    const ULESS_THAN: u32 = 176;
+    const LABEL: u32 = 248;
+    const UMIN: u32 = 38;
+    let mut labels = 0;
+    let (mut mins, mut limits, mut compares) = (BTreeSet::new(), BTreeSet::new(), 0);
+    for (op, i) in insts(words) {
+        match op {
+            FUNCTION => labels = 0,
+            LABEL => labels += 1,
+            EXT_INST if labels == 1 && i.get(4) == Some(&UMIN) => {
+                mins.insert(i[2]);
+            }
+            ISUB if labels == 1 && mins.contains(&i[4]) => {
+                limits.insert(i[2]);
+            }
+            ULESS_THAN if limits.contains(&i[4]) => compares += 1,
+            _ => {}
+        }
+    }
+    (limits.len(), compares)
+}
+
+/// A checked slot's limit is made once per access size, in its function's first block, and each
+/// checked access adds one compare under it: the load of `data`, and the store and the atomic of
+/// `out`, 4 bytes each, compare under two limits on every committed profile under the identity
+/// domains.
+#[test]
+fn a_checked_slots_limit_is_made_once_per_size_in_the_first_block() {
+    let Some(bc) = assemble() else {
+        return;
+    };
+    for (stem, p) in &identity_profiles() {
+        let (a, _, _) = compile_kept(&bc, "contain", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(first_block_limits(&a.module.words), (2, 3), "{stem}");
     }
 }
 

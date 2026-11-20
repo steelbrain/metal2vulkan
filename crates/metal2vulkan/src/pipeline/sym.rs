@@ -1301,7 +1301,8 @@ pub enum PushField {
     /// the slot's bind offset (the bind offset), then the buffer's length; for a `set*Bytes` copy 0
     /// and its length, for nil 0 and 0. A load, store or atomic of the slot at a byte offset `m`
     /// from the bind offset, read as signed, that is not a translation-time constant is checked
-    /// against the buffer, `(len >= n) && (m + before <= len - n)` in `u32`: outside, a load reads
+    /// against the buffer, `(len >= n) && (m + before <= len - n)` in `u32`, as `m + before <
+    /// len - min(len, n - 1)` with the limit made once per slot and size: outside, a load reads
     /// zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`, section 5).
     SlotBounds(SlotRef),
 }

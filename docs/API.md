@@ -1599,8 +1599,10 @@ for dependency in &pipeline.dependencies {
   offset, read as signed, the normative check `(len >= n) && (m + before <= len - n)` in `u32`.
   The domain is the bound buffer, as Metal's is and as a storage view of a whole window's is
   (from the buffer's start): an offset before the bind offset is inside where the buffer holds
-  it, and one before the buffer's start wraps to at least 2^31, outside. That is one add more
-  than a check against the bind window. A load outside reads each of its units at
+  it, and one before the buffer's start wraps to at least 2^31, outside. The module computes it
+  as `m + before < limit`, the slot's limit for `n`-byte accesses `len - min(len, n - 1)` (0 for
+  a slot shorter than one access), made once per slot and size in the function's first block:
+  one add and one compare per access. A load outside reads each of its units at
   `PushField::ZeroAddress`, a `u64` the consumer pushes: the address of 16 bytes of zeros, a
   multiple of 16, that nothing writes. That is one select of each unit's address, with no select
   of the value and no branch, and the load touches nothing of the slot. A store or an atomic

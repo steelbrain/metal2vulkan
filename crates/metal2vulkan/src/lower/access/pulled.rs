@@ -257,19 +257,21 @@ pub fn psb_read(
 /// An `n`-byte read of a source buffer under the identity domains, at the `u32` Metal
 /// displacement `m` from its bind offset, read as signed: from `address` (a `u64`), the slot's own
 /// device address, the word below the read and the byte offset in it (`psb::prepare_at`). No
-/// table is read. Where `check` holds the slot's `SlotBounds` and `ZeroAddress` and `m` is not a
+/// table is read. Where `check` holds the checked slot and the `ZeroAddress` and `m` is not a
 /// constant, the read is checked as a load of the slot is (`emit::prepare`, `psb::in_buffer`):
 /// outside its buffer it reads zero at the zero range.
 fn address_read(
+    cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     address: SValue,
     m: SValue,
-    (n, check): (u32, Option<((SValue, SValue), SValue)>),
+    (n, check): (u32, Option<(SlotRef, SValue)>),
 ) -> BResult<SourceRead> {
     let a = psb::prepare_at(fb, address, m)?;
     let mem = match check {
-        Some((bounds, zero)) if leaf::known(fb, m)?.is_none() => {
-            let inb = psb::in_buffer(fb, m, bounds, n)?;
+        Some((slot, zero)) if leaf::known(fb, m)?.is_none() => {
+            let limit = cx.slot_limit(fb, slot, n)?;
+            let inb = psb::in_buffer(fb, m, limit)?;
             a.mem.outside(inb, zero)
         }
         _ => a.mem,
@@ -298,7 +300,7 @@ pub fn prepare(
             start,
             contained,
         } => psb_read(fb, table, buffer, m, start, n, contained),
-        Source::Address { address, check } => address_read(fb, address, m, (n, check)),
+        Source::Address { address, check } => address_read(cx, fb, address, m, (n, check)),
     }
 }
 
@@ -343,7 +345,7 @@ pub fn prepare_within(
         Source::Address { address, check } => {
             let zero = k32(fb, 0)?;
             let m = fb.select(fits, m, zero)?;
-            (address_read(fb, address, m, (n, check))?, fits)
+            (address_read(cx, fb, address, m, (n, check))?, fits)
         }
     };
     let inb = match read.inb {
@@ -367,12 +369,11 @@ enum Source {
         start: i64,
         contained: bool,
     },
-    /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), with its
-    /// `SlotBounds` and the `ZeroAddress` where the access plan checks it
-    /// (`AccessPlan::variable`).
+    /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), with the
+    /// slot and the `ZeroAddress` where the access plan checks it (`AccessPlan::variable`).
     Address {
         address: SValue,
-        check: Option<((SValue, SValue), SValue)>,
+        check: Option<(SlotRef, SValue)>,
     },
 }
 
@@ -425,10 +426,7 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
         (Some(SlotLowering::Psb { .. }), _) if identity => {
             let address = super::pointer::slot_address(cx, fb, slot)?;
             let check = match checked {
-                true => Some((
-                    cx.slot_bounds(fb, slot)?,
-                    cx.push_field(fb, PushField::ZeroAddress)?,
-                )),
+                true => Some((slot, cx.push_field(fb, PushField::ZeroAddress)?)),
                 false => None,
             };
             Ok(Source::Address { address, check })

@@ -65,6 +65,23 @@ impl<'m> FunctionBuilder<'m> {
             .and_then(|f| f.blocks.first().copied())
     }
 
+    /// Run `f` with the function's entry block open, then reopen the block that was open: what
+    /// `f` appends goes after the entry block's instructions, before its terminator, where it
+    /// dominates every block of the function. `f` appends only instructions whose operands are
+    /// defined in the entry block or are module-scope, and opens and closes no block.
+    pub fn in_entry_block<T>(&mut self, f: impl FnOnce(&mut Self) -> BResult<T>) -> BResult<T> {
+        let entry = self
+            .entry_block()
+            .ok_or(BuildError::Control(ControlRule::NoCurrentBlock))?;
+        let open = self
+            .cursor
+            .replace(entry)
+            .ok_or(BuildError::Control(ControlRule::NoCurrentBlock))?;
+        let r = f(self);
+        self.cursor = Some(open);
+        r
+    }
+
     /// The type of a value.
     pub fn value_ty(&self, v: Value) -> BResult<TypeId> {
         self.m.value_ty(v)

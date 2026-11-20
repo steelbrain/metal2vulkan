@@ -21,7 +21,8 @@
 //! load's value `select(inb, v, 0)`. A contained store lands in the sink, which no shader reads
 //! observably. Only `Containment::UnsafeOff` omits it. Under the identity domains no table is
 //! read: an access whose offset is not a translation-time constant is checked against the slot's
-//! pushed length (`emit::prepare`), a load outside reading the zero range ([`PsbMem::outside`]).
+//! buffer ([`in_buffer`], `emit::prepare`), a load outside reading the zero range
+//! ([`PsbMem::outside`]).
 //!
 //! The leaf itself (`memory::leaf`) sees a word memory based at the 4-aligned address below the
 //! access, and the access's byte offset within that word (0 to 3).
@@ -40,7 +41,7 @@ use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    AtomicOp, BinOp, ConstBits, Constant, ConvOp, MemAccess, Scope, Semantics, Type, UnOp,
+    AtomicOp, BinOp, ConstBits, Constant, ConvOp, GlslOp, MemAccess, Scope, Semantics, Type, UnOp,
 };
 
 /// Bytes of one root-table entry.
@@ -243,21 +244,33 @@ pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
     }
 }
 
-/// Whether an `n`-byte access at the `u32` byte offset `m` from a slot's bind offset, read as
-/// signed, lies in the slot's buffer, by the slot's pushed bounds (`PushField::SlotBounds`, split
-/// once per function by `EmitCx::slot_bounds`): `before`, the buffer's bytes before the bind
-/// offset, and `length`, the buffer's length. `m` plus `before`, against the length, with the
-/// normative check (`contain::in_bounds`), in `u32`: one add more than a check against the bind
-/// window. Exact as the new runtime makes no buffer longer than 2 GiB: an offset that reaches
-/// before the buffer's start wraps to at least 2^31, past every length.
+/// The limit of an `n`-byte access (`n` at least 1) of a buffer of `length` bytes, an unsigned
+/// integer: `length - min(length, n - 1)`, so the access at byte `at` of the buffer lies in it
+/// exactly where `at < limit`, the normative check `(length >= n) && (at <= length - n)`
+/// (`contain::in_bounds`): where `length >= n` the limit is `length - n + 1`, and below that it is
+/// 0, which no offset is under. Nothing wraps. `length` itself for a 1-byte access.
+pub fn limit(fb: &mut FunctionBuilder<'_>, length: Value, n: u32) -> BResult<Value> {
+    if n <= 1 {
+        return Ok(length);
+    }
+    let k = crate::memory::contain::int_like(fb, length, u64::from(n - 1))?;
+    let low = fb.glsl(GlslOp::UMin, &[length, k])?;
+    fb.binary(BinOp::ISub, length, low)
+}
+
+/// Whether an access at the `u32` byte offset `m` from a slot's bind offset, read as signed, lies
+/// in the slot's buffer: `m` plus `before`, the buffer's bytes before the bind offset (from the
+/// slot's pushed bounds, `PushField::SlotBounds`), under the slot's [`limit`] for the access's
+/// size, both made once per function by `EmitCx::slot_limit`. One add and one compare per access,
+/// in `u32`. Exact as the new runtime makes no buffer longer than 2 GiB: an offset that reaches
+/// before the buffer's start wraps to at least 2^31, past every limit.
 pub fn in_buffer(
     fb: &mut FunctionBuilder<'_>,
     m: Value,
-    (before, length): (Value, Value),
-    n: u32,
+    (before, limit): (Value, Value),
 ) -> BResult<Value> {
     let at = fb.binary(BinOp::IAdd, m, before)?;
-    crate::memory::contain::in_bounds(fb, at, length, u64::from(n))
+    fb.binary(BinOp::ULessThan, at, limit)
 }
 
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and
@@ -579,5 +592,53 @@ fn unit_access(bytes: u32) -> MemAccess {
     MemAccess {
         aligned: Some(bytes),
         ..WORD
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
+    use crate::spirv::builder::FunctionBuilder;
+    use crate::spirv::error::BResult;
+    use crate::spirv::ids::Value;
+    use crate::spirv::interp::harness::{address, check_containment, AccessArgs};
+    use crate::spirv::ir::{BinOp, Constant, MemAccess};
+
+    use super::limit;
+
+    /// The identity domains' check with no bytes before the bind offset: the access at `offset`
+    /// of a buffer of `size` bytes, loaded inside `if_(offset < limit)`.
+    fn limited(fb: &mut FunctionBuilder<'_>, a: &AccessArgs) -> BResult<Value> {
+        let lim = limit(fb, a.size, a.n)?;
+        let inb = fb.binary(BinOp::ULessThan, a.offset, lim)?;
+        let null = fb.module().constant(Constant::Null { ty: a.elem })?;
+        let var = fb.local_var(a.elem, Some(null))?;
+        let result = fb.var_ptr(var)?;
+        let args = *a;
+        let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let p = address(fb, &args)?;
+            let v = fb.load(
+                p,
+                MemAccess {
+                    aligned: Some(1),
+                    ..MemAccess::default()
+                },
+            )?;
+            fb.store(result, v, MemAccess::default())?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        fb.if_(&mut (), inb, then, None)?;
+        fb.load(result, MemAccess::default())
+    }
+
+    /// An offset under the limit is exactly one the normative check admits: at offsets around the
+    /// buffer's start and end and at `0xFFFF_FFF0..=0xFFFF_FFFF` (and the top of the 64-bit range),
+    /// for `n` in {1, 2, 4, 16} in both offset widths, over buffers shorter than one access (whose
+    /// limit is 0), as long as one, and longer.
+    #[test]
+    fn an_offset_under_the_limit_is_one_the_normative_check_admits() {
+        for size in [0u64, 1, 3, 4, 15, 16, 22, 64] {
+            check_containment(&limited, size).unwrap_or_else(|e| panic!("size {size}: {e}"));
+        }
     }
 }
