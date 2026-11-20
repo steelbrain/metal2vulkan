@@ -184,7 +184,10 @@ to scheduled (`commit_to_scheduled`, counted as it is scheduled), scheduled to G
 run, and GPU end to the host time its handlers begin (counted as it retires, for one that
 completes with GPU times); the segments the submit thread held for an event's value that neither
 the host had set nor a submitted signal promised, by the length of each hold (`event_holds`, in
-the same buckets);
+the same buckets); the groups a queue held behind three submissions in flight that went once a
+completion left fewer running (`held_starts`), and the GPU's time behind them, from the latest
+end of the command buffers submitted before each to the start of its first, on their timestamps
+(`held_start_gap_nanos`);
 the copies of textures over a buffer that no linear image holds are split by cause
 (`over_copies_pitch` and the rest, in Textures below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and

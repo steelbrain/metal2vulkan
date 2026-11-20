@@ -423,6 +423,9 @@ struct Batch {
     unseen: usize,
     /// It goes member by member ([`GROUP_RUN`], tested again as it goes).
     apart: bool,
+    /// It was held as a pass ended, its queue having [`IN_FLIGHT`] submissions not seen complete;
+    /// once closed, that it goes because a completion left fewer (`Metrics::held_starts`).
+    held: bool,
     /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
     /// What its segments wrote of buffers under textures over a buffer in an image of their own
@@ -1537,6 +1540,7 @@ impl WorkState {
             seen: 0,
             unseen: 0,
             apart: false,
+            held: false,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
@@ -1644,6 +1648,12 @@ impl WorkState {
         // The bound again, with the expected run as it now stands: a completion since a join may
         // have raised it.
         batch.apart = apart(batch.starts.len() as u64, fifo.queue.expected_run());
+        // A group held that goes with fewer than `IN_FLIGHT` in flight goes as a completion left
+        // it, whatever else would have sent it now.
+        batch.held &= fifo.in_flight.len() < IN_FLIGHT;
+        if batch.held {
+            core.counters.held_start();
+        }
         // The copy-ins captured at or before the number of a command buffer that goes first in
         // it, each ahead of the first such one (`crate::capture`).
         batch.take(self.changes.captured.take(&batch.leads));
@@ -1899,6 +1909,10 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
                 Some(index) => index,
                 None => {
                     state.mark_holds(now);
+                    // Each group open now waits for its queue's submissions in flight (`unheld`).
+                    for group in (state.fifos.iter_mut()).filter_map(|fifo| fifo.group.as_mut()) {
+                        group.held = true;
+                    }
                     break;
                 }
             },
@@ -1966,6 +1980,7 @@ impl Batch {
             seen: 0,
             unseen: 0,
             apart: false,
+            held: false,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
@@ -2047,6 +2062,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         wrote,
         starts,
         apart,
+        held,
         copy_ins,
         ..
     } = batch;
@@ -2222,8 +2238,14 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     } else {
         complete::lose(core);
     }
-    core.done
-        .submitted(core, value, uploads, copy_ins, finished, watch);
+    core.done.submitted(
+        core,
+        complete::Sent { value, held },
+        uploads,
+        copy_ins,
+        finished,
+        watch,
+    );
     // Device work of the submission wrote these Managed buffers: their textures over their device
     // copies owe their copies in from the next submission (`crate::over::ManagedOvers`).
     for buffer in written {

@@ -66,7 +66,17 @@ enum Waiting {
 
 struct Retiree {
     value: u64,
+    /// Of a held group's submission ([`Sent::held`]).
+    held: bool,
     item: Item,
+}
+
+/// A submission passed to `vkQueueSubmit2`: its progress value, and whether it is a group its
+/// queue held behind its submissions in flight that goes because a completion left fewer
+/// (`Metrics::held_starts`).
+pub(crate) struct Sent {
+    pub(crate) value: u64,
+    pub(crate) held: bool,
 }
 
 enum Item {
@@ -197,29 +207,32 @@ impl Done {
         state.waiting = Waiting::Not;
     }
 
-    /// From the submit thread: a submission passed to `vkQueueSubmit2` with progress `value`.
-    /// Its command buffers retire in order once it completes, each ended one with its error, and
-    /// its uploads and the copy-ins it took with them.
+    /// From the submit thread: a submission passed to `vkQueueSubmit2` (`sent`). Its command
+    /// buffers retire in order once it completes, each ended one with its error, and its uploads
+    /// and the copy-ins it took with them.
     pub(crate) fn submitted(
         &self,
         core: &Core,
-        value: u64,
+        sent: Sent,
         uploads: Vec<Upload>,
         copy_ins: Vec<CopyIn>,
         finished: Vec<Finished>,
         watch: Vec<Arc<EventInner>>,
     ) {
+        let Sent { value, held } = sent;
         let mut state = self.lock();
         let flight_only = watch.is_empty();
         for upload in uploads {
             state.flight.push_back(Retiree {
                 value,
+                held,
                 item: Item::Upload(upload),
             });
         }
         for copy_in in copy_ins {
             state.flight.push_back(Retiree {
                 value,
+                held,
                 item: Item::CopyIn(copy_in),
             });
         }
@@ -228,6 +241,7 @@ impl Done {
             let Pending { gpu, handlers, .. } = pending;
             state.flight.push_back(Retiree {
                 value,
+                held,
                 item: Item::Command {
                     cb,
                     gpu,
@@ -259,6 +273,7 @@ impl Done {
             } = pending;
             let retiree = Retiree {
                 value,
+                held: false,
                 item: Item::Command {
                     cb,
                     gpu,
@@ -379,6 +394,10 @@ pub(crate) fn run(core: Arc<Core>) {
     // The GPU clock on the host's: read as the device starts, and again at a completion once the
     // period has passed since the last reading.
     let mut calibration = Calibration::read(&core);
+    // The latest end timestamp of a command buffer retired, and the value of the last held
+    // group's submission whose gap was counted (`Metrics::held_start_gap_nanos`).
+    let mut last_end: Option<u64> = None;
+    let mut gapped = 0;
     // A value the counter read and the host wait then reported not reached: the next wait is for
     // it, so the thread sleeps until the wait agrees rather than reading the counter again.
     let mut behind: Option<u64> = None;
@@ -498,6 +517,20 @@ pub(crate) fn run(core: Arc<Core>) {
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 if let Some((start, end)) = stamps {
                     lock(&core.tick_spans).push(core.ticks.span(start, end));
+                }
+                if let Some((start, end)) = stamps {
+                    // Retirees come in submission order: the first of a held group's command
+                    // buffers with both timestamps starts the GPU's time behind it, from the
+                    // latest end before it where the start is the later.
+                    if retiree.held && retiree.value != gapped {
+                        gapped = retiree.value;
+                        if let Some(last) = last_end {
+                            core.counters.held_start_gap(core.ticks.span(last, start));
+                        }
+                    }
+                    if last_end.is_none_or(|last| core.ticks.span(last, end) > 0) {
+                        last_end = Some(end);
+                    }
                 }
                 let times = stamps
                     .zip(calibration.as_mut())

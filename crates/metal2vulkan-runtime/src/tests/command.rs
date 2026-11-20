@@ -1903,6 +1903,57 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A group held behind its queue's [`IN_FLIGHT`] submissions that goes once a completion
+    /// leaves fewer running counts one in `Metrics::held_starts`, and the span from the end of the
+    /// busy work before it to its command buffer's start in `held_start_gap_nanos`: it is
+    /// submitted only once the host has seen that work complete. A command buffer sent at once,
+    /// its queue with nothing in flight, counts in neither.
+    #[test]
+    fn every_device_counts_a_held_group_s_start_and_not_one_sent_at_once() {
+        each_device("command_held_starts", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let counters = device.counters();
+            let held = || {
+                let m = counters.metrics();
+                (m.held_starts, m.held_start_gap_nanos)
+            };
+            let before = held();
+            let at_once = queue.command_buffer().expect("a command buffer");
+            fill(&at_once, &buffer, 1);
+            at_once.commit().expect("a commit");
+            finished(name, &at_once);
+            assert_eq!(held(), before, "{name}: a command buffer sent at once");
+            behind_busy(name, &device, &queue, |busy, _, _| {
+                let group = queue.command_buffer().expect("a command buffer");
+                fill(&group, &buffer, 2);
+                group.commit().expect("a commit");
+                // Staged in the held group, then the pass over: the submit thread holds the work
+                // lock from the staging to the pass's end unless it submits.
+                within(name, || group.status() == CommandBufferStatus::Scheduled);
+                drop(device.core().work.lock());
+                assert_eq!(held(), before, "{name}: nothing counted while it is held");
+                // Its status is read, not waited for: a host wait would send it.
+                busy.open();
+                finished(name, &group);
+                assert_eq!(group.error(), None, "{name}");
+            });
+            let (starts, gap) = held();
+            assert_eq!(starts - before.0, 1, "{name}: the held group's start");
+            assert!(
+                gap > before.1,
+                "{name}: its command buffer starts after the busy work's end"
+            );
+            println!(
+                "{name}: the held group's command buffer started {} ns after the busy work's end",
+                gap - before.1
+            );
+            assert_eq!(word(&buffer), 2, "{name}: the held fill");
+            drop((at_once, buffer, arena, queue, device));
+        });
+    }
+
     /// Each command buffer that completes lands one count in each of the four stage histograms:
     /// three committed in turn, each finished before the next, add three to each histogram.
     #[test]

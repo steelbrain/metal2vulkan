@@ -2225,6 +2225,8 @@ field	metal2vulkan-runtime::Metrics.gpu_run	pub gpu_run: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.held_release_bytes	pub held_release_bytes: u64
 field	metal2vulkan-runtime::Metrics.held_release_starts	pub held_release_starts: u64
 field	metal2vulkan-runtime::Metrics.held_releases	pub held_releases: u64
+field	metal2vulkan-runtime::Metrics.held_start_gap_nanos	pub held_start_gap_nanos: u64
+field	metal2vulkan-runtime::Metrics.held_starts	pub held_starts: u64
 field	metal2vulkan-runtime::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-runtime::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-runtime::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
