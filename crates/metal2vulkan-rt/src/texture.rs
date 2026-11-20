@@ -362,13 +362,13 @@ pub(crate) struct Image {
     /// The layout the image is in outside a copy, which its elements name.
     home: vk::ImageLayout,
     /// A draw may read an attachment of its own pass through a texture over the image (a
-    /// shader-read colour render target of no storage view, its home shader-read-only, on a
-    /// device that reads attachments): each such texture has a second element of the
-    /// sampled-texture array, at its index plus [`TEXTURES`](crate::floor::TEXTURES). Through the
-    /// attachment feedback loop the image has the feedback usage and the element names the
-    /// feedback layout, which a pass moves the whole image to for a draw that reads it; on a
-    /// device without the loop the element names the texture's view of the image's shadow
-    /// (`shadowing`).
+    /// shader-read colour render target not in place over a buffer, its home shader-read-only, or
+    /// general where it has a storage view, on a device that reads attachments): each such
+    /// texture has a second element of the sampled-texture array, at its index plus
+    /// [`TEXTURES`](crate::floor::TEXTURES). Through the attachment feedback loop the image has
+    /// the feedback usage and the element names the feedback layout, which a pass moves the whole
+    /// image to from its home, and back, for a draw that reads it; on a device without the loop
+    /// the element names the texture's view of the image's shadow (`shadowing`).
     attachment_reads: bool,
     /// Where a draw reads the image as an attachment on a device without the feedback loop: what
     /// its shadow is made of, and the shadow once made (`crate::shadow`).
@@ -1386,8 +1386,11 @@ impl Device {
         core.counters.rise(Gauge::Textures);
         // A clear zeroes it in its move home.
         let zero = placed.then(|| Zero::of(&plan, d.mipmap_level_count, &shape));
-        let attachment_reads =
-            plan.attachment_reads && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        // An image in place over a buffer is the buffer's linear image, of no feedback usage
+        // (`Plan::linear_usage`); any other keeps its home, shader-read-only or general, which a
+        // pass moves it from to the feedback layout and back.
+        let laid_over = named.as_ref().is_some_and(|n| n.form == Form::InPlace);
+        let attachment_reads = plan.attachment_reads && !laid_over;
         // On a device without the feedback loop, a draw reads such an image through its shadow.
         let shadowing = (attachment_reads && core.feedback.is_none()).then(|| {
             Box::new(Shadowing {
@@ -1527,21 +1530,23 @@ struct Plan {
 
 impl Plan {
     /// The usage of a linear image of the plan, over a buffer in place: without the feedback
-    /// usage, as its home is general and no pass moves it to the feedback layout.
+    /// usage, as no pass moves it to the feedback layout.
     fn linear_usage(&self) -> vk::ImageUsageFlags {
         self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT
     }
 
     /// Whether a draw may read an attachment of its own pass through a texture of the plan, where
-    /// its image takes the feedback usage or a shadow: a shader-read colour render target of no
-    /// storage view, on a device that reads attachments.
+    /// its image takes the feedback usage or a shadow: a shader-read colour render target, with a
+    /// storage view or not, on a device that reads attachments. Vulkan's feedback layout asks the
+    /// attachment and sampled usages beside the feedback usage
+    /// (`VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006`) and bars none, the storage usage
+    /// included; in it the image is only rendered and sampled.
     fn reads_attachments(&self, core: &Core) -> bool {
         let render =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
         core.attachment_reads
             && self.usage.contains(vk::ImageUsageFlags::SAMPLED)
             && self.usage.intersects(render)
-            && !self.storage
             && self.aspects == vk::ImageAspectFlags::COLOR
     }
 

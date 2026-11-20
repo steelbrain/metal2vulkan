@@ -24,8 +24,10 @@
 //!
 //! A draw may read an attachment of its own pass through a texture, as Metal reads a render target
 //! (`floor::Capabilities::attachment_reads`): through the attachment feedback loop where the
-//! device has it, else through a copy. Its image is a shader-read colour render target with no
-//! storage view, whose home is shader-read-only.
+//! device has it, else through a copy. Its image is a shader-read colour render target not in
+//! place over a buffer, whose home is shader-read-only, or general where it has a storage view.
+//! An attachment at home general renders there, and a move to the feedback layout and back is
+//! from and to general.
 //!
 //! Through the feedback loop: at the pass's first draw that reads the image, the rendering ends,
 //! one barrier moves the whole image to the feedback layout (its rendered level and layer from the

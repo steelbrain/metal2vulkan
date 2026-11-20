@@ -903,7 +903,7 @@ made, with no lock, and never rewritten for layouts.
   the texture's own index while it reads an attachment of its pass through the texture. Through
   the attachment feedback loop it is the texture's view in the feedback layout, written with
   element `i` for a texture whose image a pass may move there (a shader-read colour render target
-  with no storage view); on a device without the loop it is the texture's view of its image's
+  not in place over a buffer); on a device without the loop it is the texture's view of its image's
   shadow (Render encoders), written at the first draw that reads through it where the texture
   still owns index `i`. It is a null descriptor otherwise, and no grant reaches it.
 - A shader masks the index of a texture ID it reads from an argument buffer to its low 16 bits,
@@ -2565,11 +2565,16 @@ or does not check is rebuilt from the generations' names, with young counted ful
   target, where the device reads attachments (Floor, Attachment reads): through the attachment
   feedback loop where the device has it, else through a copy. The texture reaches the
   attachment's level and layer, the fragment function reads it and nothing writes it, and its
-  image is a shader-read colour render target with no storage view, which one attachment of the
-  pass renders. Through the feedback loop, at the pass's first such draw the rendering ends, one
-  barrier moves the whole image to the feedback layout (the attachment's level and layer from the
-  attachment layout, the rest from home), and the rendering begins again with the attachment in
-  that layout; the pass's second barrier moves the whole image home. Until then every draw of the
+  image is a shader-read colour render target not in place over a buffer, which one attachment of
+  the pass renders: its home is shader-read-only, or general where it has a storage view (made for
+  shader writes, or of an unknown usage, where the device stores its format), and its image takes
+  the feedback usage where the device's image format query offers it beside the rest, the storage
+  usage included. Vulkan's feedback layout asks the attachment and sampled usages beside it and
+  bars none (VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006); in it the image is only
+  rendered and sampled. Through the feedback loop, at the pass's first such draw the rendering
+  ends, one barrier moves the whole image to the feedback layout (the attachment's level and layer
+  from the layout the pass renders it in, the rest from home), and the rendering begins again
+  with the attachment in that layout; the pass's second barrier moves the whole image home. Until then every draw of the
   pass reads the image's textures through their second elements (Set 1), a texture that reaches
   no rendered level among them. Every render pipeline takes the feedback loop's enable as dynamic
   state, which the encoder sets at its first draw and where it changes: colour for a draw that
@@ -2602,8 +2607,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   barrier, and it begins again), and through a copy copies what it reads into the shadow again: a
   pass of N fetching draws records N - 1 such barriers, or N - 1 copies. The texture is a 2D
   texture (a 2D multisample one in a multisampled pass) whose first level and slice the pass
-  renders, made with an index, of a shader-read colour render target's image: a texture of its
-  own image, or a surface plane's (Exported surfaces).
+  renders, made with an index, of a shader-read colour render target's image, with a storage view
+  or not: a texture of its own image, or a surface plane's (Exported surfaces).
 - `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that
@@ -2642,8 +2647,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture
   whose image the pass renders, where neither the feedback loop nor a copy reads it: on a device
   without the attachment reads, from the vertex function at the rendered level and layer, written, of a
-  depth or stencil attachment, of an image with a storage view or over a buffer in place, or of
-  an image two attachments of the pass render; and, on a device that does not report
+  depth or stencil attachment, of an image over a buffer in place or whose format the device
+  takes neither the feedback usage nor a shadow for, or of an image two attachments of the pass
+  render; and, on a device that does not report
   `supportsNonZeroFirstInstance` (lavapipe and the UHD 630 among the lab's), a draw at a base
   instance other than 0 through a state that steps a layout per instance at a rate above 1
   (`DividedBaseInstance`: Vulkan's divisor takes `firstInstance` 0 alone there,
@@ -2652,7 +2658,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `PatchIndexBuffer`: the control stage takes each patch's index from its position, and no replay
   stream's patch draw names one. The replay streams draw lines and triangles
   under depth biases with no clamp; every attachment they read through a texture is
-  a shader-read colour render target of `Private` storage, read from the fragment function; and
+  a colour render target of `Private` storage, read from the fragment function; and
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
   A draw that reads its own target over a buffer in place, a linear image on the buffer's memory
   that never leaves the general layout, is refused on every device (`AttachmentRead`): no play

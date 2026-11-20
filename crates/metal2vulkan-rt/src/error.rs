@@ -1289,8 +1289,9 @@ pub enum DrawKind {
     /// A draw that binds a texture whose image the pass renders, where neither the attachment
     /// feedback loop nor a copy into the image's shadow reads it: on a device without the
     /// attachment reads (`floor::Capabilities::attachment_reads`), from the vertex function at the
-    /// rendered level and layer, written, of a depth or stencil attachment, of an image with a
-    /// storage view or over a buffer in place, or of an image two attachments of the pass render.
+    /// rendered level and layer, written, of a depth or stencil attachment, of an image over a
+    /// buffer in place or whose format the device takes neither the feedback usage nor a shadow
+    /// for, or of an image two attachments of the pass render.
     /// Metal reads a render target through a texture.
     AttachmentRead,
     /// A draw through a pipeline state whose fragment function reads a colour attachment
