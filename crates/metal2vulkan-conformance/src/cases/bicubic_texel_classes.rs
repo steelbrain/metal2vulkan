@@ -16,12 +16,12 @@
 //! binds the first six at slots `s mod 6`, so one dispatch samples six classes at once; the sRGB
 //! row is last.
 //!
-//! Every texture holds the same texels ([`texel`]), each the nearest code of its format: a step
+//! Every texture holds the same texels (`texel`), each the nearest code of its format: a step
 //! from 0 to 1 along `x` in red (a texel earlier on odd rows), one along `y` in green, a checker of
 //! 0.25 and 0.75 in blue, and two lone texels of 1 in alpha. A bicubic sum over a step rings below
 //! 0 and above 1, which is where a clamp into `[0, 1]`, a clamp into `[-1, 1]` and no clamp part,
 //! and the checker's inner values are where the formats' codes part. The coordinates
-//! ([`coords`]) are off every texel's centre (a quarter of a texel past its left edge, five
+//! (`coords`) are off every texel's centre (a quarter of a texel past its left edge, five
 //! eighths past its top edge), every edge and corner texel among them, and ten more near the
 //! corners and outside `[0, 1]`, where the filter's taps are clamped to the edge.
 //!
