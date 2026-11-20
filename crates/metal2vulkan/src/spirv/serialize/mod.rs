@@ -1573,7 +1573,7 @@ impl Ser<'_> {
             }
             w.inst(Op::Phi, &ops)?;
         }
-        for n in &b.insts {
+        for (i, n) in b.insts.iter().enumerate() {
             let own = n
                 .result
                 .and_then(|r| self.ids.materialized.get(&r).map(|id| (r, *id)));
@@ -1581,7 +1581,7 @@ impl Ser<'_> {
                 // A materialized value: the instruction under its own id, then the copy SPIRV-Cross
                 // declares as a temporary where it stands.
                 Some((r, own)) => {
-                    self.inst(w, Some((r, own)), &n.inst)?;
+                    self.inst(w, (id, i as u32), Some((r, own)), &n.inst)?;
                     let at = self.val(r)?;
                     let mut parts = at.checked_add(1).ok_or(BuildError::IdSpaceExhausted)?;
                     self.copy(w, self.value_ty(r)?, at, own, &mut parts)?;
@@ -1591,7 +1591,7 @@ impl Ser<'_> {
                         .result
                         .map(|r| self.val(r).map(|id| (r, id)))
                         .transpose()?;
-                    self.inst(w, result, &n.inst)?;
+                    self.inst(w, (id, i as u32), result, &n.inst)?;
                 }
             }
         }
@@ -1750,7 +1750,13 @@ impl Ser<'_> {
 
     /// Write `inst`; `result` is its value and the id the instruction writes it under (the
     /// value's own id, or a materialized value's instruction id).
-    fn inst(&self, w: &mut Writer, result: Option<(Value, u32)>, inst: &Inst) -> BResult<()> {
+    fn inst(
+        &self,
+        w: &mut Writer,
+        site: (BlockId, u32),
+        result: Option<(Value, u32)>,
+        inst: &Inst,
+    ) -> BResult<()> {
         // `[result type, result id]` of an instruction with a result.
         let head = || -> BResult<Vec<u32>> {
             let (r, id) = result.ok_or(BuildError::IdSpaceExhausted)?;

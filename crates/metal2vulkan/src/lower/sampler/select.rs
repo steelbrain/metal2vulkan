@@ -1924,16 +1924,9 @@ fn select_extended(
         level,
         half,
         result: cx.lowered_repr(Value::Inst(at), inst.ty)?,
-        routine: cx
-            .profile
-            .fields()
-            .workarounds
-            .contains(&crate::device::profile::DriverWorkaround::DontInlineKeepsCalls),
     };
     // Its routine, counted once in the module (`routine::Extended`).
-    if sample.routine {
-        super::routine::note_extended(&mut cx.families.sampler, &sample);
-    }
+    super::routine::note_extended(&mut cx.families.sampler, &sample);
     Ok(TextureStrategy::ExtendedSample(Box::new(sample)))
 }
 

@@ -1569,13 +1569,11 @@ fn samples_kernel(through: Through, n: usize, offsets: bool) -> String {
 /// call with its arguments, the status word and the sum's addition.
 const SITE_WORDS: usize = 160;
 
-/// The samples of one extended-range slot call one routine (`routine::Extended`) on a profile
-/// whose driver keeps a `DontInline` call a call (`DriverWorkaround::DontInlineKeepsCalls`): a
-/// kernel of 1, 2 and 4 samples through the runtime sampler, or through a constexpr linear
+/// The samples of one extended-range slot call one routine (`routine::Extended`) on every profile:
+/// a kernel of 1, 2 and 4 samples through the runtime sampler, or through a constexpr linear
 /// clamp-to-edge sampler each at its own constant texel offset (the call's value), holds one
 /// routine, which its entry calls once per sample and which holds every fetch, and each sample
-/// past the first adds no more than a call's words. On any other profile the entry holds every
-/// fetch, its code written at each site (`extended::Sample::routine`).
+/// past the first adds no more than a call's words.
 #[test]
 fn the_samples_of_one_slot_call_one_routine() {
     const OP_FUNCTION: u32 = 54;
@@ -1588,10 +1586,6 @@ fn the_samples_of_one_slot_call_one_routine() {
         .into_iter()
         .flat_map(|sp| cases.map(|c| (sp.clone(), c)))
     {
-        let keeps = p
-            .fields()
-            .workarounds
-            .contains(&crate::device::profile::DriverWorkaround::DontInlineKeepsCalls);
         let mut words = Vec::new();
         for n in [1usize, 2, 4] {
             let what = format!("{stem}, {n} samples, offsets {offsets}");
@@ -1629,14 +1623,6 @@ fn the_samples_of_one_slot_call_one_routine() {
             }
             let called: std::collections::BTreeSet<u32> =
                 calls.values().flat_map(|c| c.keys().copied()).collect();
-            if !keeps {
-                let holders: Vec<u32> = fetches.keys().copied().collect();
-                assert!(
-                    matches!(holders[..], [f] if !called.contains(&f)),
-                    "{what}: the entry holds every fetch, {holders:?}"
-                );
-                continue;
-            }
             // The entry is the calling function no other calls.
             let entries: Vec<u32> = calls
                 .keys()
@@ -1664,9 +1650,6 @@ fn the_samples_of_one_slot_call_one_routine() {
                 "{what}: the routine the entry calls per sample"
             );
             words.push((n, w.len()));
-        }
-        if !keeps {
-            continue;
         }
         let (n0, words0) = words[0];
         for &(n, w) in &words[1..] {

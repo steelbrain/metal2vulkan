@@ -35,20 +35,15 @@
 //! samples at every offset call one routine; the site keeps the result's status word.
 //!
 //! **Not routines.** A heap image's sample (an argument buffer's), whose `NonUniform` handle a
-//! call would carry (a later step's check); an extended-range sample on a profile whose driver is
-//! not known to keep a `DontInline` call a call (`extended::Sample::routine`), where the routine
-//! measured slower to make than the site code; a switch-at-use's shared emulation
+//! call would carry (a later step's check); a switch-at-use's shared emulation
 //! (`sampler::shared_value`), which runs once already; a gather's fetches; an anisotropic sample
 //! at a dynamic texel offset on a profile without the `Offset` operand on a sample, whose arms its
 //! site's access reads; and the bicubic filter's site code.
 //!
-//! **The call's control.** A sampling routine is started by
-//! `ModuleBuilder::sampling_routine`: `DontInline` where the profile states that its driver keeps
-//! such a call a call (`DriverWorkaround::DontInlineKeepsCalls`, a cost fact keyed on the driver
-//! release and GPU measured) or that it inlines every function at each call
-//! (`DriverWorkaround::FunctionsInlinedAtEveryCall`, MoltenVK's); no control elsewhere, the
-//! default, whose code and answers are the same. Mesa's drivers inline every function whatever it
-//! states, so there the module is smaller and the pipeline the same.
+//! **The call's control.** A sampling routine is a kept routine (`ModuleBuilder::kept_routine`),
+//! declared `DontInline` on every device: a driver that honours the control (NVIDIA's) compiles
+//! it once, and Mesa's drivers inline every function whatever it states, so there the module is
+//! smaller and the pipeline the same.
 //!
 //! **Census**. An extended-range sample's routine is counted once per shape the plan notes
 //! ([`note_extended`], `sampler::routine_words`), under `sampler.extended_range.routine`

@@ -86,7 +86,7 @@
 //! sampler under the exact forms took 1,113,991 words where the plain function took 572,061, and
 //! 33.6 to 40.7 s to make on the RTX 5080 Laptop GPU; as the routine, 659,590 words, made in 20.9
 //! to 26.1 s on a loaded host whose plain function took 16.7 to 22.3 s, its calls kept calls there
-//! (`DriverWorkaround::DontInlineKeepsCalls`). A sample at a
+//! (the routine is declared `DontInline`). A sample at a
 //! dynamic texel offset on a profile without the `Offset` operand on a sample, whose arms the
 //! taps' samples read, keeps the code at its site.
 //!
