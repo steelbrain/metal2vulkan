@@ -1382,6 +1382,7 @@ enum	metal2vulkan-rt::ExportHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, H
 enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Gap
 enum	metal2vulkan-rt::ImportHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ImportHandle
 enum	metal2vulkan-rt::IndexClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndexClass
+enum	metal2vulkan-rt::KernelInputKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum KernelInputKind
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
 enum	metal2vulkan-rt::LinearPlanePassKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinearPlanePassKind
 enum	metal2vulkan-rt::LoadAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LoadAction
@@ -9275,6 +9276,7 @@ trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for Comput
 trait-impl	metal2vulkan-rt::ComputePipelineState impl crate::kept::Handle	impl crate::kept::Handle for ComputePipelineState
 trait-impl	metal2vulkan-rt::ComputePipelineState impl crate::kept::Uncount	impl crate::kept::Uncount for ComputePipelineState
 trait-impl	metal2vulkan-rt::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
+trait-impl	metal2vulkan-rt::Error impl From<Unmade>	impl From<Unmade> for Error
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
@@ -10521,7 +10523,7 @@ variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: 
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::ImageblockLength	ImageblockLength
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
-variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::KernelInput	KernelInput { kind: KernelInputKind }
 variant	metal2vulkan-rt::Gap::LinearPlanePass	LinearPlanePass { kind: LinearPlanePassKind }
 variant	metal2vulkan-rt::Gap::LodClamps	LodClamps
 variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
@@ -10546,6 +10548,21 @@ variant	metal2vulkan-rt::ImportHandle::DmaBufs	DmaBufs
 variant	metal2vulkan-rt::ImportHandle::HostMemory	HostMemory
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
+variant	metal2vulkan-rt::KernelInputKind::ArgumentBlock	ArgumentBlock
+variant	metal2vulkan-rt::KernelInputKind::CommandBuffers	CommandBuffers
+variant	metal2vulkan-rt::KernelInputKind::ConstexprSampler	ConstexprSampler
+variant	metal2vulkan-rt::KernelInputKind::DescriptorSet	DescriptorSet
+variant	metal2vulkan-rt::KernelInputKind::EntryPoint	EntryPoint
+variant	metal2vulkan-rt::KernelInputKind::HandleTranslation	HandleTranslation
+variant	metal2vulkan-rt::KernelInputKind::PointerTranslation	PointerTranslation
+variant	metal2vulkan-rt::KernelInputKind::PushBytes	PushBytes
+variant	metal2vulkan-rt::KernelInputKind::PushField	PushField
+variant	metal2vulkan-rt::KernelInputKind::RuntimeFact	RuntimeFact
+variant	metal2vulkan-rt::KernelInputKind::Slot	Slot
+variant	metal2vulkan-rt::KernelInputKind::Specialization	Specialization
+variant	metal2vulkan-rt::KernelInputKind::StageFlags	StageFlags
+variant	metal2vulkan-rt::KernelInputKind::StageIn	StageIn
+variant	metal2vulkan-rt::KernelInputKind::Workgroup	Workgroup
 variant	metal2vulkan-rt::Limit::AllocationNotMapped	AllocationNotMapped { class: MemoryClass, len: u64 }
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }

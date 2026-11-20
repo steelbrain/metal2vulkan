@@ -902,15 +902,21 @@ pub enum Gap {
     ///
     /// Basis: ours (indirect command buffers are not built).
     IndirectCommandBuffers,
-    /// A kernel that reads something the compute encoder does not supply yet: a function table,
-    /// a `[[stage_in]]` fetch, an explicit imageblock, a parameter the runtime does not fill, or a
-    /// specialization the runtime does not set. Buffers, `setBytes` data, textures and sampler states by their
-    /// resource IDs, constexpr samplers by their indices, an integer write's channel widths,
-    /// threadgroup memory lengths, the dispatch's grid, the stage-in region and a pinned subgroup
-    /// size are supplied.
+    /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
+    /// a function table, a `[[stage_in]]` fetch, an explicit imageblock, a parameter the runtime
+    /// does not fill, or a specialization the runtime does not set, among others. Buffers,
+    /// `setBytes` data, textures and sampler states by their resource IDs, constexpr samplers by
+    /// their indices, an integer write's channel widths, threadgroup memory lengths, the
+    /// dispatch's grid, the stage-in region and a pinned subgroup size are supplied. Metal's
+    /// counterpart is the compute pipeline state's make
+    /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings),
+    /// which makes each.
     ///
     /// Basis: ours (the encoder supplies only those).
-    KernelInput,
+    KernelInput {
+        /// What the kernel reads, named where the runtime found it.
+        kind: KernelInputKind,
+    },
     /// An imageblock length Metal answers that no case measures: a compute state's
     /// `imageblockMemoryLengthForDimensions:` where its kernel declares an imageblock it never
     /// reaches, or its compile kept no reflection to tell whether it declares one (a kernel that
@@ -1319,6 +1325,81 @@ pub enum RenderPipelineKind {
     /// binder builds, a parameter block longer than a parameter ring chunk (64 KiB), a push field
     /// or bind-time fact the render encoder does not fill, or an unnormalized constexpr sampler.
     DrawInput,
+}
+
+/// What a kernel reads that the compute encoder does not supply yet ([`Gap::KernelInput`]),
+/// named where the runtime finds it in the translator's compute pipeline. Metal supplies each:
+/// every variant names its Metal counterpart.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KernelInputKind {
+    /// A buffer the kernel reaches through the translator's root table of addresses
+    /// (`PipelineInterface::needs_pointer_translation`), which the runtime does not build: it
+    /// pushes each buffer's own device address. Metal's counterpart is a device pointer the
+    /// kernel reads, which Metal reaches at its `gpuAddress`.
+    PointerTranslation,
+    /// A texture or sampler the kernel resolves through the translator's handle table
+    /// (`PipelineInterface::needs_handle_translation`), which the runtime does not build: it
+    /// pushes each one's resource ID. Metal's counterpart is a texture or sampler the kernel
+    /// reads, which Metal resolves by its `gpuResourceID`.
+    HandleTranslation,
+    /// An indirect command buffer the kernel may reach
+    /// (`PipelineInterface::reaches_command_buffers`). Metal's counterpart is a `command_buffer`
+    /// the kernel takes, as an argument or a member of an argument buffer, of an
+    /// `MTLIndirectCommandBuffer` it can encode, reset or copy.
+    CommandBuffers,
+    /// A `[[stage_in]]` argument, which fetches by the stage-in region
+    /// (`PipelineInterface::stage_in`). Metal's counterpart is the descriptor's
+    /// `stageInputDescriptor`.
+    StageIn,
+    /// A descriptor set of the pipeline's layout that is not the device's: a binding of set 1
+    /// that is not one of the device's texture and sampler arrays, or a binding of another set.
+    /// Metal has no counterpart: it binds every argument by its index.
+    DescriptorSet,
+    /// Shader stage flags other than full and varying subgroups
+    /// (`VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT` and
+    /// `VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT`). Metal has no
+    /// counterpart: it states no subgroup control.
+    StageFlags,
+    /// A fact of the module the encoder does not supply: a `RuntimeFact` the runtime does not
+    /// name, such as an explicit imageblock's size (`RuntimeFact::ImageblockSize`), a resource's
+    /// presence or a sampler's coordinates. Metal's counterpart is the dispatch's state the fact
+    /// stands for: `setImageblockWidth:height:`, or the bound resource's own state.
+    RuntimeFact,
+    /// An argument slot the encoder does not bind: a visible or an intersection function table
+    /// at a buffer index, or a slot of another class or stage. Metal's counterparts are
+    /// `setVisibleFunctionTable:atBufferIndex:` and `setIntersectionFunctionTable:atBufferIndex:`.
+    Slot,
+    /// A pushed parameter the encoder does not fill: a `PushField` or a placement the runtime
+    /// does not name, or one of another stage. Metal's counterpart is the dispatch's state the
+    /// parameter stands for.
+    PushField,
+    /// A `constexpr sampler` the state does not hold: one of unnormalized coordinates
+    /// (`coord::pixel`), one Metal's numbering of the kernel's samplers does not list, or one a
+    /// variant of the kernel samples that its module does not. Metal's counterpart is the
+    /// sampler the kernel's source declares.
+    ConstexprSampler,
+    /// Arguments whose parameter block is past one chunk of the runtime's ring, or that have no
+    /// address for it. Metal's counterpart is the kernel's arguments, which Metal binds however
+    /// many there are.
+    ArgumentBlock,
+    /// Arguments whose pushed words are past the push-constant bytes of the runtime's floor.
+    /// Metal's counterpart is the kernel's arguments, which Metal binds however many there are.
+    PushBytes,
+    /// A specialization constant the runtime does not set: an explicit imageblock's width or
+    /// height, a sampler state's fields, a constant that is not 4 bytes, or the threadgroup
+    /// memory length of an argument the kernel does not take. Metal's counterpart is the state
+    /// the constant stands for: `setImageblockWidth:height:`, a sampler state's descriptor, or
+    /// `setThreadgroupMemoryLength:atIndex:`.
+    Specialization,
+    /// A workgroup the module fixes in a shape the runtime does not run: a subgroup multiple
+    /// outside a flattened local size (a compute-derivative group), or a module that neither
+    /// flattens its threadgroup nor runs a deep one as one row. Metal's counterpart is the
+    /// dispatch's threadgroup size, which Metal runs in any shape within its limits.
+    Workgroup,
+    /// An entry point whose name holds a NUL byte, which names no Vulkan entry point. Metal's
+    /// counterpart is the function's name.
+    EntryPoint,
 }
 
 /// What a draw asks that the runtime does not build ([`Gap::Draw`]).
@@ -2086,9 +2167,10 @@ impl fmt::Display for Gap {
             Gap::IndirectCommandBuffers => {
                 f.write_str("pipeline states for indirect command buffers are not built")
             }
-            Gap::KernelInput => {
-                f.write_str("the kernel reads an input the compute encoder does not supply yet")
-            }
+            Gap::KernelInput { kind } => write!(
+                f,
+                "the kernel reads an input the compute encoder does not supply yet: {kind:?}"
+            ),
             Gap::ImageblockLength => {
                 f.write_str("the state's imageblock length is not measured against Metal's")
             }

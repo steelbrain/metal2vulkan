@@ -72,8 +72,8 @@ pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, Dispatch, DispatchType, Resource, ResourceUsage};
 pub use error::{
-    DrawKind, Error, Gap, Limit, LinearPlanePassKind, Refusal, RenderPassKind, RenderPipelineKind,
-    TextureViewKind,
+    DrawKind, Error, Gap, KernelInputKind, Limit, LinearPlanePassKind, Refusal, RenderPassKind,
+    RenderPipelineKind, TextureViewKind,
 };
 pub use event::{Event, SharedEvent};
 pub use export::{Export, ExportHandle};

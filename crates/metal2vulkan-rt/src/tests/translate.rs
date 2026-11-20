@@ -769,7 +769,7 @@ mod on_device {
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
             {
                 Ok(state) => state,
-                Err(Error::Unsupported(Gap::KernelInput)) => {
+                Err(Error::Unsupported(Gap::KernelInput { .. })) => {
                     println!(
                         "{name}: SIMD groups not pinnable at 32; the tier's kernel is refused"
                     );
@@ -1084,7 +1084,7 @@ mod on_device {
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
             {
                 Ok(state) => state,
-                Err(Error::Unsupported(Gap::KernelInput)) if !pinnable => {
+                Err(Error::Unsupported(Gap::KernelInput { .. })) if !pinnable => {
                     println!(
                         "{name}: SIMD groups not pinnable at 32; the tier's kernel is refused"
                     );

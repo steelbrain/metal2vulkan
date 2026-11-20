@@ -5,7 +5,7 @@
 //! reads as that gap.
 
 use crate::pipeline::Lowered;
-use crate::{Error, Gap};
+use crate::{Error, Gap, KernelInputKind};
 use metal2vulkan::error::{Error as TranslationError, InternalError, InternalKind};
 
 /// The emulated variant's gap, as the compute encoder's need of it states it.
@@ -43,11 +43,13 @@ fn a_lowering_error_is_not_reported_as_the_variant_s_gap() {
     );
     assert!(
         matches!(
-            Lowered::Unsupplied.kernel(partial_simdgroups),
-            Err(Error::Unsupported(Gap::KernelInput))
+            Lowered::Unsupplied(KernelInputKind::StageIn).kernel(partial_simdgroups),
+            Err(Error::Unsupported(Gap::KernelInput {
+                kind: KernelInputKind::StageIn
+            }))
         ),
-        "an input the encoder does not supply: {}",
-        reported(&Lowered::Unsupplied)
+        "an input the encoder does not supply, of its kind: {}",
+        reported(&Lowered::Unsupplied(KernelInputKind::StageIn))
     );
     assert!(
         matches!(

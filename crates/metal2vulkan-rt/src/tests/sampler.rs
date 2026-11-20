@@ -49,9 +49,10 @@ fn a_device_sampler_is_shared_by_create_info_up_to_the_cap() {
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        CompareFunction, Device, DeviceOptions, DispatchType, Error, Gap, IndexClass, PixelFormat,
-        Refusal, RenderPassDescriptor, SamplerBorderColor, SamplerDescriptor, SamplerMinMagFilter,
-        SamplerState, TextureDescriptor, TextureType, TextureUsage,
+        CompareFunction, Device, DeviceOptions, DispatchType, Error, Gap, IndexClass,
+        KernelInputKind, PixelFormat, Refusal, RenderPassDescriptor, SamplerBorderColor,
+        SamplerDescriptor, SamplerMinMagFilter, SamplerState, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan::metal::sampler::SamplerWord;
 
@@ -254,7 +255,11 @@ mod on_device {
                 samplers,
                 &[(0, uses[0]), (1, uses[1])],
                 |_| Ok(vec![1, 2]),
-                || Error::Unsupported(Gap::KernelInput),
+                || {
+                    Error::Unsupported(Gap::KernelInput {
+                        kind: KernelInputKind::ConstexprSampler,
+                    })
+                },
             );
             assert!(
                 matches!(numbered, Err(Error::Translation(_))),

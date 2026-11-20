@@ -48,7 +48,7 @@ use crate::cache;
 use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::encoder::{decide, size_checked, threadgroup_memory, Dispatch, Module};
-use crate::error::{Error, Gap, Refusal};
+use crate::error::{Error, Gap, KernelInputKind, Refusal};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::reaper::{Free, Job};
@@ -202,7 +202,8 @@ fn number(
     sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
 ) -> Result<Numbered, Error> {
     let samplers = whole.numbered.clone();
-    number_samplers(core, samplers, &whole.constexprs, sampler_ids, gap)
+    let unstated = || gap(KernelInputKind::ConstexprSampler);
+    number_samplers(core, samplers, &whole.constexprs, sampler_ids, unstated)
 }
 
 /// A state's numbered samplers `samplers`: `sampler_ids` gives an index to each, and each
@@ -304,8 +305,9 @@ pub(crate) enum Lowered {
     /// The translator's lowering or compile of the variant failed otherwise, a translator bug or
     /// a limit among them: the need reports this error.
     Translation(TranslationError),
-    /// The variant reads what the compute encoder does not supply ([`Gap::KernelInput`]).
-    Unsupplied,
+    /// The variant reads what the compute encoder does not supply ([`Gap::KernelInput`] of the
+    /// kind).
+    Unsupplied(KernelInputKind),
     /// `vkCreateShaderModule` failed.
     Failed(vk::Result),
 }
@@ -1023,12 +1025,11 @@ fn lower_variant(
         // the encoder does not supply.
         Ok(mut kernel) if !covers(whole, &kernel.interface) => {
             kernel.release(core);
-            Lowered::Unsupplied
+            Lowered::Unsupplied(KernelInputKind::ConstexprSampler)
         }
         Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
-        Err(Error::Vulkan { result, .. }) => Lowered::Failed(result),
-        // Every other error of `Kernel::new` is `gap`'s.
-        Err(_) => Lowered::Unsupplied,
+        Err(Unmade::Unsupplied(kind)) => Lowered::Unsupplied(kind),
+        Err(Unmade::Failed(result)) => Lowered::Failed(result),
     }
 }
 
@@ -1081,12 +1082,12 @@ pub(crate) fn made_through_cache(
     Ok(pipeline)
 }
 
-/// The runtime's view of the translator's kernel, or [`Gap::KernelInput`] where the kernel reads
-/// something the compute encoder does not supply.
+/// The runtime's view of the translator's kernel, or what the kernel reads that the compute
+/// encoder does not supply ([`Gap::KernelInput`] of that kind), the first this finds.
 fn interface(
     pipeline: &ComputePipeline,
     required_size: Option<[u32; 3]>,
-) -> Result<Interface, Error> {
+) -> Result<Interface, KernelInputKind> {
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
     // Every argument is a pushed address, a pushed resource ID or index, or a specialization: no
@@ -1096,14 +1097,31 @@ fn interface(
     let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
-    if translated.needs_pointer_translation
-        || translated.needs_handle_translation
-        || translated.reaches_command_buffers
-        || !translated.stage_in.is_empty()
-        || !pipeline.layout.sets.iter().all(of_the_device)
-        || !subgroups.contains(stage_flags)
-    {
-        return Err(gap());
+    let unsupplied = [
+        (
+            translated.needs_pointer_translation,
+            KernelInputKind::PointerTranslation,
+        ),
+        (
+            translated.needs_handle_translation,
+            KernelInputKind::HandleTranslation,
+        ),
+        (
+            translated.reaches_command_buffers,
+            KernelInputKind::CommandBuffers,
+        ),
+        (!translated.stage_in.is_empty(), KernelInputKind::StageIn),
+        (
+            !pipeline.layout.sets.iter().all(of_the_device),
+            KernelInputKind::DescriptorSet,
+        ),
+        (
+            !subgroups.contains(stage_flags),
+            KernelInputKind::StageFlags,
+        ),
+    ];
+    if let Some(&(_, kind)) = unsupplied.iter().find(|(reads, _)| *reads) {
+        return Err(kind);
     }
     // The bind-time facts the encoder supplies.
     let mut multiples = Vec::new();
@@ -1155,7 +1173,7 @@ fn interface(
             RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one the encoder
             // does not supply.
-            _ => return Err(gap()),
+            _ => return Err(KernelInputKind::RuntimeFact),
         }
     }
     let mut buffers = Vec::new();
@@ -1175,7 +1193,7 @@ fn interface(
                 }
             }
             (Stage::Kernel, SlotClass::Sampler, SlotInterface::Sampler(_)) => {}
-            _ => return Err(gap()),
+            _ => return Err(KernelInputKind::Slot),
         }
     }
     // The samplers a state of the kernel numbers, in Metal's order.
@@ -1192,7 +1210,7 @@ fn interface(
     let mut block_address = None;
     for placement in &translated.push {
         if placement.stage != Stage::Kernel {
-            return Err(gap());
+            return Err(KernelInputKind::PushField);
         }
         push_len = placement
             .push_range
@@ -1202,7 +1220,7 @@ fn interface(
             let place = match placed.loc {
                 PushLoc::Push { offset } => Place::Push(offset),
                 PushLoc::ArgumentTable { offset } => Place::Block(offset),
-                _ => return Err(gap()),
+                _ => return Err(KernelInputKind::PushField),
             };
             let value = match (placed.field, place) {
                 (PushField::ArgumentTableAddress, Place::Push(offset)) => {
@@ -1245,14 +1263,14 @@ fn interface(
                 ) => FieldValue::BicubicTexels(index),
                 (PushField::ConstexprSampler(sampler), _) => {
                     let SamplerRef::Constexpr(words) = sampler.sampler else {
-                        return Err(gap());
+                        return Err(KernelInputKind::ConstexprSampler);
                     };
                     let at = numbered
                         .iter()
                         .position(|&numbered| numbered == NumberedSampler::Constexpr(words))
-                        .ok_or_else(gap)?;
+                        .ok_or(KernelInputKind::ConstexprSampler)?;
                     if sampler.unnormalized {
-                        return Err(gap());
+                        return Err(KernelInputKind::ConstexprSampler);
                     }
                     constexprs.push((at, sampler));
                     FieldValue::ConstexprSampler(at)
@@ -1268,7 +1286,7 @@ fn interface(
                     _,
                 ) => FieldValue::BufferBounds(index),
                 (PushField::ZeroAddress, _) => FieldValue::ZeroAddress,
-                _ => return Err(gap()),
+                _ => return Err(KernelInputKind::PushField),
             };
             fields.push(Field { place, value });
         }
@@ -1277,10 +1295,10 @@ fn interface(
     let block_address = match (block_len, block_address) {
         (0, None) => 0,
         (1.., Some(at)) if u64::from(block_len) <= CHUNK => at,
-        _ => return Err(gap()),
+        _ => return Err(KernelInputKind::ArgumentBlock),
     };
     if push_len > PUSH_BYTES {
-        return Err(gap());
+        return Err(KernelInputKind::PushBytes);
     }
     // The threadgroup memory arguments are the lengths the module specializes on, each by its
     // `[[threadgroup(n)]]` index.
@@ -1296,7 +1314,7 @@ fn interface(
     let mut constants = Vec::new();
     for constant in &stage.specialization.constants {
         if constant.size != 4 {
-            return Err(gap());
+            return Err(KernelInputKind::Specialization);
         }
         let set = match constant.key {
             SpecKey::LocalSize(Axis::X) => Constant::Size(0),
@@ -1307,11 +1325,11 @@ fn interface(
                 threadgroups
                     .iter()
                     .position(|&argument| argument == index)
-                    .ok_or_else(gap)?,
+                    .ok_or(KernelInputKind::Specialization)?,
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
             SpecKey::DeepThreadgroup => Constant::Deep,
-            _ => return Err(gap()),
+            _ => return Err(KernelInputKind::Specialization),
         };
         constants.push((constant.id, set));
     }
@@ -1321,7 +1339,7 @@ fn interface(
         .iter()
         .any(|(_, set)| matches!(set, Constant::Threads));
     if !multiples.is_empty() && !flat {
-        return Err(gap());
+        return Err(KernelInputKind::Workgroup);
     }
     // Every workgroup is within the floor's sizes: a flattened one is one row of the threadgroup,
     // and any other runs a threadgroup deeper than `DEEP_THREADGROUP` as one row, which a module
@@ -1330,7 +1348,7 @@ fn interface(
         .iter()
         .any(|(_, set)| matches!(set, Constant::Deep));
     if !flat && !deep {
-        return Err(gap());
+        return Err(KernelInputKind::Workgroup);
     }
     let max_total_threads = match required_size {
         Some(size) => size.iter().product(),
@@ -1367,9 +1385,30 @@ fn interface(
     })
 }
 
-/// The refusal of a kernel that reads what the compute encoder does not supply.
-fn gap() -> Error {
-    Error::Unsupported(Gap::KernelInput)
+/// The refusal of a kernel that reads what the compute encoder does not supply, of `kind`.
+fn gap(kind: KernelInputKind) -> Error {
+    Error::Unsupported(Gap::KernelInput { kind })
+}
+
+/// Why [`Kernel::new`] made no module.
+enum Unmade {
+    /// The kernel reads what the compute encoder does not supply ([`Gap::KernelInput`] of the
+    /// kind).
+    Unsupplied(KernelInputKind),
+    /// `vkCreateShaderModule` failed.
+    Failed(vk::Result),
+}
+
+impl From<Unmade> for Error {
+    fn from(unmade: Unmade) -> Error {
+        match unmade {
+            Unmade::Unsupplied(kind) => gap(kind),
+            Unmade::Failed(result) => Error::Vulkan {
+                call: "vkCreateShaderModule",
+                result,
+            },
+        }
+    }
 }
 
 /// Whether `set` of a pipeline's layout is the device's: set 1 the device's texture and sampler
@@ -1553,7 +1592,8 @@ impl ComputePipelineState {
     ) -> Result<ComputePipelineState, Error> {
         let core = Arc::clone(device.core());
         // SAFETY: the words are a valid SPIR-V module.
-        let module = unsafe { Kernel::module(&core, words) }?;
+        let module = unsafe { Kernel::module(&core, words) }
+            .map_err(Error::vulkan("vkCreateShaderModule"))?;
         let whole = Kernel {
             module,
             entry: c"main".to_owned(),
@@ -1645,7 +1685,7 @@ impl Lowered {
             Lowered::Made(kernel, _) => Ok(&**kernel),
             Lowered::Refused => Err(refused()),
             Lowered::Translation(error) => Err(Error::Translation(error.clone())),
-            Lowered::Unsupplied => Err(gap()),
+            &Lowered::Unsupplied(kind) => Err(gap(kind)),
             &Lowered::Failed(result) => Err(Error::Vulkan {
                 call: "vkCreateShaderModule",
                 result,
@@ -1660,13 +1700,14 @@ impl Kernel {
         core: &Core,
         pipeline: ComputePipeline,
         required_size: Option<[u32; 3]>,
-    ) -> Result<Kernel, Error> {
-        let interface = interface(&pipeline, required_size)?;
+    ) -> Result<Kernel, Unmade> {
+        let interface = interface(&pipeline, required_size).map_err(Unmade::Unsupplied)?;
         let stage = pipeline.stage;
         // The translator's entry points hold no NUL; one that did would name no entry point.
-        let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
+        let entry = CString::new(stage.entry_point)
+            .map_err(|_| Unmade::Unsupplied(KernelInputKind::EntryPoint))?;
         // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
-        let module = unsafe { Kernel::module(core, &stage.spirv) }?;
+        let module = unsafe { Kernel::module(core, &stage.spirv) }.map_err(Unmade::Failed)?;
         Ok(Kernel {
             module,
             entry,
@@ -1680,11 +1721,10 @@ impl Kernel {
     /// # Safety
     ///
     /// `words` are a valid SPIR-V module for the features device creation enabled.
-    unsafe fn module(core: &Core, words: &[u32]) -> Result<vk::ShaderModule, Error> {
+    unsafe fn module(core: &Core, words: &[u32]) -> Result<vk::ShaderModule, vk::Result> {
         let info = vk::ShaderModuleCreateInfo::default().code(words);
         // SAFETY: the caller's contract.
         unsafe { core.device.create_shader_module(&info, None) }
-            .map_err(Error::vulkan("vkCreateShaderModule"))
     }
 
     /// The `VkPipeline` of the variant `key`, made now where it is not yet: the calling thread

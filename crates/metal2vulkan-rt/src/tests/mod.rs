@@ -145,7 +145,9 @@ pub(crate) fn no_constexpr_samplers(
         .iter()
         .any(|sampler| matches!(sampler, crate::NumberedSampler::Constexpr(_)))
     {
-        true => Err(crate::Error::Unsupported(crate::Gap::KernelInput)),
+        true => Err(crate::Error::Unsupported(crate::Gap::KernelInput {
+            kind: crate::KernelInputKind::ConstexprSampler,
+        })),
         false => Ok(vec![0; samplers.len()]),
     }
 }

@@ -13,7 +13,7 @@ use crate::run::{
 };
 use crate::{Buffer, Device, Failed, GaugeReader, Refused, Result, Storage, Waits};
 use metal2vulkan::metal::TextureUsage;
-use metal2vulkan_rt::{Error as RtError, Gap, Limit};
+use metal2vulkan_rt::{Error as RtError, Gap, KernelInputKind, Limit};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -1170,7 +1170,9 @@ fn a_row_is_judged_by_host_time_never_its_gpu_time() {
 #[test]
 fn the_new_runtime_refuses_by_its_gaps_and_limits_alone() {
     let refused = |error: RtError| rt::error(error).downcast::<Refused>().is_ok();
-    assert!(refused(RtError::Unsupported(Gap::KernelInput)));
+    assert!(refused(RtError::Unsupported(Gap::KernelInput {
+        kind: KernelInputKind::StageIn
+    })));
     assert!(refused(RtError::Limit(Limit::BlockIds)));
     assert!(!refused(RtError::Quiesced));
     assert_eq!(rt::size([4, 2, 1]).unwrap(), [4, 2, 1]);
