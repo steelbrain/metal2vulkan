@@ -253,14 +253,6 @@ pub struct BindState {
     /// `VariantKey::rotated_weights`). Part of the shape; `false` for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_weights: bool,
-    /// Whether a mesh draw of an emulated mesh function's pipeline draws each line or triangle
-    /// from its last index first: a draw under Apple's last provoking vertex
-    /// (`setProvokingVertexMode:` 1) on a device that takes flat inputs from the first vertex.
-    /// Its pipeline runs the variant whose synthesized vertex stage reads its corners so
-    /// (`BindShape::mesh_last_first`, `VariantKey::mesh_last_first`). Part of the shape; `false`
-    /// for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_last_first: bool,
     /// What the draw draws as bands of triangles, where it draws its lines or its triangles'
     /// edges so, and its band (`PushField::LineBand`): `[sx, sy, h, f]`, the half extent of its
     /// Vulkan viewport 0 (its height negative, as the viewport is), half the band's width in
@@ -646,7 +638,6 @@ impl BindState {
             kept_imageblock_bytes: self.kept_imageblock_bytes,
             depth_clamp_range: self.depth_clamp_range.is_some(),
             rotated_weights: self.rotated_weights,
-            mesh_last_first: self.mesh_last_first,
             line_band: self.line_band.map(|(primitive, _)| primitive),
             interlocked_colors: self.interlocked_colors.clone(),
             fragment_tests: self.fragment_tests,
@@ -734,7 +725,6 @@ impl BindState {
             kept_imageblock_bytes,
             depth_clamp_range,
             rotated_weights,
-            mesh_last_first,
             line_band,
             interlocked_colors,
             fragment_tests,
@@ -765,7 +755,6 @@ impl BindState {
             && self.kept_imageblock_bytes == *kept_imageblock_bytes
             && self.depth_clamp_range.is_some() == *depth_clamp_range
             && self.rotated_weights == *rotated_weights
-            && self.mesh_last_first == *mesh_last_first
             && self.line_band.map(|(primitive, _)| primitive) == *line_band
             && self.interlocked_colors == *interlocked_colors
             && self.fragment_tests == *fragment_tests
@@ -1731,11 +1720,6 @@ pub struct BindShape {
     /// (`VariantKey::rotated_weights`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_weights: bool,
-    /// `BindState.mesh_last_first`: the variant whose emulated mesh pipeline's synthesized
-    /// vertex stage draws each line or triangle from its last index first
-    /// (`VariantKey::mesh_last_first`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_last_first: bool,
     /// What `BindState.line_band` draws as bands: the variant that draws its lines, or its
     /// triangles' edges, so (`VariantKey::line_band`).
     #[cfg_attr(feature = "serde", serde(default))]

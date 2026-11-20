@@ -1117,11 +1117,7 @@ pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<LocalDecl> {
             None => None,
         },
         payload: match p.payload {
-            Some(size) => Some(arena::declare_payload(
-                mb,
-                size,
-                plan.families.mesh.emulated,
-            )?),
+            Some(size) => Some(arena::declare_payload(mb, size)?),
             None => None,
         },
         typed,

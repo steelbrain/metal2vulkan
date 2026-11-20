@@ -124,10 +124,9 @@ pub use graphics::{
 };
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
-    LevelReads, MeshRecords, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
-    PushPlacement, RecordField, RecordValue, SampledLevels, SamplerArray, SamplerLevels,
-    SamplerSlot, SlotInterface, SnapshotRefusal, TextureAccess, TextureSlot, ThreadgroupArgument,
-    Window,
+    LevelReads, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
+    PushPlacement, SampledLevels, SamplerArray, SamplerLevels, SamplerSlot, SlotInterface,
+    SnapshotRefusal, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 pub use layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,

@@ -23,8 +23,8 @@
 //!   (`LoweringInputs::window_depth_varying`), and one linked with another vertex function is
 //!   `NeedsInput(FramebufferFetch)`.
 //!   The primitive ID (`IoRole::PrimitiveId`) is such a varying, read flat: a fragment function
-//!   compiled for a device that cannot declare a fragment `PrimitiveId`, or for an emulated
-//!   post-tessellation vertex function, reads its `[[primitive_id]]` from it, and its pipeline's
+//!   compiled for a device that cannot declare a fragment `PrimitiveId` reads its
+//!   `[[primitive_id]]` from it, and its pipeline's
 //!   vertex function writes it, compiled under `LoweringInputs::primitive_id_varying`
 //!   (`NeedsInput(PrimitiveId)` otherwise, and for a fragment function that reads Vulkan's
 //!   `PrimitiveId` behind a vertex function that writes the varying). A mesh function writes none,
@@ -36,9 +36,7 @@
 //!   every vertex output's, below `maxFragmentInputComponents / 4`, and is never packed. A
 //!   fragment function alone numbers them with its other inputs.
 //! - **Mesh outputs**, per vertex and per primitive alike, are numbered densely in output order,
-//!   one location each at component 0, within `maxMeshOutputComponents / 4` locations
-//!   (`maxVertexOutputComponents / 4` for an emulated mesh function's, which its pipeline's
-//!   synthesized vertex stage writes). In a mesh render pipeline each fragment input takes the
+//!   one location each at component 0, within `maxMeshOutputComponents / 4` locations. In a mesh render pipeline each fragment input takes the
 //!   number of the mesh output of its key and type (`UnmatchedVarying` without one), below
 //!   `maxFragmentInputComponents / 4`; the raw indices follow the vertex rule above. The fragment
 //!   function reads per primitive exactly the inputs whose keys the mesh function writes per
@@ -348,17 +346,13 @@ pub fn assign(stages: &[&FunctionArtifact], p: &DeviceProfile) -> Result<Locatio
     let mut vertex: Option<&StageIo> = None;
     let mut fragment: Option<&StageIo> = None;
     let mut mesh: Option<&StageIo> = None;
-    let mut emulated_mesh = false;
     for a in stages {
         let io = &a.interface.io;
         check_roles(a.interface.stage, io)?;
         match a.interface.stage {
             Stage::Vertex => vertex = Some(io),
             Stage::Fragment => fragment = Some(io),
-            Stage::Mesh => {
-                mesh = Some(io);
-                emulated_mesh = a.interface.mesh_records.is_some();
-            }
+            Stage::Mesh => mesh = Some(io),
             Stage::Kernel | Stage::Object => {}
         }
     }
@@ -374,18 +368,13 @@ pub fn assign(stages: &[&FunctionArtifact], p: &DeviceProfile) -> Result<Locatio
     let mut table = Locations::new();
     if let Some(m) = mesh {
         let need = m.outputs.len() as u64;
-        let (limit, available) = match emulated_mesh {
-            true => (
-                VkLimit::MaxVertexOutputComponents,
-                l.max_vertex_output_components,
-            ),
-            false => (
-                VkLimit::MaxMeshOutputComponents,
-                l.mesh.max_mesh_output_components,
-            ),
-        };
+        let available = l.mesh.max_mesh_output_components;
         if need.saturating_mul(4) > u64::from(available) {
-            return Err(limit_error(limit, need, available));
+            return Err(limit_error(
+                VkLimit::MaxMeshOutputComponents,
+                need,
+                available,
+            ));
         }
         for (n, x) in m.outputs.iter().enumerate() {
             table.insert(x.key.clone(), (n as u32, 0));

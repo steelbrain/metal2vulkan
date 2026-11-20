@@ -4,9 +4,9 @@
 //! with [`ExecutionStatus::initial`] before the command buffer's first use and reads it back with
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
 //! the resident-set miss counter, the device replay's preprocess, the index
-//! bounds pass, an absent argument's read, the mesh scans, a sample through a
-//! cubic argument sampler, and a sequentially consistent fence write the words
-//! named here.
+//! bounds pass, an absent argument's read, a mesh draw's arguments pass, a sample
+//! through a cubic argument sampler, and a sequentially consistent fence write the
+//! words named here. Words 3 to 6 are not written.
 
 /// The `ExecutionStatus` buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,7 +15,7 @@ pub struct ExecutionStatus;
 impl ExecutionStatus {
     /// Size of the buffer in bytes.
     pub const BYTES: usize = 32;
-    /// Size of the buffer in 32-bit words: [`StatusWord::ALL`].
+    /// Size of the buffer in 32-bit words: up to the last of [`StatusWord::ALL`].
     pub const WORDS: usize = 8;
 
     /// The buffer's initial bytes: every word 0.
@@ -24,8 +24,8 @@ impl ExecutionStatus {
     }
 
     /// What the buffer's bytes report after the command buffer ran. The consumer maps a replay
-    /// fault, an index pool overflow, an absent argument read, a mesh records fault, a mesh
-    /// grid Metal's GPU discards or the device cannot launch, and a cubic argument sampler's sample
+    /// fault, an index pool overflow, an absent argument read, a mesh grid Metal's GPU
+    /// discards or the device cannot launch, and a cubic argument sampler's sample
     /// to a command-buffer execution error, and treats resident-set misses by its own policy.
     pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport {
         let word = |w: StatusWord| {
@@ -43,13 +43,6 @@ impl ExecutionStatus {
             cubic_argument_sampler: bits.contains(StatusBits::CUBIC_ARGUMENT_SAMPLER),
             mesh_grid_discarded: bits.contains(StatusBits::MESH_GRID_DISCARDED),
             mesh_grid_past_limits: bits.contains(StatusBits::MESH_GRID_PAST_LIMITS),
-            mesh_records_overflow: (bits.contains(StatusBits::MESH_RECORDS_OVERFLOW)).then(|| {
-                MeshRecordsFault {
-                    draw: word(StatusWord::MeshFaultDraw),
-                    object_threadgroups: word(StatusWord::MeshFaultObjects),
-                    mesh_threadgroups: word(StatusWord::MeshFaultGroups),
-                }
-            }),
         }
     }
 }
@@ -75,38 +68,16 @@ pub struct StatusReport {
     /// no value (`RuntimeFact::AbsentArgumentRead`): the read yielded zero, so no result of the
     /// command buffer is Metal's.
     pub absent_argument_read: bool,
-    /// A mesh scan found no room in the command buffer's records pool for an emulated mesh
-    /// draw's records, or the draw's vertices passed a `u32` (`bind::MeshScanModule`), or an
-    /// object arguments pass none for an emulated indirect draw's object slots
-    /// (`bind::mesh_object_arguments_module`, no mesh threadgroups yet): such draws drew nothing.
-    /// The command buffer's first one, as the pass saw it.
-    pub mesh_records_overflow: Option<MeshRecordsFault>,
     /// A function sampled through an argument buffer's sampler whose min or mag filter is
     /// `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): no result of the command buffer is then Metal's.
     pub cubic_argument_sampler: bool,
-    /// An indirect mesh draw's arguments pass (or an emulated one's object arguments pass) met an
-    /// object grid that Metal's GPU discards (`StatusBits::MESH_GRID_DISCARDED`): that draw drew
+    /// An indirect mesh draw's arguments pass met an object grid that Metal's GPU discards (`StatusBits::MESH_GRID_DISCARDED`): that draw drew
     /// nothing, and the command buffer fails as Metal's does (`MTLCommandBufferErrorInternal`).
     pub mesh_grid_discarded: bool,
-    /// An indirect mesh draw's arguments pass (or an emulated one's object arguments pass) met a
-    /// grid that Metal draws and the device cannot launch (`StatusBits::MESH_GRID_PAST_LIMITS`):
+    /// An indirect mesh draw's arguments pass met a grid that Metal draws and the device cannot launch (`StatusBits::MESH_GRID_PAST_LIMITS`):
     /// that draw drew nothing, and the command buffer fails (not Metal's failure).
     pub mesh_grid_past_limits: bool,
-}
-
-/// The first emulated mesh draw of a command buffer that drew nothing because its records did
-/// not fit (`StatusReport::mesh_records_overflow`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct MeshRecordsFault {
-    /// The consumer's number for the draw (the work buffer's `DRAW_ID` word).
-    pub draw: u32,
-    /// The draw's object threadgroups (1 without an object function).
-    pub object_threadgroups: u32,
-    /// The mesh threadgroups the draw's object threadgroups launched, saturated at `u32::MAX`; 0
-    /// where its object slots did not fit, before any launched.
-    pub mesh_threadgroups: u32,
 }
 
 /// A word of the `ExecutionStatus` buffer.
@@ -119,16 +90,6 @@ pub enum StatusWord {
     ResidentMisses,
     /// The device replay's fault reasons ([`ReplayFaults`]). Initial 0.
     ReplayFaults,
-    /// The words of the command buffer's mesh records pool its scans reserved
-    /// (`bind::MeshScanModule`). Initial 0.
-    MeshRecordsCursor,
-    /// The consumer's number for the command buffer's first emulated mesh draw whose records did
-    /// not fit ([`StatusBits::MESH_RECORDS_OVERFLOW`]). Initial 0.
-    MeshFaultDraw,
-    /// That draw's object threadgroups. Initial 0.
-    MeshFaultObjects,
-    /// The mesh threadgroups that draw needed, saturated. Initial 0.
-    MeshFaultGroups,
     /// The word every sequentially consistent fence of the command buffer increments with an
     /// acquire-release atomic at the fence's scope (`lower::sync::barrier::seq_cst_order`), so
     /// that the fences of one command buffer are totally ordered, as Metal's are. Its value means
@@ -138,14 +99,10 @@ pub enum StatusWord {
 
 impl StatusWord {
     /// Every word, in index order.
-    pub const ALL: [StatusWord; 8] = [
+    pub const ALL: [StatusWord; 4] = [
         StatusWord::Status,
         StatusWord::ResidentMisses,
         StatusWord::ReplayFaults,
-        StatusWord::MeshRecordsCursor,
-        StatusWord::MeshFaultDraw,
-        StatusWord::MeshFaultObjects,
-        StatusWord::MeshFaultGroups,
         StatusWord::SeqCstFences,
     ];
 
@@ -155,10 +112,7 @@ impl StatusWord {
             StatusWord::Status => 0,
             StatusWord::ResidentMisses => 1,
             StatusWord::ReplayFaults => 2,
-            StatusWord::MeshRecordsCursor => 3,
-            StatusWord::MeshFaultDraw => 4,
-            StatusWord::MeshFaultObjects => 5,
-            StatusWord::MeshFaultGroups => 6,
+            // Words 3 to 6 are not written.
             StatusWord::SeqCstFences => 7,
         }
     }
@@ -184,12 +138,8 @@ impl StatusBits {
     /// A function read an argument its pipeline's function constants removed, a read Metal
     /// gives no value, and took zero for it (`RuntimeFact::AbsentArgumentRead`).
     pub const ABSENT_ARGUMENT_READ: StatusBits = StatusBits(1 << 4);
-    /// A mesh scan found no room in the command buffer's records pool for an emulated mesh
-    /// draw's records, or the draw's vertices passed a `u32`, or an object arguments pass none for
-    /// an emulated indirect draw's object slots, and the draw drew nothing
-    /// (`bind::MeshScanModule`, `bind::mesh_object_arguments_module`); the fault words name the
-    /// command buffer's first such draw.
-    pub const MESH_RECORDS_OVERFLOW: StatusBits = StatusBits(1 << 5);
+    // Bit 5 (an emulated mesh draw's records fault) is not reported: a device without
+    // `meshShader` refuses the pipeline.
     /// A function sampled, gathered, or queried through a sampler an argument buffer holds whose
     /// min or mag filter is `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
@@ -200,15 +150,11 @@ impl StatusBits {
     /// An indirect mesh draw's arguments pass met a grid that Metal draws and the device cannot
     /// launch: a mesh grid past the mesh stage's limits, an unfolded object grid past the task
     /// stage's, or a folded one of more pieces than `MeshArguments::OBJECT_PIECES` (only under task
-    /// limits below Vulkan's required least); or an emulated indirect draw's object arguments pass
-    /// met an object grid past the device's compute limits (`bind::mesh_object_arguments_module`);
-    /// the draw drew nothing
-    /// (`bind::MeshArguments`).
+    /// limits below Vulkan's required least); the draw drew nothing (`bind::MeshArguments`).
     pub const MESH_GRID_PAST_LIMITS: StatusBits = StatusBits(1 << 9);
     /// An indirect mesh draw's arguments pass met an object grid of more threadgroups than
-    /// `bind::METAL_OBJECT_GRID_TOTAL`, which Metal's GPU discards (or an emulated draw's object
-    /// arguments pass did); the draw drew nothing (`bind::MeshArguments`,
-    /// `bind::mesh_object_arguments_module`).
+    /// `bind::METAL_OBJECT_GRID_TOTAL`, which Metal's GPU discards; the draw drew nothing
+    /// (`bind::MeshArguments`).
     pub const MESH_GRID_DISCARDED: StatusBits = StatusBits(1 << 10);
     /// Every bit in `other` is set in `self`.
     pub const fn contains(self, other: StatusBits) -> bool {
@@ -286,9 +232,13 @@ mod tests {
     #[test]
     fn words_are_distinct_and_inside_the_buffer() {
         for (i, w) in StatusWord::ALL.iter().enumerate() {
-            assert_eq!(w.index() as usize, i, "{w:?}");
+            if let Some(next) = StatusWord::ALL.get(i + 1) {
+                assert!(w.index() < next.index(), "{w:?}");
+            }
             assert!((w.byte_offset() as usize) + 4 <= ExecutionStatus::BYTES);
         }
+        let last = StatusWord::ALL[StatusWord::ALL.len() - 1];
+        assert_eq!(last.index() as usize + 1, ExecutionStatus::WORDS);
         assert_eq!(ExecutionStatus::WORDS * 4, ExecutionStatus::BYTES);
     }
 
@@ -299,8 +249,9 @@ mod tests {
             StatusBits::REPLAY_FAULT,
             StatusBits::INDEX_POOL_OVERFLOW,
             StatusBits::ABSENT_ARGUMENT_READ,
-            StatusBits::MESH_RECORDS_OVERFLOW,
             StatusBits::CUBIC_ARGUMENT_SAMPLER,
+            StatusBits::MESH_GRID_PAST_LIMITS,
+            StatusBits::MESH_GRID_DISCARDED,
         ];
         let mut all = 0u32;
         for b in bits {
@@ -358,23 +309,6 @@ mod tests {
         let c = ExecutionStatus::decode(&cubic);
         assert!(c.cubic_argument_sampler && !c.absent_argument_read);
         assert!(r.absent_argument_read && !r.index_pool_overflow);
-        assert_eq!(r.mesh_records_overflow, None);
-        bytes = [0u8; 32];
-        bytes[0..4].copy_from_slice(&StatusBits::MESH_RECORDS_OVERFLOW.0.to_le_bytes());
-        bytes[12..16].copy_from_slice(&40u32.to_le_bytes());
-        bytes[16..20].copy_from_slice(&3u32.to_le_bytes());
-        bytes[20..24].copy_from_slice(&2u32.to_le_bytes());
-        bytes[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
-        let r = ExecutionStatus::decode(&bytes);
-        assert_eq!(
-            r.mesh_records_overflow,
-            Some(MeshRecordsFault {
-                draw: 3,
-                object_threadgroups: 2,
-                mesh_threadgroups: u32::MAX,
-            })
-        );
-        assert!(!r.index_pool_overflow);
     }
 
     #[test]

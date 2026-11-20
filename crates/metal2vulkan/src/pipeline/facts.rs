@@ -482,10 +482,6 @@ pub enum RuntimeFact {
     /// weights back from a triangle drawn with Metal's last vertex first. Its plans state the
     /// variant the shape asks for (`BindShape::rotated_weights`).
     RotatedWeights,
-    /// The emulated mesh function's pipeline was compiled under `VariantKey::mesh_last_first`:
-    /// its synthesized vertex stage draws each line or triangle from its last index first. Its
-    /// plans state the variant the shape asks for (`BindShape::mesh_last_first`).
-    MeshLastFirst,
     /// The function reads, samples, gathers, or fetches through a sampler the color texture
     /// bound to the slot, on a profile whose sparse textures are sparse images (it enables
     /// `shaderResourceResidency`): where that texture is sparse, a block of it that holds no
@@ -956,7 +952,6 @@ impl RuntimeFact {
             RuntimeFact::DroppedColor { .. } => "DroppedColor",
             RuntimeFact::DepthClampRange => "DepthClampRange",
             RuntimeFact::RotatedWeights => "RotatedWeights",
-            RuntimeFact::MeshLastFirst => "MeshLastFirst",
             RuntimeFact::ConstantLanes { .. } => "ConstantLanes",
             RuntimeFact::FunctionTableRange { .. } => "FunctionTableRange",
             RuntimeFact::TestedStorageWrites { .. } => "TestedStorageWrites",

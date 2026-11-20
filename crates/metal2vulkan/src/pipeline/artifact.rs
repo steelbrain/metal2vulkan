@@ -488,8 +488,7 @@ impl RuntimeDependency {
 /// maximum other than the function's or the required size's threads, and any of them above
 /// 1024, [`MeshPipelineProblem`](crate::error::MeshPipelineProblem)), held to this device's
 /// limit for the stage where that is lower: `maxTaskWorkGroupInvocations` and
-/// `maxMeshWorkGroupInvocations` with `VK_EXT_mesh_shader`, and `maxComputeWorkGroupInvocations`
-/// where the device runs both stages as compute work (`lower::mesh::emulates`).
+/// `maxMeshWorkGroupInvocations`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -508,8 +507,7 @@ pub struct MeshPipelineMetalInfo {
     pub mesh_thread_execution_width: u32,
     /// `maxTotalThreadgroupsPerMeshGrid`: the descriptor's maximum, else Metal's 2^20 (an object
     /// function's `[[max_total_threadgroups_per_mesh_grid(n)]]` changes neither), held to the
-    /// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is
-    /// lower.
+    /// device's `maxMeshWorkGroupTotalCount` where that is lower.
     pub max_total_threadgroups_per_mesh_grid: u32,
 }
 

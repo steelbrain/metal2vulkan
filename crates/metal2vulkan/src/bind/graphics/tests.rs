@@ -1501,13 +1501,12 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
                 size: [256; 3],
                 invocations: 256,
                 count: [65535; 3],
-                total: Some(1 << 22),
+                total: 1 << 22,
                 stage: GroupStage::Mesh,
             },
             object: None,
             folded: false,
             partial_groups: false,
-            records: None,
         }),
         shader_tests: None,
         deindexed: None,
@@ -1566,7 +1565,7 @@ fn object_template() -> GraphicsTemplate {
         size: [128; 3],
         invocations: 128,
         count: [65535; 3],
-        total: Some(1 << 22),
+        total: 1 << 22,
         stage: crate::bind::plan::GroupStage::Task,
     });
     t

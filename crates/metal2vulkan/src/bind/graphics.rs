@@ -129,10 +129,7 @@
 //! - **Rotated weights**. A draw of triangles drawn with Metal's last vertex first
 //!   (`BindShape::rotated_weights`) of a pipeline whose fragment function reads
 //!   `[[barycentric_coord]]` runs the variant that takes Metal's weights back from the drawn
-//!   triangle's (`VariantKey::rotated_weights`, `LoweringInputs::rotated_weights`). A mesh draw
-//!   drawn from each primitive's last index first (`BindShape::mesh_last_first`) of an emulated
-//!   mesh function's pipeline of lines or triangles runs the variant whose synthesized vertex
-//!   stage reads its corners so (`VariantKey::mesh_last_first`).
+//!   triangle's (`VariantKey::rotated_weights`, `LoweringInputs::rotated_weights`).
 //! - **Tested storage writes**. A fragment function that stores a color through the interlocked
 //!   storage form and declares no early tests only because it discards
 //!   (`RuntimeFact::TestedStorageWrites`), in a pipeline with a depth or stencil attachment, stores
@@ -272,29 +269,6 @@
 //!   offset where the mesh function chooses its slice, is not implemented: the mesh function does
 //!   not add it. A mesh pipeline draws with an amplification count of 1 (its
 //!   `maxVertexAmplificationCount`).
-//!
-//!   An emulated mesh pipeline (`GraphicsState::mesh_records`) is different in these ways:
-//!   - Its object and mesh functions are `COMPUTE` stages, the object function's first, and
-//!     their threadgroups are held to the compute limits, as is the object function's grid.
-//!   - Each draw's compute work is `DrawCommands::mesh_dispatch` (`MeshDispatch` states the
-//!     consumer contract), over a work buffer of the draw's own. A direct draw of `G` mesh
-//!     threadgroups without an object function is the host's: its dispatch is `G` folded into
-//!     rows of `maxComputeWorkGroupCount[0]`, its records hold `G · group_words` words (at
-//!     least 16 bytes; past `maxStorageBufferRange` refused, naming it), and its draw is a
-//!     `Draw` of `G · NP · k` vertices. A direct draw with an object function, and an indirect
-//!     draw without one, are scanned on the GPU (`MeshScanModule`): the mesh dispatch and the
-//!     draw are indirect from the work buffer, and the records lie in the command buffer's
-//!     records pool, where a draw that does not fit draws nothing and fails the command buffer
-//!     (`StatusReport::mesh_records_overflow`). Neither asks for its arguments on the CPU.
-//!   - An indirect draw of a pipeline with an object function, whose object threadgroups only the
-//!     GPU knows, runs an object arguments pass first (`mesh_object_arguments_module`,
-//!     `MeshDispatch::object_arguments`): it reads Metal's arguments, reserves the object
-//!     threadgroups' slots and offsets in the records pool (`lower::mesh::work::SLOTS`), and
-//!     writes the object dispatch, which reads its counts from the work buffer; then the scan as
-//!     above. Every threadgroup of a grid whose threads per grid wrap runs, reporting the wrapped
-//!     grid as Metal's (`lower::dispatch`'s object grid). A grid Metal's GPU discards, one past the
-//!     compute limits, and one whose slots the pool cannot hold draw nothing and say so in the
-//!     command buffer's `ExecutionStatus`.
 
 use std::collections::BTreeMap;
 
@@ -321,9 +295,8 @@ use crate::bind::plan::slots::{
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorTemplate, FieldLocation,
     GraphicsTemplate, GroupLimits, GroupStage, MeshTemplate, PlannedVertexBuffer,
-    PushFieldPlacement, PushTemplate, RecordsTemplate, ResourceUse, ShaderTestsTemplate,
-    ShadowTemplate, StageTemplate, StrideRules, UseTarget, VertexBufferBind, ViewSetup,
-    WriteSource,
+    PushFieldPlacement, PushTemplate, ResourceUse, ShaderTestsTemplate, ShadowTemplate,
+    StageTemplate, StrideRules, UseTarget, VertexBufferBind, ViewSetup, WriteSource,
 };
 use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{
@@ -508,10 +481,6 @@ pub struct DrawCommands {
     /// (`SpecKey::ObjectLocalSize`, `ObjectFlatLocalSize`, `ObjectMultiRegion`). The consumer creates the draw's
     /// `VkPipeline` with it. `None` for every other draw, whose pipeline takes the plan's.
     pub specialization: Option<SpecializationKey>,
-    /// A mesh draw of an emulated mesh function's pipeline (`GraphicsState::mesh_records`): the
-    /// compute dispatch that runs its mesh threadgroups before `draw` draws their primitives
-    /// ([`MeshDispatch`] states the consumer contract). `None` for every other draw.
-    pub mesh_dispatch: Option<MeshDispatch>,
     /// An indirect mesh draw on a device with `VK_EXT_mesh_shader`, whose first stage's group
     /// counts `vkCmdDrawMeshTasksIndirectEXT` requires within the device's limits: the form of the
     /// arguments pass the consumer records before the draw ([`MeshArguments`], which it makes with
@@ -574,128 +543,8 @@ impl Default for DrawCommands {
             discards_command_buffer: false,
             amplifications: Vec::new(),
             specialization: None,
-            mesh_dispatch: None,
         }
     }
-}
-
-/// The compute work of a mesh draw whose mesh function is emulated: its object threadgroups, where
-/// the pipeline has an object function, set the mesh grids they launch; its mesh threadgroups write
-/// their vertices and primitives to records, from which the pipeline's synthesized vertex stage
-/// draws them.
-///
-/// The draw's **work buffer** (`SyntheticBinding::MeshWork`) is the region of
-/// [`work_bytes`](Self::work_bytes) that every step of the draw binds whole: its first words are
-/// [`work`](Self::work), the rest zero. Its header holds the draw's object threadgroups and its
-/// mesh threadgroups, where its records begin, the mesh dispatch's arguments
-/// ([`DISPATCH_OFFSET`](Self::DISPATCH_OFFSET)) and the draw's ([`DRAW_OFFSET`](Self::DRAW_OFFSET));
-/// then each object threadgroup's slot (the grid it set and its payload) and each one's first
-/// mesh threadgroup.
-///
-/// The consumer, outside the render pass instance the draw records into, and after every command
-/// of the pass that writes what the object or mesh function reads or reads what they write:
-///
-/// - makes the work buffer and the records ([`records`](Self::records)), and writes them to the
-///   plan's `WriteSource::MeshWork` and `WriteSource::MeshRecords` bindings of the draw's set 0;
-///   for records in the command buffer's pool it writes the pool's words at word
-///   [`POOL_WORDS`](Self::POOL_WORDS) of the work buffer, and, for any draw, its number for the
-///   draw at word [`DRAW_ID`](Self::DRAW_ID), which a records fault reports
-///   (`StatusReport::mesh_records_overflow`);
-/// - creates a compute pipeline of each of the pipeline's `COMPUTE` modules (the object
-///   function's first, where it has one), under the pipeline's layout and the draw's
-///   `DrawCommands::specialization`;
-/// - for an indirect draw with an object function ([`object_arguments`](Self::object_arguments)),
-///   dispatches [`mesh_object_arguments_module`](crate::bind::mesh_object_arguments_module) (one
-///   workgroup) under the scan's bindings first: it reads Metal's arguments, reserves the draw's
-///   slots and offsets in the records pool, and writes the object dispatch's
-///   `VkDispatchIndirectCommand` in the work buffer;
-/// - with an object function, binds its pipeline and the draw's sets at the compute bind point,
-///   records the push writes whose stages are `COMPUTE`, and `vkCmdDispatch` of
-///   [`object_groups`](Self::object_groups), or, for an indirect draw, `vkCmdDispatchIndirect`
-///   from the work buffer where the object arguments pass wrote it;
-/// - for [`MeshGroups::Scanned`], dispatches [`MeshScanModule`](crate::bind::MeshScanModule)
-///   (one workgroup) over the work buffer, the command buffer's `ExecutionStatus` buffer, the
-///   arguments the variant names and the records;
-/// - binds the mesh function's pipeline and the draw's sets, records the push writes whose
-///   stages are `COMPUTE`, and dispatches its threadgroups: `vkCmdDispatch` of
-///   [`MeshGroups::Direct`]'s counts (nothing where one is 0), or `vkCmdDispatchIndirect` from
-///   the work buffer at [`DISPATCH_OFFSET`](Self::DISPATCH_OFFSET);
-/// - between the steps, orders each one's writes before the next one's reads (a barrier from
-///   compute shader writes to compute shader and indirect command reads), and after the last,
-///   before the draw's vertex stage and indirect command reads; then records `DrawCommands::draw`
-///   in the render pass instance as any draw, its indirect buffer (`DrawIndirect`, for
-///   [`MeshGroups::Scanned`]) the work buffer.
-///
-/// The object and mesh functions' resource uses are compute-stage uses (`ResourceUse`'s
-/// stages).
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MeshDispatch {
-    /// The work buffer's first words; its other words are zero.
-    pub work: Vec<u32>,
-    /// The work buffer's bytes, at least 16.
-    pub work_bytes: u64,
-    /// The object function's threadgroups, the object dispatch's group counts; `None` for a
-    /// pipeline without an object function, and for an indirect draw with one.
-    pub object_groups: Option<[u32; 3]>,
-    /// An indirect draw with an object function: the range of the Metal indirect buffer its
-    /// object arguments pass binds at `MeshScanModule::ARGUMENTS_BINDING`, from the arguments'
-    /// offset aligned down to `minStorageBufferOffsetAlignment` through their 12 bytes (the work
-    /// buffer's `OBJECT_ARGUMENTS` word names where they begin). `None` for any other draw.
-    pub object_arguments: Option<BufferRange>,
-    /// The mesh threadgroups.
-    pub mesh: MeshGroups,
-    /// The records.
-    pub records: MeshRecordsRegion,
-}
-
-impl MeshDispatch {
-    /// The work buffer's word where the consumer writes its records pool's words, for
-    /// [`MeshRecordsRegion::Pool`].
-    pub const POOL_WORDS: usize = crate::lower::mesh::work::POOL_WORDS as usize;
-    /// The work buffer's word where the consumer writes its number for the draw.
-    pub const DRAW_ID: usize = crate::lower::mesh::work::DRAW_ID as usize;
-    /// The byte of the work buffer where the mesh dispatch's `VkDispatchIndirectCommand` lies.
-    pub const DISPATCH_OFFSET: u64 = 4 * crate::lower::mesh::work::DISPATCH as u64;
-    /// The byte of the work buffer where the draw's `VkDrawIndirectCommand` lies.
-    pub const DRAW_OFFSET: u64 = 4 * crate::lower::mesh::work::DRAW as u64;
-}
-
-/// Where an emulated mesh draw's mesh threadgroups come from ([`MeshDispatch`]).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum MeshGroups {
-    /// The host knows them (a direct draw without an object function): the dispatch's group
-    /// counts, the draw's threadgroups folded into rows of `maxComputeWorkGroupCount[0]`. The
-    /// work buffer is complete, and the draw is a `Draw`.
-    Direct([u32; 3]),
-    /// The scan writes them (a draw with an object function, or an indirect draw): the mesh
-    /// dispatch is indirect, and the draw a `DrawIndirect`, both from the work buffer.
-    Scanned {
-        /// The range of the Metal indirect buffer the scan binds at
-        /// `MeshScanModule::ARGUMENTS_BINDING`, for an indirect draw: from the arguments' offset
-        /// aligned down to `minStorageBufferOffsetAlignment` through their 12 bytes. `None` for
-        /// any other draw, whose scan reads no argument (any 4 bytes bind there).
-        arguments: Option<BufferRange>,
-    },
-}
-
-/// The records of an emulated mesh draw ([`MeshDispatch`]), which its mesh dispatch and its draw
-/// bind whole.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum MeshRecordsRegion {
-    /// A region of the draw's own of this many bytes (at least 16), for
-    /// [`MeshGroups::Direct`].
-    Exact(u64),
-    /// The command buffer's records pool, for [`MeshGroups::Scanned`]: storage of the
-    /// consumer's size (its budget for the command buffer's emulated mesh draws, within
-    /// `maxStorageBufferRange`), which the scans reserve from front to back
-    /// (`StatusWord::MeshRecordsCursor`). Its words need no initial value.
-    Pool,
 }
 
 /// How a direct indexed draw treats its index positions past the index buffer: the positions whose
@@ -742,38 +591,29 @@ impl RenderPipeline {
 /// a Metal function, with its Vulkan stage: a tessellation pipeline's (`tessellated`) synthesized
 /// vertex and control stages run none, and its post-tessellation vertex function is its
 /// evaluation stage; a mesh render pipeline's object and mesh functions are its task and mesh
-/// stages, and an emulated pipeline's (`emulated`) are its compute stages, the object function's
-/// first where it has one, and its synthesized vertex stage runs none; the geometry stages link
+/// stages; the geometry stages link
 /// generates (`link::geometry`: barycentric weights read as varyings, a selected slice or
 /// viewport) run none and bind nothing, nor do a band variant's (`banded`) control and evaluation
 /// stages (`link::band`).
 fn metal_stages(
     stages: impl ExactSizeIterator<Item = vk::ShaderStage>,
     (tessellated, banded): (bool, bool),
-    emulated: bool,
 ) -> Result<Vec<(Stage, vk::ShaderStage)>, BindError> {
-    let stages: Vec<vk::ShaderStage> = stages.collect();
     let mut out = Vec::with_capacity(stages.len());
-    for (i, &s) in stages.iter().enumerate() {
-        let compute = s == vk::ShaderStage::COMPUTE && emulated;
-        let object_first = compute && stages.get(i + 1) == Some(&vk::ShaderStage::COMPUTE);
+    for s in stages {
         let stage = if s == vk::ShaderStage::FRAGMENT {
             Stage::Fragment
-        } else if object_first {
-            Stage::Object
-        } else if s == vk::ShaderStage::MESH_EXT || compute {
+        } else if s == vk::ShaderStage::MESH_EXT {
             Stage::Mesh
         } else if s == vk::ShaderStage::TASK_EXT {
             Stage::Object
-        } else if s == vk::ShaderStage::VERTEX && emulated {
-            continue;
         } else if s == vk::ShaderStage::VERTEX && !tessellated
             || s == vk::ShaderStage::TESSELLATION_EVALUATION && tessellated
         {
             Stage::Vertex
         } else if tessellated
             && (s == vk::ShaderStage::VERTEX || s == vk::ShaderStage::TESSELLATION_CONTROL)
-            || s == vk::ShaderStage::GEOMETRY && !emulated
+            || s == vk::ShaderStage::GEOMETRY
             || banded
                 && (s == vk::ShaderStage::TESSELLATION_CONTROL
                     || s == vk::ShaderStage::TESSELLATION_EVALUATION)
@@ -789,15 +629,10 @@ fn metal_stages(
 
 /// Whether a module of mesh render pipeline `p` other than its object function's declares
 /// threadgroup memory arguments (`SpecKey::TgLength`): a mesh function's, whose lengths no encoder
-/// setter sets. The object module is the task stage, or, `emulated`, the first of the two compute
-/// stages, as [`metal_stages`] names them.
-fn other_stage_lengths(p: &RenderPipeline, emulated: bool) -> bool {
-    p.stages.iter().enumerate().any(|(i, m)| {
-        let object = m.stage == vk::ShaderStage::TASK_EXT
-            || emulated
-                && m.stage == vk::ShaderStage::COMPUTE
-                && p.stages.get(i + 1).map(|n| n.stage) == Some(vk::ShaderStage::COMPUTE);
-        !object
+/// setter sets. The object module is the task stage, as [`metal_stages`] names it.
+fn other_stage_lengths(p: &RenderPipeline) -> bool {
+    p.stages.iter().any(|m| {
+        m.stage != vk::ShaderStage::TASK_EXT
             && m.specialization
                 .constants
                 .iter()
@@ -828,15 +663,6 @@ fn pipeline_stage(stage: Stage) -> vk::PipelineStageFlags2 {
 fn tessellated_pipeline_stage(stage: Stage) -> vk::PipelineStageFlags2 {
     match stage {
         Stage::Vertex => vk::PipelineStageFlags2::TESSELLATION_EVALUATION_SHADER,
-        other => pipeline_stage(other),
-    }
-}
-
-/// [`pipeline_stage`] of an emulated mesh function's pipeline, whose object and mesh functions
-/// run in the draw's compute dispatches.
-fn emulated_mesh_pipeline_stage(stage: Stage) -> vk::PipelineStageFlags2 {
-    match stage {
-        Stage::Object | Stage::Mesh => vk::PipelineStageFlags2::COMPUTE_SHADER,
         other => pipeline_stage(other),
     }
 }
@@ -934,7 +760,6 @@ fn stores(a: crate::pipeline::graphics::ColorAttachmentState) -> bool {
 
 fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {
     check_slots(shape)?;
-    let records = p.graphics.mesh_records.as_ref();
     let tessellation = p.graphics.tessellation.is_some();
     let modules = metal_stages(
         p.stages.iter().map(|m| m.stage),
@@ -942,7 +767,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             p.graphics.tessellation.is_some(),
             p.graphics.line_band.is_some(),
         ),
-        records.is_some(),
     )?;
     let stages: Vec<Stage> = modules.iter().map(|(stage, _)| *stage).collect();
     // A mesh render pipeline (`Device::compile_mesh_pipeline`) is drawn by mesh draws.
@@ -1245,7 +1069,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && p.graphics.tessellation.is_none()
         && shadow.is_none()
         && tile_memory.is_none()
-        && records.is_none()
         && !mesh
         && interlocked_colors.is_empty()
         && extended_shadows.is_empty()
@@ -1296,18 +1119,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::RotatedWeights);
-    // A mesh draw drawn from each primitive's last index first: the variant whose emulated
-    // mesh pipeline's synthesized vertex stage reads its corners so. A pipeline of points, or
-    // one whose mesh function is not emulated, has no order to change.
-    let mesh_last_first = shape.mesh_last_first
-        && p.graphics
-            .mesh_records
-            .as_ref()
-            .is_some_and(|r| r.corners > 1);
-    let compiled_last_first = p
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::MeshLastFirst);
     // A draw of lines, or of triangles' edges, as bands: the variant whose synthesized
     // tessellation stages draw them so, which its graphics state states.
     let line_band = shape.line_band;
@@ -1451,15 +1262,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .iter()
         .any(|d| matches!(d.fact, RuntimeFact::ShaderStencilTest { .. }));
     // A mesh entry's `Layer` at or past `maxMeshOutputLayers` is undefined: a pass of more layers
-    // than that, which a mesh function choosing its slice could render into, is past the device. An
-    // emulated mesh function's slice is its synthesized vertex stage's `Layer`, as a vertex
-    // function's is.
+    // than that, which a mesh function choosing its slice could render into, is past the device.
     let mesh_layers = limits.mesh.max_mesh_output_layers;
-    if mesh
-        && records.is_none()
-        && vertex_layer.is_some()
-        && shape.render_target_array_length > mesh_layers
-    {
+    if mesh && vertex_layer.is_some() && shape.render_target_array_length > mesh_layers {
         return Err(BindError::Unsupported(Unsupported::needs(
             Feature::MeshShading,
             Capability::Limit {
@@ -1476,12 +1281,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             .find(|(s, _)| *s == stage)
             .map_or_else(|| vk_stage(stage), |(_, m)| *m)
     };
-    let stage_flags: fn(Stage) -> vk::PipelineStageFlags2 =
-        match (&p.graphics.tessellation, records) {
-            (Some(_), _) => tessellated_pipeline_stage,
-            (None, Some(_)) => emulated_mesh_pipeline_stage,
-            (None, None) => pipeline_stage,
-        };
+    let stage_flags: fn(Stage) -> vk::PipelineStageFlags2 = match &p.graphics.tessellation {
+        Some(_) => tessellated_pipeline_stage,
+        None => pipeline_stage,
+    };
     let bindings = bindings(&p.layout);
     let stage_shape = |s: Stage| shape.stages.get(&s);
 
@@ -1883,9 +1686,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                         control_point_index_binding = Some((set.set, b.binding));
                         WriteSource::ControlPointIndices
                     }
-                    // An emulated mesh function's records and work buffer, each draw's own.
-                    SyntheticBinding::MeshRecords if records.is_some() => WriteSource::MeshRecords,
-                    SyntheticBinding::MeshWork if records.is_some() => WriteSource::MeshWork,
                     SyntheticBinding::HandleTable => {
                         planner(&mut heap)?.table(stage, set.set, b.binding)?
                     }
@@ -2134,7 +1934,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         } => Some((static_bytes, payload)),
         _ => None,
     });
-    if mesh && other_stage_lengths(p, records.is_some()) {
+    if mesh && other_stage_lengths(p) {
         // A mesh function's arguments, whose lengths no Metal setter sets.
         return Err(not_implemented(Feature::MeshShading));
     }
@@ -2211,32 +2011,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         fixed.iter().find(|(key, _)| *key == k).map(|(_, v)| *v)
     });
     let m = &limits.mesh;
-    // An emulated mesh function's threadgroups are the draw's compute dispatch's.
-    let mesh_limits = match records {
-        Some(_) => GroupLimits {
-            size: limits.max_compute_work_group_size,
-            invocations: limits.max_compute_work_group_invocations,
-            count: limits.max_compute_work_group_count,
-            total: None,
-            stage: GroupStage::Compute,
-        },
-        None => GroupLimits {
-            size: m.max_mesh_work_group_size,
-            invocations: m.max_mesh_work_group_invocations,
-            count: m.max_mesh_work_group_count,
-            total: Some(m.max_mesh_work_group_total_count),
-            stage: GroupStage::Mesh,
-        },
-    };
-    let records = records.map(|r| RecordsTemplate {
-        group_words: r.group_words(),
-        group_vertices: r.primitives.saturating_mul(r.corners),
-        max_range: limits.max_storage_buffer_range,
-        slot_words: r.slot_words,
-        row: limits.max_compute_work_group_count[0],
-        rows: limits.max_compute_work_group_count[1],
-        alignment: limits.min_storage_buffer_offset_alignment,
-    });
     let mesh = mesh.then(|| MeshTemplate {
         multiples: p
             .dependencies
@@ -2248,23 +2022,19 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             .collect(),
         spec: layout,
         fixed,
-        mesh: mesh_limits,
-        // An emulated object function's threadgroups are a compute dispatch.
-        object: stages.contains(&Stage::Object).then_some(match records {
-            Some(_) => GroupLimits {
-                size: limits.max_compute_work_group_size,
-                invocations: limits.max_compute_work_group_invocations,
-                count: limits.max_compute_work_group_count,
-                total: None,
-                stage: GroupStage::Compute,
-            },
-            None => GroupLimits {
-                size: m.max_task_work_group_size,
-                invocations: m.max_task_work_group_invocations,
-                count: m.max_task_work_group_count,
-                total: Some(m.max_task_work_group_total_count),
-                stage: GroupStage::Task,
-            },
+        mesh: GroupLimits {
+            size: m.max_mesh_work_group_size,
+            invocations: m.max_mesh_work_group_invocations,
+            count: m.max_mesh_work_group_count,
+            total: m.max_mesh_work_group_total_count,
+            stage: GroupStage::Mesh,
+        },
+        object: stages.contains(&Stage::Object).then_some(GroupLimits {
+            size: m.max_task_work_group_size,
+            invocations: m.max_task_work_group_invocations,
+            count: m.max_task_work_group_count,
+            total: m.max_task_work_group_total_count,
+            stage: GroupStage::Task,
         }),
         folded: p
             .dependencies
@@ -2274,7 +2044,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             .dependencies
             .iter()
             .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
-        records,
     });
 
     // Uses: bound buffer slots, vertex buffers, textures, attachments, used resources.
@@ -2418,7 +2187,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .retain(|slot| !variant.snapshot_textures.contains_key(slot));
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;
-    variant.mesh_last_first = mesh_last_first;
     variant.line_band = line_band;
     variant.read_only_tests = read_only_tests;
     variant.shader_tests = shader_tests;
@@ -2460,7 +2228,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || other_colors
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
-                || compiled_last_first != mesh_last_first
                 || compiled_band != line_band
                 || compiled_tests != read_only_tests
                 || compiled_shader_tests != shader_tests
@@ -2900,8 +2667,6 @@ struct MeshDraw {
     /// The object stage's region, of a pipeline with an object function.
     object_region: Option<[u8; 32]>,
     mesh_region: [u8; 32],
-    /// An emulated mesh function's dispatch.
-    dispatch: Option<MeshDispatch>,
     /// A direct draw's fold of its object grid, of a folded object function
     /// (`DrawCommands::object_fold`).
     fold: Option<ObjectFold>,
@@ -2934,13 +2699,12 @@ fn mesh_limit(limit: VkLimit, required: u64, available: u32) -> BindError {
 }
 
 /// The limits that name a stage's threadgroup and grid: the task stage's for an object
-/// function, the mesh stage's for a mesh function, and the compute stage's for an emulated mesh
-/// function, whose grid has no total limit.
+/// function and the mesh stage's for a mesh function.
 struct GroupLimitNames {
     size: fn(u8) -> VkLimit,
     invocations: VkLimit,
     count: fn(u8) -> VkLimit,
-    total: Option<VkLimit>,
+    total: VkLimit,
 }
 
 impl GroupLimitNames {
@@ -2950,19 +2714,13 @@ impl GroupLimitNames {
                 size: VkLimit::MaxTaskWorkGroupSize,
                 invocations: VkLimit::MaxTaskWorkGroupInvocations,
                 count: VkLimit::MaxTaskWorkGroupCount,
-                total: Some(VkLimit::MaxTaskWorkGroupTotalCount),
+                total: VkLimit::MaxTaskWorkGroupTotalCount,
             },
             GroupStage::Mesh => GroupLimitNames {
                 size: VkLimit::MaxMeshWorkGroupSize,
                 invocations: VkLimit::MaxMeshWorkGroupInvocations,
                 count: VkLimit::MaxMeshWorkGroupCount,
-                total: Some(VkLimit::MaxMeshWorkGroupTotalCount),
-            },
-            GroupStage::Compute => GroupLimitNames {
-                size: VkLimit::MaxComputeWorkGroupSize,
-                invocations: VkLimit::MaxComputeWorkGroupInvocations,
-                count: VkLimit::MaxComputeWorkGroupCount,
-                total: None,
+                total: VkLimit::MaxMeshWorkGroupTotalCount,
             },
         }
     }
@@ -3015,10 +2773,8 @@ fn check_grid(limits: &GroupLimits, g: [u32; 3]) -> Result<(), BindError> {
         ));
     }
     let total: u64 = g.iter().map(|&x| u64::from(x)).product();
-    if let (Some(available), Some(limit)) = (limits.total, names.total) {
-        if total > u64::from(available) {
-            return Err(mesh_limit(limit, total, available));
-        }
+    if total > u64::from(limits.total) {
+        return Err(mesh_limit(names.total, total, limits.total));
     }
     Ok(())
 }
@@ -3163,24 +2919,13 @@ fn mesh_draw(
         if let Some(o) = &t.object {
             check_group(o, lo, flat(&object_keys), &t.multiples)?;
         }
-        // An emulated mesh function's threadgroups are folded into rows, so its direct grid is
-        // held to no axis limit.
-        match (groups, t.object.as_ref(), &t.records) {
-            (Some(_), Some(_), _) if folded => {}
-            (Some(g), Some(o), _) => check_grid(o, g)?,
-            (Some(g), None, None) => check_grid(&t.mesh, g)?,
-            (Some(_), None, Some(_)) | (None, _, _) => {}
+        match (groups, t.object.as_ref()) {
+            (Some(_), Some(_)) if folded => {}
+            (Some(g), Some(o)) => check_grid(o, g)?,
+            (Some(g), None) => check_grid(&t.mesh, g)?,
+            (None, _) => {}
         }
     }
-    // An emulated mesh function's threadgroups are a compute dispatch, and their primitives a
-    // draw of `NP · k` vertices each.
-    let (command, dispatch) = match &t.records {
-        None => (command, None),
-        Some(r) => {
-            let (command, dispatch) = emulated_draw(r, t.object.is_some(), draw, groups, launches)?;
-            (command, Some(dispatch))
-        }
-    };
     let object = t.object.is_some();
     // A folded object function reads every grid builtin from its region record, and an unfolded
     // one whose wrapped grid leaves a partial threadgroup from its region (`MultiRegion` 1).
@@ -3195,7 +2940,7 @@ fn mesh_draw(
         (true, Some(g), Some(o)) => {
             let task = MeshGridLimits {
                 axes: o.count,
-                total: o.total.unwrap_or(u32::MAX),
+                total: o.total,
             };
             let g = if launches { g } else { [0; 3] };
             let fold = match asked.filter(|_| launches) {
@@ -3268,197 +3013,10 @@ fn mesh_draw(
         specialization,
         object_region,
         mesh_region,
-        dispatch,
         fold,
         discards,
     })
 }
-
-/// The draw and the compute work of an emulated mesh draw `draw` under `r` ([`MeshDispatch`]),
-/// of a pipeline with an object function where `object`: `groups` are the first stage's
-/// threadgroups of a direct draw (`None` for an indirect one), `lo` the threads of an object
-/// threadgroup, and a draw that `launches` nothing runs nothing and draws nothing.
-///
-/// - A direct draw without an object function is the host's: `G` mesh threadgroups (refused as
-///   a group count where they pass a `u32`), their records exactly (`maxStorageBufferRange`,
-///   else `Unsupported{MeshShading}` naming it with the records' bytes), folded into rows of
-///   `maxComputeWorkGroupCount[0]` (the rows within `maxComputeWorkGroupCount[1]`, else
-///   refused naming it), and a draw of `G · NP · k` vertices (refused as a group count past a
-///   `u32`).
-/// - A direct draw with an object function dispatches its object threadgroups (`O`, whose
-///   work buffer must be bindable whole, else refused naming `maxStorageBufferRange` with its
-///   bytes), and an indirect draw without one reads Metal's arguments in the scan: both are
-///   scanned, their records in the command buffer's pool.
-/// - An indirect draw with an object function, of object threadgroups of `lo` threads, runs the
-///   object arguments pass first (`MeshDispatch::object_arguments`), which reads Metal's
-///   arguments, reserves the slots and offsets of its object threadgroups in the pool, and writes
-///   the object dispatch, which reads its counts from the work buffer; then the scan, as above.
-fn emulated_draw(
-    r: &RecordsTemplate,
-    object: bool,
-    draw: &DrawCall,
-    groups: Option<[u32; 3]>,
-    launches: bool,
-) -> Result<(vk::DrawCommand, MeshDispatch), BindError> {
-    use crate::lower::mesh::work;
-    let group_vertices = r.group_vertices;
-    let over_range = |bytes: u64| mesh_limit(VkLimit::MaxStorageBufferRange, bytes, r.max_range);
-    let count_past = || {
-        BindError::Unsupported(Unsupported::not_representable(Feature::GroupCount {
-            axis: None,
-        }))
-    };
-    let header = |objects: u32| {
-        let mut w = vec![0u32; work::HEADER as usize];
-        w[work::OBJECT_GROUPS as usize] = objects;
-        w[work::SLOT_WORDS as usize] = r.slot_words;
-        // Within a `u32`: link sizes a threadgroup's records so (`lower::mesh::layout`).
-        w[work::GROUP_WORDS as usize] = r.group_words as u32;
-        w[work::GROUP_VERTICES as usize] = group_vertices;
-        w[work::ROW as usize] = r.row.max(1);
-        w
-    };
-    let work_bytes = |objects: u64| -> Result<u64, BindError> {
-        let bytes = work::words(objects, r.slot_words).saturating_mul(4);
-        if bytes > u64::from(r.max_range) {
-            return Err(over_range(bytes));
-        }
-        Ok(bytes)
-    };
-    // The range of Metal's arguments at `offset` a pass binds, from the offset aligned down to
-    // `minStorageBufferOffsetAlignment`, and the arguments' byte in it.
-    let arguments_range = |offset: u64| {
-        let a = r.alignment.max(4);
-        let start = offset - offset % a;
-        let residual = offset - start;
-        let range = BufferRange {
-            offset: start,
-            range: residual + 12,
-        };
-        (range, residual)
-    };
-    let scanned = |objects: u32, object_groups, arguments| -> Result<_, BindError> {
-        let command = vk::DrawCommand::DrawIndirect {
-            offset: MeshDispatch::DRAW_OFFSET,
-            draw_count: 1,
-            stride: 16,
-        };
-        let dispatch = MeshDispatch {
-            work: header(objects),
-            work_bytes: work_bytes(u64::from(objects))?,
-            object_groups,
-            object_arguments: None,
-            mesh: MeshGroups::Scanned { arguments },
-            records: MeshRecordsRegion::Pool,
-        };
-        Ok((command, dispatch))
-    };
-    match (object, groups.filter(|_| launches)) {
-        // The host's draw of `G` mesh threadgroups.
-        (false, Some(g)) => {
-            let total: u64 = g.iter().map(|&x| u64::from(x)).product();
-            let t = u32::try_from(total).map_err(|_| count_past())?;
-            let bytes = total
-                .saturating_mul(r.group_words)
-                .saturating_mul(4)
-                .max(MIN_RECORDS_BYTES);
-            if bytes > u64::from(r.max_range) {
-                return Err(over_range(bytes));
-            }
-            let vertices = t.checked_mul(group_vertices).ok_or_else(count_past)?;
-            let row = r.row.max(1);
-            let rows = t.div_ceil(row);
-            if rows > r.rows {
-                return Err(mesh_limit(
-                    VkLimit::MaxComputeWorkGroupCount(1),
-                    u64::from(rows),
-                    r.rows,
-                ));
-            }
-            let folded = [t.min(row), rows, 1];
-            let mut w = header(1);
-            w[work::MESH_GROUPS as usize] = t;
-            w[work::DISPATCH as usize..][..3].copy_from_slice(&folded);
-            w[work::DRAW as usize..][..4].copy_from_slice(&[vertices, 1, 0, 0]);
-            // Slot 0: the grid, then a zero payload; then the offsets 0 and `T`.
-            w.extend(g);
-            w.extend(std::iter::repeat_n(
-                0,
-                r.slot_words.saturating_sub(3) as usize,
-            ));
-            w.extend([0, t]);
-            let command = vk::DrawCommand::Draw {
-                vertex_count: vertices,
-                instance_count: 1,
-                first_vertex: 0,
-                first_instance: 0,
-            };
-            let dispatch = MeshDispatch {
-                work: w,
-                work_bytes: work_bytes(1)?,
-                object_groups: None,
-                object_arguments: None,
-                mesh: MeshGroups::Direct(folded),
-                records: MeshRecordsRegion::Exact(bytes),
-            };
-            Ok((command, dispatch))
-        }
-        // The object threadgroups set the mesh grids: scanned.
-        (true, Some(g)) => {
-            let objects: u64 = g.iter().map(|&x| u64::from(x)).product();
-            let objects = u32::try_from(objects).map_err(|_| count_past())?;
-            scanned(objects, Some(g), None)
-        }
-        // Metal's arguments are the mesh grid: scanned from them.
-        (false, None) if launches => {
-            let DrawCall::MeshThreadgroupsIndirect { indirect, .. } = *draw else {
-                return Err(internal(format!("an indirect mesh draw of {draw:?}")));
-            };
-            let (range, residual) = arguments_range(indirect.offset);
-            let mut out = scanned(1, None, Some(range))?;
-            let word = u32::try_from(residual / 4 + 1).map_err(|_| count_past())?;
-            out.1.work[work::ARGUMENTS as usize] = word;
-            Ok(out)
-        }
-        // Metal's arguments are the object grid: the object arguments pass reads them, reserves
-        // the slots in the pool and writes the object dispatch; then the scan.
-        (true, None) if launches => {
-            let DrawCall::MeshThreadgroupsIndirect { indirect, .. } = *draw else {
-                return Err(internal(format!("an indirect mesh draw of {draw:?}")));
-            };
-            let range = arguments_range(indirect.offset);
-            let mut out = scanned(0, None, None)?;
-            let word = u32::try_from(range.1 / 4 + 1).map_err(|_| count_past())?;
-            out.1.work[work::OBJECT_ARGUMENTS as usize] = word;
-            out.1.object_arguments = Some(range.0);
-            Ok(out)
-        }
-        // A draw that launches nothing: no step runs, and nothing is drawn.
-        (_, _) => {
-            let command = vk::DrawCommand::Draw {
-                vertex_count: 0,
-                instance_count: 1,
-                first_vertex: 0,
-                first_instance: 0,
-            };
-            let mut w = header(1);
-            w.extend(std::iter::repeat_n(0, r.slot_words as usize + 2));
-            let dispatch = MeshDispatch {
-                work: w,
-                work_bytes: work_bytes(1)?,
-                object_groups: None,
-                object_arguments: None,
-                mesh: MeshGroups::Direct([0; 3]),
-                records: MeshRecordsRegion::Exact(MIN_RECORDS_BYTES),
-            };
-            Ok((command, dispatch))
-        }
-    }
-}
-
-/// The fewest bytes of an emulated mesh function's records: a draw of no threadgroup still binds
-/// them (the smallest binding).
-const MIN_RECORDS_BYTES: u64 = 16;
 
 /// What a patch draw of `p` instantiates ([`FactorTemplate`]), from the layout's factor, patch
 /// index and control-point index bindings and the device's `(minStorageBufferOffsetAlignment,
@@ -4042,7 +3600,6 @@ fn instantiate(
         index_bounds_pass,
         amplifications: amplifications_out,
         specialization: specialization_out,
-        mesh_dispatch: mesh_dispatch_out,
         mesh_arguments: mesh_arguments_out,
         object_fold: object_fold_out,
         discards_command_buffer: discards_out,
@@ -4367,10 +3924,7 @@ fn instantiate(
     };
     let index_unbounded = indirect_indices_unbounded(t.robust_index_fetch, draw);
     let amplifications = amplification_writes(t)?;
-    let (mesh_dispatch, specialization) = match mesh {
-        Some(m) => (m.dispatch, Some(m.specialization)),
-        None => (None, None),
-    };
+    let specialization = mesh.map(|m| m.specialization);
     // The de-indexed form reads its indices in the vertex stage, by address, and binds no index
     // buffer.
     uses.clear();
@@ -4378,12 +3932,8 @@ fn instantiate(
         Some(indices) => uses.push(indices),
         None => draw_uses(uses, draw, overrun, t.tessellation.as_ref()),
     }
-    // An indirect mesh draw's arguments pass, or an emulated one's scan or object arguments pass,
-    // reads Metal's 12 bytes in the compute stage.
-    let scanned = mesh_dispatch.as_ref().is_some_and(|d| {
-        matches!(d.mesh, MeshGroups::Scanned { arguments: Some(_) }) || d.object_arguments.is_some()
-    });
-    if scanned || mesh_arguments.is_some() {
+    // An indirect mesh draw's arguments pass reads Metal's 12 bytes in the compute stage.
+    if mesh_arguments.is_some() {
         uses.push(ResourceUse {
             resource: UseTarget::Indirect,
             access: AccessSet::READ,
@@ -4400,7 +3950,6 @@ fn instantiate(
     *draw_command = command;
     *overrun_out = overrun;
     *amplifications_out = amplifications;
-    *mesh_dispatch_out = mesh_dispatch;
     *specialization_out = specialization;
     Ok(())
 }

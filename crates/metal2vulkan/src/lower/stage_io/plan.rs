@@ -1453,13 +1453,11 @@ fn push_var(list: &mut Vec<IoVariable>, v: IoVariable) {
 /// Whether the fragment function reads the varying `key` per primitive: its mesh render
 /// pipeline's mesh function writes it per primitive (`LoweringInputs::primitive_varyings`). The
 /// stage interface lists it (`StageIo::primitive_inputs`), and the declaration decorates it
-/// `PerPrimitiveEXT`, or, on a device that emulates mesh functions, reads it flat alone
-/// (`StageIoPlan::flat_primitive_inputs`).
+/// `PerPrimitiveEXT`.
 fn read_per_primitive(cx: &mut SelectCx<'_>, key: &VaryingKey) -> bool {
     if !cx.inputs.primitive_varyings.contains(key) {
         return false;
     }
-    cx.families.stage_io.flat_primitive_inputs = crate::lower::mesh::emulates(cx.profile);
     let keys = &mut cx.families.stage_io.interface.primitive_inputs;
     if let Err(at) = keys.binary_search(key) {
         keys.insert(at, key.clone());

@@ -594,8 +594,8 @@ through buffer arguments it reads at any index.
   threadgroup memory on a profile without it is `Unsupported` with
   `Feature::ZeroedThreadgroupMemory`. The translator's own `Workgroup` words have none: an
   emulated SIMD group's exchange scratch and vote word, an object function's mesh grid, a mesh
-  function's primitive count and staged indices, an emulated object or mesh function's payload,
-  and those of the binder's own scan, shadow-merge and index-rewrite kernels. Each is written
+  function's primitive count and staged indices, and those of the binder's own shadow-merge and
+  index-rewrite kernels. Each is written
   before any read of it, and an object function's payload "is assumed uninitialized at the entry
   of the object function" (the Metal Shading Language Specification, the `payload` attribute). Metal's documents give
   threadgroup memory no first contents: `MTLComputeCommandEncoder.h`'s
@@ -874,7 +874,7 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   function that selects its slice is refused needing either feature (its pass of one layer still
   runs), and so is one that selects its viewport on a device with `multiViewport`; one whose index
   differs among a primitive's vertices is refused needing `geometryShader`. The stages cannot serve
-  a post-tessellation vertex function or an emulated mesh function, nor sit beside a vertex function
+  a post-tessellation vertex function, nor sit beside a vertex function
   that writes the builtins itself (a device with the outputs but without
   `fragmentShaderBarycentric`): those are refused as not implemented. A fragment function that reads
   an index no stage writes, on a device that can declare neither builtin, reads 0, Metal's value
@@ -972,16 +972,16 @@ the feature), and a fragment `[[primitive_id]]` behind it is `NotImplemented(Tes
 
 `Device::compile_mesh_pipeline` compiles a `MeshPipelineDescriptor` (an optional object function,
 a mesh function and a fragment function), and `compile_mesh_variant` its variants. Its plan draws
-mesh draws only (`DrawCall::MeshThreadgroups`, `MeshThreads` and their indirect forms). With
-`VK_EXT_mesh_shader` the stages are task and mesh shaders. Without it (MoltenVK, older ANV) the
-pipeline is an exact emulation: the object and mesh functions run as compute stages that write the
-mesh's vertices and primitives as records into buffers, and a synthesized vertex stage draws those
-records; the plan says which dispatches and draw to record.
+mesh draws only (`DrawCall::MeshThreadgroups`, `MeshThreads` and their indirect forms). The
+stages are task and mesh shaders, which need `VK_EXT_mesh_shader` with `meshShader` (and
+`taskShader` for an object function). A device without them (MoltenVK, older ANV) refuses the
+pipeline and each of its object and mesh functions (`Unsupported{MeshShading}`, naming what it
+lacks).
 
 A grid Metal draws nothing for (an axis past `bind::METAL_MESH_GRID_AXIS`, or more than
 `bind::METAL_MESH_GRID_TOTAL` threadgroups, measured on the M3 Max) draws nothing in every form:
 a direct draw's command is zeroed, an object function's wrapper launches nothing for such a grid,
-and an indirect draw reads its counts on the GPU. With the extension, an indirect draw's
+and an indirect draw reads its counts on the GPU. An indirect draw's
 `DrawCommands::mesh_arguments` is a pass to record before the render pass
 (`bind::mesh_arguments_module`, one invocation): it writes the draw's counts into the consumer's
 scratch (`MeshArguments::scratch_bytes`), which the draw reads in place of Metal's arguments.
@@ -1010,17 +1010,6 @@ through `StatusBits::MESH_GRID_PAST_LIMITS`, or a fold of more pieces than
 `MeshArguments::OBJECT_PIECES` (only under task limits below Vulkan's required least), its `past`.
 A direct object grid past the task limits of a device that does not fold is refused naming the
 limit.
-
-Without the extension, an indirect draw with an object function first dispatches an object
-arguments pass (`MeshDispatch::object_arguments`, `bind::mesh_object_arguments_module`, one
-invocation over the scan's bindings): it reads Metal's arguments, reserves the object threadgroups'
-slots in the command buffer's records pool, and writes the object function's
-`VkDispatchIndirectCommand` into the work buffer. A grid
-Metal's GPU discards sets `StatusBits::MESH_GRID_DISCARDED`; one past the device's compute limits
-sets `MESH_GRID_PAST_LIMITS`; slots the rest of the pool cannot hold set `MESH_RECORDS_OVERFLOW`.
-Each draws nothing. A grid whose threads per grid wrap along an axis runs every threadgroup, and
-the object function reports the wrapped grid as Metal's: an unfolded object function's
-`threadgroups_per_grid` is the threadgroups its wrapped threads fill.
 
 ### Tile pipelines
 

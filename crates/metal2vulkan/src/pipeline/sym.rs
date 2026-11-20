@@ -340,17 +340,6 @@ pub enum SyntheticBinding {
     /// its words ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)). The stage's
     /// function-table directory gives each id the word offset of its table's record.
     FunctionTableSnapshot,
-    /// An emulated mesh function's records (`StageInterface::mesh_records`): a storage buffer of
-    /// words from the draw's first word (`lower::mesh::work::RECORDS_BASE`), each mesh
-    /// threadgroup's zeroed by its own threads before its body runs, which the mesh function's
-    /// compute entry writes and the pipeline's synthesized vertex stage reads. Declared with the
-    /// mesh stage's symbols.
-    MeshRecords,
-    /// An emulated mesh pipeline's work buffer for one draw: its object threadgroups' grids and
-    /// payloads, their offsets in the draw's mesh threadgroups, and where its records begin,
-    /// which its object function writes and its mesh function and synthesized vertex stage read
-    /// (`lower::mesh::work`). Declared with the mesh stage's symbols.
-    MeshWork,
     /// The stand-in of the render pass's depth attachment a fragment function that runs the
     /// draw's depth test itself tests and writes (`GraphicsState::shader_tests`): a coherent
     /// `R32f` storage image holding pixel `(x, y)`'s depth at texel `(x, y)` (its samples as the

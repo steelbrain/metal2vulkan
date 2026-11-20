@@ -508,10 +508,6 @@ pub struct DispatchPlan {
     /// threadgroups, so its threadgroup's number adds `DrawIndex · nx · ny · nz`
     /// ([`KernelDecl::folded`]).
     pub draw_pieces: bool,
-    /// The kernel's threadgroup position and grid are what its entry wrapper computes, not its
-    /// dispatch's: an emulated mesh function under an object function, whose flat dispatch runs
-    /// every object threadgroup's mesh grid ([`WrapperGroups`]).
-    pub wrapper_groups: bool,
     /// An unfolded object function: its single-region `threadgroups_per_grid` is Metal's object
     /// grid's, the threadgroups its threads per grid fill once each axis wraps at 2^32
     /// (`bind::metal_object_grid`, measured): `⌈(NumWorkgroups · L mod 2^32) / L⌉`, which is
@@ -659,10 +655,9 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
             builtins.insert(b);
         }
     }
-    // An object or mesh function's wrapper reads its thread and its threadgroup's threads, an
-    // emulated mesh function's its threadgroup's place in the grid.
+    // An object or mesh function's wrapper reads its thread and its threadgroup's threads.
     if crate::lower::mesh::wraps(&cx.families.mesh) {
-        for &b in crate::lower::mesh::builtins(&cx.families.mesh) {
+        for b in crate::lower::mesh::BUILTINS {
             builtins.insert(b);
         }
     }
@@ -744,7 +739,6 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         keys: SpecKey::dispatch_keys(cx.stage),
         folded_groups,
         draw_pieces: folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
-        wrapper_groups: crate::lower::mesh::wrapper_groups(&cx.families.mesh),
         object_grid: !folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
         partial_groups,
         grid_edge,
@@ -1000,9 +994,6 @@ pub struct KernelDecl {
     subgroup_local: Option<GlobalId>,
     /// The subgroup size the pipeline pins ([`DispatchPlan::pinned_subgroup_size`]).
     pinned_subgroup_size: Option<u32>,
-    /// The words the entry wrapper stores the threadgroup's position and grid into
-    /// ([`DispatchPlan::wrapper_groups`]), with the dispatch's own builtins it reads.
-    wrapper: Option<WrapperGroups>,
     /// An unfolded object function's grid ([`DispatchPlan::object_grid`]).
     object_grid: bool,
     /// A function whose threadgroup may be partial ([`DispatchPlan::partial_groups`]).
@@ -1010,18 +1001,6 @@ pub struct KernelDecl {
     /// Its threadgroups run whole, its invocations past the grid return
     /// ([`DispatchPlan::grid_edge`]).
     grid_edge: bool,
-}
-
-/// The threadgroup position and grid of a kernel whose entry wrapper computes them
-/// ([`DispatchPlan::wrapper_groups`]): two `Private` `uvec3`s that every grid builtin reads in
-/// place of `WorkgroupId` and `NumWorkgroups`, which the wrapper stores before the body; and the
-/// dispatch's `WorkgroupId` and `NumWorkgroups`, which only the wrapper reads.
-#[derive(Clone, Copy, Debug)]
-pub struct WrapperGroups {
-    pub position: GlobalId,
-    pub grid: GlobalId,
-    pub workgroup_id: GlobalId,
-    pub num_workgroups: GlobalId,
 }
 
 /// Declare the kernel's workgroup size (module scope, before the entry is declared), its
@@ -1316,18 +1295,6 @@ impl KernelDecl {
             || (needs.local_pos && deep.is_some());
         let subgroups = needs.lin && flat && !by_index && !dp.grid_edge;
         use crate::spv::BuiltIn as B;
-        // A wrapper that computes the threadgroup's position and grid stores them into private
-        // words, which the builtins read; it reads the dispatch's own.
-        let wrapper = if dp.wrapper_groups {
-            Some(WrapperGroups {
-                position: mb.plain_global(StorageClass::Private, uvec3, None)?,
-                grid: mb.plain_global(StorageClass::Private, uvec3, None)?,
-                workgroup_id: mb.builtin(B::WorkgroupId, IoDir::Input, uvec3)?,
-                num_workgroups: mb.builtin(B::NumWorkgroups, IoDir::Input, uvec3)?,
-            })
-        } else {
-            None
-        };
         let mut var = |on: bool, b: crate::spv::BuiltIn, ty: TypeId| -> BResult<Option<GlobalId>> {
             if on {
                 mb.builtin(b, IoDir::Input, ty).map(Some)
@@ -1335,13 +1302,10 @@ impl KernelDecl {
                 Ok(None)
             }
         };
-        let (workgroup_id, num_workgroups) = match wrapper {
-            Some(w) => (Some(w.position), Some(w.grid)),
-            None => (
-                var(needs.workgroup_id, B::WorkgroupId, uvec3)?,
-                var(needs.num_workgroups, B::NumWorkgroups, uvec3)?,
-            ),
-        };
+        let (workgroup_id, num_workgroups) = (
+            var(needs.workgroup_id, B::WorkgroupId, uvec3)?,
+            var(needs.num_workgroups, B::NumWorkgroups, uvec3)?,
+        );
         Ok(KernelDecl {
             form: dp.local_size,
             tile: dp.tile,
@@ -1370,27 +1334,10 @@ impl KernelDecl {
             )?,
             subgroup_local: var(subgroups, B::SubgroupLocalInvocationId, u32_)?,
             pinned_subgroup_size: dp.pinned_subgroup_size,
-            wrapper,
             object_grid: dp.object_grid,
             partial_groups: dp.partial_groups,
             grid_edge: dp.grid_edge,
         })
-    }
-
-    /// The dispatch's own `WorkgroupId` and `NumWorkgroups`, of a kernel that reads its
-    /// threadgroup's position and the grid's threadgroups (an emulated object function's wrapper:
-    /// its slot's number counts the threadgroups the dispatch runs, not the grid Metal reports).
-    pub fn dispatch_groups(&self, fb: &mut FunctionBuilder<'_>) -> BResult<(SValue, SValue)> {
-        Ok((
-            self.load(fb, self.workgroup_id)?,
-            self.load(fb, self.num_workgroups)?,
-        ))
-    }
-
-    /// The words the entry wrapper computes the threadgroup's position and grid into, where it
-    /// does ([`DispatchPlan::wrapper_groups`]).
-    pub fn wrapper_groups(&self) -> Option<WrapperGroups> {
-        self.wrapper
     }
 
     fn load(&self, fb: &mut FunctionBuilder<'_>, g: Option<GlobalId>) -> BResult<SValue> {

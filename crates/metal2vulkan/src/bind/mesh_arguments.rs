@@ -94,7 +94,6 @@
 use std::sync::Arc;
 
 use crate::bind::instantiate::{BufferRange, IndirectRef};
-use crate::bind::mesh_scan::{div_ceil, for_range};
 use crate::bind::replay::checked_mul;
 use crate::bind::status::{StatusBits, StatusWord};
 use crate::budget::{Budget, Meter};
@@ -104,7 +103,7 @@ use crate::error::{Error, InternalError, InternalKind};
 use crate::pipeline::sym::{
     PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, Stage, Symbol, SyntheticBinding,
 };
-use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
@@ -499,6 +498,43 @@ fn words_buffer(b: &mut ModuleBuilder, sym: ResourceSlot, u32_: TypeId) -> BResu
 fn u32_value(f: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
     let c = f.u32_const(v)?;
     f.module().const_value(c)
+}
+
+/// `a / b` rounded up (`b` not 0), without wrapping.
+fn div_ceil(f: &mut FunctionBuilder<'_>, a: Value, b: Value) -> BResult<Value> {
+    let q = f.binary(BinOp::UDiv, a, b)?;
+    let r = f.binary(BinOp::UMod, a, b)?;
+    let zero = u32_value(f, 0)?;
+    let one = u32_value(f, 1)?;
+    let partial = f.binary(BinOp::INotEqual, r, zero)?;
+    let extra = f.select(partial, one, zero)?;
+    f.binary(BinOp::IAdd, q, extra)
+}
+
+/// Run `each(f, i)` for `i` from `lo` below `hi`.
+fn for_range<'a>(
+    f: &mut FunctionBuilder<'_>,
+    u32_: TypeId,
+    (lo, hi): (Value, Value),
+    each: impl FnOnce(&mut FunctionBuilder<'_>, Value) -> BResult<()> + 'a,
+) -> BResult<()> {
+    let var = f.local_var(u32_, None)?;
+    let counter = f.var_ptr(var)?;
+    f.store(counter, lo, MemAccess::default())?;
+    let body: LoopFn<'a, ()> = Box::new(move |f, _, lc| {
+        let i = f.load(counter, MemAccess::default())?;
+        let done = f.binary(BinOp::UGreaterThanEqual, i, hi)?;
+        let exit: ArmFn<'_, ()> = Box::new(move |f, _| {
+            lc.break_(f)?;
+            Ok(ArmEnd::Exits)
+        });
+        f.if_(&mut (), done, exit, None)?;
+        let one = u32_value(f, 1)?;
+        let next = f.binary(BinOp::IAdd, i, one)?;
+        f.store(counter, next, MemAccess::default())?;
+        each(f, i)
+    });
+    f.loop_(&mut (), LoopSpec::default(), body)
 }
 
 /// Whether `v`'s product is at most `total`, without overflow and without a division: a zero

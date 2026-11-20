@@ -555,20 +555,13 @@ pub fn payload_bytes(size: u64) -> u64 {
 }
 
 /// Declare the payload arena of a payload of `size` bytes: a `TaskPayloadWorkgroupEXT` array of
-/// [`payload_bytes`], or, for an emulated object or mesh function (`emulated`), a `Workgroup` one
-/// that its wrapper copies out of or into its slot of the draw's work buffer. Neither has an
-/// initializer: an object function's payload "is assumed uninitialized at the entry of the object
-/// function" (the Metal Shading Language Specification's `payload` attribute), and an emulated
-/// mesh function's wrapper copies its payload in before the function runs.
-pub fn declare_payload(mb: &mut ModuleBuilder, size: u64, emulated: bool) -> BResult<ArenaDecl> {
+/// [`payload_bytes`], with no initializer: an object function's payload "is assumed uninitialized
+/// at the entry of the object function" (the Metal Shading Language Specification's `payload`
+/// attribute).
+pub fn declare_payload(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> {
     let bytes = konst(mb, size)?;
     let words = konst(mb, static_words(size))?;
-    let class = if emulated {
-        StorageClass::Workgroup
-    } else {
-        StorageClass::TaskPayloadWorkgroupEXT
-    };
-    let global = array(mb, class, words, false)?;
+    let global = array(mb, StorageClass::TaskPayloadWorkgroupEXT, words, false)?;
     Ok(ArenaDecl {
         arena: Arena::Payload,
         global,

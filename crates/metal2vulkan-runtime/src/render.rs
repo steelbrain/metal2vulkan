@@ -663,7 +663,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
     };
     let synthesized = g.line_band.is_some()
         || g.region_fan_out.is_some()
-        || g.mesh_records.is_some()
         || (pipeline.stages.iter()).any(|stage| !stages.contains(&stage.stage));
     let unenabled = !(requirements.features).is_subset(&enabled.features)
         || !(requirements.extensions).is_subset(&enabled.extensions);

@@ -5,8 +5,8 @@
 //! and data type declare, and every specialization constant its size and default. The module's
 //! user interface variables must be exactly the ones its stage-IO interface ([`StageIo`]) lists, in
 //! the listed direction and with the listed type (`StageIo::declared_type`: an extended-range color
-//! output's is the raw texel's), so link numbers every `Location` key from that one contract; an
-//! emulated mesh function's outputs are records instead. Nothing here reads a name.
+//! output's is the raw texel's), so link numbers every `Location` key from that one contract.
+//! Nothing here reads a name.
 
 use std::collections::BTreeMap;
 
@@ -73,22 +73,10 @@ pub fn stage_symbols(m: &TypedModule, io: &StageIo) -> Result<StageSymbols, Erro
             | GlobalKind::FixedIo { .. } => {}
         }
     }
-    // A compute entry's listed outputs are an emulated mesh function's: it writes them to its
-    // records binding and declares no interface variable for them.
-    let records = m.entry().model == ExecModel::GLCompute && !outputs.is_empty();
-    let listed = inputs.len() + if records { 0 } else { outputs.len() };
-    if declared != listed {
+    if declared != inputs.len() + outputs.len() {
         return Err(invariant(
             "an interface variable the module does not declare",
         ));
-    }
-    if records
-        && !out
-            .descriptors
-            .iter()
-            .any(|d| d.slot == crate::lower::mesh::RECORDS_SLOT)
-    {
-        return Err(invariant("a compute entry's outputs without its records"));
     }
     for d in m.decls() {
         if let Decl::Const(c) = d {

@@ -988,8 +988,7 @@ fn generated_companions_link_with_their_cases_in_the_engine() {
     let linked = device
         .compile_mesh_pipeline(&descriptor, &metal2vulkan::Budget::standard())
         .unwrap();
-    // The object, mesh and fragment stages (with the mesh emulation's, where the device has no
-    // mesh shaders).
+    // The object, mesh and fragment stages.
     assert!(linked.stages.len() >= 3, "{}", linked.stages.len());
 
     // The payload object under the mesh function that reads its payload, and that mesh

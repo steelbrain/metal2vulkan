@@ -1327,7 +1327,7 @@ pub enum RenderPipelineKind {
     /// function that is not post-tessellation is ignored, as Metal ignores it.
     Tessellation,
     /// Stages the translator synthesizes beside the functions' but a tessellation's: geometry
-    /// stages, lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
+    /// stages, lines drawn as bands of triangles, or a rate map's fan-out.
     SynthesizedStages,
     /// A fragment function that reaches the render pass's imageblock.
     Imageblock,

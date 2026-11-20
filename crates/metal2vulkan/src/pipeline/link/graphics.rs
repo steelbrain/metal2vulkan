@@ -799,9 +799,6 @@ pub fn graphics_state(
         early_fragment_tests: fs.is_some_and(|fs| fs.io.early_fragment_tests),
         writes_sample_mask: fs
             .is_some_and(|fs| fs.io.builtins.contains(&StageBuiltin::SampleMaskOut)),
-        // An emulated mesh function's pipeline states its records (`link`).
-        mesh_records: None,
-        mesh_corners: None,
         // A band variant's pipeline states its band (`link`).
         line_band: None,
         // A fan-out variant's pipeline states its fan-out (`link`).

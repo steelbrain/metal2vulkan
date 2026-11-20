@@ -1568,8 +1568,6 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             }
             Stage::Vertex => ExecModel::Vertex,
             Stage::Fragment => ExecModel::Fragment,
-            // An emulated object or mesh function is a compute entry.
-            Stage::Object | Stage::Mesh if plan.families.mesh.emulated => ExecModel::GLCompute,
             Stage::Object => ExecModel::TaskEXT,
             Stage::Mesh => ExecModel::MeshEXT,
         };

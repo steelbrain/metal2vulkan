@@ -169,7 +169,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             device: true,
         },
         RuntimeFact::TexelRows { slot },
-        RuntimeFact::MeshLastFirst,
         RuntimeFact::AbsentArgumentRead {
             stage: Stage::Fragment,
         },
@@ -387,7 +386,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::QuadPrimitiveIds => 58,
         RuntimeFact::RotatedWeights => 82,
         RuntimeFact::PrivateList => 86,
-        RuntimeFact::MeshLastFirst => 71,
         RuntimeFact::YCbCrInPlace { .. } => 65,
         RuntimeFact::PartialObjectThreadgroups => 89,
         RuntimeFact::RotatedInputBlend { .. } => 90,
@@ -404,7 +402,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::UnitAxes { .. } => 101,
         RuntimeFact::TexelBufferParts { .. } => 102,
         RuntimeFact::OpenClLineTexture { .. } => 103,
-        RuntimeFact::AddressAlignment { .. } => 104,
+        RuntimeFact::AddressAlignment { .. } => 71,
         RuntimeFact::GridTiles => 55,
     }
 }
@@ -413,7 +411,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..105).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..104).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -498,7 +496,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::DroppedColor { .. }
                 | RuntimeFact::DepthClampRange
                 | RuntimeFact::RotatedWeights
-                | RuntimeFact::MeshLastFirst
                 | RuntimeFact::TestedStorageWrites { .. }
                 | RuntimeFact::MovableStorageWrites { .. }
                 | RuntimeFact::ConstexprSampled { .. }

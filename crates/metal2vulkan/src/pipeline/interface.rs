@@ -355,22 +355,6 @@ pub struct StageInterface {
     /// Metal's color attachment write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_memory: bool,
-    /// A mesh function compiled for a device without `VK_EXT_mesh_shader`: the module is a
-    /// `GLCompute` entry that writes its threadgroups' vertices and primitives as these records,
-    /// which the pipeline's synthesized vertex stage draws.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_records: Option<MeshRecords>,
-    /// A mesh function's primitive: its indices, 1 (points), 2 (lines) or 3 (triangles), on
-    /// every device, whether the device draws the mesh or the function writes records. `None`
-    /// for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_corners: Option<u32>,
-    /// An object or mesh function compiled for a device without `VK_EXT_mesh_shader` (a
-    /// `GLCompute` entry): its payload's words (0 without a payload), which its object
-    /// threadgroup's slot of the draw's work buffer holds (`MeshRecords::slot_words`). `None`
-    /// for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub emulated_payload: Option<u32>,
     /// An object or mesh function's payload arena's bytes (`memory::arena::payload_bytes` of its
     /// `[[payload]]` parameter's `air.arg_type_size`, a mesh function's at least
     /// `LoweringInputs::object_payload`), which its accesses of the payload read and write; `None`
@@ -740,101 +724,6 @@ impl SampledLevels {
 
 impl LevelReads {}
 
-/// An emulated mesh function's records: what each of its threadgroups writes to the draw's records
-/// buffer (`SyntheticBinding::MeshRecords`), all of it words.
-///
-/// Mesh threadgroup `w`, its number among the draw's mesh threadgroups (object threadgroup by
-/// object threadgroup, each one's grid x fastest), owns [`MeshRecords::group_words`] words from
-/// the draw's first word plus `w · group_words()`: its primitive count, then `vertices` vertex
-/// records of `vertex_words` words each, then `primitives` primitive records of
-/// `primitive_words` words each, every primitive record beginning with the primitive's
-/// `corners` indices. Each field sits at its offset in its record, one word per lane. A
-/// threadgroup zeroes its words before its body runs, so an index, a culled flag, or a render
-/// target slice or viewport index the function does not write reads 0, as Metal's does.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MeshRecords {
-    /// The mesh type's `NV`.
-    pub vertices: u32,
-    /// The mesh type's `NP`.
-    pub primitives: u32,
-    /// The indices of one primitive: 1 (points), 2 (lines) or 3 (triangles).
-    pub corners: u32,
-    pub vertex_words: u32,
-    pub primitive_words: u32,
-    /// Every field, in record order: the vertex record's, then the primitive record's.
-    pub fields: Vec<RecordField>,
-    /// The words of an object threadgroup's slot in the draw's work buffer: its grid's three
-    /// counts and a zero, then the larger payload of the pipeline's object and mesh functions
-    /// (in a function's own interface, its own payload).
-    pub slot_words: u32,
-}
-
-impl MeshRecords {
-    /// The words of one threadgroup's records: its count, its vertex records and its primitive
-    /// records.
-    pub fn group_words(&self) -> u64 {
-        1 + u64::from(self.vertices) * u64::from(self.vertex_words)
-            + u64::from(self.primitives) * u64::from(self.primitive_words)
-    }
-
-    /// The word of a threadgroup's records where its primitive records begin.
-    pub fn primitive_base(&self) -> u64 {
-        1 + u64::from(self.vertices) * u64::from(self.vertex_words)
-    }
-
-    /// The Vulkan list topology of the records' primitives.
-    pub fn topology(&self) -> vk::PrimitiveTopology {
-        match self.corners {
-            1 => vk::PrimitiveTopology::POINT_LIST,
-            2 => vk::PrimitiveTopology::LINE_LIST,
-            _ => vk::PrimitiveTopology::TRIANGLE_LIST,
-        }
-    }
-}
-
-/// One field of a vertex or primitive record ([`MeshRecords`]).
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RecordField {
-    pub value: RecordValue,
-    /// In the primitive record, else in the vertex record.
-    pub per_primitive: bool,
-    /// Its first word in its record.
-    pub offset: u32,
-    /// Its words: its lanes, or the length of the clip distances.
-    pub words: u32,
-    /// What each word holds: a `float`'s bits, a `uint`, or an `int`'s bits (a `bool` is a
-    /// `uint`, 0 or 1).
-    pub numeric: crate::pipeline::stage_io::IoNumeric,
-}
-
-/// What a [`RecordField`] holds.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RecordValue {
-    /// `[[position]]`.
-    Position,
-    /// `[[point_size]]`.
-    PointSize,
-    /// `[[clip_distance]]`.
-    ClipDistance,
-    /// `[[primitive_culled]]`, 1 where set.
-    Culled,
-    /// The primitive's render target slice (`Layer`): its `[[render_target_array_index]]` where
-    /// that lies below the pass's length, else 0.
-    Layer,
-    /// The primitive's viewport (`ViewportIndex`): its `[[viewport_array_index]]` where that lies
-    /// below the draw's viewport count, else 0.
-    ViewportIndex,
-    /// A user varying: vertex data, primitive data, or a raw index (the link numbers its
-    /// location by key).
-    Varying(crate::pipeline::sym::VaryingKey),
-}
-
 /// What a tessellation evaluation module (a post-tessellation vertex function) needs of the
 /// pipeline's control stage: its patch domain and Metal's control points per patch. It reads the
 /// patch index and the instance as `uint` patch inputs at
@@ -882,13 +771,11 @@ pub enum PatchDomain {
 
 impl StageInterface {
     /// The Vulkan stage of the module: the evaluation stage for a post-tessellation vertex
-    /// function, the compute stage for an emulated object or mesh function, else the Metal
-    /// stage's.
+    /// function, else the Metal stage's.
     pub fn vk_stage(&self) -> vk::ShaderStage {
-        match (self.tessellation, self.emulated_payload) {
-            (Some(_), _) => vk::ShaderStage::TESSELLATION_EVALUATION,
-            (None, Some(_)) => vk::ShaderStage::COMPUTE,
-            (None, None) => crate::device::derive::vk_stage(self.stage),
+        match self.tessellation {
+            Some(_) => vk::ShaderStage::TESSELLATION_EVALUATION,
+            None => crate::device::derive::vk_stage(self.stage),
         }
     }
 

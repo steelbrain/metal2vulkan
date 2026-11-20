@@ -75,35 +75,6 @@
 //! function reads from push fields, and the index as written to a raw per-primitive varying, which
 //! Metal's fragment function reads ([`target_index`]).
 //!
-//! **Emulated meshes**. On a device without `VK_EXT_mesh_shader` (or its `meshShader` feature) a
-//! mesh function is a `GLCompute` entry ([`MeshPlan::emulated`]): every output is a field of the
-//! draw's records ([`records`], `StageInterface::mesh_records`), a storage buffer of words
-//! (`SyntheticBinding::MeshRecords`) that the pipeline's synthesized vertex stage draws from
-//! (`pipeline::link::mesh`). Each `set_*` stores its value's words at its field in its vertex's or
-//! primitive's record, as it would store the output, and `set_index` its index at its word of the
-//! primitive's record. The primitive id is not recorded: a fragment function that reads
-//! `[[primitive_id]]` behind an emulated mesh is refused (`pipeline::link`).
-//!
-//! Every emulated draw has a work buffer ([`work`], `SyntheticBinding::MeshWork`): its header
-//! (the object threadgroups `O`, the mesh threadgroups `T`, the records' first word, the mesh
-//! dispatch's and the draw's indirect arguments), a slot per object threadgroup (the grid it
-//! launched, then its payload's words), and each object threadgroup's first mesh threadgroup. An
-//! indirect draw with an object function keeps its slots and offsets in its records instead,
-//! where its object arguments pass reserved them (`work::SLOTS`); the wrappers and the scan read
-//! the header's word to find them. An object function is a `GLCompute` entry too: its payload is
-//! workgroup memory, its wrapper zeroes its grid, runs the body between two barriers, and writes
-//! the grid it set (held to Metal's limit) and its payload into its slot, numbered by its
-//! workgroup in the dispatch (whose grid is the threadgroups the draw runs, which an indirect
-//! draw's wrapped threads make more than the grid Metal reports). The binder or a scan
-//! (`bind::mesh_scan_module`) fills the rest of the header. The mesh wrapper's threadgroup is
-//! number `w` of the draw's `T` (past `T` it returns); it finds its object threadgroup by
-//! bisecting the offsets, and its place in that threadgroup's grid, which every grid builtin
-//! reads; it copies in the payload (zero past the slot's words), zeroes its own records from
-//! `RECORDS_BASE + w · group_words` and its count, runs the body between two barriers, and its
-//! first thread stores the count (0 for points without point sizes) at its first word; the
-//! vertex stage draws only the slots below it. The function's threadgroup memory is held to the
-//! compute stage's `maxComputeSharedMemorySize`, with the count word.
-//!
 //! Its hooks into `select` and `lower::emit`: the entry ([`plan_entry`]), the handle parameters
 //! ([`select_param`]), the operations ([`select`], [`emit`]), the module-scope objects and
 //! execution modes ([`declare`]), and the entry wrapper ([`wrap_entry`]).
@@ -127,18 +98,15 @@ use crate::lower::sync::memory_model::coherence;
 use crate::memory::arena::{self, WorkgroupLimit};
 use crate::memory::leaf::Coherence;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::interface::{MeshRecords, RecordField, RecordValue};
 use crate::pipeline::stage_io::{IoNumeric, IoRole, IoType, IoVariable, StageBuiltin};
-use crate::pipeline::sym::{
-    AirUserKey, PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding, VaryingKey,
-};
+use crate::pipeline::sym::{AirUserKey, PushField, Stage, VaryingKey};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::{BResult, BuildError};
+use crate::spirv::error::BResult;
 use crate::spirv::ids::{FuncId, GlobalId, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    natural_layout, BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDecor, IoDir,
-    LayoutRule, MemAccess, MemoryOrder, Scope, Semantics, StorageClass, Type,
+    BinOp, ConstBits, Constant, ExecMode, GlslOp, IoDecor, IoDir, MemAccess, MemoryOrder, Scope,
+    StorageClass, Type,
 };
 use crate::spv::BuiltIn as B;
 use std::borrow::Cow;
@@ -245,14 +213,6 @@ pub struct MeshPlan {
     pub outputs: Vec<Output>,
     /// A point mesh whose vertex type has no `point_size`: it draws nothing (the module docs).
     pub unsized_points: bool,
-    /// An object or mesh function on a device without `VK_EXT_mesh_shader`: a `GLCompute`
-    /// entry, an object function writing its grid and payload to its slot of the draw's work
-    /// buffer and a mesh function its outputs as records ([`records`], the module docs).
-    pub emulated: bool,
-    /// An emulated object or mesh function's payload words ([`arena::payload_bytes`] of its
-    /// payload parameter's size), 0 without one: the words its wrapper copies out of or into
-    /// its object threadgroup's slot.
-    pub payload_words: u32,
     /// An object or mesh function's payload arena's bytes (`arena::payload_bytes` of
     /// [`payload_extent`]), `None` without a payload (`StageInterface::payload`).
     pub payload: Option<u32>,
@@ -365,32 +325,30 @@ fn mesh_outputs<'e>(cx: &SelectCx<'e>) -> Option<&'e MeshOutputs> {
     })
 }
 
-/// What an object (`TaskEXT`) entry needs enabled: `VK_EXT_mesh_shader` and `taskShader`. The
-/// missing ones, as the refusal names them.
+/// What an object (`TaskEXT`) entry needs enabled, `VK_EXT_mesh_shader` and `taskShader`, and a
+/// mesh (`MeshEXT`) entry, `VK_EXT_mesh_shader` and `meshShader`: the missing ones, as the
+/// refusal names them.
 fn missing_caps(cx: &SelectCx<'_>) -> Vec<Capability> {
     let enabled = cx.profile.enabled();
     let mut missing = Vec::new();
     if !enabled.extensions.contains(&VkExtension::ExtMeshShader) {
         missing.push(Capability::Extension(VkExtension::ExtMeshShader));
     }
-    if !enabled.features.contains(&VkFeature::TaskShader) {
-        missing.push(Capability::Feature(VkFeature::TaskShader));
+    let feature = match cx.stage {
+        Stage::Object => VkFeature::TaskShader,
+        _ => VkFeature::MeshShader,
+    };
+    if !enabled.features.contains(&feature) {
+        missing.push(Capability::Feature(feature));
     }
     missing
 }
 
-/// Whether the entry is an object or mesh function the device runs as a compute entry (the
-/// module docs).
-fn emulated(cx: &SelectCx<'_>) -> bool {
-    matches!(cx.stage, Stage::Object | Stage::Mesh) && emulates(cx.profile)
-}
-
-/// Whether profile `p` runs mesh functions as compute entries writing records (the module docs):
-/// it does not enable `VK_EXT_mesh_shader` and `meshShader`.
-pub fn emulates(p: &DeviceProfile) -> bool {
+/// Whether profile `p` runs mesh functions: it enables `VK_EXT_mesh_shader` and `meshShader`.
+pub fn mesh_stages(p: &DeviceProfile) -> bool {
     let enabled = p.enabled();
-    !enabled.extensions.contains(&VkExtension::ExtMeshShader)
-        || !enabled.features.contains(&VkFeature::MeshShader)
+    enabled.extensions.contains(&VkExtension::ExtMeshShader)
+        && enabled.features.contains(&VkFeature::MeshShader)
 }
 
 /// Whether profile `p` compiles an object function folded (`LoweringInputs::folded_groups`), so
@@ -401,7 +359,7 @@ pub fn emulates(p: &DeviceProfile) -> bool {
 /// draw's).
 pub fn folds_object_grids(p: &DeviceProfile) -> bool {
     let features = &p.enabled().features;
-    !emulates(p)
+    mesh_stages(p)
         && p.fields().buffer_access == crate::device::profile::BufferAccess::Addressed
         && features.contains(&VkFeature::ShaderInt64)
         && features.contains(&VkFeature::MultiDrawIndirect)
@@ -438,8 +396,7 @@ pub fn workgroup_limit(cx: &SelectCx<'_>) -> WorkgroupLimit {
 
 /// The workgroup memory limit of a `stage` entry on `profile` ([`arena::workgroup_limit`]), with
 /// its payload arena's bytes where it has a payload of `payload` bytes (`arena::payload_bytes`):
-/// an object or mesh entry's workgroup memory and payload share a limit. An emulated object or mesh
-/// function's is the compute stage's, with its grid or count words and its payload. The binder
+/// an object or mesh entry's workgroup memory and payload share a limit. The binder
 /// checks an object function's arena with the encoder's lengths against it
 /// (`RuntimeFact::ObjectThreadgroupArena`).
 pub fn stage_workgroup_limit(
@@ -447,19 +404,7 @@ pub fn stage_workgroup_limit(
     profile: &DeviceProfile,
     payload: Option<u64>,
 ) -> WorkgroupLimit {
-    let limits = &profile.fields().limits;
-    // An emulated entry's: the compute stage's, with its wrapper's words (an object function's
-    // grid, a mesh function's count) and its payload, which is workgroup memory there.
-    if matches!(stage, Stage::Object | Stage::Mesh) && emulates(profile) {
-        let w = arena::workgroup_limit(Stage::Kernel, limits);
-        let words = if stage == Stage::Object { 12 } else { 4 };
-        let payload = payload.map_or(0, arena::payload_bytes);
-        return WorkgroupLimit {
-            wrapper: w.wrapper.saturating_add(words).saturating_add(payload),
-            ..w
-        };
-    }
-    let w = arena::workgroup_limit(stage, limits);
+    let w = arena::workgroup_limit(stage, &profile.fields().limits);
     match payload {
         Some(size) => w.with_payload(arena::payload_bytes(size)),
         None => w,
@@ -470,10 +415,6 @@ pub fn stage_workgroup_limit(
 /// wrapper's workgroup words, within the stage's limit on its workgroup memory and payload together
 /// (the function's own workgroup memory joins that check where it is planned).
 pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
-    // An emulated entry's payload is workgroup memory, held to the compute stage's limit.
-    if emulated(cx) {
-        return workgroup_limit(cx).check(0);
-    }
     let bytes = arena::payload_bytes(size);
     let available = cx.profile.fields().limits.mesh.max_task_payload_size;
     if bytes > u64::from(available) {
@@ -524,34 +465,24 @@ pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Plan the entry: an object function needs `VK_EXT_mesh_shader` and `taskShader` enabled
-/// (`Unsupported{MeshShading}` naming the missing ones), and a mesh function without them is
-/// emulated (the module docs); a mesh function's shape, its always-declared outputs ([`CULLED`],
+/// Plan the entry: an object function needs `VK_EXT_mesh_shader` and `taskShader` enabled, and a
+/// mesh function `VK_EXT_mesh_shader` and `meshShader` (`Unsupported{MeshShading}` naming the
+/// missing ones); a mesh function's shape, its always-declared outputs ([`CULLED`],
 /// [`PRIMITIVE_ID`]). Nothing for any other stage.
 pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if !matches!(cx.stage, Stage::Object | Stage::Mesh) {
         return Ok(());
     }
-    let emulated = emulated(cx);
+    let missing = missing_caps(cx);
+    if !missing.is_empty() {
+        return Err(Unsupported::needs_any_of(Feature::MeshShading, vec![missing]).into());
+    }
     let payload = payload_extent(cx)
         .map(|size| u32::try_from(arena::payload_bytes(size)))
         .transpose()
         .map_err(|_| cx.invariant("a payload past a u32's bytes"))?;
-    let payload_words = payload.map_or(0, |bytes| bytes / 4);
     cx.families.mesh.payload = payload;
     if cx.stage != Stage::Mesh {
-        // An emulated object function writes its grid and payload to its slot, which its
-        // threadgroup's position in the grid places (the module docs).
-        if emulated {
-            cx.push.insert(PushField::DispatchRegion);
-            cx.families.mesh.emulated = true;
-            cx.families.mesh.payload_words = payload_words;
-            return Ok(());
-        }
-        let missing = missing_caps(cx);
-        if !missing.is_empty() {
-            return Err(Unsupported::needs_any_of(Feature::MeshShading, vec![missing]).into());
-        }
         return Ok(());
     }
     let Some(out) = mesh_outputs(cx) else {
@@ -566,7 +497,7 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         return Err(cx.invariant("a mesh type without vertices or primitives"));
     }
     // `OutputVertices` and `OutputPrimitivesEXT` are the type's `NV` and `NP`, each within the
-    // device's limit; an emulated function's records hold any.
+    // device's limit.
     let limits = &cx.profile.fields().limits.mesh;
     for (limit, required, available) in [
         (
@@ -579,10 +510,7 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             shape.primitives,
             limits.max_mesh_output_primitives,
         ),
-    ]
-    .into_iter()
-    .filter(|_| !emulated)
-    {
+    ] {
         if required > available {
             return Err(Unsupported::needs(
                 Feature::MeshShading,
@@ -606,8 +534,6 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     let plan = &mut cx.families.mesh;
     plan.mesh = Some(shape);
-    plan.emulated = emulated;
-    plan.payload_words = if emulated { payload_words } else { 0 };
     plan.unsized_points = shape.topology == MeshTopology::Point && !point_size;
     let culled = plan.output(Output {
         kind: OutputKind::Builtin(B::CullPrimitiveEXT),
@@ -864,20 +790,15 @@ pub fn select(cx: &mut SelectCx<'_>, _at: InstId, inst: &Inst) -> Result<MeshStr
             return Err(cx.invariant("a mesh grid outside an object function"));
         }
         let limits = &cx.profile.fields().limits.mesh;
-        // Metal's own limits, within the device's mesh limits where the stages are native (an
-        // emulated grid has no device limit).
-        cx.families.mesh.grid_limits = Some(if cx.families.mesh.emulated {
-            ([METAL_MESH_GRID_AXIS; 3], METAL_MESH_GRID_TOTAL)
-        } else {
-            (
-                limits
-                    .max_mesh_work_group_count
-                    .map(|axis| axis.min(METAL_MESH_GRID_AXIS)),
-                limits
-                    .max_mesh_work_group_total_count
-                    .min(METAL_MESH_GRID_TOTAL),
-            )
-        });
+        // Metal's own limits, within the device's mesh limits.
+        cx.families.mesh.grid_limits = Some((
+            limits
+                .max_mesh_work_group_count
+                .map(|axis| axis.min(METAL_MESH_GRID_AXIS)),
+            limits
+                .max_mesh_work_group_total_count
+                .min(METAL_MESH_GRID_TOTAL),
+        ));
         cx.families.mesh.object = true;
         return Ok(MeshStrategy::Grid);
     }
@@ -1007,140 +928,6 @@ pub struct Declared {
     pub count: Option<GlobalId>,
     /// The object function's mesh grid, a workgroup `uvec3`.
     pub grid: Option<GlobalId>,
-    /// An emulated mesh function's records buffer (`SyntheticBinding::MeshRecords`).
-    pub records: Option<GlobalId>,
-    /// An emulated mesh function's first word of its threadgroup's records: a private `uint`
-    /// the wrapper writes before the body.
-    pub first_word: Option<GlobalId>,
-    /// An emulated mesh function's records ([`layout`]).
-    pub layout: Option<Layout>,
-    /// An emulated object or mesh function's work buffer (`SyntheticBinding::MeshWork`,
-    /// [`WORK_SLOT`]).
-    pub work: Option<GlobalId>,
-}
-
-/// The binding symbol of an emulated mesh function's records (`SyntheticBinding::MeshRecords`),
-/// declared with the mesh stage's symbols.
-pub const RECORDS_SLOT: ResourceSlot = ResourceSlot {
-    stage: Stage::Mesh,
-    kind: ResourceKind::Synthetic(SyntheticBinding::MeshRecords),
-    index: 0,
-};
-
-/// The binding symbol of an emulated mesh pipeline's work buffer (`SyntheticBinding::MeshWork`)
-/// for its mesh function and synthesized vertex stage; its object function binds the same
-/// buffer under its own stage's symbol ([`OBJECT_WORK_SLOT`]).
-pub const WORK_SLOT: ResourceSlot = ResourceSlot {
-    stage: Stage::Mesh,
-    kind: ResourceKind::Synthetic(SyntheticBinding::MeshWork),
-    index: 0,
-};
-
-/// The binding symbol of the work buffer for an emulated object function ([`WORK_SLOT`]).
-pub const OBJECT_WORK_SLOT: ResourceSlot = ResourceSlot {
-    stage: Stage::Object,
-    kind: ResourceKind::Synthetic(SyntheticBinding::MeshWork),
-    index: 0,
-};
-
-/// The binding symbol of the records for an emulated object function ([`RECORDS_SLOT`]), where
-/// an indirect draw keeps its slots (`work::SLOTS`).
-pub const OBJECT_RECORDS_SLOT: ResourceSlot = ResourceSlot {
-    stage: Stage::Object,
-    kind: ResourceKind::Synthetic(SyntheticBinding::MeshRecords),
-    index: 0,
-};
-
-pub mod work;
-
-/// An emulated mesh function's records ([`MeshRecords`]) with each output's word offset in its
-/// record, by [`MeshPlan::outputs`] index (`None` for an output not recorded).
-#[derive(Clone, Debug)]
-pub struct Layout {
-    pub offsets: Vec<Option<u32>>,
-    pub records: MeshRecords,
-    /// [`MeshRecords::group_words`], which lies within a `u32`.
-    pub group_words: u32,
-}
-
-/// The record value of output `kind`; `None` for the primitive id, which is not recorded (the
-/// module docs).
-fn record_value(kind: &OutputKind) -> Option<RecordValue> {
-    match kind {
-        OutputKind::Builtin(B::Position) => Some(RecordValue::Position),
-        OutputKind::Builtin(B::PointSize) => Some(RecordValue::PointSize),
-        OutputKind::Builtin(B::ClipDistance) => Some(RecordValue::ClipDistance),
-        OutputKind::Builtin(B::CullPrimitiveEXT) => Some(RecordValue::Culled),
-        OutputKind::Builtin(B::Layer) => Some(RecordValue::Layer),
-        OutputKind::Builtin(B::ViewportIndex) => Some(RecordValue::ViewportIndex),
-        OutputKind::Builtin(_) => None,
-        OutputKind::User(key) => Some(RecordValue::Varying(key.clone())),
-    }
-}
-
-/// The records of an emulated mesh plan (the module docs): every vertex record holds the
-/// per-vertex outputs in output order, and every primitive record its indices and then the
-/// per-primitive outputs in output order, one word per lane. `None` for any other plan, and for
-/// records whose words a `u32` does not hold.
-pub fn layout(plan: &MeshPlan) -> Option<Layout> {
-    let shape = plan.mesh.filter(|_| plan.emulated)?;
-    // The end of the vertex record, and of the primitive record.
-    let (mut vertex_end, mut primitive_end) = (0u32, shape.per_primitive());
-    let mut offsets = Vec::with_capacity(plan.outputs.len());
-    let mut fields = Vec::new();
-    for o in &plan.outputs {
-        let Some(value) = record_value(&o.kind) else {
-            offsets.push(None);
-            continue;
-        };
-        let (words, numeric) = match o.element {
-            Element::Num { numeric, lanes } => (u32::from(lanes), numeric),
-            Element::Bool => (1, IoNumeric::Uint),
-            Element::Floats(n) => (n, IoNumeric::Float),
-        };
-        let end = if o.per_primitive {
-            &mut primitive_end
-        } else {
-            &mut vertex_end
-        };
-        offsets.push(Some(*end));
-        fields.push(RecordField {
-            value,
-            per_primitive: o.per_primitive,
-            offset: *end,
-            words,
-            numeric,
-        });
-        *end = end.checked_add(words)?;
-    }
-    fields.sort_by_key(|f| (f.per_primitive, f.offset));
-    let records = MeshRecords {
-        vertices: shape.vertices,
-        primitives: shape.primitives,
-        corners: shape.per_primitive(),
-        vertex_words: vertex_end,
-        primitive_words: primitive_end,
-        fields,
-        slot_words: work::GRID.checked_add(plan.payload_words)?,
-    };
-    let group_words = u32::try_from(records.group_words()).ok()?;
-    Some(Layout {
-        offsets,
-        records,
-        group_words,
-    })
-}
-
-/// The records of an emulated mesh plan (`StageInterface::mesh_records`, [`layout`]); `None` for
-/// any other plan.
-pub fn records(plan: &MeshPlan) -> Option<MeshRecords> {
-    layout(plan).map(|l| l.records)
-}
-
-/// An emulated object or mesh plan's payload words (`StageInterface::emulated_payload`); `None`
-/// for any other plan.
-pub fn emulated_payload(plan: &MeshPlan) -> Option<u32> {
-    plan.emulated.then_some(plan.payload_words)
 }
 
 fn u32_ty(mb: &mut ModuleBuilder) -> BResult<TypeId> {
@@ -1177,28 +964,9 @@ pub fn declare(
         let uvec3 = mb.ty(Type::Vector { elem: u32_, len: 3 })?;
         d.grid = Some(mb.plain_global(StorageClass::Workgroup, uvec3, None)?);
     }
-    // An emulated object function that sets its grid writes its slot: in the work buffer, or in
-    // the records where an indirect draw's object arguments pass reserved it (`work::SLOTS`).
-    if mp.emulated && mp.object {
-        d.work = Some(words_buffer(mb, OBJECT_WORK_SLOT)?);
-        d.records = Some(words_buffer(mb, OBJECT_RECORDS_SLOT)?);
-    }
     let Some(shape) = mp.mesh else {
         return Ok(d);
     };
-    // An emulated mesh function's outputs are its records (the module docs).
-    if mp.emulated {
-        let Some(l) = layout(mp) else {
-            return Err(BuildError::IdSpaceExhausted);
-        };
-        let u32_ = u32_ty(mb)?;
-        d.records = Some(words_buffer(mb, RECORDS_SLOT)?);
-        d.work = Some(words_buffer(mb, WORK_SLOT)?);
-        d.first_word = Some(mb.plain_global(StorageClass::Private, u32_, None)?);
-        d.count = Some(mb.plain_global(StorageClass::Workgroup, u32_, None)?);
-        d.layout = Some(l);
-        return Ok(d);
-    }
     modes.push(ExecMode::OutputVertices { n: shape.vertices });
     modes.push(ExecMode::OutputPrimitives {
         n: shape.primitives,
@@ -1259,21 +1027,6 @@ pub fn declare(
     d.indices = Some(mb.builtin(b, IoDir::Output, ty)?);
     d.count = Some(mb.plain_global(StorageClass::Workgroup, u32_, None)?);
     Ok(d)
-}
-
-/// A storage buffer of `u32` words (a block of one runtime array) at binding symbol `slot`.
-fn words_buffer(mb: &mut ModuleBuilder, slot: ResourceSlot) -> BResult<GlobalId> {
-    let u32_ = u32_ty(mb)?;
-    let words = mb.ty(Type::RuntimeArray {
-        elem: u32_,
-        stride: Some(4),
-    })?;
-    let block_layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[words])?;
-    let block = mb.ty(Type::Struct {
-        members: [words].into(),
-        layout: Some(block_layout),
-    })?;
-    mb.resource(slot, StorageClass::StorageBuffer, block)
 }
 
 /// The operands of call `id`.
@@ -1356,8 +1109,7 @@ fn store_element(
 }
 
 /// Store `value` at element `at` (and `inner`, a vector component or array element within it)
-/// of output `output`: its output array's element, or, for an emulated mesh function, its words
-/// in the element's record ([`store_record`]).
+/// of output `output`: its output array's element.
 fn store_output(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1366,217 +1118,8 @@ fn store_output(
     inner: Option<SValue>,
     value: SValue,
 ) -> BResult<()> {
-    if cx.plan.families.mesh.emulated {
-        return store_record(cx, fb, output, at, inner, value);
-    }
     let (g, len) = output_of(cx, output)?;
     store_element(cx, fb, g, len, at, inner, value)
-}
-
-/// The word of the records where record `at` of an emulated mesh function's threadgroup begins
-/// (`per_primitive`: a primitive record, else a vertex record), plus `offset`.
-fn record_word(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    per_primitive: bool,
-    at: SValue,
-    offset: u32,
-) -> BResult<SValue> {
-    let (Some(l), Some(first)) = (
-        cx.decl.families.mesh.layout.as_ref(),
-        cx.decl.families.mesh.first_word,
-    ) else {
-        return Err(cx.fail("an emulated mesh store without its records"));
-    };
-    let r = &l.records;
-    // Within the threadgroup's words, which lie within a `u32` ([`layout`]).
-    let (region, stride) = if per_primitive {
-        (r.primitive_base() as u32, r.primitive_words)
-    } else {
-        (1, r.vertex_words)
-    };
-    let p = fb.module().global_value(first)?;
-    let first = fb.load(p, MemAccess::default())?;
-    let kstride = k32(fb, stride)?;
-    let into = fb.binary(BinOp::IMul, at, kstride)?;
-    let start = k32(fb, region + offset)?;
-    let word = fb.binary(BinOp::IAdd, first, start)?;
-    fb.binary(BinOp::IAdd, word, into)
-}
-
-/// Store `words` (`u32`s) at word `word` of the records and the words after it.
-fn store_words(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    word: SValue,
-    words: &[SValue],
-) -> BResult<()> {
-    let Some(buffer) = cx.decl.families.mesh.records else {
-        return Err(cx.fail("an emulated mesh store without its records"));
-    };
-    // Ordered with the wrapper's zeroing of the records by its barrier: the function's
-    // coherence of shared memory, as the wrapper's words take it.
-    let coherence = coherence(cx.plan);
-    for (j, &w) in words.iter().enumerate() {
-        let off = k32(fb, j as u32)?;
-        let at = fb.binary(BinOp::IAdd, word, off)?;
-        let access = word_access(coherence, fb, true)?;
-        store_word(fb, buffer, at, w, access)?;
-    }
-    Ok(())
-}
-
-/// Store `value` at word `at` of words buffer `buffer` ([`words_buffer`]).
-fn store_word(
-    fb: &mut FunctionBuilder<'_>,
-    buffer: GlobalId,
-    at: SValue,
-    value: SValue,
-    access: MemAccess,
-) -> BResult<()> {
-    let zero = k32(fb, 0)?;
-    let base = fb.module().global_value(buffer)?;
-    let ptr = fb.access_chain(base, &[zero, at])?;
-    fb.store(ptr, value, access)
-}
-
-/// Word `at` of words buffer `buffer` ([`words_buffer`]).
-fn load_word(fb: &mut FunctionBuilder<'_>, buffer: GlobalId, at: SValue) -> BResult<SValue> {
-    let zero = k32(fb, 0)?;
-    let base = fb.module().global_value(buffer)?;
-    let ptr = fb.access_chain(base, &[zero, at])?;
-    fb.load(ptr, MemAccess::default())
-}
-
-/// Where an emulated draw's slots and offsets begin (`work::SLOTS`): in the records, at the word
-/// the header names, for an indirect draw with an object function (whose object arguments pass
-/// reserved them), else after the work buffer's header.
-#[derive(Clone, Copy)]
-struct Slots {
-    work: GlobalId,
-    records: GlobalId,
-    pooled: SValue,
-    start: SValue,
-}
-
-impl Slots {
-    fn of(fb: &mut FunctionBuilder<'_>, work: GlobalId, records: GlobalId) -> BResult<Slots> {
-        let at = k32(fb, work::SLOTS)?;
-        let word = load_word(fb, work, at)?;
-        let zero = k32(fb, 0)?;
-        let one = k32(fb, 1)?;
-        let pooled = fb.binary(BinOp::INotEqual, word, zero)?;
-        let in_pool = fb.binary(BinOp::ISub, word, one)?;
-        let header = k32(fb, work::HEADER)?;
-        let start = fb.select(pooled, in_pool, header)?;
-        Ok(Slots {
-            work,
-            records,
-            pooled,
-            start,
-        })
-    }
-
-    /// Word `at` of the slots and offsets (from their first).
-    fn load(self, fb: &mut FunctionBuilder<'_>, at: SValue) -> BResult<SValue> {
-        let zero = k32(fb, 0)?;
-        let at = fb.binary(BinOp::IAdd, self.start, at)?;
-        let in_work = fb.select(self.pooled, zero, at)?;
-        let in_pool = fb.select(self.pooled, at, zero)?;
-        let from_work = load_word(fb, self.work, in_work)?;
-        let from_pool = load_word(fb, self.records, in_pool)?;
-        fb.select(self.pooled, from_pool, from_work)
-    }
-
-    /// Store `value` at word `at` of the slots and offsets (from their first).
-    fn store<C>(
-        self,
-        fb: &mut FunctionBuilder<'_>,
-        cx: &mut C,
-        at: SValue,
-        value: SValue,
-        access: MemAccess,
-    ) -> BResult<()> {
-        let at = fb.binary(BinOp::IAdd, self.start, at)?;
-        let (records, work) = (self.records, self.work);
-        let pool: ArmFn<'_, C> = Box::new(move |fb, _| {
-            store_word(fb, records, at, value, access)?;
-            Ok(ArmEnd::FallThrough(Vec::new()))
-        });
-        let local: ArmFn<'_, C> = Box::new(move |fb, _| {
-            store_word(fb, work, at, value, access)?;
-            Ok(ArmEnd::FallThrough(Vec::new()))
-        });
-        fb.if_(cx, self.pooled, pool, Some(local))?;
-        Ok(())
-    }
-}
-
-/// Store `value`, an element of output `output` of an emulated mesh function, as words in record
-/// `at` (its element `inner` of a clip distance array, `value` a `float`), where `at` lies inside
-/// the output's array: a lane per word, a `float` or `int` as its bits and a `bool` as 1 or 0
-/// (the module docs). An output the records do not hold (the primitive id) stores nothing.
-fn store_record(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    output: usize,
-    at: SValue,
-    inner: Option<SValue>,
-    value: SValue,
-) -> BResult<()> {
-    let mp = &cx.plan.families.mesh;
-    let (Some(o), Some(l)) = (
-        mp.outputs.get(output),
-        cx.decl.families.mesh.layout.as_ref(),
-    ) else {
-        return Err(cx.fail("an emulated mesh output that was not declared"));
-    };
-    let Some(&offset) = l.offsets.get(output) else {
-        return Err(cx.fail("an emulated mesh output without its offset"));
-    };
-    let Some(offset) = offset else {
-        return Ok(());
-    };
-    let (per_primitive, element) = (o.per_primitive, o.element);
-    let len = if per_primitive {
-        l.records.primitives
-    } else {
-        l.records.vertices
-    };
-    let n = k32(fb, len)?;
-    let inside = fb.binary(BinOp::ULessThan, at, n)?;
-    when(fb, cx, inside, move |fb, cx| {
-        let mut word = record_word(cx, fb, per_primitive, at, offset)?;
-        if let Some(i) = inner {
-            word = fb.binary(BinOp::IAdd, word, i)?;
-        }
-        let u32_ = u32_ty(fb.module())?;
-        let lanes = match element {
-            Element::Bool => {
-                let (one, zero) = (k32(fb, 1)?, k32(fb, 0)?);
-                vec![fb.select(value, one, zero)?]
-            }
-            Element::Num { numeric, lanes } if lanes > 1 && inner.is_none() => {
-                let mut out = Vec::with_capacity(usize::from(lanes));
-                for j in 0..u32::from(lanes) {
-                    let lane = fb.composite_extract(value, &[j])?;
-                    out.push(match numeric {
-                        IoNumeric::Uint => lane,
-                        _ => fb.convert(ConvOp::Bitcast, lane, u32_)?,
-                    });
-                }
-                out
-            }
-            Element::Num {
-                numeric: IoNumeric::Uint,
-                ..
-            } => vec![value],
-            Element::Num { .. } | Element::Floats(_) => {
-                vec![fb.convert(ConvOp::Bitcast, value, u32_)?]
-            }
-        };
-        store_words(cx, fb, word, &lanes)
-    })
 }
 
 /// The output array of `MeshPlan::outputs[output]` and its length.
@@ -1604,31 +1147,11 @@ fn store_index(
     at: SValue,
     value: SValue,
 ) -> BResult<()> {
-    let (Some(g), Some(shape)) = (
-        cx.decl
-            .families
-            .mesh
-            .indices
-            .or(cx.decl.families.mesh.records),
-        cx.plan.families.mesh.mesh,
-    ) else {
+    let (Some(g), Some(shape)) = (cx.decl.families.mesh.indices, cx.plan.families.mesh.mesh) else {
         return Err(cx.fail("mesh indices that were not declared"));
     };
     let k = shape.per_primitive();
     let len = shape.primitives.saturating_mul(k);
-    if cx.plan.families.mesh.emulated {
-        // The index's word in its primitive's record, which begins with its indices.
-        let n = k32(fb, len)?;
-        let inside = fb.binary(BinOp::ULessThan, at, n)?;
-        let kk = k32(fb, k)?;
-        let prim = fb.binary(BinOp::UDiv, at, kk)?;
-        let comp = fb.binary(BinOp::UMod, at, kk)?;
-        return when(fb, cx, inside, move |fb, cx| {
-            let word = record_word(cx, fb, true, prim, 0)?;
-            let word = fb.binary(BinOp::IAdd, word, comp)?;
-            store_words(cx, fb, word, &[value])
-        });
-    }
     if k == 1 {
         return store_element(cx, fb, g, len, at, None, value);
     }
@@ -1796,31 +1319,11 @@ fn builtin(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, b: KernelBuiltin) 
 }
 
 /// The builtins an entry wrapper reads (`dispatch::plan_kernel` derives them): its thread and
-/// its threadgroup's threads, and an emulated object function's its threadgroup's position and
-/// the grid's threadgroups, which declare the dispatch's `WorkgroupId` and `NumWorkgroups` that
-/// number its slot (`KernelDecl::dispatch_groups`).
-pub fn builtins(plan: &MeshPlan) -> &'static [KernelBuiltin] {
-    if plan.emulated && plan.mesh.is_none() {
-        &[
-            KernelBuiltin::ThreadIndexInThreadgroup,
-            KernelBuiltin::ThreadsPerThreadgroup,
-            KernelBuiltin::ThreadgroupPositionInGrid,
-            KernelBuiltin::ThreadgroupsPerGrid,
-        ]
-    } else {
-        &[
-            KernelBuiltin::ThreadIndexInThreadgroup,
-            KernelBuiltin::ThreadsPerThreadgroup,
-        ]
-    }
-}
-
-/// Whether the entry's threadgroup position and grid are what its wrapper computes
-/// (`dispatch::DispatchPlan::wrapper_groups`): an emulated mesh function's, found in its draw's
-/// work buffer (the module docs).
-pub fn wrapper_groups(plan: &MeshPlan) -> bool {
-    plan.emulated && plan.mesh.is_some()
-}
+/// its threadgroup's threads.
+pub const BUILTINS: [KernelBuiltin; 2] = [
+    KernelBuiltin::ThreadIndexInThreadgroup,
+    KernelBuiltin::ThreadsPerThreadgroup,
+];
 
 /// Whether the entry has a wrapper that reads [`builtins`].
 pub fn wraps(plan: &MeshPlan) -> bool {
@@ -1879,9 +1382,6 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
     let zero = k32(&mut fb, 0)?;
     let first = fb.binary(BinOp::IEqual, lin, zero)?;
     let coherence = coherence(cx.plan);
-    if object && cx.plan.families.mesh.emulated {
-        return emulated_object_wrapper(cx, fb, (lin, first), body);
-    }
     if object {
         let Some(g) = cx.decl.families.mesh.grid else {
             return Err(cx.fail("an object wrapper without its grid"));
@@ -1905,9 +1405,6 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
         let payload = cx.decl.families.access.local.payload.map(|d| d.global);
         fb.emit_mesh_tasks(x, y, z, payload)?;
         return fb.finish();
-    }
-    if cx.plan.families.mesh.emulated {
-        return emulated_wrapper(cx, fb, (lin, first), body);
     }
     let Some(shape) = mesh else {
         return Err(cx.fail("a mesh wrapper without its shape"));
@@ -1989,308 +1486,6 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
             let ptr = fb.access_chain(base, &[p])?;
             fb.store(ptr, yes, MemAccess::default())
         })
-    })?;
-    fb.ret(None)?;
-    fb.finish()
-}
-
-/// A barrier of the threadgroup's invocations that orders its workgroup memory and, for an
-/// emulated mesh function's records and an emulated object function's slot, its device memory.
-fn device_barrier(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
-    let flags = MemFlags {
-        device: true,
-        threadgroup: true,
-        ..Default::default()
-    };
-    let sem = semantics(flags, MemoryOrder::AcquireRelease, memory_model(cx.plan));
-    fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)
-}
-
-/// The number of the threadgroup's threads, `x · y · z` of `ThreadsPerThreadgroup`.
-fn thread_count(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
-    let threads = builtin(cx, fb, KernelBuiltin::ThreadsPerThreadgroup)?;
-    let [tx, ty, tz] = [0, 1, 2].map(|i| fb.composite_extract(threads, &[i]));
-    let txy = fb.binary(BinOp::IMul, tx?, ty?)?;
-    fb.binary(BinOp::IMul, txy, tz?)
-}
-
-/// Word `at` of the payload arena, read (`store` is `None`) or written: a relaxed workgroup
-/// atomic where the arena's words are atomics (`memory::arena::ArenaMem`), else plain.
-fn payload_word(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    at: SValue,
-    store: Option<SValue>,
-) -> BResult<Option<SValue>> {
-    let Some(arena) = cx.decl.families.access.local.payload else {
-        return Err(cx.fail("an emulated payload copy without its arena"));
-    };
-    let base = fb.module().global_value(arena.global)?;
-    let ptr = fb.access_chain(base, &[at])?;
-    let atomic = coherence(cx.plan) != Coherence::Plain;
-    match (store, atomic) {
-        (Some(v), true) => {
-            fb.atomic_store(ptr, Scope::Workgroup, Semantics::RELAXED, v)?;
-            Ok(None)
-        }
-        (Some(v), false) => {
-            fb.store(ptr, v, MemAccess::default())?;
-            Ok(None)
-        }
-        (None, true) => fb
-            .atomic_load(ptr, Scope::Workgroup, Semantics::RELAXED)
-            .map(Some),
-        (None, false) => fb.load(ptr, MemAccess::default()).map(Some),
-    }
-}
-
-/// An emulated object function's wrapper (the module docs): its grid zeroed, the body between
-/// two barriers, then its slot ([`Slots`]: in the work buffer, or in the records for an indirect
-/// draw), placed by its workgroup's linear index in the dispatch: the grid it stored, held to
-/// Metal's limit, and its payload's words that the slot holds.
-fn emulated_object_wrapper(
-    cx: &mut EmitCx<'_>,
-    mut fb: FunctionBuilder<'_>,
-    (lin, first): (SValue, SValue),
-    body: FuncId,
-) -> BResult<FuncId> {
-    let d = &cx.decl.families.mesh;
-    let (Some(g), Some(work), Some(records)) = (d.grid, d.work, d.records) else {
-        return Err(cx.fail("an emulated object wrapper without its grid, work buffer or records"));
-    };
-    let coherence = coherence(cx.plan);
-    let zero = k32(&mut fb, 0)?;
-    let u32_ = u32_ty(fb.module())?;
-    let uvec3 = fb.module().ty(Type::Vector { elem: u32_, len: 3 })?;
-    let none = fb.composite_construct(uvec3, &[zero, zero, zero])?;
-    when(&mut fb, cx, first, move |fb, _| {
-        let p = fb.module().global_value(g)?;
-        let access = word_access(coherence, fb, true)?;
-        fb.store(p, none, access)
-    })?;
-    device_barrier(cx, &mut fb)?;
-    fb.call(body, &[])?;
-    device_barrier(cx, &mut fb)?;
-    // Its slot: word `o · S` of the slots, `o = x + X · (y + Y · z)` its workgroup's linear index
-    // in the dispatch, which runs Metal's threadgroups at their positions (no region of an
-    // emulated draw has a base). The dispatch's grid, not the one Metal reports, which an indirect
-    // draw's wrapped threads make smaller than the threadgroups it runs.
-    let Some(k) = cx.decl.families.dispatch.kernel.as_ref() else {
-        return Err(cx.fail("an emulated object wrapper without its dispatch"));
-    };
-    let (at, grid) = k.dispatch_groups(&mut fb)?;
-    let [x, y, z] = [0, 1, 2].map(|i| fb.composite_extract(at, &[i]));
-    let [gx, gy] = [0, 1].map(|i| fb.composite_extract(grid, &[i]));
-    let yz = fb.binary(BinOp::IMul, gy?, z?)?;
-    let yz = fb.binary(BinOp::IAdd, y?, yz)?;
-    let xyz = fb.binary(BinOp::IMul, gx?, yz)?;
-    let o = fb.binary(BinOp::IAdd, x?, xyz)?;
-    let at_s = k32(&mut fb, work::SLOT_WORDS)?;
-    let s = load_word(&mut fb, work, at_s)?;
-    let slots = Slots::of(&mut fb, work, records)?;
-    let slot = fb.binary(BinOp::IMul, o, s)?;
-    when(&mut fb, cx, first, move |fb, cx| {
-        let p = fb.module().global_value(g)?;
-        let access = word_access(coherence, fb, false)?;
-        let stored = fb.load(p, access)?;
-        let [x, y, z] = [0, 1, 2].map(|i| fb.composite_extract(stored, &[i]));
-        let bounded = bounded_grid(cx, fb, [x?, y?, z?])?;
-        for (i, v) in bounded.into_iter().enumerate() {
-            let off = k32(fb, i as u32)?;
-            let w = fb.binary(BinOp::IAdd, slot, off)?;
-            slots.store(fb, cx, w, v, MemAccess::default())?;
-        }
-        Ok(())
-    })?;
-    // Its payload's words, as many as the slot holds (`S − 4`).
-    // Every invocation copies, a partial threadgroup's past its threads too.
-    let words = cx.plan.families.mesh.payload_words;
-    if words > 0 && cx.decl.families.access.local.payload.is_some() {
-        let running = k.running_threads(&mut fb)?;
-        let [rx, ry, rz] = [0, 1, 2].map(|i| fb.composite_extract(running, &[i]));
-        let rxy = fb.binary(BinOp::IMul, rx?, ry?)?;
-        let n = fb.binary(BinOp::IMul, rxy, rz?)?;
-        let grid_words = k32(&mut fb, work::GRID)?;
-        let room = fb.binary(BinOp::ISub, s, grid_words)?;
-        let start = fb.binary(BinOp::IAdd, slot, grid_words)?;
-        strided(cx, &mut fb, (lin, n), words, move |fb, cx, i| {
-            let held = fb.binary(BinOp::ULessThan, i, room)?;
-            when(fb, cx, held, move |fb, cx| {
-                let Some(v) = payload_word(cx, fb, i, None)? else {
-                    return Err(cx.fail("a payload read without its value"));
-                };
-                let w = fb.binary(BinOp::IAdd, start, i)?;
-                slots.store(fb, cx, w, v, MemAccess::default())
-            })
-        })?;
-    }
-    fb.ret(None)?;
-    fb.finish()
-}
-
-/// An emulated mesh function's wrapper (the module docs). Its threadgroup is number `w =
-/// WorkgroupId.x + WorkgroupId.y · NumWorkgroups.x` of the draw's `T` mesh threadgroups (past
-/// them, it returns as a whole); it finds its object threadgroup `o` (the last whose offset is
-/// at most `w`) and its place in that object threadgroup's grid, which every grid builtin reads
-/// (`dispatch::WrapperGroups`); it copies in that object threadgroup's payload, zeroes its own
-/// records from word `RECORDS_BASE + w · group_words`, zeroes the count, runs the body between
-/// two barriers, and its first thread stores the count at its first word.
-fn emulated_wrapper(
-    cx: &mut EmitCx<'_>,
-    mut fb: FunctionBuilder<'_>,
-    (lin, first): (SValue, SValue),
-    body: FuncId,
-) -> BResult<FuncId> {
-    let d = &cx.decl.families.mesh;
-    let (Some(l), Some(word), Some(count), Some(records), Some(work)) =
-        (d.layout.as_ref(), d.first_word, d.count, d.records, d.work)
-    else {
-        return Err(cx.fail("an emulated mesh wrapper without its records or work buffer"));
-    };
-    let group_words = l.group_words;
-    let Some(groups) = cx
-        .decl
-        .families
-        .dispatch
-        .kernel
-        .as_ref()
-        .and_then(|k| k.wrapper_groups())
-    else {
-        return Err(cx.fail("an emulated mesh wrapper without its threadgroup words"));
-    };
-    let coherence = coherence(cx.plan);
-    let u32_ = u32_ty(fb.module())?;
-    let uvec3 = fb.module().ty(Type::Vector { elem: u32_, len: 3 })?;
-    let k = |fb: &mut FunctionBuilder<'_>, n: u32| k32(fb, n);
-    // `w`, from the flat dispatch's workgroup.
-    let p = fb.module().global_value(groups.workgroup_id)?;
-    let wid = fb.load(p, MemAccess::default())?;
-    let p = fb.module().global_value(groups.num_workgroups)?;
-    let dispatched = fb.load(p, MemAccess::default())?;
-    let wx = fb.composite_extract(wid, &[0])?;
-    let wy = fb.composite_extract(wid, &[1])?;
-    let nx = fb.composite_extract(dispatched, &[0])?;
-    let row = fb.binary(BinOp::IMul, wy, nx)?;
-    let w = fb.binary(BinOp::IAdd, wx, row)?;
-    let at = k(&mut fb, work::MESH_GROUPS)?;
-    let total = load_word(&mut fb, work, at)?;
-    let past = fb.binary(BinOp::UGreaterThanEqual, w, total)?;
-    let leave: ArmFn<'_, EmitCx<'_>> = Box::new(|fb, _| {
-        fb.ret(None)?;
-        Ok(ArmEnd::Exits)
-    });
-    fb.if_(cx, past, leave, None)?;
-    // Its object threadgroup: the last `o` below `O` whose offset is at most `w` (`offsets[0]`
-    // is 0 and `offsets[O]` is `T`, past `w`), by bisection.
-    let at = k(&mut fb, work::OBJECT_GROUPS)?;
-    let objects = load_word(&mut fb, work, at)?;
-    let at = k(&mut fb, work::SLOT_WORDS)?;
-    let s = load_word(&mut fb, work, at)?;
-    let slots = Slots::of(&mut fb, work, records)?;
-    let offsets = fb.binary(BinOp::IMul, objects, s)?;
-    let lo = fb.local_var(u32_, None)?;
-    let hi = fb.local_var(u32_, None)?;
-    let (lo, hi) = (fb.var_ptr(lo)?, fb.var_ptr(hi)?);
-    let zero = k(&mut fb, 0)?;
-    let one = k(&mut fb, 1)?;
-    fb.store(lo, zero, MemAccess::default())?;
-    fb.store(hi, objects, MemAccess::default())?;
-    let search: LoopFn<'_, EmitCx<'_>> = Box::new(move |fb, cx, lc| {
-        let a = fb.load(lo, MemAccess::default())?;
-        let b = fb.load(hi, MemAccess::default())?;
-        let gap = fb.binary(BinOp::ISub, b, a)?;
-        let done = fb.binary(BinOp::ULessThanEqual, gap, one)?;
-        let exit: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, _| {
-            lc.break_(fb)?;
-            Ok(ArmEnd::Exits)
-        });
-        fb.if_(cx, done, exit, None)?;
-        let half = fb.binary(BinOp::ShiftRightLogical, gap, one)?;
-        let mid = fb.binary(BinOp::IAdd, a, half)?;
-        let at = fb.binary(BinOp::IAdd, offsets, mid)?;
-        let offset = slots.load(fb, at)?;
-        let below = fb.binary(BinOp::ULessThanEqual, offset, w)?;
-        let a = fb.select(below, mid, a)?;
-        let b = fb.select(below, b, mid)?;
-        fb.store(lo, a, MemAccess::default())?;
-        fb.store(hi, b, MemAccess::default())
-    });
-    fb.loop_(cx, LoopSpec::default(), search)?;
-    let o = fb.load(lo, MemAccess::default())?;
-    // Its place in the object threadgroup's grid: `w − offsets[o]`, x fastest.
-    let slot = fb.binary(BinOp::IMul, o, s)?;
-    let mut axis = |i: u32| -> BResult<SValue> {
-        let off = k(&mut fb, i)?;
-        let at = fb.binary(BinOp::IAdd, slot, off)?;
-        slots.load(&mut fb, at)
-    };
-    let [gx, gy, gz] = [axis(0)?, axis(1)?, axis(2)?];
-    let at = fb.binary(BinOp::IAdd, offsets, o)?;
-    let start = slots.load(&mut fb, at)?;
-    let local = fb.binary(BinOp::ISub, w, start)?;
-    // The object threadgroup launched `w`, so none of its counts is 0.
-    let x = fb.binary(BinOp::UMod, local, gx)?;
-    let rest = fb.binary(BinOp::UDiv, local, gx)?;
-    let y = fb.binary(BinOp::UMod, rest, gy)?;
-    let z = fb.binary(BinOp::UDiv, rest, gy)?;
-    let position = fb.composite_construct(uvec3, &[x, y, z])?;
-    let launched = fb.composite_construct(uvec3, &[gx, gy, gz])?;
-    let p = fb.module().global_value(groups.position)?;
-    fb.store(p, position, MemAccess::default())?;
-    let p = fb.module().global_value(groups.grid)?;
-    fb.store(p, launched, MemAccess::default())?;
-    // Its first word: within a `u32`, since the binder binds the records whole.
-    let at = k(&mut fb, work::RECORDS_BASE)?;
-    let base = load_word(&mut fb, work, at)?;
-    let gw = k(&mut fb, group_words)?;
-    let mine = fb.binary(BinOp::IMul, w, gw)?;
-    let first_word = fb.binary(BinOp::IAdd, base, mine)?;
-    let p = fb.module().global_value(word)?;
-    fb.store(p, first_word, MemAccess::default())?;
-    let n = thread_count(cx, &mut fb)?;
-    // The object threadgroup's payload, as many words as the slot holds (`S − 4`), zero past.
-    let words = cx.plan.families.mesh.payload_words;
-    if words > 0 && cx.decl.families.access.local.payload.is_some() {
-        let grid_words = k(&mut fb, work::GRID)?;
-        let room = fb.binary(BinOp::ISub, s, grid_words)?;
-        let from = fb.binary(BinOp::IAdd, slot, grid_words)?;
-        strided(cx, &mut fb, (lin, n), words, move |fb, cx, i| {
-            let held = fb.binary(BinOp::ULessThan, i, room)?;
-            let at = fb.binary(BinOp::IAdd, from, i)?;
-            let at = fb.select(held, at, from)?;
-            let read = slots.load(fb, at)?;
-            let zero = k32(fb, 0)?;
-            let v = fb.select(held, read, zero)?;
-            payload_word(cx, fb, i, Some(v)).map(|_| ())
-        })?;
-    }
-    // Its records, zero: the body's stores and the wrapper's are ordered by the barrier.
-    strided(cx, &mut fb, (lin, n), group_words, move |fb, _, i| {
-        let at = fb.binary(BinOp::IAdd, first_word, i)?;
-        let zero = k32(fb, 0)?;
-        let access = word_access(coherence, fb, true)?;
-        store_word(fb, records, at, zero, access)
-    })?;
-    when(&mut fb, cx, first, move |fb, _| {
-        let p = fb.module().global_value(count)?;
-        let access = word_access(coherence, fb, true)?;
-        fb.store(p, zero, access)
-    })?;
-    device_barrier(cx, &mut fb)?;
-    fb.call(body, &[])?;
-    device_barrier(cx, &mut fb)?;
-    // A point mesh without point sizes draws nothing.
-    let unsized_points = cx.plan.families.mesh.unsized_points;
-    when(&mut fb, cx, first, move |fb, _| {
-        let drawn = if unsized_points {
-            zero
-        } else {
-            let p = fb.module().global_value(count)?;
-            let access = word_access(coherence, fb, false)?;
-            fb.load(p, access)?
-        };
-        let access = word_access(coherence, fb, true)?;
-        store_word(fb, records, first_word, drawn, access)
     })?;
     fb.ret(None)?;
     fb.finish()

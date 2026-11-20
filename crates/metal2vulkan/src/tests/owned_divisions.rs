@@ -29,8 +29,6 @@ fn modules() -> Vec<Build> {
     plain!(
         index_bounds_fill_module,
         index_bounds_plan_module,
-        mesh_object_arguments_module,
-        mesh_scan_module,
         replay_preprocess_module,
         ycbcr_write_module,
     );

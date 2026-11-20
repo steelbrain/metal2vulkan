@@ -470,11 +470,6 @@ pub struct StageIoPlan {
     /// The render pipeline's private alpha test the fragment function runs at each return
     /// (`LoweringInputs::alpha_test`).
     pub alpha_test: Option<AlphaTest>,
-    /// A fragment function's per-primitive inputs (`StageIo::primitive_inputs`) are flat alone,
-    /// not decorated `PerPrimitiveEXT`: its device does not enable `VK_EXT_mesh_shader`, so the
-    /// pipeline's mesh function is emulated, and its synthesized vertex stage writes a
-    /// primitive's values at every corner of it.
-    pub flat_primitive_inputs: bool,
     /// The second outputs a fragment function writes for attachments held with their channels
     /// rotated (`LoweringInputs::rotated_factors`), each beside its first output there.
     pub rotated_seconds: Vec<RotatedSecond>,
@@ -2837,11 +2832,8 @@ pub fn declare(
                         .insert(i, mb.plain_global(StorageClass::Private, array, None)?);
                 }
                 let g = mb.io(key.clone(), *dir, ty, *deco)?;
-                // An input of a key the mesh function writes per primitive, flat alone behind an
-                // emulated mesh function.
-                if *dir == IoDir::Input
-                    && !sp.flat_primitive_inputs
-                    && sp.interface.primitive_inputs.binary_search(key).is_ok()
+                // An input of a key the mesh function writes per primitive.
+                if *dir == IoDir::Input && sp.interface.primitive_inputs.binary_search(key).is_ok()
                 {
                     mb.per_primitive(g)?;
                 }

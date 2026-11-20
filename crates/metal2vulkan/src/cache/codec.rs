@@ -47,10 +47,10 @@ use crate::pipeline::graphics::{
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
-    MeshRecords, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
-    PushPlacement, RecordField, RecordValue, SampledLevels, SamplerArray, SamplerSlot,
-    SlotInterface, SnapshotRefusal, StageDescriptor, StageInterface, StageSpec, TessellationStage,
-    TextureAccess, TextureSlot, ThreadgroupArgument, Window,
+    NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
+    SampledLevels, SamplerArray, SamplerSlot, SlotInterface, SnapshotRefusal, StageDescriptor,
+    StageInterface, StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument,
+    Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -858,8 +858,6 @@ codec_enum! {
         ControlPointIndices,
         TileMemory,
         FunctionTableSnapshot,
-        MeshRecords,
-        MeshWork,
         DepthStandIn,
         StencilStandIn,
     }
@@ -1139,9 +1137,7 @@ codec_struct! {
     CommandWrites { operations, primitive_types, kinds }
     StageInterface {
         stage, slots, threadgroup, push, descriptors, spec, needs_pointer_translation,
-        needs_handle_translation, io, tessellation, writes_memory, mesh_records, mesh_corners,
-        emulated_payload,
-        payload, reaches_command_buffers, command_writes, writes_textures,
+        needs_handle_translation, io, tessellation, writes_memory, payload, reaches_command_buffers, command_writes, writes_textures,
         reads_unbound_resources, writes_unbound_resources, unbound_storage_textures,
         numbered_samplers, own_pixel_textures, snapshot_textures, snapshot_refusals, level_reads,
         private_bytes, sampler_arrays,
@@ -1154,8 +1150,6 @@ codec_struct! {
         max_tessellation_factor, partition_mode, factor_format, factor_step_function,
         output_winding_order, control_point_index_type, factor_scale_enabled,
     }
-    MeshRecords { vertices, primitives, corners, vertex_words, primitive_words, fields, slot_words }
-    RecordField { value, per_primitive, offset, words, numeric }
     BufferSlot { access, window, form, kind }
     TextureSlot { texture_type, sampled_type, depth_compare, access, storage }
     TextureAccess { sample, read, write }
@@ -1197,9 +1191,6 @@ codec_enum! {
         WritesMemory, Interlock, Coherent, Other,
     }
     PatchDomain { Triangle, Quad }
-    RecordValue {
-        Position, PointSize, ClipDistance, Culled, Layer, ViewportIndex, Varying(f0),
-    }
     Window { Bounded { start, len }, Whole }
     BufferForm { Descriptor(f0), Psb }
     BufferKind { Buffer, VisibleFunctionTable, IntersectionFunctionTable }
@@ -1292,7 +1283,6 @@ codec_enum! {
         DroppedColor { color },
         DepthClampRange,
         RotatedWeights,
-        MeshLastFirst,
         ConstantLanes { slot },
         FunctionTableRange { addressed },
         TestedStorageWrites { early_tests, early_variant },
@@ -1425,7 +1415,7 @@ codec_struct! {
         rasterization_order_attachment_access, max_vertex_amplification_count, declares_layer,
         tessellation,
         fragment_imageblock, sample_shading, vertex_writes_memory, writes_viewport_index,
-        storage_attachments, shadow_stencil, early_fragment_tests, mesh_records, mesh_corners,
+        storage_attachments, shadow_stencil, early_fragment_tests,
         writes_point_size, flat_fragment_inputs,
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
         reads_position_depth,

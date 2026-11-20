@@ -54,7 +54,6 @@ use crate::pipeline::descriptor::{
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::{GraphicsState, StorageAttachmentView};
 use crate::pipeline::link::geometry;
-use crate::pipeline::link::mesh::synthesized_stage as mesh_vertex_stage;
 use crate::pipeline::link::tessellation::{note_evaluation_stage, synthesized_stages};
 use crate::pipeline::link::{link, LinkInputs, Linked, RenderLinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
@@ -551,10 +550,9 @@ impl Device {
     /// result is a [`RenderPipeline`] whose stages are the object stage (`TASK_EXT`), the mesh
     /// stage (`MESH_EXT`) and the fragment stage: it has no vertex input and no input assembly (its
     /// `GraphicsState::topology` is unused), and Metal's draws of it are `drawMeshThreadgroups` and
-    /// `drawMeshThreads`. On a device without `VK_EXT_mesh_shader` the mesh stage is a `COMPUTE`
-    /// module that writes records, followed by a synthesized `VERTEX` stage that draws them as a
-    /// list of the mesh's topology (`GraphicsState::mesh_records`). A `Compiled` stage must have
-    /// been compiled under the same inputs and Metal's call stack depth of 1.
+    /// `drawMeshThreads`. A device without `VK_EXT_mesh_shader` and `meshShader` (and `taskShader`
+    /// for an object function) refuses it (`Unsupported{MeshShading}`). A `Compiled` stage must
+    /// have been compiled under the same inputs and Metal's call stack depth of 1.
     pub fn compile_mesh_pipeline(
         &self,
         d: &MeshPipelineDescriptor,
@@ -672,32 +670,7 @@ impl Device {
         {
             requirements = p.union_requirements(&requirements, &a.requirements);
         }
-        // An emulated mesh function's records are drawn by a synthesized vertex stage, which
-        // follows the mesh stage's compute module, the last compute module (an object
-        // function's comes first).
-        let records = linked
-            .graphics
-            .as_ref()
-            .and_then(|g| g.mesh_records.as_ref());
-        let mut mesh_facts = Vec::new();
-        if let Some(records) = records {
-            // Drawn from each primitive's last index first: Apple's last provoking vertex on a
-            // device that takes flat inputs from the first (`VariantKey::mesh_last_first`).
-            let last_first = v.mesh_last_first && records.corners > 1;
-            let (module, r) = mesh_vertex_stage(records, last_first, &linked, p, m)?;
-            if last_first {
-                let fact = RuntimeFact::MeshLastFirst;
-                mesh_facts.push(RuntimeDependency::new(fact, mechanism(&fact, p)));
-            }
-            requirements = p.union_requirements(&requirements, &r);
-            let at = stages
-                .iter()
-                .rposition(|s| s.stage == vk::ShaderStage::COMPUTE)
-                .ok_or_else(|| invariant("an emulated mesh pipeline without its compute stage"))?;
-            stages.insert(at + 1, module);
-        }
-        let mut dependencies = dependencies(&artifacts, self);
-        dependencies.extend(mesh_facts);
+        let dependencies = dependencies(&artifacts, self);
         let (graphics, requirements) = graphics_requirements(requirements, &linked, &artifacts, p)?;
         let profile = self.profile_fingerprint();
         let mesh_info = self.mesh_info(d, object.as_ref(), &mesh);
@@ -731,16 +704,11 @@ impl Device {
     ) -> MeshPipelineMetalInfo {
         let p = self.profile();
         let limits = &p.fields().limits;
-        // Each stage's threadgroups run in the task and mesh stages, or as compute work.
-        let (object_limit, mesh_limit) = if crate::lower::mesh::emulates(p) {
-            let compute = limits.max_compute_work_group_invocations;
-            (compute, compute)
-        } else {
-            (
-                limits.mesh.max_task_work_group_invocations,
-                limits.mesh.max_mesh_work_group_invocations,
-            )
-        };
+        // Each stage's threadgroups run in the task and mesh stages.
+        let (object_limit, mesh_limit) = (
+            limits.mesh.max_task_work_group_invocations,
+            limits.mesh.max_mesh_work_group_invocations,
+        );
         // Metal's on a first compile: the least of 1024, the function's own maximum, the
         // descriptor's (Metal's 0 is none) and the threads of the stage's required size (Metal's
         // all-zero size is none), within the device's.
@@ -763,10 +731,7 @@ impl Device {
             .max_total_threadgroups_per_mesh_grid
             .filter(|&n| n > 0)
             .unwrap_or(METAL_MESH_GRID_THREADGROUPS);
-        let grid = match crate::lower::mesh::emulates(p) {
-            true => grid,
-            false => grid.min(limits.mesh.max_mesh_work_group_total_count),
-        };
+        let grid = grid.min(limits.mesh.max_mesh_work_group_total_count);
         MeshPipelineMetalInfo {
             max_total_threads_per_object_threadgroup: object.map_or(0, |o| {
                 threads(
@@ -1773,17 +1738,12 @@ fn compute_fields(d: &ComputePipelineDescriptor) -> String {
 
 /// The pipeline key's fields of variant `v` past its stages' keys: its color group past the first
 /// (`VariantKey::color_group`), whose variant of a pipeline without a fragment function has no
-/// stage of its own, its emulated mesh function's synthesized vertex stage, and a band variant's
-/// synthesized tessellation stages. Empty for every other variant, so a pipeline keeps its key.
+/// stage of its own, and a band variant's synthesized tessellation stages. Empty for every other variant, so a pipeline keeps its key.
 fn variant_fields(v: &VariantKey) -> String {
     let mut fields = String::new();
     // The group a pipeline without a fragment function keeps in no stage's key.
     if v.color_group != 0 {
         fields.push_str(&format!(" color_group {}", v.color_group));
-    }
-    // The synthesized vertex stage of an emulated mesh function's pipeline, in no stage's key.
-    if v.mesh_last_first {
-        fields.push_str(" mesh_last_first");
     }
     // The band's synthesized stages, in no stage's key.
     match v.line_band {

@@ -245,7 +245,6 @@ mod serde_round_trips {
             kept_imageblock_bytes: Some(8),
             depth_clamp_range: true,
             rotated_weights: true,
-            mesh_last_first: true,
             line_band: Some(crate::pipeline::BandPrimitive::Triangles),
             swizzled_storage: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 6)]),
             addressed_function_tables: true,
@@ -638,41 +637,6 @@ mod serde_round_trips {
             }),
             early_fragment_tests: true,
             writes_sample_mask: true,
-            // An emulated mesh function's records.
-            mesh_records: Some(crate::pipeline::MeshRecords {
-                vertices: 3,
-                primitives: 1,
-                corners: 3,
-                vertex_words: 4,
-                primitive_words: 5,
-                fields: vec![
-                    crate::pipeline::RecordField {
-                        value: crate::pipeline::RecordValue::Position,
-                        per_primitive: false,
-                        offset: 0,
-                        words: 4,
-                        numeric: crate::pipeline::stage_io::IoNumeric::Float,
-                    },
-                    crate::pipeline::RecordField {
-                        value: crate::pipeline::RecordValue::Culled,
-                        per_primitive: true,
-                        offset: 3,
-                        words: 1,
-                        numeric: crate::pipeline::stage_io::IoNumeric::Uint,
-                    },
-                    crate::pipeline::RecordField {
-                        value: crate::pipeline::RecordValue::Varying(
-                            crate::pipeline::sym::VaryingKey::user(b"c"),
-                        ),
-                        per_primitive: true,
-                        offset: 4,
-                        words: 1,
-                        numeric: crate::pipeline::stage_io::IoNumeric::Sint,
-                    },
-                ],
-                slot_words: 12,
-            }),
-            mesh_corners: Some(3),
             writes_point_size: true,
             flat_fragment_inputs: true,
             clip_distances: 2,
@@ -1052,7 +1016,6 @@ mod bind_serde_round_trips {
             kept_imageblock_bytes: Some(4),
             depth_clamp_range: Some([0.25, 0.5]),
             rotated_weights: true,
-            mesh_last_first: true,
             line_band: Some((
                 crate::pipeline::BandPrimitive::Triangles,
                 [8.0, -8.0, 1.75, -1.0],
@@ -1126,7 +1089,6 @@ mod bind_serde_round_trips {
             kept_imageblock_bytes: Some(4),
             depth_clamp_range: true,
             rotated_weights: true,
-            mesh_last_first: true,
             line_band: Some(crate::pipeline::BandPrimitive::Lines),
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Pass,
@@ -1350,23 +1312,6 @@ mod bind_serde_round_trips {
                 }],
             ],
             specialization: None,
-            // An emulated mesh draw's dispatch.
-            mesh_dispatch: Some(crate::bind::MeshDispatch {
-                work: vec![1, 0, 0, 2],
-                work_bytes: 112,
-                object_groups: Some([2, 1, 1]),
-                object_arguments: Some(crate::bind::BufferRange {
-                    offset: 0,
-                    range: 12,
-                }),
-                mesh: crate::bind::MeshGroups::Scanned {
-                    arguments: Some(crate::bind::BufferRange {
-                        offset: 64,
-                        range: 16,
-                    }),
-                },
-                records: crate::bind::MeshRecordsRegion::Pool,
-            }),
         });
         // A mesh draw's commands.
         round_trip(&vk::DrawCommand::DrawMeshTasks {

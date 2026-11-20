@@ -46,9 +46,7 @@
 //!   record, with the measured properties a conversion relies on in place of a note. A mesh
 //!   render pipeline has an object stage when it has an object function, its mesh stage, and a
 //!   fragment stage exactly when it rasterizes; its `GraphicsState` is a render pipeline's with the
-//!   mesh stage in the vertex stage's place, and it has no vertex input. An emulated mesh
-//!   function's pipeline ([`mesh`]) adds a synthesized vertex stage, which reads the mesh
-//!   function's records binding too (its stage flags are both stages').
+//!   mesh stage in the vertex stage's place, and it has no vertex input.
 
 pub mod band;
 pub mod contract;
@@ -425,28 +423,18 @@ pub fn link(
         },
         _ => None,
     };
-    // A mesh function reads its payload within its object function's. An emulated mesh
-    // function's pipeline draws through a synthesized vertex stage, which reads the records the
-    // mesh stage writes.
-    let records = match inputs {
-        LinkInputs::Mesh(_) => {
-            mesh::payload(&ifaces)?;
-            mesh::records(&ifaces)?
-        }
-        _ => None,
-    };
+    // A mesh function reads its payload within its object function's.
+    if let LinkInputs::Mesh(_) = inputs {
+        mesh::payload(&ifaces)?;
+    }
     let mut table = LinkTable::default();
-    let mut synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
+    let synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
         .as_ref()
         .map(tessellation::ControlPlan::slots)
         .unwrap_or_default()
         .into_iter()
         .map(|slot| (slot, vk::ShaderStageFlags::TESSELLATION_CONTROL))
         .collect();
-    if records.is_some() {
-        synthesized.push((mesh::RECORDS_SLOT, vk::ShaderStageFlags::VERTEX));
-        synthesized.push((mesh::WORK_SLOT, vk::ShaderStageFlags::VERTEX));
-    }
     // A fan-out variant's triangle stage reads the region table, and a probe's writes its flags.
     if let Some(fan) = geometry.as_ref().and_then(|g| g.fan_out) {
         let stage = vk::ShaderStageFlags::GEOMETRY;
@@ -583,13 +571,7 @@ pub fn link(
                 .ok_or_else(|| missing_stage(Stage::Mesh))?;
             let vi = VertexInputState::default();
             let fragment = stages.get(at + 1).copied();
-            let mut gs = render_state(r, ifaces[at], fragment, &vi, None, p)?;
-            gs.mesh_corners = ifaces[at].mesh_corners;
-            // An emulated mesh function's primitives are drawn as a list of their kind.
-            if let Some(records) = records {
-                gs.topology = records.topology();
-                gs.mesh_records = Some(records);
-            }
+            let gs = render_state(r, ifaces[at], fragment, &vi, None, p)?;
             (vi, Some(gs))
         }
         LinkInputs::Standalone | LinkInputs::Compute => (VertexInputState::default(), None),
@@ -1009,8 +991,7 @@ struct HeapDecl {
 
 /// Number every binding symbol densely in set 0 and every heap array in set 1, build the layout,
 /// and check the pipeline-wide limits. `synthesized` are the storage buffers the pipeline's
-/// synthesized stages read, with those stages: a tessellation pipeline's control-stage buffers, and
-/// an emulated mesh function's records, which its vertex stage reads too.
+/// synthesized stages read, with those stages: a tessellation pipeline's control-stage buffers.
 fn layout(
     ifaces: &[&StageInterface],
     synthesized: &[(ResourceSlot, vk::ShaderStageFlags)],
@@ -1020,7 +1001,7 @@ fn layout(
     let mut decls: BTreeMap<ResourceSlot, (StageDescriptor, vk::ShaderStageFlags)> =
         BTreeMap::new();
     // A tessellation pipeline's factor, patch index, and control-point index buffers are the
-    // control stage's; an emulated mesh function's records are its synthesized vertex stage's too.
+    // control stage's.
     for &(slot, stages) in synthesized {
         let d = StageDescriptor::new(slot, vk::DescriptorType::STORAGE_BUFFER, 1);
         decls.insert(d.slot, (d, stages));
@@ -1133,25 +1114,11 @@ fn layout(
                     ),
                 )));
             }
-            let stages = i.vk_stage().flags();
-            // An emulated mesh pipeline's object and mesh functions are both compute entries:
-            // Vulkan admits one range per stage, so theirs is the hull of their disjoint windows.
-            match push_constants
-                .iter_mut()
-                .find(|r: &&mut PushConstantRange| r.stages == stages)
-            {
-                Some(r) => {
-                    let start = r.offset.min(offset);
-                    let end = (r.offset + r.size).max(offset + size);
-                    r.offset = start;
-                    r.size = end - start;
-                }
-                None => push_constants.push(PushConstantRange {
-                    stages,
-                    offset,
-                    size,
-                }),
-            }
+            push_constants.push(PushConstantRange {
+                stages: i.vk_stage().flags(),
+                offset,
+                size,
+            });
         }
     }
     let mut sets = vec![DescriptorSetLayout {

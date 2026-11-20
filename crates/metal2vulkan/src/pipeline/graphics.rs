@@ -14,7 +14,7 @@ use crate::error::{
     Attachment, Capability, Error, Feature, InternalError, InternalKind, Unsupported,
 };
 use crate::metal;
-use crate::pipeline::interface::{MeshRecords, PatchDomain};
+use crate::pipeline::interface::PatchDomain;
 use crate::pipeline::sym::SampledType;
 use crate::vk;
 
@@ -153,18 +153,6 @@ pub struct GraphicsState {
     /// [`Limits::early_fragment_multisample_coverage_after_sample_counting`](crate::device::Limits::early_fragment_multisample_coverage_after_sample_counting)).
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_sample_mask: bool,
-    /// A mesh render pipeline on a device without `VK_EXT_mesh_shader`: its mesh function is
-    /// the pipeline's `COMPUTE` module, which writes these records, and a synthesized `VERTEX`
-    /// module draws them as a list of [`MeshRecords::topology`](MeshRecords::topology)
-    /// (the binder's `DrawCommands::mesh_dispatch` states the consumer contract). `None` for
-    /// every other pipeline.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_records: Option<MeshRecords>,
-    /// A mesh render pipeline's primitive, its mesh function's: its indices, 1 (points), 2
-    /// (lines) or 3 (triangles), whether the device draws the mesh or
-    /// [`mesh_records`](Self::mesh_records) does. `None` for every other pipeline.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_corners: Option<u32>,
     /// A render pipeline variant that draws its lines as bands of triangles
     /// (`VariantKey::line_band`, `pipeline::link::band`): its `topology` is `PATCH_LIST` (never
     /// dynamic), its stages the vertex stage, the band's synthesized tessellation control and
@@ -544,8 +532,6 @@ impl GraphicsState {
             shadow_stencil: None,
             early_fragment_tests: false,
             writes_sample_mask: false,
-            mesh_records: None,
-            mesh_corners: None,
             line_band: None,
             region_fan_out: None,
             writes_point_size: false,

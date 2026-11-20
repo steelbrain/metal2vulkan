@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2220;
+pub const SEMANTICS_VERSION: u32 = 2221;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2220;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 564;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 565;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -357,13 +357,6 @@ pub struct VariantKey {
     /// it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_weights: bool,
-    /// The synthesized vertex stage of an emulated mesh function's pipeline draws each line or
-    /// triangle from its last index first (`BindShape::mesh_last_first`): the variant a mesh draw
-    /// under Apple's last provoking vertex runs on a device that takes flat inputs from the
-    /// first (`pipeline::link::mesh`). The plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::MeshLastFirst`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mesh_last_first: bool,
     /// The pipeline draws its lines, or its triangles' edges, as bands of triangles through
     /// synthesized tessellation stages, each patch one primitive of this kind
     /// (`BindShape::line_band`, `pipeline::link::band`): the variant a draw of lines, or of
@@ -613,7 +606,6 @@ impl VariantKey {
             && self.kept_imageblock_bytes.is_none()
             && !self.depth_clamp_range
             && !self.rotated_weights
-            && !self.mesh_last_first
             && self.line_band.is_none()
             && self.swizzled_storage.is_empty()
             && !self.addressed_function_tables

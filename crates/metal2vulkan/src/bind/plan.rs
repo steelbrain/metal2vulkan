@@ -259,8 +259,7 @@ pub(crate) struct MeshTemplate {
     /// Every `LocalSizeConstraint{multiple}` of the pipeline: a threadgroup of either stage must
     /// be whole subgroups of the flattened tier's size.
     pub multiples: Vec<u32>,
-    /// The mesh stage's limits (`maxMeshWorkGroup*`; an emulated mesh function's are the
-    /// compute stage's, `maxComputeWorkGroup*`).
+    /// The mesh stage's limits (`maxMeshWorkGroup*`).
     pub mesh: GroupLimits,
     /// The task stage's limits (`maxTaskWorkGroup*`), of a pipeline with an object function.
     pub object: Option<GroupLimits>,
@@ -274,10 +273,6 @@ pub(crate) struct MeshTemplate {
     /// draws it, its region flagged `lower::dispatch::NONUNIFORM`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub partial_groups: bool,
-    /// An emulated mesh function's records: each draw dispatches its mesh threadgroups and
-    /// draws their primitives (`DrawCommands::mesh_dispatch`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub records: Option<RecordsTemplate>,
 }
 
 /// A stage's threadgroup and grid limits.
@@ -290,8 +285,8 @@ pub(crate) struct GroupLimits {
     pub invocations: u32,
     /// `max*WorkGroupCount`.
     pub count: [u32; 3],
-    /// `max*WorkGroupTotalCount`; `None` for the compute stage, which has none.
-    pub total: Option<u32>,
+    /// `max*WorkGroupTotalCount`.
+    pub total: u32,
     /// The stage the limits are of, which names them.
     pub stage: GroupStage,
 }
@@ -304,30 +299,6 @@ pub(crate) enum GroupStage {
     Task,
     /// A mesh function's (`MESH_EXT`).
     Mesh,
-    /// An emulated mesh function's (`COMPUTE`).
-    Compute,
-}
-
-/// What a draw of an emulated mesh function's pipeline sizes from its grid
-/// (`DrawCommands::mesh_dispatch`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub(crate) struct RecordsTemplate {
-    /// The words of one threadgroup's records (`MeshRecords::group_words`).
-    pub group_words: u64,
-    /// The vertices of one threadgroup's primitives in the draw: `NP · k`.
-    pub group_vertices: u32,
-    /// The device's `maxStorageBufferRange`, past which a draw's records or work buffer cannot
-    /// be bound.
-    pub max_range: u32,
-    /// The words of an object threadgroup's slot in the work buffer (`MeshRecords::slot_words`).
-    pub slot_words: u32,
-    /// `maxComputeWorkGroupCount[0]`, the mesh dispatch's rows.
-    pub row: u32,
-    /// `maxComputeWorkGroupCount[1]`, its most rows.
-    pub rows: u32,
-    /// `minStorageBufferOffsetAlignment`, to which the scan's arguments range is aligned.
-    pub alignment: u64,
 }
 
 /// What a draw of a pipeline whose fragment function runs the draw's depth test itself
@@ -822,15 +793,6 @@ pub enum WriteSource {
     /// stand when the command runs, which differs only for a CPU write racing the GPU. The
     /// stage's directory gives each listed id its record's offset, by the same sizes.
     FunctionTableSnapshot,
-    /// An emulated mesh function's records (`SyntheticBinding::MeshRecords`): the draw's
-    /// `MeshDispatch::records`, a region of its own or the command buffer's records pool, which
-    /// the consumer binds whole for the mesh dispatch and the draw alike
-    /// ([`MeshDispatch`](crate::bind::MeshDispatch)).
-    MeshRecords,
-    /// An emulated mesh draw's work buffer (`SyntheticBinding::MeshWork`, the object and mesh
-    /// stages' alike): the draw's region of `MeshDispatch::work_bytes`, holding
-    /// `MeshDispatch::work`, bound whole ([`MeshDispatch`](crate::bind::MeshDispatch)).
-    MeshWork,
     /// The command buffer's execution status (`SyntheticBinding::ExecutionStatus`) of a stage on
     /// a device that does not address buffers: a storage buffer of the
     /// [`ExecutionStatus`](crate::bind::ExecutionStatus) words, the same buffer every command of

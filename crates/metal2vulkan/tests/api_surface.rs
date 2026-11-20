@@ -380,15 +380,12 @@ surface! {
         struct CommandWrites E;
         enum DescriptorView N;
         struct LevelReads N;
-        struct MeshRecords N;
         enum NumberedSampler N;
         enum PatchDomain N;
         struct PipelineInterface N;
         struct PlacedField N;
         enum PushLoc N;
         struct PushPlacement N;
-        struct RecordField N;
-        enum RecordValue N;
         struct SampledLevels N;
         struct SamplerArray N;
         struct SamplerLevels N;
@@ -468,9 +465,6 @@ surface! {
         struct DrawCommands N;
         fn alpha_test_code;
         enum IndexOverrun N;
-        struct MeshDispatch N;
-        enum MeshGroups N;
-        enum MeshRecordsRegion N;
         fn heap_classes;
         struct HeapElements O;
         enum HeapSource E;
@@ -547,7 +541,6 @@ surface! {
         struct TileThreadgroupArgument N;
         enum FragmentTests N;
         struct ExecutionStatus E;
-        struct MeshRecordsFault N;
         struct StatusBits E;
         struct StatusReport N;
         enum StatusWord N;
@@ -626,9 +619,6 @@ surface! {
         enum EtcDecode N;
         enum EtcTexels N;
         enum ChromaDecode N;
-        fn mesh_scan_module;
-        fn mesh_object_arguments_module;
-        struct MeshScanModule N;
         fn mesh_arguments_module;
         fn fold_object_grid;
         fn metal_object_grid;

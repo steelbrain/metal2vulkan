@@ -359,7 +359,7 @@ fn a_selected_slice_and_viewport_take_the_stages() {
 /// `LayeredRendering`: a post-tessellation vertex function and a vertex function's own
 /// `ViewportIndex` beside a selected slice as not implemented, and a selected viewport drawn as
 /// multiview without `multiviewGeometryShader` as needing the output instead. A selected slice is
-/// never drawn as multiview, and an emulated mesh pipeline's indices take no stage.
+/// never drawn as multiview.
 #[test]
 fn what_the_stages_cannot_carry_for_an_index_is_refused() {
     let p = profile("lavapipe");

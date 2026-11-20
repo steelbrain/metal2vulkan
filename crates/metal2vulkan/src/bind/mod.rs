@@ -105,7 +105,6 @@ pub(crate) mod index_rewrite;
 pub mod indirect_commands;
 pub(crate) mod instantiate;
 pub(crate) mod mesh_arguments;
-pub(crate) mod mesh_scan;
 pub(crate) mod neutral;
 pub(crate) mod plan;
 pub(crate) mod pvrtc_decode;
@@ -142,10 +141,7 @@ pub use depth_stencil_copy::{
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
-pub use graphics::{
-    alpha_test_code, DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups,
-    MeshRecordsRegion,
-};
+pub use graphics::{alpha_test_code, DrawCall, DrawCommands, IndexOverrun};
 pub use heap::{
     handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,
     HeapElements, HeapSource, HANDLE_ENTRY_BYTES, HANDLE_TABLE_CAPACITY, NEUTRAL_HEAP_ELEMENT,
@@ -169,7 +165,6 @@ pub use mesh_arguments::{
     MeshArgumentsModule, MeshGridLimits, MeshGridRule, ObjectFold, METAL_MESH_GRID_AXIS,
     METAL_MESH_GRID_TOTAL, METAL_OBJECT_GRID_TOTAL,
 };
-pub use mesh_scan::{mesh_object_arguments_module, mesh_scan_module, MeshScanModule};
 pub use neutral::NeutralResource;
 pub use plan::resources::sampler_desc;
 pub use plan::{
@@ -220,9 +215,7 @@ pub use sample_interleave::{
 pub use sample_planes::{
     planes_merge_modules, planes_split_module, PlanesCopy, PlanesMergeModules, PlanesSplitModule,
 };
-pub use status::{
-    ExecutionStatus, MeshRecordsFault, ReplayFaults, StatusBits, StatusReport, StatusWord,
-};
+pub use status::{ExecutionStatus, ReplayFaults, StatusBits, StatusReport, StatusWord};
 pub use table::{FunctionTableSnapshot, FunctionTableWords};
 pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;

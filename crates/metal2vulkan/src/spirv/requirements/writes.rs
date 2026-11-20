@@ -24,12 +24,6 @@
 //! The trace also ends at an `OpIAdd` whose one operand is a load of the address member, whatever
 //! the other: the guest does not hold the address, so no sum of the guest's has such an operand.
 //!
-//! An emulated mesh function's records (`Synthetic(MeshRecords)`) are the product's too, traced as
-//! the status buffer's binding is: they hand the function's outputs to the pipeline's synthesized
-//! vertex stage, as a mesh function's output variables would. So is an emulated object function's
-//! slot of its draw's work buffer (`Synthetic(MeshWork)`), which hands its grid and payload to the
-//! mesh function, as `OpEmitMeshTasksEXT` would.
-//!
 //! The shader-side stencil's shadow (`Synthetic(ShadowStencil)`) is the product's too: its writes
 //! carry Metal's stencil test, which Metal applies per sample whether the function runs per pixel
 //! or per sample, so they do not make the function run per sample. An image write counts unless its
@@ -99,8 +93,7 @@ fn class(m: &TypedModule, ptr: Value) -> BResult<StorageClass> {
 /// is traced through.
 #[derive(Default)]
 struct Status<'m> {
-    /// The variables of the `Synthetic(ExecutionStatus)`, `Synthetic(MeshRecords)` and
-    /// `Synthetic(MeshWork)` bindings.
+    /// The variables of the `Synthetic(ExecutionStatus)` binding.
     bindings: Vec<Value>,
     /// The variables of the `Synthetic(ShadowStencil)`, `Synthetic(DepthStandIn)`,
     /// `Synthetic(StencilStandIn)`, `TileAttachment`, `ExtendedShadow` and `SnapshotTexels`
@@ -123,11 +116,7 @@ impl<'m> Status<'m> {
                 GlobalKind::Resource(slot)
                     if matches!(
                         slot.kind,
-                        ResourceKind::Synthetic(
-                            SyntheticBinding::ExecutionStatus
-                                | SyntheticBinding::MeshRecords
-                                | SyntheticBinding::MeshWork
-                        )
+                        ResourceKind::Synthetic(SyntheticBinding::ExecutionStatus)
                     ) =>
                 {
                     s.bindings.push(g.value);
