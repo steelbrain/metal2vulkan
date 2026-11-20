@@ -33,24 +33,10 @@
 //! through the twin's `R8G8B8A8_SRGB` view, the device's decode (`PrecisionNote::SrgbTexelDecode`),
 //! as for `RGBA8Unorm_sRGB`. A format's linear and sRGB forms decode to the same codes, so one twin
 //! serves the views of both.
-//!
-//! **The module** ([`pvrtc_decode_module`], one per device and block shape: 2 or 4 bits a pixel,
-//! RGB or RGBA). `BlockDecodeModule`'s entry point, local size and bindings: the shape
-//! ([`PvrtcDecode::shape`]: a band of a level's rows of some of its images), every block of
-//! those images (row-major, each image's after the last, read whole, since each texel's colors
-//! come from the blocks around it, wrapping), and the band's texels, written as a copy into the
-//! twin reads them. Invocation `(x, y, z)` inside the band's width, rows and images writes texel
-//! `(x, first + y)` of image `z`; one outside writes nothing. A write into some blocks changes the
-//! texels around them, wrapping at the level's edges: the consumer decodes whole levels.
 
-use crate::bind::block_decode::{decode_module, BlockDecodeModule};
-use crate::device::Device;
-use crate::error::Error;
 use crate::lower::arith::srgb::SRGB_DECODE_STEPS;
 use crate::metal::PixelFormat;
 use crate::vk::Format;
-
-mod kernel;
 
 /// How a PVRTC format's blocks decode (the module docs).
 #[non_exhaustive]
@@ -153,22 +139,6 @@ impl PvrtcDecode {
         (width.div_ceil(bw) * height.div_ceil(bh) * Self::BLOCK_BYTES) as usize
     }
 
-    /// The shape's bytes ([`BlockDecodeModule::SHAPE_WORDS`] words) of a band of rows `first` to
-    /// `first + rows` of `images` images of a level `width` x `height`, whose blocks the module
-    /// reads whole: `width`, `rows`, `images`, `first` and `height`.
-    pub fn shape(
-        [width, height]: [u32; 2],
-        [first, rows]: [u32; 2],
-        images: u32,
-    ) -> [u8; BlockDecodeModule::SHAPE_WORDS as usize * 4] {
-        let words = [width, rows, images, first, height];
-        let mut bytes = [0; BlockDecodeModule::SHAPE_WORDS as usize * 4];
-        for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
-            chunk.copy_from_slice(&word.to_le_bytes());
-        }
-        bytes
-    }
-
     /// The twin's texels of rows `first` to `first + rows` of one image of a level `width` x
     /// `height` whose `blocks` (all of the image's, row-major) wrap, into `out` (exactly their
     /// bytes), laid out as a copy into the twin reads them.
@@ -207,18 +177,6 @@ impl PvrtcDecode {
             }
         }
     }
-}
-
-/// The PVRTC decode module of `device` for `decode` (the module docs; an sRGB format's is its
-/// linear form's): built with the typed builder, checked by the owned verifier against the
-/// device's profile (requirements included), serialized, and numbered with the fixed bindings of
-/// [`BlockDecodeModule`].
-pub fn pvrtc_decode_module(
-    device: &Device,
-    decode: PvrtcDecode,
-) -> Result<BlockDecodeModule, Error> {
-    let m = kernel::typed_module(decode.linear())?;
-    decode_module(device, m, "PVRTC decode")
 }
 
 /// Colors A and B of the block `word`, each red, green and blue of 5 bits and alpha of 4.

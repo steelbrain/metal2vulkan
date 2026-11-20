@@ -2,10 +2,9 @@
 //! per-lane constants it reads.
 //!
 //! The math intrinsics' normalized-integer conversions, the vertex fetch's normalized formats,
-//! and the sRGB decode steps emit it at compile time; the runtime also emits it when it builds a
-//! BC4 or BC5 texture's block decode (`bind::block_decode`). It is a file of its own so that what
-//! the runtime emits is among the runtime's inputs (validation's `build.rs`) without the math
-//! intrinsics, which only the compile emits.
+//! and the sRGB decode steps emit it at compile time. It is a file of its own so that it is among
+//! the runtime's inputs (validation's `build.rs`) without the math intrinsics, which only the
+//! compile emits.
 
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::ops::{elem_ty, ones, splat, ty};

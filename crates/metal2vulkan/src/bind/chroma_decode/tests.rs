@@ -1,8 +1,8 @@
 use super::{
-    convert_typed_module, sample_typed_module, typed_module, ChromaConvertModule, ChromaDecode,
+    convert_typed_module, sample_typed_module, ChromaConvertModule, ChromaDecode,
     ChromaSampleModule, IMAGE,
 };
-use crate::bind::block_decode::{BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
+use super::{BLOCKS, SHAPE, TEXELS};
 use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
@@ -92,11 +92,6 @@ fn the_probe_s_textures_decode_as_metal_reads_them() {
 #[test]
 fn the_chroma_decode_kernels_are_valid_on_every_committed_profile() {
     let profiles = committed_profiles().expect("profiles");
-    for decode in ChromaDecode::ALL {
-        for (_, p) in &profiles {
-            assert_valid(typed_module(decode).expect("module"), p);
-        }
-    }
     // The device's own conversion's sample kernel, one for both formats.
     for (_, p) in &profiles {
         assert_valid(sample_typed_module().expect("sample module"), p);
@@ -121,61 +116,6 @@ fn the_chroma_sample_shape_and_formats() {
     use crate::vk::Format;
     assert_eq!(ChromaDecode::Gbgr.format(), Format::G8B8G8R8_422_UNORM);
     assert_eq!(ChromaDecode::Bgrg.format(), Format::B8G8R8G8_422_UNORM);
-}
-
-/// The kernel's texels of a region `size` of `decode`'s `pairs`; the texel buffer's bytes past the
-/// region's stay unwritten.
-fn kernel_texels(decode: ChromaDecode, pairs: &[u8], size: [u32; 3]) -> Vec<u8> {
-    let m = typed_module(decode).expect("module");
-    let [w, h, d] = size;
-    let length = (w * h * d * ChromaDecode::TEXEL_BYTES) as usize;
-    let res = Resources {
-        buffers: vec![
-            Buffer {
-                slot: Some(SHAPE),
-                address: None,
-                bytes: BlockDecodeModule::shape(size).to_vec(),
-            },
-            Buffer {
-                slot: Some(BLOCKS),
-                address: None,
-                bytes: pairs.to_vec(),
-            },
-            Buffer {
-                slot: Some(TEXELS),
-                address: None,
-                bytes: vec![0xcd; length + 64],
-            },
-        ],
-        push: Vec::new(),
-        spec: Default::default(),
-    };
-    let groups = |n: u32| n.div_ceil(BlockDecodeModule::LOCAL_SIZE);
-    let cfg = Config {
-        order: Order::Forward,
-        workgroups: [groups(w) + 1, groups(h), d + 1],
-        ..Config::default()
-    };
-    let mut out = run(&m, &cfg, res).expect("run").buffers;
-    let written = out.swap_remove(2);
-    assert!(written[length..].iter().all(|&b| b == 0xcd), "{decode:?}");
-    written[..length].to_vec()
-}
-
-/// The kernel writes the CPU's decode on every texel of both orders: random pairs, two images, odd
-/// widths and heights, rows of one pair and of one texel.
-#[test]
-fn the_chroma_kernel_is_the_decode_on_every_texel() {
-    for (k, decode) in ChromaDecode::ALL.into_iter().enumerate() {
-        for size in [[16u32, 12, 2], [13, 9, 1], [7, 5, 2], [2, 1, 1], [1, 1, 1]] {
-            let [w, h, d] = size;
-            let n = (w.div_ceil(2) * h * d * ChromaDecode::BLOCK_BYTES) as usize;
-            let pairs = stream(0x422_0000 + k as u64, n);
-            let cpu = decode.decode(&pairs, size);
-            let gpu = kernel_texels(decode, &pairs, size);
-            assert_eq!(gpu, cpu, "{decode:?} {size:?}");
-        }
-    }
 }
 
 /// The in-place kernel's texels of a texture of `size` whose rows of pairs start at byte `first`

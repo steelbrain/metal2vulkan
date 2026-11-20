@@ -1,5 +1,5 @@
 //! A 4:2:2 texture's texels as Metal reads them, from its pairs: the texels the decoded twin of a
-//! `GBGR422` or `BGRG422` texture holds, which [`chroma_decode_module`] writes on the GPU.
+//! `GBGR422` or `BGRG422` texture holds.
 //!
 //! **The decode.** Two texels share 4 bytes: their own green codes and one blue and one red code
 //! (`G0 B G1 R` for `GBGR422`, `B G0 R G1` for `BGRG422`), sited between the two. Metal reads
@@ -43,7 +43,7 @@
 //! whose chroma lies at Metal's midpoint through a linear chroma filter), the consumer copies the
 //! pairs into an image of that format and one dispatch of [`chroma_sample_module`] samples it
 //! through a sampler of that conversion (the identity model, full range) at each texel's centre,
-//! writing the twin's codes as [`chroma_decode_module`] writes Metal's: Vulkan's implicit
+//! writing the twin's codes as [`ChromaDecode::decode_into`] writes Metal's: Vulkan's implicit
 //! reconstruction weighs the pair's chroma 3 and the pair beside it 1 at a texel's centre, clamped
 //! to the edge at the row's ends, as Metal does, at the device's precision; each channel is
 //! stored as `roundEven(clamp(c, 0, 1) · 255)`, where Metal's sum rounds its ties up.
@@ -70,7 +70,6 @@
 //! the dispatch; its texel writes (`SHADER_STORAGE_WRITE`) → `TRANSFER_READ` before the texels are
 //! copied into the twin.
 
-use super::block_decode::{decode_module, BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
 use super::ycbcr_convert::{scalar, words_buffer};
 use crate::budget::{Budget, Meter};
 use crate::device::requirements::Requirements;
@@ -91,16 +90,24 @@ use crate::spirv::ir::{
 use crate::vk::Format;
 use std::sync::Arc;
 
-/// The 4:2:2 decode module of `device` for `decode`'s pairs: one invocation per texel on the block
-/// decode's bindings and shape ([`BlockDecodeModule`]), built with the typed builder, checked by
-/// the owned verifier against the device's profile (requirements included), serialized, and
-/// numbered with the fixed bindings.
-pub fn chroma_decode_module(
-    device: &Device,
-    decode: ChromaDecode,
-) -> Result<BlockDecodeModule, Error> {
-    decode_module(device, typed_module(decode)?, "4:2:2 decode")
-}
+/// The binding symbol of a module's shape in its typed module.
+const SHAPE: ResourceSlot = ResourceSlot {
+    stage: Stage::Kernel,
+    kind: ResourceKind::Buffer,
+    index: 0,
+};
+/// The binding symbol of a module's pairs (the in-place module's bytes) in its typed module.
+const BLOCKS: ResourceSlot = ResourceSlot {
+    stage: Stage::Kernel,
+    kind: ResourceKind::Buffer,
+    index: 1,
+};
+/// The binding symbol of a module's texels in its typed module.
+const TEXELS: ResourceSlot = ResourceSlot {
+    stage: Stage::Kernel,
+    kind: ResourceKind::Buffer,
+    index: 2,
+};
 
 /// How a 4:2:2 format's pairs lie (the module docs).
 #[non_exhaustive]
@@ -205,92 +212,6 @@ impl ChromaDecode {
             }
         }
     }
-}
-
-/// The GPU's decode: the module [`chroma_decode_module`] serializes, the same decode as the CPU's
-/// ([`ChromaDecode::decode_into`]). One invocation per texel of whole rows (the block decode's
-/// dispatch and shape, `BlockDecodeModule::shape`) reads its pair's word, at `(z · height + y) ·
-/// ceil(width / 2) + x / 2`, and the word of the pair beside it, and writes its texel's word.
-fn typed_module(decode: ChromaDecode) -> BResult<TypedModule> {
-    let mut b = crate::spirv::builder::ModuleBuilder::new();
-    let u32_ = b.ty(Type::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
-    let shape = words_buffer(&mut b, SHAPE, u32_)?;
-    let pairs = words_buffer(&mut b, BLOCKS, u32_)?;
-    let texels = words_buffer(&mut b, TEXELS, u32_)?;
-    let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
-    let void = b.ty(Type::Void)?;
-    let mut f = b.function(void)?;
-    let zero = scalar(&mut f, u32_, 0)?;
-    let invocation = f.module().global_value(invocation)?;
-    let invocation = f.load(invocation, MemAccess::default())?;
-    let [x, y, z] = [0, 1, 2].map(|i| f.composite_extract(invocation, &[i]));
-    let (x, y, z) = (x?, y?, z?);
-    let shape = f.module().global_value(shape)?;
-    let mut field = |index: u32| -> BResult<_> {
-        let index = scalar(&mut f, u32_, u64::from(index))?;
-        let p = f.access_chain(shape, &[zero, index])?;
-        f.load(p, MemAccess::default())
-    };
-    let (width, height, depth) = (field(0)?, field(1)?, field(2)?);
-    let in_x = f.binary(BinOp::ULessThan, x, width)?;
-    let in_y = f.binary(BinOp::ULessThan, y, height)?;
-    let in_z = f.binary(BinOp::ULessThan, z, depth)?;
-    let inside = f.binary(BinOp::LogicalAnd, in_x, in_y)?;
-    let inside = f.binary(BinOp::LogicalAnd, inside, in_z)?;
-    let pairs = f.module().global_value(pairs)?;
-    let texels = f.module().global_value(texels)?;
-    let decoded: ArmFn<'_, ()> = Box::new(move |f, _| {
-        let k = |f: &mut crate::spirv::builder::FunctionBuilder<'_>, v: u32| {
-            scalar(f, u32_, u64::from(v))
-        };
-        let one = k(f, 1)?;
-        // The row's index through the region, and its pairs across.
-        let row = f.binary(BinOp::IMul, z, height)?;
-        let row = f.binary(BinOp::IAdd, row, y)?;
-        let across = f.binary(BinOp::IAdd, width, one)?;
-        let across = f.binary(BinOp::ShiftRightLogical, across, one)?;
-        let half = f.binary(BinOp::ShiftRightLogical, x, one)?;
-        let at = f.binary(BinOp::IMul, row, across)?;
-        let at = f.binary(BinOp::IAdd, at, half)?;
-        let p = f.access_chain(pairs, &[zero, at])?;
-        let pair = f.load(p, MemAccess::default())?;
-        // The pair beside it: before an even texel, after an odd one, its own at the row's ends.
-        let odd = f.binary(BinOp::BitwiseAnd, x, one)?;
-        let odd = f.binary(BinOp::INotEqual, odd, zero)?;
-        let first = f.binary(BinOp::IEqual, half, zero)?;
-        let before = f.binary(BinOp::ISub, at, one)?;
-        let before = f.select(first, at, before)?;
-        let last = f.binary(BinOp::ISub, across, one)?;
-        let last = f.binary(BinOp::IEqual, half, last)?;
-        let after = f.binary(BinOp::IAdd, at, one)?;
-        let after = f.select(last, at, after)?;
-        let beside = f.select(odd, after, before)?;
-        let p = f.access_chain(pairs, &[zero, beside])?;
-        let next = f.load(p, MemAccess::default())?;
-        let word = texel_word(f, (u32_, decode), (pair, next), odd)?;
-        let t = f.binary(BinOp::IMul, row, width)?;
-        let t = f.binary(BinOp::IAdd, t, x)?;
-        let ptr = f.access_chain(texels, &[zero, t])?;
-        f.store(ptr, word, MemAccess::default())?;
-        Ok(ArmEnd::FallThrough(Vec::new()))
-    });
-    f.if_(&mut (), inside, decoded, None)?;
-    f.ret(None)?;
-    let id = f.finish()?;
-    b.entry(
-        ExecModel::GLCompute,
-        id,
-        vec![ExecMode::LocalSize {
-            x: BlockDecodeModule::LOCAL_SIZE,
-            y: BlockDecodeModule::LOCAL_SIZE,
-            z: 1,
-        }],
-    )?;
-    b.finalize()
 }
 
 /// The crate-owned 4:2:2 decode module of one device and decode that reads the pairs where they

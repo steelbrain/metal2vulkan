@@ -1,14 +1,10 @@
 //! The HDR profile of the ASTC decode against Metal's reads of the same blocks on an Apple M3 Max
 //! (macOS 27.0.1, our probe `astc_hdr_textures`, its `reads` case: `texture.read` as `float4` and
-//! as `half4`, and a nearest `sample` at each texel's centre, all three the same bits), and the
-//! GPU's decode against the CPU's.
+//! as `half4`, and a nearest `sample` at each texel's centre, all three the same bits).
 
-use super::{assert_kernel_decodes, fnv1a, modes_of, two_layers};
-use crate::bind::astc_decode::kernel::typed_module;
+use super::fnv1a;
 use crate::bind::astc_decode::{hdr, AstcDecode, AstcTexels};
 use crate::metal::PixelFormat;
-use crate::spirv::interp::Order;
-use crate::spirv::testing::{assert_valid, committed_profiles};
 use crate::vk::Format;
 
 /// The sixteen `_HDR` formats.
@@ -330,82 +326,5 @@ fn an_hdr_format_s_twin_holds_halves() {
     {
         let widened = hdr::half_value(u16::from_le_bytes(*half));
         assert_eq!(widened.to_bits(), u32::from_le_bytes(*float));
-    }
-}
-
-#[test]
-fn the_astc_hdr_decode_kernels_are_valid_on_every_committed_profile() {
-    let profiles = committed_profiles().expect("profiles");
-    for pf in [PixelFormat::ASTC4x4HDR, PixelFormat::ASTC12x12HDR] {
-        let decode = AstcDecode::of(pf).expect("a decode");
-        for texels in [AstcTexels::Half, AstcTexels::Float] {
-            for (_, p) in &profiles {
-                assert_valid(typed_module(decode, texels).expect("module"), p);
-            }
-        }
-    }
-}
-
-/// Seeded blocks of `decode` that cover the HDR profile's kinds of valid block, then `invalid`
-/// error blocks: each valid one that adds a colour endpoint mode, a partition count, two planes,
-/// or an HDR or LDR void-extent block, seen fewer than `each` times so far.
-fn covering_hdr_blocks(decode: AstcDecode, seed: u64, each: usize, invalid: usize) -> Vec<u8> {
-    let (mut modes, mut partitions, mut planes, mut void) = ([0; 16], [0; 5], 0, [0; 2]);
-    let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for block in hdr_seeded_blocks(seed, 32768).as_chunks::<16>().0 {
-        if decode.block_values(block).is_none() {
-            if bad.len() < invalid * 16 {
-                bad.extend_from_slice(block);
-            }
-            continue;
-        }
-        let bits = u128::from_le_bytes(*block);
-        if bits & 0x1FF == 0x1FC {
-            let hdr = ((bits >> 9) & 1) as usize;
-            if void[hdr] < each {
-                void[hdr] += 1;
-                good.extend_from_slice(block);
-            }
-            continue;
-        }
-        let (kinds, dual) = modes_of(block);
-        let adds = kinds.iter().any(|&m| modes[m as usize] < each)
-            || partitions[kinds.len()] < each
-            || (dual && planes < each);
-        if adds {
-            for &m in &kinds {
-                modes[m as usize] += 1;
-            }
-            partitions[kinds.len()] += 1;
-            planes += usize::from(dual);
-            good.extend_from_slice(block);
-        }
-    }
-    assert!(modes.iter().all(|&n| n >= each), "{decode:?}: {modes:?}");
-    assert!(void.iter().all(|&n| n >= each), "{decode:?}: {void:?}");
-    good.extend(bad);
-    good
-}
-
-/// The GPU's decode is the CPU's, bit for bit, as halves and as `float`s, in regions of two layers
-/// with partial blocks at their right and bottom edges: every texel of seeded 4x4 blocks that
-/// cover every colour endpoint mode, partition count, two planes and HDR and LDR void-extent
-/// blocks, and of error blocks (in both orders); and of a few such blocks of each other footprint.
-#[test]
-fn the_astc_hdr_kernel_is_the_decode_on_every_texel() {
-    let both = [Order::Forward, Order::Reverse];
-    let four = AstcDecode::of(PixelFormat::ASTC4x4HDR).expect("a decode");
-    let (blocks, size) = two_layers(four, covering_hdr_blocks(four, 222, 2, 4), 8);
-    assert_kernel_decodes(four, AstcTexels::Half, &blocks, size, &both);
-    assert_kernel_decodes(four, AstcTexels::Float, &blocks, size, &both[..1]);
-    for pf in hdr_formats()
-        .into_iter()
-        .filter(|&pf| pf != PixelFormat::ASTC4x4HDR)
-    {
-        let decode = AstcDecode::of(pf).expect("a decode");
-        let mut blocks = covering_hdr_blocks(decode, u64::from(pf.as_raw()), 1, 1);
-        blocks.drain(16 * 4..blocks.len() - 16);
-        let (blocks, size) = two_layers(decode, blocks, 2);
-        assert_kernel_decodes(decode, AstcTexels::Half, &blocks, size, &both[..1]);
     }
 }

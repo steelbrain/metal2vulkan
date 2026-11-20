@@ -1,6 +1,5 @@
 //! An ETC2 or EAC texture's texels as Metal decodes them, from its blocks: the texels the decoded
-//! twin of the texture holds on a device without the format, for a consumer that keeps one, which
-//! [`etc_decode_module`] writes on the GPU.
+//! twin of the texture holds on a device without the format, for a consumer that keeps one.
 //!
 //! **The decode** is the Khronos Data Format Specification's (its ETC2 and EAC chapters), written
 //! here from the specification. A block is 64 bits read most significant byte first; its texels
@@ -38,30 +37,8 @@
 //! most half a 16-bit step off it; [`EtcTexels::Float`] holds the values exactly (`R32_SFLOAT`,
 //! `R32G32_SFLOAT`).
 
-use super::block_decode::{decode_module, BlockDecodeModule};
-use crate::device::Device;
-use crate::error::Error;
 use crate::metal::PixelFormat;
 use crate::vk::Format;
-
-mod kernel;
-
-/// The ETC2 and EAC decode module of `device` for `decode`'s blocks into `texels` (the module
-/// docs; an sRGB format's is its unorm form's): one invocation per texel on the block decode's
-/// bindings and shape ([`BlockDecodeModule`]), built with the typed builder, checked by the owned
-/// verifier against the device's profile (requirements included), serialized, and numbered with
-/// the fixed bindings.
-pub fn etc_decode_module(
-    device: &Device,
-    decode: EtcDecode,
-    texels: EtcTexels,
-) -> Result<BlockDecodeModule, Error> {
-    decode_module(
-        device,
-        kernel::typed_module(decode, texels)?,
-        "ETC2 and EAC decode",
-    )
-}
 
 /// How an ETC2 or EAC format's blocks decode (the module docs). The sRGB forms decode to their
 /// unorm forms' codes.

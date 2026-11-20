@@ -51,36 +51,14 @@
 //! (`metal::texel_format::srgb_coded`) and the device decodes through the image's `R8G8B8A8_SRGB`
 //! view (`PrecisionNote::SrgbTexelDecode`). Whatever its policy, the runtime holds an LDR or sRGB
 //! format's twin in 8-bit codes and an HDR format's in halves.
-//!
-//! **The GPU's decode** ([`astc_decode_module`]) is this decode in integer operations, each
-//! texel's from its block alone, writing the texels [`decode`](AstcDecode::decode) writes; its
-//! bindings, shape and dispatch are the block decode's ([`BlockDecodeModule`]), its blocks and
-//! texels laid out as [`decode`](AstcDecode::decode)'s are.
 
 use std::sync::OnceLock;
 
-use super::block_decode::{decode_module, BlockDecodeModule};
-use crate::device::Device;
-use crate::error::Error;
 use crate::lower::arith::srgb::SRGB_DECODE_STEPS;
 use crate::metal::PixelFormat;
 use crate::vk::Format;
 
 mod hdr;
-mod kernel;
-
-/// The module of `device` that decodes `decode`'s blocks into the texels of `texels` on the GPU
-/// (the module docs): the bindings, shape and dispatch of [`BlockDecodeModule`], of which it
-/// reads the shape's first three words (the region's width, height and depth), its blocks
-/// `decode`'s, `⌈width / w⌉` across and `⌈height / h⌉` down of each layer for the footprint
-/// `w` x `h`.
-pub fn astc_decode_module(
-    device: &Device,
-    decode: AstcDecode,
-    texels: AstcTexels,
-) -> Result<BlockDecodeModule, Error> {
-    decode_module(device, kernel::typed_module(decode, texels)?, "ASTC decode")
-}
 
 /// How an ASTC format's blocks decode: its footprint, and its profile (LDR, sRGB-encoded LDR, or
 /// HDR).

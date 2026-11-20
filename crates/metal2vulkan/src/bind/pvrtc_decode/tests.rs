@@ -1,12 +1,8 @@
 //! The PVRTC decode against Metal's reads of seeded random blocks on an Apple M3 Max (macOS
 //! 27.0.1).
 
-use super::kernel::typed_module;
 use super::PvrtcDecode;
-use crate::bind::block_decode::{BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
 use crate::metal::PixelFormat;
-use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
-use crate::spirv::testing::{assert_valid, committed_profiles};
 
 /// The eight PVRTC formats decode, and no other format does.
 #[test]
@@ -125,86 +121,4 @@ fn images_small_levels_and_bands_decode_apart() {
     let mut band = vec![0; 32 * 5 * 4];
     decode.decode_rows(&blocks[..image], [32, 16], [7, 5], &mut band);
     assert_eq!(band, first[32 * 7 * 4..32 * 12 * 4]);
-}
-
-#[test]
-fn the_pvrtc_decode_kernels_are_valid_on_every_committed_profile() {
-    let profiles = committed_profiles().expect("profiles");
-    for pf in [PixelFormat::PVRTCRGBA2BPPSRGB, PixelFormat::PVRTCRGB4BPP] {
-        let decode = PvrtcDecode::of(pf).expect("a decode");
-        for (_, p) in &profiles {
-            assert_valid(typed_module(decode).expect("module"), p);
-        }
-    }
-}
-
-/// The kernel's texels of rows `first` to `first + rows` of `images` images of a level `level`
-/// of `decode` whose `blocks` lie row-major; the texel buffer's words past the band's stay
-/// unwritten.
-fn kernel_texels(
-    decode: PvrtcDecode,
-    blocks: &[u8],
-    level: [u32; 2],
-    band: [u32; 2],
-    images: u32,
-) -> Vec<u8> {
-    let m = typed_module(decode).expect("module");
-    let (w, rows) = (level[0], band[1]);
-    let length = (w * rows * images * PvrtcDecode::TEXEL_BYTES) as usize;
-    let res = Resources {
-        buffers: vec![
-            Buffer {
-                slot: Some(SHAPE),
-                address: None,
-                bytes: PvrtcDecode::shape(level, band, images).to_vec(),
-            },
-            Buffer {
-                slot: Some(BLOCKS),
-                address: None,
-                bytes: blocks.to_vec(),
-            },
-            Buffer {
-                slot: Some(TEXELS),
-                address: None,
-                bytes: vec![0xcd; length + 64],
-            },
-        ],
-        push: Vec::new(),
-        spec: Default::default(),
-    };
-    let groups = |n: u32| n.div_ceil(BlockDecodeModule::LOCAL_SIZE);
-    let cfg = Config {
-        order: Order::Forward,
-        workgroups: [groups(w) + 1, groups(rows), images + 1],
-        step_limit: 1 << 26,
-        ..Config::default()
-    };
-    let mut out = run(&m, &cfg, res).expect("run").buffers;
-    let written = out.swap_remove(2);
-    assert!(written[length..].iter().all(|&b| b == 0xcd), "{decode:?}");
-    written[..length].to_vec()
-}
-
-/// The kernel writes the CPU's decode (Metal's, `seeded_levels_read_as_metal_read_them`) on every
-/// format: a level of seeded blocks whole, a band of its rows, two images, and levels no larger
-/// than a block.
-#[test]
-fn the_pvrtc_kernel_is_the_decode_on_every_texel() {
-    for &pf in PixelFormat::ALL {
-        let Some(decode) = PvrtcDecode::of(pf) else {
-            continue;
-        };
-        let blocks = seeded_level(decode);
-        for level in [[32, 32], [16, 8], [8, 8], [4, 4], [2, 2], [1, 1]] {
-            let image = decode.level_bytes(level);
-            let cpu = decode.decode(&blocks[..2 * image], [level[0], level[1], 2]);
-            let gpu = kernel_texels(decode, &blocks, level, [0, level[1]], 2);
-            assert_eq!(gpu, cpu, "{pf:?} {level:?}");
-        }
-        let level = [32, 32];
-        let mut cpu = vec![0; 32 * 9 * 4];
-        decode.decode_rows(&blocks, level, [13, 9], &mut cpu);
-        let gpu = kernel_texels(decode, &blocks, level, [13, 9], 1);
-        assert_eq!(gpu, cpu, "{pf:?} band");
-    }
 }

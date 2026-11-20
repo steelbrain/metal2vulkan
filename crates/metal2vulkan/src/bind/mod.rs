@@ -103,14 +103,11 @@
 //! elements in the heap's bytes in Metal's tiled layout, moved between its image and those bytes
 //! through [`tiled_texels_module`]. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
-//! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes from
-//! the blocks each write left, each decode module of [`BlockDecodeModule`]'s shape; a
-//! PVRTC texture on a device without its format through a twin of its texels' codes
-//! ([`PvrtcDecode`]), which [`pvrtc_decode_module`] writes; an ETC2 or EAC texture on a device
-//! without the formats through a twin of its codes or an 11-bit format's values ([`EtcDecode`], in
-//! the texels [`EtcTexels`] names), which [`etc_decode_module`] writes; a 4:2:2 texture through a
-//! twin of its texels' codes ([`ChromaDecode`]), which [`chroma_decode_module`] writes, or, where
-//! the device converts the format itself, [`chroma_sample_module`] samples through the device's
+//! ([`AstcDecode`], in the texels [`AstcTexels`] names); a PVRTC texture on a device without its
+//! format through a twin of its texels' codes ([`PvrtcDecode`]); an ETC2 or EAC texture on a
+//! device without the formats through a twin of its codes or an 11-bit format's values
+//! ([`EtcDecode`], in the texels [`EtcTexels`] names); a 4:2:2 texture through a twin of its
+//! texels' codes ([`ChromaDecode`]), or, where the device converts the format itself, [`chroma_sample_module`] samples through the device's
 //! own Y′CbCr conversion ([`ChromaSampleModule`]); one over a buffer's bytes through an image of
 //! those codes, which [`chroma_convert_module`] writes from the pairs where they lie
 //! ([`ChromaConvertModule`]).
@@ -135,7 +132,6 @@
 pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
-pub(crate) mod block_decode;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
 pub(crate) mod depth_clamp;
@@ -200,11 +196,10 @@ pub use argument_buffer::{
     ArgumentBufferLayout, ArgumentDescriptor, ArgumentLayoutError, ArgumentMember, ArgumentPlace,
     ArgumentType, ARGUMENT_HANDLE_BYTES,
 };
-pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
-pub use block_decode::BlockDecodeModule;
+pub use astc_decode::{AstcDecode, AstcTexels};
 pub use chroma_decode::{
-    chroma_convert_module, chroma_decode_module, chroma_sample_module, ChromaConvertModule,
-    ChromaDecode, ChromaSampleModule,
+    chroma_convert_module, chroma_sample_module, ChromaConvertModule, ChromaDecode,
+    ChromaSampleModule,
 };
 pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
@@ -221,7 +216,7 @@ pub use depth_stencil_resolve::{
     ResolveWrite,
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
-pub use etc_decode::{etc_decode_module, EtcDecode, EtcTexels};
+pub use etc_decode::{EtcDecode, EtcTexels};
 pub use extended_canonical::{
     extended_canonical_module, extended_range_canonical, ExtendedCanonicalModule,
 };
@@ -315,7 +310,7 @@ pub use plane_bytes_copy::{
 };
 pub use plane_copy::{plane_copy_module, PlaneCopyModule, PlaneRows};
 pub use plane_words::{plane_words_module, PlaneWordsModule};
-pub use pvrtc_decode::{pvrtc_decode_module, PvrtcDecode};
+pub use pvrtc_decode::PvrtcDecode;
 pub use rotate_texels::{rotate_texels_module, RotateTexelsModule};
 pub use rows_copy::{rows_copy_module, RowsCopyModule};
 pub use sample_interleave::{

@@ -673,16 +673,11 @@ surface! {
         enum ShadowMergeStores E;
         fn extended_shadow_module;
         struct ExtendedShadowModule N;
-        struct BlockDecodeModule N;
-        fn astc_decode_module;
         struct AstcDecode N;
         enum AstcTexels N;
-        fn pvrtc_decode_module;
         struct PvrtcDecode N;
-        fn etc_decode_module;
         enum EtcDecode N;
         enum EtcTexels N;
-        fn chroma_decode_module;
         enum ChromaDecode N;
         fn chroma_sample_module;
         struct ChromaSampleModule N;
