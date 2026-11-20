@@ -4,8 +4,8 @@ source_filename = "-"
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
-%struct.LwGlobals = type { float, float }
 %"struct.metal::_atomic" = type { i32 }
+%struct.LwGlobals = type { float, float }
 
 @__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 34901797601017929, i64 0], align 8
 
@@ -51,36 +51,51 @@ define <{ <4 x float>, <2 x float> }> @lw_half(i32 noundef %0) local_unnamed_add
 declare float @air.convert.f.f32.u.i1(i1) local_unnamed_addr #1
 
 ; Function Attrs: mustprogress nounwind willreturn
-define <4 x float> @lw_early_write(<4 x float> %0, <2 x float> %1, ptr addrspace(1) %2) local_unnamed_addr #2 {
-  %4 = shufflevector <4 x float> %0, <4 x float> poison, <2 x i32> <i32 0, i32 1>
-  %5 = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %4) #8
-  %6 = extractelement <2 x i32> %5, i64 0
-  %7 = tail call fast float @air.convert.f.f32.u.i32(i32 %6) #8
-  %8 = extractelement <2 x i32> %5, i64 1
-  %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #8
-  %10 = insertelement <4 x float> <float poison, float poison, float 2.500000e-01, float 1.000000e+00>, float %7, i64 0
-  %11 = insertelement <4 x float> %10, float %9, i64 1
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %5, <4 x float> %11, i32 0, i32 2) #9, !alias.scope !46
+define <4 x float> @lw_early_write(<4 x float> %0, <2 x float> %1, ptr addrspace(1) captures(none) %2, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %3) local_unnamed_addr #2 {
+  %5 = shufflevector <4 x float> %0, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %6 = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %5) #8
+  %7 = extractelement <2 x i32> %6, i64 0
+  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #8
+  %9 = extractelement <2 x i32> %6, i64 1
+  %10 = tail call fast float @air.convert.f.f32.u.i32(i32 %9) #8
+  %11 = insertelement <4 x float> <float poison, float poison, float 2.500000e-01, float 1.000000e+00>, float %8, i64 0
+  %12 = insertelement <4 x float> %11, float %10, i64 1
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %6, <4 x float> %12, i32 0, i32 2) #9, !alias.scope !47, !noalias !50
+  %13 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %3, i64 0, i32 0
+  %14 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %13, i32 1, i32 0, i32 2, i1 true) #10
   ret <4 x float> <float 0.000000e+00, float 1.000000e+00, float 0.000000e+00, float 1.000000e+00>
 }
 
-; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>) local_unnamed_addr #1
+; Function Attrs: mustprogress nounwind willreturn
+define <4 x float> @lw_late_write(<4 x float> %0, <2 x float> %1, ptr addrspace(1) captures(none) %2, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %3) local_unnamed_addr #2 {
+  %5 = shufflevector <4 x float> %0, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %6 = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %5) #8
+  %7 = extractelement <2 x i32> %6, i64 0
+  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #8
+  %9 = extractelement <2 x i32> %6, i64 1
+  %10 = tail call fast float @air.convert.f.f32.u.i32(i32 %9) #8
+  %11 = insertelement <4 x float> <float poison, float poison, float 2.500000e-01, float 1.000000e+00>, float %8, i64 0
+  %12 = insertelement <4 x float> %11, float %10, i64 1
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %6, <4 x float> %12, i32 0, i32 2) #9, !alias.scope !52, !noalias !55
+  %13 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %3, i64 0, i32 0
+  %14 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %13, i32 1, i32 0, i32 2, i1 true) #10
+  ret <4 x float> <float 0.000000e+00, float 1.000000e+00, float 0.000000e+00, float 1.000000e+00>
+}
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define <4 x half> @lw_dropped(<4 x float> %0, <2 x float> %1, ptr addrspace(1) %2, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(8) "air-buffer-no-alias" %3, ptr addrspace(1) %4) local_unnamed_addr #3 {
   %6 = shufflevector <4 x float> %0, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %7 = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %6) #8
   %8 = tail call fast <2 x float> @air.fast_clamp.v2f32(<2 x float> %1, <2 x float> zeroinitializer, <2 x float> splat (float 1.000000e+00)) #8
-  %9 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %2, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %8, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #10
+  %9 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %2, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %8, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #11
   %10 = extractvalue { <4 x half>, i8 } %9, 0
   %11 = extractelement <4 x half> %10, i64 3
   %12 = fpext half %11 to float
   %13 = getelementptr inbounds %struct.LwGlobals, ptr addrspace(2) %3, i64 0, i32 0
-  %14 = load float, ptr addrspace(2) %13, align 4, !tbaa !49, !alias.scope !54, !noalias !57
+  %14 = load float, ptr addrspace(2) %13, align 4, !tbaa !57, !alias.scope !62, !noalias !65
   %15 = fmul reassoc nnan ninf nsz arcp afn float %14, %12
   %16 = getelementptr inbounds %struct.LwGlobals, ptr addrspace(2) %3, i64 0, i32 1
-  %17 = load float, ptr addrspace(2) %16, align 4, !tbaa !59, !alias.scope !54, !noalias !57
+  %17 = load float, ptr addrspace(2) %16, align 4, !tbaa !67, !alias.scope !62, !noalias !65
   %18 = fadd reassoc nnan ninf nsz arcp afn float %17, %15
   %19 = fcmp reassoc nnan ninf nsz arcp afn ogt float %18, 5.000000e-01
   br i1 %19, label %20, label %27
@@ -99,12 +114,12 @@ define <4 x half> @lw_dropped(<4 x float> %0, <2 x float> %1, ptr addrspace(1) %
   br i1 %28, label %29, label %30
 
 29:                                               ; preds = %27
-  tail call void @air.discard_fragment() #11
+  tail call void @air.discard_fragment() #10
   br label %30
 
 30:                                               ; preds = %29, %27
   %31 = fmul reassoc nnan ninf nsz arcp afn <2 x float> %1, splat (float 5.000000e-01)
-  %32 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %2, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %31, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #10
+  %32 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %2, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %31, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #11
   %33 = extractelement <2 x float> %1, i64 0
   %34 = tail call fast float @air.fwidth.f32(float %33) #12
   br i1 %28, label %35, label %46
@@ -139,36 +154,42 @@ define <4 x half> @lw_dropped(<4 x float> %0, <2 x float> %1, ptr addrspace(1) %
   %60 = insertelement <4 x i32> <i32 poison, i32 poison, i32 poison, i32 1>, i32 %57, i64 0
   %61 = insertelement <4 x i32> %60, i32 %58, i64 1
   %62 = insertelement <4 x i32> %61, i32 %59, i64 2
-  tail call void @air.write_texture_2d.u.v4i32(ptr addrspace(1) captures(none) %4, <2 x i32> %7, <4 x i32> %62, i32 0, i32 2) #9, !alias.scope !57, !noalias !54
+  tail call void @air.write_texture_2d.u.v4i32(ptr addrspace(1) captures(none) %4, <2 x i32> %7, <4 x i32> %62, i32 0, i32 2) #9, !alias.scope !65, !noalias !62
   %63 = insertelement <4 x half> %48, half 0xH3C00, i64 3
   ret <4 x half> %63
 }
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>) local_unnamed_addr #1
 
 ; Function Attrs: mustprogress nounwind willreturn
 define <4 x float> @lw_count(<4 x float> %0, <2 x float> %1, i32 noundef %2, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %3, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %4, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %5) local_unnamed_addr #2 {
   %7 = shufflevector <4 x float> %0, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %8 = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %7) #8
   %9 = extractelement <2 x i32> %8, i64 1
-  %10 = load i32, ptr addrspace(2) %5, align 4, !tbaa !60, !alias.scope !62, !noalias !65
+  %10 = load i32, ptr addrspace(2) %5, align 4, !tbaa !68, !alias.scope !70, !noalias !73
   %11 = mul i32 %9, %10
   %12 = extractelement <2 x i32> %8, i64 0
   %13 = add i32 %11, %12
   %14 = zext i32 %13 to i64
   %15 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %3, i64 %14, i32 0
-  %16 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %15, i32 1, i32 0, i32 2, i1 true) #11
+  %16 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %15, i32 1, i32 0, i32 2, i1 true) #10
   %17 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %4, i64 %14, i32 0
-  %18 = tail call i32 @air.atomic.global.or.u.i32(ptr addrspace(1) captures(none) %17, i32 %2, i32 0, i32 2, i1 true) #11
+  %18 = tail call i32 @air.atomic.global.or.u.i32(ptr addrspace(1) captures(none) %17, i32 %2, i32 0, i32 2, i1 true) #10
   ret <4 x float> <float 0.000000e+00, float 1.000000e+00, float 0.000000e+00, float 1.000000e+00>
 }
+
+; Function Attrs: mustprogress nounwind willreturn memory(argmem: readwrite)
+declare void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none), <2 x i32>, <4 x float>, i32, i32) local_unnamed_addr #4
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare <2 x float> @air.fast_clamp.v2f32(<2 x float>, <2 x float>, <2 x float>) local_unnamed_addr #1
 
 ; Function Attrs: mustprogress nounwind willreturn
-declare void @air.discard_fragment() local_unnamed_addr #4
+declare void @air.discard_fragment() local_unnamed_addr #5
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare float @air.fwidth.f32(float) local_unnamed_addr #5
+declare float @air.fwidth.f32(float) local_unnamed_addr #6
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare i32 @air.convert.u.i32.f.f32(float) local_unnamed_addr #1
@@ -176,43 +197,40 @@ declare i32 @air.convert.u.i32.f.f32(float) local_unnamed_addr #1
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare float @air.fast_rint.f32(float) local_unnamed_addr #1
 
-; Function Attrs: mustprogress nounwind willreturn memory(argmem: readwrite)
-declare void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none), <2 x i32>, <4 x float>, i32, i32) local_unnamed_addr #6
+; Function Attrs: mustprogress nounwind willreturn
+declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #5
 
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
 declare { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #7
 
 ; Function Attrs: mustprogress nounwind willreturn memory(argmem: readwrite)
-declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1) captures(none), <2 x i32>, <4 x i32>, i32, i32) local_unnamed_addr #6
+declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1) captures(none), <2 x i32>, <4 x i32>, i32, i32) local_unnamed_addr #4
 
 ; Function Attrs: mustprogress nounwind willreturn
-declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #4
-
-; Function Attrs: mustprogress nounwind willreturn
-declare i32 @air.atomic.global.or.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #4
+declare i32 @air.atomic.global.or.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #5
 
 attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #1 = { mustprogress nofree nosync nounwind willreturn memory(none) }
 attributes #2 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #3 = { convergent mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #4 = { mustprogress nounwind willreturn }
-attributes #5 = { convergent mustprogress nounwind willreturn }
-attributes #6 = { mustprogress nounwind willreturn memory(argmem: readwrite) }
+attributes #4 = { mustprogress nounwind willreturn memory(argmem: readwrite) }
+attributes #5 = { mustprogress nounwind willreturn }
+attributes #6 = { convergent mustprogress nounwind willreturn }
 attributes #7 = { convergent mustprogress nofree nounwind willreturn memory(argmem: read) }
 attributes #8 = { nounwind willreturn memory(none) }
 attributes #9 = { nounwind willreturn memory(argmem: readwrite) }
-attributes #10 = { convergent nounwind willreturn memory(argmem: read) }
-attributes #11 = { nounwind willreturn }
+attributes #10 = { nounwind willreturn }
+attributes #11 = { convergent nounwind willreturn memory(argmem: read) }
 attributes #12 = { convergent nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.vertex = !{!9, !15}
-!air.fragment = !{!16, !23, !32}
-!air.compile_options = !{!39, !40, !41}
-!air.sampler_states = !{!42}
-!llvm.ident = !{!43}
-!air.version = !{!44}
-!air.language_version = !{!45}
+!air.fragment = !{!16, !25, !26, !35}
+!air.compile_options = !{!40, !41, !42}
+!air.sampler_states = !{!43}
+!llvm.ident = !{!44}
+!air.version = !{!45}
+!air.language_version = !{!46}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -233,52 +251,60 @@ attributes #12 = { convergent nounwind willreturn }
 !16 = !{ptr @lw_early_write, !17, !19, !"early_fragment_tests"}
 !17 = !{!18}
 !18 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
-!19 = !{!20, !21, !22}
+!19 = !{!20, !21, !22, !23}
 !20 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
 !21 = !{i32 1, !"air.fragment_input", !"generated(2uvDv2_f)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"uv", !"air.arg_unused"}
 !22 = !{i32 2, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<float, write>", !"air.arg_name", !"out"}
-!23 = !{ptr @lw_dropped, !24, !26}
-!24 = !{!25}
-!25 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"half4"}
-!26 = !{!20, !27, !28, !29, !31}
-!27 = !{i32 1, !"air.fragment_input", !"generated(2uvDv2_f)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"uv"}
-!28 = !{i32 2, !"air.texture", !"air.location_index", i32 1, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<half, sample>", !"air.arg_name", !"noise"}
-!29 = !{i32 3, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !30, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"LwGlobals", !"air.arg_name", !"g"}
-!30 = !{i32 0, i32 4, i32 0, !"float", !"scale", i32 4, i32 4, i32 0, !"float", !"bias"}
-!31 = !{i32 4, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<uint, write>", !"air.arg_name", !"out"}
-!32 = !{ptr @lw_count, !17, !33}
-!33 = !{!20, !21, !34, !35, !37, !38}
-!34 = !{i32 2, !"air.sample_mask_in", !"air.arg_type_name", !"uint", !"air.arg_name", !"mask"}
-!35 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !36, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"metal::_atomic", !"air.arg_name", !"runs"}
-!36 = !{i32 0, i32 4, i32 0, !"uint", !"__s"}
-!37 = !{i32 4, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !36, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"metal::_atomic", !"air.arg_name", !"masks"}
-!38 = !{i32 5, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"side"}
-!39 = !{!"air.compile.denorms_disable"}
-!40 = !{!"air.compile.fast_math_enable"}
-!41 = !{!"air.compile.framebuffer_fetch_enable"}
-!42 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
-!43 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!44 = !{i32 2, i32 8, i32 0}
-!45 = !{!"Metal", i32 4, i32 0, i32 0}
-!46 = !{!47}
-!47 = distinct !{!47, !48, !"air-alias-scope-textures"}
-!48 = distinct !{!48, !"air-alias-scopes(lw_early_write)"}
-!49 = !{!50, !51, i64 0}
-!50 = !{!"_ZTS9LwGlobals", !51, i64 0, !51, i64 4}
-!51 = !{!"float", !52, i64 0}
-!52 = !{!"omnipotent char", !53, i64 0}
-!53 = !{!"Simple C++ TBAA"}
-!54 = !{!55}
-!55 = distinct !{!55, !56, !"air-alias-scope-arg(3)"}
-!56 = distinct !{!56, !"air-alias-scopes(lw_dropped)"}
-!57 = !{!58}
-!58 = distinct !{!58, !56, !"air-alias-scope-textures"}
-!59 = !{!50, !51, i64 4}
-!60 = !{!61, !61, i64 0}
-!61 = !{!"int", !52, i64 0}
+!23 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !24, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"metal::_atomic", !"air.arg_name", !"runs"}
+!24 = !{i32 0, i32 4, i32 0, !"uint", !"__s"}
+!25 = !{ptr @lw_late_write, !17, !19}
+!26 = !{ptr @lw_dropped, !27, !29}
+!27 = !{!28}
+!28 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"half4"}
+!29 = !{!20, !30, !31, !32, !34}
+!30 = !{i32 1, !"air.fragment_input", !"generated(2uvDv2_f)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"uv"}
+!31 = !{i32 2, !"air.texture", !"air.location_index", i32 1, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<half, sample>", !"air.arg_name", !"noise"}
+!32 = !{i32 3, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !33, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"LwGlobals", !"air.arg_name", !"g"}
+!33 = !{i32 0, i32 4, i32 0, !"float", !"scale", i32 4, i32 4, i32 0, !"float", !"bias"}
+!34 = !{i32 4, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<uint, write>", !"air.arg_name", !"out"}
+!35 = !{ptr @lw_count, !17, !36}
+!36 = !{!20, !21, !37, !23, !38, !39}
+!37 = !{i32 2, !"air.sample_mask_in", !"air.arg_type_name", !"uint", !"air.arg_name", !"mask"}
+!38 = !{i32 4, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !24, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"metal::_atomic", !"air.arg_name", !"masks"}
+!39 = !{i32 5, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"side"}
+!40 = !{!"air.compile.denorms_disable"}
+!41 = !{!"air.compile.fast_math_enable"}
+!42 = !{!"air.compile.framebuffer_fetch_enable"}
+!43 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
+!44 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!45 = !{i32 2, i32 8, i32 0}
+!46 = !{!"Metal", i32 4, i32 0, i32 0}
+!47 = !{!48}
+!48 = distinct !{!48, !49, !"air-alias-scope-textures"}
+!49 = distinct !{!49, !"air-alias-scopes(lw_early_write)"}
+!50 = !{!51}
+!51 = distinct !{!51, !49, !"air-alias-scope-arg(3)"}
+!52 = !{!53}
+!53 = distinct !{!53, !54, !"air-alias-scope-textures"}
+!54 = distinct !{!54, !"air-alias-scopes(lw_late_write)"}
+!55 = !{!56}
+!56 = distinct !{!56, !54, !"air-alias-scope-arg(3)"}
+!57 = !{!58, !59, i64 0}
+!58 = !{!"_ZTS9LwGlobals", !59, i64 0, !59, i64 4}
+!59 = !{!"float", !60, i64 0}
+!60 = !{!"omnipotent char", !61, i64 0}
+!61 = !{!"Simple C++ TBAA"}
 !62 = !{!63}
-!63 = distinct !{!63, !64, !"air-alias-scope-arg(5)"}
-!64 = distinct !{!64, !"air-alias-scopes(lw_count)"}
-!65 = !{!66, !67}
-!66 = distinct !{!66, !64, !"air-alias-scope-arg(3)"}
-!67 = distinct !{!67, !64, !"air-alias-scope-arg(4)"}
+!63 = distinct !{!63, !64, !"air-alias-scope-arg(3)"}
+!64 = distinct !{!64, !"air-alias-scopes(lw_dropped)"}
+!65 = !{!66}
+!66 = distinct !{!66, !64, !"air-alias-scope-textures"}
+!67 = !{!58, !59, i64 4}
+!68 = !{!69, !69, i64 0}
+!69 = !{!"int", !60, i64 0}
+!70 = !{!71}
+!71 = distinct !{!71, !72, !"air-alias-scope-arg(5)"}
+!72 = distinct !{!72, !"air-alias-scopes(lw_count)"}
+!73 = !{!74, !75}
+!74 = distinct !{!74, !72, !"air-alias-scope-arg(3)"}
+!75 = distinct !{!75, !72, !"air-alias-scope-arg(4)"}
