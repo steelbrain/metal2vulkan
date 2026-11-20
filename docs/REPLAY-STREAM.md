@@ -2,9 +2,9 @@
 
 A replay stream records, in order, what Metal programs asked of their devices: every call with its
 objects and arguments, the bytes the CPU left in GPU-visible memory before each commit, and the GPU
-addresses the programs saw. `command-replay play` runs a stream on a Vulkan device through a
+addresses the programs saw. `command-replay play` runs a stream on a Vulkan device through the
 runtime, with no guest, and reports deterministic metrics and checksums, so two runs, two devices
-or two runtimes compare.
+or two commits compare.
 
 Records use Metal's own selectors and raw enum values. Structs and descriptors are maps keyed by
 the recorder's field names (section 2). This page is all a reader needs. The reader, the writer and
@@ -139,9 +139,9 @@ and the (name id, value) answer pairs.
 |---|---|---|---|
 | `m2v.newBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | `newBufferWithLength:options:`, whose texture rows may keep or change the bytes between them; `alignedByte` (or nil) is the buffer's byte the host put on a 256-byte boundary | `newBufferWithLength:options:` `[length, options]` |
 | `m2v.newExportableBufferOfLength` | `[length, options, alignedByte]` | the same buffer in an allocation of its own, which another API imports; result 0 where the host made none | the same, and nothing at result 0 |
-| `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0; the new runtime's backend makes its textures through the surface call (section 10) |
+| `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0; the backend makes its textures through the surface call (section 10) |
 | `m2v.newCommandQueueUnshared` | `[]` | a queue the host kept apart | `newCommandQueue` |
-| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend fills the textures over it at their next use, or on a video surface's pages acquires its surface (section 10) |
+| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the backend fills the textures over it at their next use, or on a video surface's pages acquires its surface (section 10) |
 
 ## 5. Memory and addresses
 
@@ -173,62 +173,28 @@ and the (name id, value) answer pairs.
   `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:`, a heap's
   `newTextureWithDescriptor:offset:`, each taking a texture descriptor object (section 9). The
   linear form (Apple's SPI) makes what the first makes of a 2D descriptor, and also a 2D array,
-  whose slices Metal lays out itself; the new runtime's player plays a 2D one as the first and
-  refuses another.
+  whose slices Metal lays out itself; the player plays a 2D one as the first and refuses another.
 - **The address map** is the ranges `[gpuAddress, gpuAddress + gpuLength)` of the live objects that
   answered them; `release` removes an object's range. A range that meets a live one in part (the
   program put a newer object in memory an older one still held, as a guest's own allocator in a
   block may) ends the older range, whose inner ranges stay: a word there is the newer object's.
   The player's report counts the ranges it ended (`parted`).
-- **Recorded addresses on the old runtime.** The old runtime's player makes every object that
-  answered a `gpuAddress` at that address (`AddressPlacement::At`): a buffer, a block or a heap
-  at its own answer, the descriptor's `pinnedGpuAddress` aside; a buffer in a heap lands at the
-  heap's address plus its offset. A heap with a recorded range plays as its buffers and its
-  textures apart, decided by what the stream places in it (read ahead), whatever the heap's type:
-  - its buffers (`newBufferWithLength:options:offset:` or `newBufferWithLength:options:` of it)
-    go in a heap at its recorded address and of its recorded size, each at its recorded offset,
-    never laid out again: a pinned span never grows;
-  - its textures (`newTextureWithDescriptor:offset:` or `newTextureWithDescriptor:` of it) go in
-    a heap outside the space, laid out for the runtime's sizes (section 10). A texture has no
-    address and a heap answers none, so no address the program holds lies in it. It is one heap,
-    so textures the stream placed at one offset still share memory.
-
-  A heap the stream places only buffers in is the first heap alone; one it places no buffer in is
-  the second alone, and its range keeps its recorded address in the address map; one it places
-  both in is both. A texture and a buffer that shared memory in the recording no longer share it.
-  The report counts such textures: those whose range in the recording (the heap's recorded
-  address plus the texture's offset, for the bytes the runtime answers for its descriptor, as the
-  stream holds no texture's size) met the recorded range of a buffer live in the same heap. A
-  count above 0 is reported, and the play goes on. Every heap the streams recorded so far hold is
-  a placement heap; the rule for an automatic one is held by the player's unit test alone. A heap
-  without a recorded range goes outside the space whole, laid out as on any runtime. Every other
-  object, and the player's own buffers (its staging, readback and host copies), goes outside the
-  space a pin can take (`AddressPlacement::Outside`, `[2^47, 2^48)`; a pin's span ends at or
-  below 2^47). A recorded address the runtime refuses (its span meets a live pin's, its first page
-  starts no 32-KiB granule, or it leaves the space), a buffer the runtime will not place at its
-  recorded offset in its heap's recorded span, or an object the runtime made at another address
-  than it recorded, stops the play, naming the object and its recorded address
-  (`PlayError::Unpinned`); no other placement is tried. Each range's address in the play is then
-  its recorded one, so no address argument moves (below). The report says how many objects it
-  pinned, how many heaps' textures it made outside the space and how many textures met a live
-  buffer (section 10).
-- **Address arguments move.** On the new runtime the player makes each object where the runtime
-  has room. Every address value (tag 8) whose value lies in a live range becomes the player's
+- **Address arguments move.** The player makes each object where the runtime has room. Every address value (tag 8) whose value lies in a live range becomes the player's
   address of that range's object plus its offset into the range; the innermost range wins, so an
   address in a buffer in a block moves with the buffer. One outside every live range stays. The
   report counts the address values (`address_arguments`) and those that moved
-  (`relocated_words`): none on the old runtime, whose ranges lie at their recorded addresses.
+  (`relocated_words`).
 - **Written words play as recorded.** A word's value is no reason to move it: the bytes the
   player puts into an object (`m2v.write`, a copied buffer's `contents`, the copies from the
   guest's RAM, a Private range's bytes before a dispatch) and the data of every
-  `set*Bytes:length:atIndex:` play as the stream holds them, on either runtime. A word there that
+  `set*Bytes:length:atIndex:` play as the stream holds them. A word there that
   is an address, which a stream recorded before the escape note cannot tell from data, keeps its
   recorded value. The player counts, as a census that writes nothing, the words that look like
   addresses: in the bytes put into an object that answered a `gpuAddress` and in `set*Bytes`
   data, each 8-byte word at an offset that is a multiple of 8 from the target's start whose value
   lies in a live range (`address_looking_words`), and apart from them the 8-byte values at 4 past
   a multiple of 8 that do (`misaligned_address_words`). Both are the stream's, the same on every
-  play on either runtime.
+  play.
 - **The escape note.** `m2v.bufferEscaped` (receiver: a buffer; arguments: `[kind]`) says the
   program may hold the buffer's address in memory from then on; the whole buffer escapes. Its
   kind is 0 for a `gpuAddress` read of the buffer or of a texture over it, 1 for an argument
@@ -246,9 +212,9 @@ and the (name id, value) answer pairs.
 - **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
-  argument. Every other object takes the ID its runtime gives it; on the new runtime, whose
-  consumer gives every texture and sampler index, the index of the ID the program saw of the
-  object (its first `gpuResourceID` record, read ahead), else the lowest index of its class that
+  argument. Every other texture and sampler state takes, as the runtime's consumer gives every
+  texture and sampler index, the index of the ID the program saw of the object (its first
+  `gpuResourceID` record, read ahead), else the lowest index of its class that
   no live object holds and the program did not reserve (`reserveResourceIndicesForResourceType:
   indices:indexCount:`), as Metal's pool hands out a sampler state's ID. A reserved index is taken
   only where the stream names it. A named index a live object of the play holds is taken from
@@ -260,14 +226,14 @@ and the (name id, value) answer pairs.
   one took its index holds it no more: the index is the later one's, and that naming owes it
   nothing. Where the runtime refuses a named index (it lies outside the object's class), the object
   takes the lowest free one, and the report counts it. A constexpr sampler, which the stream names
-  no index for, takes the highest free sampler index on the new runtime, outside the sequence the
-  program's sampler states take, so none of theirs takes its index.
+  no index for, takes the highest free sampler index, outside the sequence the program's sampler
+  states take, so none of theirs takes its index. Every other object takes the ID the runtime
+  gives it.
 - **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
   program's (the host's cursor), comes from a texture descriptor record whose map holds
   `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no
   ID in Metal's space, so the program's textures took theirs as if it were not there. The player
-  makes it where it moves no ID of the program's: on the old runtime with no ID
-  (`IdPlacement::Outside`), on the new runtime at the highest free index of its class, outside
+  makes it where it moves no ID of the program's: at the highest free index of its class, outside
   the sequence the program's textures take. A marked descriptor with a `resourceIndex`, a marked
   descriptor any other call makes a texture of, and a drawable's map with the mark are refused; a
   `gpuResourceID` record of a marked texture stops the play (`invalid stream`): the program never
@@ -435,9 +401,7 @@ and the (name id, value) answer pairs.
   `ResourceOptionsOr` (bits or'ed in), `StorageMode`, `HazardTrackingMode`.
   - `newBufferWithDescriptor:`: `{length, options, pinnedGpuAddress, contents, noCopy,
     deallocator, zeroFrom}`.
-  - `newHeapWithDescriptor:`: `{size, heapType, options, pinnedGpuAddress}`. The old runtime's
-    player makes the heap's buffers in a heap at its pin and its textures in a heap outside the
-    pinned space (section 5).
+  - `newHeapWithDescriptor:`: `{size, heapType, options, pinnedGpuAddress}`.
   - `newSamplerStateWithDescriptor:`: `{minFilter, magFilter, lodAverage, compareFunction,
     sAddressMode, tAddressMode, rAddressMode, mipFilter, maxAnisotropy, normalizedCoordinates,
     supportArgumentBuffers, reductionMode, lodMinClamp, lodMaxClamp, lodBias, borderColor,
@@ -454,7 +418,7 @@ and the (name id, value) answer pairs.
     factorFormat, controlPointIndexType, factorStepFunction, outputWinding}`, Metal's raw values,
     and the depths are uints. A record without them, as every stream recorded before the recorder
     carried them, does not hold the program's state: a player plays Metal's defaults in its place,
-    `{0, 16, false, 0, 0, 0, 0}` and depths 1 and 1, and the new runtime's backend counts the patch
+    `{0, 16, false, 0, 0, 0, 0}` and depths 1 and 1, and the backend counts the patch
     draws it plays through such a state (`patch_draws_unrecorded_tessellation`, in each frame and
     the total, and the report's `patch draws through a render pipeline state whose record lacks
     tessellation` line), so a report that quotes their pass says the tessellation state there is
@@ -509,16 +473,16 @@ and the (name id, value) answer pairs.
 [--blobs DIR] [--snapshots yes|no] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 [--video-handle dma-buf|opaque-fd] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
-new runtime, and writes `DIR/report.txt`. `--video-handle`
+runtime, and writes `DIR/report.txt`. `--video-handle`
 names the consumer's decoder route, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
 by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device raises. It
 writes each frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends
 leaves every frame it finished. Every line it writes to `report.txt`, the frame lines among them, it writes to
 its standard error too, so a caller that loses the directory keeps the report.
-With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
-plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
-their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
+It takes no `m2v.privateBytes` snapshot, with `--snapshots no` or without (the backend has no
+blits between buffers yet): each such dispatch plays as it is, counted on the `unsnapshotted`
+line, so two plays do the same work and their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
 counted from 0), completes the work committed so far, reports as at the stream's end and says
 `until-frame F`. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
 0), the texture the present shows, as an `m2v.check` of it with no recorded checksum would: a
@@ -546,14 +510,14 @@ records as text, and
 - **The display library.** The report's line after `range` is `display library the stream's
   sidecar, N bytes, sha256 HEX, git blob ID` where the stream has `NAME.display.metallib` (section
   1), which names the file the play ran by its SHA-256 and its git blob id in the host's tree, and
-  the host's library from source is made of it on either runtime; else `display library none: the
+  the host's library from source is made of it; else `display library none: the
   host's library from source is skipped`.
 - **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
   6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
   stream may differ from what the program did`, so no table taken from the report loses it.
 - It moves address arguments (section 5) and plays the host's plumbing as the plain calls it
   stands for (section 4).
-- **Managed buffers** (the new runtime) play in the form the recording device kept them: its
+- **Managed buffers** play in the form the recording device kept them: its
   `m2v.deviceIdentity` record's `hasUnifiedMemory`, or where the stream has none, `--managed`
   (`one-copy` for unified memory, `two-copy` for a GPU copy). With neither, a Managed buffer stops
   the play with an error that says so. One copy: every Managed buffer plays as a Shared buffer, on
@@ -573,8 +537,7 @@ records as text, and
   two-copy stream's Managed buffer: the runtime's device copy beside the consumer's bytes, or on a
   device with unified memory, the player's own CPU copy beside the device's one copy) reads its
   CPU copy, as Metal's `contents` answers, and says so: its `check` line ends `(CPU copy)` and its
-  dump holds a `.copy` file (below). With `--read-device-copies yes` (the new runtime's play only)
-  it reads the device copy instead, back through a blit into a Shared buffer of the play's own
+  dump holds a `.copy` file (below). With `--read-device-copies yes` it reads the device copy instead, back through a blit into a Shared buffer of the play's own
   where the runtime keeps one (that blit's commit takes the ranges named and not yet taken, as the
   program's next commit would), and its line ends `(device copy, read back)`. On a device that
   keeps a device copy of each Managed buffer, the line after `device` says which the play reads:
@@ -582,20 +545,7 @@ records as text, and
   reads its CPU copy only, as Metal's contents answers (--read-device-copies yes reads the device
   copy back)`, or `... reads the device copy back`. Two plays' CPU copies agreeing says nothing of
   their device copies, which commands read.
-- **Managed buffers on the old runtime** take the same one-copy rule: under a one-copy identity
-  record (or `--managed one-copy`), every Managed buffer and block plays as a Shared one, so a CPU
-  write reaches the GPU as it reached the recording device's, with or without a
-  `didModifyRange:`. Otherwise a Managed buffer plays as the old runtime's, which keeps a GPU copy
-  on a device without unified memory, and that copy starts from the bytes the buffer was made
-  with, as on the new runtime: the backend's making takes them from the call and announces them
-  (`didModifyRange:` over them). In a stream with no identity record played with two copies, a
-  no-copy Managed buffer made with no bytes takes the writes recorded before its first use into
-  its GPU copy too, by the new runtime's rule (above); an identity record gives the bytes at its
-  making instead, and its later writes reach the GPU copy only by `didModifyRange:`, on both
-  runtimes. Its report's `managed` line says which form played, from what, and counts the
-  buffers and blocks played as Shared, or under two copies the no-copy ones whose contents came
-  from first use.
-- **No-copy buffers** (the new runtime) play as the product makes them, by creator:
+- **No-copy buffers** play as the product makes them, by creator:
   - A `newBufferWithDescriptor:` with `noCopy` is a pool buffer in the product: a guest buffer's
     storage in one of the host's blocks. Where its recorded address and length lie inside a live
     block's recorded range (`m2v.newBlockWithLength:storageMode:`) it plays as a buffer of the
@@ -627,17 +577,15 @@ records as text, and
   texture freed on another thread in that moment hides one), and its `textures over buffers in an
   image of their own, by pixel format and usage` line those in an image of their own by the
   descriptor's pixel format and usage, most first.
-- **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
-  6), a `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the
-  stream's writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's
-  copy: on the new runtime it copies the GPU's copy into an aside buffer of the player's own, which
-  a check of the buffer reads from the read-back to its next `didModifyRange:`; on the old runtime
-  it moves nothing, and a check reads the GPU's copy as it always does. A stream without the bit
-  plays its read-backs into the CPU's copy, as Metal does. A Managed buffer played as one copy (in
-  the stream's block, or on the old runtime on a device with unified memory) holds the GPU's bytes
-  either way. The report's `announced bytes` line says which rule played and counts the read-backs
+- **Announced bytes.** On a stream whose header has bit 0 set (section 6), a
+  `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the stream's
+  writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's copy: it
+  copies the GPU's copy into an aside buffer of the player's own, which a check of the buffer
+  reads from the read-back to its next `didModifyRange:`. A stream without the bit plays its
+  read-backs into the CPU's copy, as Metal does. A Managed buffer played as one copy holds the
+  GPU's bytes either way. The report's `announced bytes` line says which rule played and counts the read-backs
   it kept out of the CPU's copies.
-- **Unwritten buffers** (the new runtime): its report's `unwritten` line counts the Shared
+- **Unwritten buffers:** the report's `unwritten` line counts the Shared
   buffers made without bytes that a compute encoder bound or used and whose command buffer
   committed before any recorded write, upload or GPU pass reached their bytes since their making,
   and names the first few with the command buffer that read each. Such a buffer plays with
@@ -647,8 +595,7 @@ records as text, and
   buffer; and the commit of a dispatch that binds it, which may write it. A dispatch that writes
   such a buffer before it reads it is counted too, and a texture over a buffer is not followed.
   The line counts; it stops nothing.
-- **Writes into Managed textures** (both runtimes' backends tell a texture's storage mode): the
-  report's `texture_writes` line counts the CPU's writes into Managed textures
+- **Writes into Managed textures** (the backend tells a texture's storage mode): the report's `texture_writes` line counts the CPU's writes into Managed textures
   (`replaceRegion:...` and any other call on a texture that carries bytes), their bytes and
   textures, and of them those made while a command buffer that used the texture (an encoder of it
   named the texture or a view of it, or it was made with a descriptor that names one) was committed
@@ -661,7 +608,7 @@ records as text, and
   the writes into textures whose storage the backend does not tell. It stops nothing.
 - **Reads of Managed bytes on two copies:** the report's `managed reads on two copies: made-with
   CLASS, served; stale CLASS, played as recorded` line (`CLASS` `N objects, U uses, first at
-  frame F`, or `none`) counts, from the stream's calls alone and so alike on every runtime and
+  frame F`, or `none`) counts, from the stream's calls alone and so alike on every commit and
   device, the GPU's reads of a Managed object's bytes that no announcement took to its GPU copy,
   as a play that keeps two copies holds them. A Managed object is a buffer of any maker whose
   options say Managed, a Managed block and its buffers, and a texture over such a buffer or a view
@@ -671,10 +618,10 @@ records as text, and
   stream carries no buffer access. Made-with reads are of the bytes a buffer was made with (a
   descriptor's `contents`, a no-copy buffer's pages, `newBufferWithBytes:length:options:`'s bytes;
   bytes that are all zero left out) before a `didModifyRange:` or a GPU write covered them. The
-  player serves them on both runtimes (section 5: the GPU copy starts from them), so the count
+  player serves them (section 5: the GPU copy starts from them), so the count
   says how many reads depend on that, not that any is wrong. Stale reads are of bytes an
   `m2v.write` put in that no `didModifyRange:` announced and no GPU write covered: what the GPU
-  reads there Metal leaves undefined, and both runtimes play it by one rule, the GPU copy's bytes
+  reads there Metal leaves undefined, and the play takes one rule, the GPU copy's bytes
   as the making and the announcements left them. Where the stream has no identity record, a
   no-copy buffer's writes before its first use reach its GPU copy (section 5) and are not counted;
   the line ends `; writes before first use served (no identity record)`. Where the guest device's
@@ -684,18 +631,9 @@ records as text, and
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
   held behind an event wait. Each wait is bounded under the validation crate's hang protocol.
-- It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream, and plays
-  each dispatch they name with its ranges' bytes before put in and its bytes after compared: it
-  puts the bytes before (as recorded, counted as a write's are) in a Shared buffer of its own;
-  ends the dispatch's compute encoder; copies them into the ranges in a blit encoder; makes the
-  compute encoder again by the call that made it, with every `set…` and `use…` call the program
-  made on it; dispatches; then ends it, copies the ranges out in a blit encoder and makes it again the
-  same way. A fence of its own orders each of these encoders after the one before it. Once the
-  command buffer completed, it reads the bytes after back and counts the 4-byte words of each
-  range that differ from the recording's bytes after. A difference is reported, and
-  the play goes on. Its own objects take ids from 2^63 + 1. On a backend that takes no snapshots
-  (the new runtime's, which has no blits between buffers yet), each such dispatch plays
-  as it is and is counted on the report's `unsnapshotted` line.
+- It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream. Its
+  backend takes no snapshot (it has no blits between buffers yet), so each dispatch they name
+  plays as it is and is counted on the report's `unsnapshotted` line.
 - It lays each placement heap out again for the runtime's sizes and alignments, as a program that
   lays out its heap by `heapTextureSizeAndAlignWithDescriptor:` and
   `heapBufferSizeAndAlignWithLength:options:` does: the stream's offsets and heap sizes are the
@@ -706,16 +644,12 @@ records as text, and
   moves up until the resources placed below it end, and rounds up to the largest alignment of the
   resources placed there. The heap keeps at least its distance past its last offset and holds the
   resources placed there. Resources the stream placed at one offset still share it; resources at different offsets no longer share memory, even where the
-  stream's did, on every runtime. Where every resource ends before the next offset and every offset
+  stream's did. Where every resource ends before the next offset and every offset
   is aligned, the layout is the stream's. A placement whose size the runtime does not answer keeps
-  its offset, and the play meets the runtime's refusal where it lies. On the old runtime a heap
-  grown past its recorded span would hold pages the recording gave the objects after it, so a heap
-  with a recorded range is laid out by its textures alone, which go in a heap of their own outside
-  the space, while its buffers keep their recorded offsets in a heap of its recorded size at its
-  recorded address (section 5).
+  its offset, and the play meets the runtime's refusal where it lies.
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
-  - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
+  - **Fixed by the stream** (`stream`), the same on every play of the stream: the
     calls played (`calls`), the command buffers committed (`commits`, a host's split included),
     the encoders made (`encoders`: the objects a command buffer or an encoder makes), the draws
     and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
@@ -727,37 +661,18 @@ records as text, and
     buffers' `contents`, the copies from the guest's RAM and the `m2v.privateBytes` bytes before
     (`written_bytes`). A group's calls are those played before it completed:
     the call that waited for it counts in the next.
-  - **As executed** (`executed`): the counters the runtime exposes. The old runtime's are the
-    Vulkan commands it recorded (submissions, render passes, barriers, dispatches, draws, copies)
-    and the pipelines it made. They differ between runtimes, and between plays on one runtime
-    where what it records depends on timing. The old runtime's commands depend on whether the
-    pipelines it makes in the background have landed: a draw whose own pipeline is still being
-    made records through the pipeline's general form and keeps nothing for a later encoder to
-    draw again. So a play with cold shader caches records more commands than a warm one, and warm
-    plays can move a few draws and barriers from one group or frame to another. Only the stream's
-    counts are compared between plays.
+  - **As executed** (`executed`): the runtime's metrics (`Device::counters`): its submissions,
+    passes, barriers, bytes copied, copies of textures over buffers, pipelines made, allocations
+    and the rest. They differ between commits, and between plays of one commit where what the
+    runtime records depends on timing. Only the stream's counts are compared between plays.
 
-  Its own readbacks are not counted. The new runtime's backend reads a Private buffer, which has
-  no CPU mapping, through a blit copy of it into a Shared buffer of the play's own, on a queue of
-  the play's own, and waits for the copy. Its own work around a dispatch an `m2v.privateBytes` record
-  names (its buffer, fence and blits and the encoders it ends and makes again) is in none of the
-  stream's counts. The runtime's work for it cannot be told apart from the program's (a runtime
-  may record the barriers a split needs at the program's next command or at the commit), so a
-  group that held such a dispatch reports no executed counts: they are added up apart, on the
-  report's `split` line, and no frame or total holds them.
-- A selector, argument or descriptor key the runtime's backend does not implement is a typed
-  refusal naming it; the run stops there and the report keeps what ran. The old runtime's backend
-  refuses rate maps, stage inputs, dynamic libraries, OpenCL mode, indirect command buffers,
-  accumulated visibility results, and protection options, rotation, `framebufferOnly` and
-  `isDrawable` other than their defaults; it does not play `defaultColorSampleCount`, which changes
-  nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
-  read-only option (bit 24) is made without it and keeps the GPU writes Metal drops. No device
-  here compiles Metal source, so it skips a library from source, whatever a call makes of a
-  skipped object (`skipped_objects`), every call of one (`skipped_calls`, with a render encoder's
-  `setRenderPipelineState:` of one) and the draws of a render encoder whose pipeline state is one
-  (`skipped_draws`).
-- The new runtime's backend plays compute, render, blits, `synchronizeResource:`, fences, events
-  and queues. What the new runtime does not build yet it skips and counts, and never fakes:
+  Its own readbacks are not counted. The backend reads a Private buffer, which has no CPU
+  mapping, through a blit copy of it into a Shared buffer of the play's own, on a queue of the
+  play's own, and waits for the copy.
+- A selector, argument or descriptor key the backend does not implement is a typed refusal naming
+  it; the run stops there and the report keeps what ran.
+- The backend plays compute, render, blits, `synchronizeResource:`, fences, events and queues.
+  What the runtime does not build yet it skips and counts, and never fakes:
   - objects: libraries from source, and whatever a call makes of a skipped object
     (`skipped_objects`);
   - render pipeline states the runtime answers with a typed gap or the translator refuses
@@ -785,8 +700,7 @@ records as text, and
     as nothing, and `generateMipmapsForTexture:` as the runtime's `generate_mipmaps`.
 
   A buffer-to-buffer copy plays as the runtime's (`copy_from_buffer_to_buffer`). The copies
-  between the guest's RAM and a buffer play in the host's form on the new runtime, the one-copy
-  form: one buffer copy a call, in a command buffer of the backend's own on the queue of the
+  between the guest's RAM and a buffer play in the host's form, the one-copy form: one buffer copy a call, in a command buffer of the backend's own on the queue of the
   call's command buffer, through a Shared scratch of the backend's own; the report's `guest RAM`
   line says so. A copy from the guest's RAM gathers its pieces on the CPU into the scratch, laid
   out as the target's bytes they span, and copies them into the target in a command buffer
@@ -808,16 +722,14 @@ records as text, and
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
   views (`Texture::new_texture_view`). A tiled texture over a buffer of one level plays as the
   first form's texture over the buffer, and one of more than one level, which the runtime takes no
-  form of, plays as the old runtime plays the call (`Buffer::new_tiled_texture`): an ordinary
-  texture of the descriptor that takes, at its first use, a copy of the buffer's bytes from the
+  form of, plays as an ordinary texture of the descriptor that takes, at its first use, a copy of the buffer's bytes from the
   offset, rows `bytesPerRow` apart, into its first level and makes its later levels from the first
   as `generateMipmapsForTexture:` makes them (a format whose mipmaps the runtime refuses or cannot
   filter keeps them). The take is a blit encoder of a command buffer of the backend's own,
   committed on the queue of the command buffer whose encoder (a command, or a render pass's
   attachment) named the texture or a view of it first since its making, just before it and after
-  its copies from the guest's RAM; the old runtime records it inside that command buffer, ahead of
-  the command, so what an earlier encoder of it writes into the bytes or the texture lands after
-  the new runtime's take alone. A `replaceRegion` of such a texture's first level, which writes
+  its copies from the guest's RAM, so what an earlier encoder of that command buffer writes into
+  the bytes or the texture lands after the take. A `replaceRegion` of such a texture's first level, which writes
   the bytes and asks for another take, is refused. The stand-in is counted apart from the stream's
   work: `tiled_textures`, `tiled_takes`, `tiled_take_bytes` (the first level's bytes),
   `tiled_mipmap_generations`, `tiled_levels_kept`, and its GPU time `tiled_gpu_nanos`, in no
@@ -894,8 +806,7 @@ records as text, and
   `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
   `surface_format_refusals`, `surface_plain_format_views`) are the player's work, among its
   executed counters; `surface_refill_gpu_nanos` is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
-  complete. The report's `surfaces` line gives them with the longest refill command buffer. A
-  check of a texture reads its first level and slice as the old runtime's backend lays them out.
+  complete. The report's `surfaces` line gives them with the longest refill command buffer.
 
   A buffer made as a video surface's pages (`m2v.newDmaBufBufferOfLengthPaddingUnobserved`, section
   4), which another API decodes pictures into, plays instead as the product makes it: one surface
@@ -924,9 +835,6 @@ records as text, and
   `video_pictures_before_surface` and `video_buffers_otherwise` give them by frame, beside the
   runtime's own `surfaces_in_place`, `surfaces_copied` and `surface_waits` (the ready waits of
   surfaces made in place), and the gauges add `surface_imports`.
-  The old runtime's backend plays such a buffer as any surface's pages: a buffer of its length
-  (section 4), the textures over its planes the old runtime's textures over the buffer, which read
-  it in place, and `m2v.externalWriteDone` as nothing.
 
   The counts are among its executed counters; a `skipped_` one above zero makes the play no gate
   result, and `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
@@ -964,19 +872,18 @@ records as text, and
   buffers, offsets, bytes, textures and sampler states, the viewport, scissor, cull mode, winding,
   blend color and stencil references, the draws (indexed or not, with instance counts, base
   vertex and base instance), fences and memory barriers (their stages are the runtime's to
-  order). On the new runtime a bind of a range (`withRange:`) of buffers, textures or sampler
+  order). A bind of a range (`withRange:`) of buffers, textures or sampler
   states plays as the single-slot bind of each, from the range's location, on render and compute
   encoders alike.
-  Compute encoders on the new runtime play `setStageInRegion:` (the runtime takes it and it
-  changes nothing a dispatch of a kernel without a stage-in argument does, the only kernel it
-  builds); the old runtime refuses it.
+  Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
+  dispatch of a kernel without a stage-in argument does, the only kernel it builds).
 
 `report.txt` holds one line per item: the line `recorded before the recorder's completion fix: the
 stream may differ from what the program did` first where the stream's header lacks bit 1 (section
 6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
-`device NAME runtime old|rt snapshots yes|no`, then on the new runtime on a device that keeps a
+`device NAME runtime rt snapshots yes|no`, then on a device that keeps a
 device copy of each Managed buffer, `managed digests: ...` (above), then
 `addresses address_looking_words=N misaligned_address_words=N address_arguments=N
 relocated_words=N differing_ids=N: written words play as recorded; NOTES` (the census of the
@@ -1005,17 +912,16 @@ union of the GPU intervals of the command buffers the frame waited for, where th
 them, which runs beside the rest, then `gpu_longest` and `gpu_longest_cb`, the longest of those
 intervals, one command buffer's, and that command buffer's stream id (the first of equal ones; 0
 and 0 where the runtime gives none); and the backend's gauges then, as they stand, never as growth:
-the new runtime's live
-blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
+the runtime's live blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
 spilled bytes (`managed_spilled_bytes`: the bytes of those whose GPU copy the player placed in a
 spilled Private block) and idle Shared and
 Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
-`private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
+`private_block_bytes`),
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
 guest makes its objects on (section 4), `check ID frame F SHA256 match|differs|unrecorded|covered|receiver` (`F` the frame it was read in, the presents played before it), ending `(CPU copy)` or `(device copy, read back)` for a buffer with two copies (above), `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
-runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
+runtime's getter raises), `id ID RECORDED PLAYED word WORD`, as the runtime lays its IDs
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
 the recording's, and its high word with `WORD`, the document's own function of the descriptor the
 object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
@@ -1029,8 +935,7 @@ memory, so from that write until the object is written again its check (`covered
 snapshot ranges that meet those bytes (`covered`) are not compared. The ranges are the stream's
 offsets in the heap with a buffer's length and a texture's size as the runtime answers it, and
 the writes are found by structure: a draw's or a dispatch's to the texture slots the pipeline
-state's interface marks written (the new runtime's; the old runtime answers no slot access, so
-there only the following count), a render pass's to the textures its descriptor names, a blit's
+state's interface marks written, a render pass's to the textures its descriptor names, a blit's
 to its destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage and the
 CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. An object is written
 again by the player's writes into it, a blit into it, and, as the stream carries no buffer
@@ -1041,23 +946,14 @@ C checks and R snapshot ranges of surfaces' receiver buffers not compared; the t
 surfaces hold the texels` where the stream checks a buffer a texture over a surface's plane was made
 on (section 7), while that buffer lives: a runtime may keep the texels apart from the buffer, as the
 product does, so such a check (`receiver`) and the snapshot ranges in such a buffer (`receiver`) are
-compared on no runtime, and the textures' own checks carry the bytes. `split N executed COUNTS` where the player split compute
-encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
-`unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
+not compared, and the textures' own checks carry the bytes. `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
-`pinned N of N; K heaps' textures outside; S textures whose recorded range (by the runtime's
-texture sizes) met a live buffer's` on the old runtime (`N` the objects made at their recorded
-addresses, every other object with a recorded range there too, so the address map moves no word;
-`K` the heaps with a recorded range whose textures it made in a heap outside the space, those the
-stream places a texture or no buffer in; `S` the textures whose range in the recording, by the
-runtime's size for each, met the recorded range of a buffer live in the same heap, read ahead and
-not a stop; section 5),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
 CPU's writes into Managed textures, above), `managed reads on two copies: ...` (the reads of
 Managed bytes no announcement took to the GPU copy, above), `total COUNTS` (its `calls` the
 calls played: where
-the play stopped, the stopping call is the next), the new runtime's backend's
+the play stopped, the stopping call is the next), the backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
 making's wall time, and whether no state of another specialization of the kernel, a library's
 function by name, was made before), its `commit lock wait longest N ns` (the runtime's
@@ -1081,9 +977,9 @@ the runtime's does not hold, or the runtime's gap for the pass as Rust prints it
 `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute and
-render pipeline states whose `gpuResourceID` the player asked, which the new runtime does not
+render pipeline states whose `gpuResourceID` the player asked, which the runtime does not
 give; bookkeeping: no draw or dispatch is skipped for it, and only an indirect command buffer,
-which the runtime does not build, would read such an ID), on the new runtime where the play
+which the runtime does not build, would read such an ID), where the play
 finished its range (it ended without an error, through frame `F`'s present where it plays to
 `F`) and the backend skipped nothing, the matrix's judged metrics, one line each, `M2V-MATRIX
 metric replay-rt/STEM/RANGE/NAME N` (`STEM` the first segment's stem, whitespace made `_`;
@@ -1100,12 +996,11 @@ the play ended but objects whose ID the program saw have other IDs in the runtim
 one end `; not a verdict past frame F, call C`: `F` and `C` the frame and stream position of the
 call at which it first skipped, past which nothing the play shows is a verdict. A dispatch is
 skipped only where it names a skipped object. `COUNTS` is `stream KEY=VALUE ... executed
-KEY=VALUE ...`. On the new runtime the player then ends its device and prints, for each of the
+KEY=VALUE ...`. The player then ends its device and prints, for each of the
 runtime's gauges read once the device dropped, `M2V-MATRIX gauge replay-rt/device/GAUGE@drop N`:
 the matrix's own record, so the matrix's rule (`scripts/matrix/results.py`) fails a play whose
 gauge is not 0 at device drop. Such a gauge, or a device that did not quiesce within 30 seconds,
-also writes `error teardown: WHAT`. The old runtime's counts end with its device, so its plays
-print no such line. The exit status is 0 for `ok`, 1 for a run that stopped or an `ok` followed
+also writes `error teardown: WHAT`. The exit status is 0 for `ok`, 1 for a run that stopped or an `ok` followed
 by `error teardown`, 2 for a harness failure (a bad command line or an unreadable stream) and 3
 for `ids`, a run that played to the end.
 
@@ -1118,8 +1013,7 @@ it covered then (as above, `start..end` byte offsets joined by commas, or `-`), 
 two copies `cbC-objO.copy`, which copy the bytes are: `CPU copy` or `device copy, read back`
 (above). `command-replay
 compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
-wholly inside a range either play held covered (the old runtime answers no slot access, so its
-plays cover less), and prints `differs cb #C obj #O: N words outside every cover, the first word
+wholly inside a range either play held covered, and prints `differs cb #C obj #O: N words outside every cover, the first word
 W; M covered; lengths A and B` for each buffer that differs outside every cover, `only in a|b:
 cbC-objO` for a dump one play lacks, `unread in a|b: cbC-objO: WHY`, `copies differ: cbC-objO: a
 read its COPY, b its COPY` for a buffer the two plays read different copies of (`one copy` where a
@@ -1133,7 +1027,7 @@ the cover would show only as the same mismatch.
 
 **Two plays compared for a timing verdict.** `command-replay compare-plays --a REPORT --b REPORT
 [--frame F]` reads two plays' reports (each a `report.txt` or the directory holding it), of one
-stream on two runtimes or two commits, and prints `served a|b: yes`, or `no: ...` for a report
+stream on two devices or two commits, and prints `served a|b: yes`, or `no: ...` for a report
 without the `managed reads` line; `frames a N b M; both B; counts equal in E, unequal in U` and
 `unequal frame F: KEY a=X b=Y` for the first eight frames whose player-side counts differ (the
 frame line's `stream` `calls`, `draws` and `dispatches`, and every `executed` count of a skip,
@@ -1168,8 +1062,7 @@ An NVIDIA time row is GPU ms a present over presents whose covering clock sample
 state on both arms, the state named, at least 30 presents an arm; otherwise 'not comparable by
 time' with the counts.
 
-Stale reads bar no verdict: Metal leaves those bytes undefined and both runtimes play them by one
-rule. Where the digests differ, they are the first suspect, as the old runtime takes a no-copy
-buffer's copy in at its making later than the new runtime does. The exit status is 0 where the
+Stale reads bar no verdict: Metal leaves those bytes undefined and every play takes them by one
+rule. Where the digests differ, they are the first suspect. The exit status is 0 where the
 frame `--frame` names has a verdict (or none is named), 1 where it has none and 2 for a bad
 command line or an unreadable report.
