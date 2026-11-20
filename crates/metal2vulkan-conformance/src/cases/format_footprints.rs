@@ -598,6 +598,12 @@ impl Case for FootprintCase {
         if self.shared_texture_buffers {
             named.push(crate::replay::shared_memory_notice());
         }
+        // The new runtime's footprints are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::device_own_sizes`).
+        named.extend(crate::texture_query::device_own_sizes(
+            &self.queries,
+            site::QUERY,
+        ));
         named
     }
 

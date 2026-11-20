@@ -629,6 +629,12 @@ impl Case for DescriptorPairs {
                 metal2vulkan_runtime::Degradation::MemorylessTextureBuffer.code(),
             ));
         }
+        // The new runtime's footprints are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::device_own_sizes`).
+        named.extend(crate::texture_query::device_own_sizes(
+            &self.queries,
+            site::QUERY,
+        ));
         named
     }
 

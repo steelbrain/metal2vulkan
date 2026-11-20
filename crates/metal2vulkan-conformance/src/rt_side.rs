@@ -48,6 +48,7 @@ mod descriptors;
 mod events;
 mod fences;
 mod functions;
+mod heap_sizes;
 mod render;
 mod state_facts;
 mod states;
@@ -803,12 +804,18 @@ impl Side for RtSide<'_> {
         Ok(facts)
     }
 
+    /// The runtime's answer, held to the property the side's `heap_sizes` states before it is
+    /// answered: the numbers are the device's own, which the cases do not compare with Metal's on
+    /// this side.
     fn heap_texture_size_and_align(
         &mut self,
         query: &crate::texture_query::HeapTextureQuery,
     ) -> Answer<crate::texture_query::SizeAndAlign> {
-        let sized = (self.on.device.heap_texture_size_and_align(&queried(query)))
+        let descriptor = queried(query);
+        let sized = (self.on.device.heap_texture_size_and_align(&descriptor))
             .map_err(|error| Failure::of_rt(&error))?;
+        let queue = self.queue()?.clone();
+        heap_sizes::hold(self.on, &queue, query, &descriptor, sized)?;
         Ok(crate::texture_query::SizeAndAlign {
             size: sized.size,
             align: sized.align,

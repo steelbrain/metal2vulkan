@@ -137,6 +137,15 @@ impl Case for FormatDescriptors {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<Allowance> {
+        // The new runtime's answers are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::device_own_sizes`).
+        let queries: Vec<Q> = (self.queries().into_iter())
+            .map(|(query, _)| query)
+            .collect();
+        crate::texture_query::device_own_sizes(&queries, site::QUERY)
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut words = Vec::new();
         for (query, asks_texture) in self.queries() {

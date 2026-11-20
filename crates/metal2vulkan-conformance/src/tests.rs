@@ -1311,7 +1311,8 @@ fn a_failing_row_names_the_native_notes_its_run_announced() {
 }
 
 /// Every accepted difference a case names is an entry of `docs/API.md` section 10, a venue's
-/// answer (`Justification::WithoutCompression`) included. A slug that names no entry justifies
+/// answer (`Justification::WithoutCompression`) and the new runtime's
+/// (`Justification::NewRuntimeAccepted`) included. A slug that names no entry justifies
 /// nothing on any venue, and a replay says so only where the site it loosens differs: the
 /// presented-Mac entry's lead-in was reworded while the compression slug kept the old words, so
 /// every site that slug loosens read divergent on the RTX 5080 and on lavapipe, and the M3 Max,
@@ -1322,8 +1323,9 @@ fn every_accepted_difference_a_case_names_is_an_entry() {
     let mut missing = Vec::new();
     for case in crate::cases::all() {
         for allowance in case.allowances() {
-            let (Justification::AcceptedDifference(slug) | Justification::WithoutCompression(slug)) =
-                &allowance.justified_by
+            let (Justification::AcceptedDifference(slug)
+            | Justification::WithoutCompression(slug)
+            | Justification::NewRuntimeAccepted(slug)) = &allowance.justified_by
             else {
                 continue;
             };
@@ -1343,6 +1345,69 @@ fn every_accepted_difference_a_case_names_is_an_entry() {
         missing.len(),
         missing.join("\n")
     );
+}
+
+/// Every answer Metal recorded to `heapTextureSizeAndAlignWithDescriptor:` is loosened on the new
+/// runtime's run, both of its numbers, by the entry saying they are the device's own
+/// (`texture_query::device_own_sizes`); the new runtime's side holds them to their property
+/// instead. An answer the allowances missed would compare the device's numbers with Metal's, which
+/// the entry says they are not; one they reach past would excuse a site that is no answer.
+#[test]
+fn every_recorded_heap_texture_answer_is_held_by_its_property_on_the_new_runtime() {
+    /// The paths of the `size-and-align` sites under `node` that recorded an answer.
+    fn answered(node: &Node, path: &str, out: &mut Vec<String>) {
+        let path = match path.is_empty() {
+            true => node.name.clone(),
+            false => format!("{path}/{}", node.name),
+        };
+        let ok = matches!(&node.observed.value, Value::Variant { name, .. } if name == "Ok");
+        if node.name == "size-and-align" && ok {
+            out.push(path.clone());
+        }
+        for child in &node.children {
+            answered(child, &path, out);
+        }
+    }
+    let own = Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES);
+    let (mut held, mut missed, mut cases) = (0, Vec::new(), 0);
+    for case in crate::cases::all() {
+        let Ok(recording) = crate::recording::read(case.name()) else {
+            continue;
+        };
+        let mut paths = Vec::new();
+        for outcome in recording.answers.iter().flat_map(|answer| &answer.outcomes) {
+            answered(&outcome.transcript.root, "", &mut paths);
+        }
+        let allowances = case.allowances();
+        let loosened = |at: &str| {
+            (allowances.iter())
+                .any(|allowance| allowance.covers(at) && allowance.justified_by == own)
+        };
+        cases += usize::from(!paths.is_empty());
+        for path in paths {
+            for field in ["size", "align"] {
+                let at = format!("{path}/Ok/{field}");
+                match loosened(&at) {
+                    true => held += 1,
+                    false => missed.push(format!("{}: {at}", case.name())),
+                }
+            }
+            assert!(
+                !loosened(&path),
+                "{}: the allowance reaches {path}, where a refusal would be excused",
+                case.name()
+            );
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "{} recorded answer field(s) compared with Metal's on the new runtime:\n{}",
+        missed.len(),
+        missed.join("\n")
+    );
+    // The heap families' four case kinds over 18 recordings, some two thousand answers: a walk
+    // that found none would pass vacuously.
+    assert!(cases >= 18 && held >= 2000, "{cases} cases, {held} fields");
 }
 
 /// A case that names two notices separately must see **both** fire. Before the subset check the

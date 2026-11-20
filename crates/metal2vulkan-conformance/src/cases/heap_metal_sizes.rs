@@ -372,12 +372,19 @@ impl Case for HeapSizeCase {
         // alignment -- so the notice a card without unified memory announces for a `Shared` buffer
         // cannot reach it, and no row declares one. Measured: five of the seven rows were exact on
         // both the 5080 and llvmpipe.
-        match LARGER_THAN_METALS.contains(&self.name) {
+        let mut named = match LARGER_THAN_METALS.contains(&self.name) {
             true => vec![crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal.code(),
             )],
             false => Vec::new(),
-        }
+        };
+        // The new runtime's answers are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::device_own_sizes`).
+        named.extend(crate::texture_query::device_own_sizes(
+            &self.queries,
+            site::QUERY,
+        ));
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

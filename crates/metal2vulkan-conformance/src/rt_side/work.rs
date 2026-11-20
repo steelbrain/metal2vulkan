@@ -155,7 +155,7 @@ fn shared_buffer(on: &RtDevice, length: u64) -> Answer<(rt::Buffer, rt::Block)> 
 }
 
 /// `bytes` written into a buffer the host reaches, at its start.
-fn write(buffer: &rt::Buffer, bytes: &[u8]) -> Answer<()> {
+pub(super) fn write(buffer: &rt::Buffer, bytes: &[u8]) -> Answer<()> {
     let contents = (buffer.contents())
         .ok_or_else(|| Failure::named("NoContents", "a buffer the host does not reach"))?;
     // SAFETY: the buffer holds at least `bytes.len()` bytes, the host reaches them, and no command
@@ -165,7 +165,7 @@ fn write(buffer: &rt::Buffer, bytes: &[u8]) -> Answer<()> {
 }
 
 /// `length` bytes of `buffer` from `offset`, as the host reads a buffer it reaches.
-fn read_buffer(buffer: &rt::Buffer, offset: u64, length: usize) -> Answer<Vec<u8>> {
+pub(super) fn read_buffer(buffer: &rt::Buffer, offset: u64, length: usize) -> Answer<Vec<u8>> {
     let past = (offset.checked_add(length as u64)).is_none_or(|end| end > buffer.length());
     if past {
         return Err(Failure::named(

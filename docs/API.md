@@ -6298,6 +6298,18 @@ each item named states the rule in full.
 - **A heap's texture answers the size that placed it** (`Texture::allocated_size`, Metal's
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
+- **The new runtime's heap texture size and alignment are the device's own**
+  (`metal2vulkan-rt`'s `Device::heap_texture_size_and_align`, its README's heaps): the device's
+  own image requirements, not Metal's, the size rounded up to and the alignment raised to the
+  device's `bufferImageGranularity`, so a buffer placed by the same answers never shares a
+  granularity page with the texture. The answers differ by device, so the consumer places by this
+  device's. The conformance suite does not compare the two numbers with Metal's on the new
+  runtime; it holds each answer to three steps: (1) the alignment is a power of two; (2) a Private
+  descriptor's texture is made at offset `align` in a heap of `align + size` bytes; (3) there,
+  level 0's first slice written from a buffer reads back unchanged. A Shared, Managed or
+  Memoryless descriptor is held to step 1 alone, as the new runtime places heap textures in
+  Private blocks only. A descriptor whose bytes the new runtime does not move (depth and stencil
+  both, multisample, `Depth32Float`) is held to steps 1 and 2.
 - **A no-copy buffer's keep-alive waits for the buffers bound inside its import** (`KeepAlive`, a
   runtime extension with no Metal counterpart). A no-copy buffer made over part of a live one's
   bytes, or over the same bytes as memory of another class, is bound inside the live one's import
