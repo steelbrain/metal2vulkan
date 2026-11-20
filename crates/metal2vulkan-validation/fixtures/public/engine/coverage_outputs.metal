@@ -1,5 +1,4 @@
-// The functions of the coverage outputs lane
-// (validation/src/runtime_lane/coverage_outputs.rs), our own MSL: fragment functions that read
+// The functions of the coverage outputs lane, our own MSL: fragment functions that read
 // [[sample_mask]], write memory, so that Metal runs them once per covered sample, and return a
 // color, one also a sample mask. Each counts its runs per pixel in buffer 0 and returns the count
 // before its run and the coverage it read. The triangle covers the lower left half of the target

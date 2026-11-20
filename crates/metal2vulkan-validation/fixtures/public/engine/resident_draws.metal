@@ -1,4 +1,4 @@
-// Owned fixture: the functions of the resident-draws lane (`runtime_lane::resident_draws`). A
+// Owned fixture: the functions of the resident-draws lane. A
 // draw places one small triangle at a position: one its vertex buffer holds
 // (`rd_slot_vertex`), or one the pointer of its argument-table entry points to
 // (`rd_entry_vertex`). The fragment returns one colour (`rd_color_fragment`), or the texel at

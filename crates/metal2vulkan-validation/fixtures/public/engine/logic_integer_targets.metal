@@ -1,6 +1,6 @@
-// The integer functions of the logic-operation lane (validation/src/runtime_lane/logic_ops.rs),
-// our own MSL: a fullscreen triangle and fragments writing the unsigned or signed integer color
-// in buffer 0, which may lie past the attachment's channels' range.
+// The integer functions of the logic-operation lane, our own MSL: a fullscreen triangle and
+// fragments writing the unsigned or signed integer color in buffer 0, which may lie past the
+// attachment's channels' range.
 #include <metal_stdlib>
 using namespace metal;
 

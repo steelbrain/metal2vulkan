@@ -377,7 +377,7 @@ impl SamplerPlan {
         }
     }
 
-    /// Its descriptor, as both runtimes take it.
+    /// Its descriptor, as the runtime takes it.
     pub(crate) fn descriptor(self) -> SamplerDescriptor {
         let filter = match self.filter {
             Filter::Nearest => SamplerMinMagFilter::Nearest,
@@ -633,7 +633,7 @@ pub struct Constant {
     pub value: Vec<u8>,
 }
 
-/// `constants` as the translator's `MTLFunctionConstantValues`, which both runtimes take.
+/// `constants` as the translator's `MTLFunctionConstantValues`, which the runtime takes.
 pub(crate) fn values(constants: &[Constant]) -> Result<FunctionConstantValues> {
     let mut values = FunctionConstantValues::defaults();
     for constant in constants {

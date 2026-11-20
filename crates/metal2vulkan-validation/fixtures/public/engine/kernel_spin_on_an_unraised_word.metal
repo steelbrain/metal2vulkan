@@ -1,4 +1,4 @@
-// Owned fixture: the busy work of the runtime lane's queue storm (runtime_lane::queue_storms). One
+// Owned fixture: the busy work of a queue storm. One
 // thread loads a word no one raises, with relaxed atomic loads, until it has made `cap` of them,
 // then stores how many it made: its GPU time grows with `cap` alone. It calls nothing a translation
 // drops (rfs_agx_yield's `llvm.agx3.yield` delays only Metal's own compilation of a spin), so

@@ -1,4 +1,4 @@
-// The functions of the `A8Unorm` lane (validation/src/runtime_lane/alpha_in_red.rs), our own MSL:
+// The functions of the `A8Unorm` lane, our own MSL:
 // a fullscreen triangle and one over the lower left half of the target, fragments writing the
 // color in buffer 0 (and the second color as a second output), one also reading its attachment,
 // and kernels that write, read, sample and read-and-write an 8 x 8 texture at every texel.

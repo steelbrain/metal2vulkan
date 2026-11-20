@@ -1,8 +1,8 @@
-// The functions of the private depth compare clamp lane (validation/src/runtime_lane/
-// depth_compare_clamps.rs), our own MSL: a fullscreen triangle, and fragments that compare a
-// `depth2d<float>` at the target's centre against buffer 0's references, `sample_compare` in red
-// and `gather_compare`'s first texel in green: through `[[sampler(2)]]` with the texture at
-// `[[texture(1)]]`, through a constexpr `less` sampler, and through an argument buffer's sampler.
+// The functions of the private depth compare clamp lane, our own MSL: a fullscreen triangle, and
+// fragments that compare a `depth2d<float>` at the target's centre against buffer 0's references,
+// `sample_compare` in red and `gather_compare`'s first texel in green: through `[[sampler(2)]]`
+// with the texture at `[[texture(1)]]`, through a constexpr `less` sampler, and through an argument
+// buffer's sampler.
 #include <metal_stdlib>
 using namespace metal;
 

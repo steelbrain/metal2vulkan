@@ -72,8 +72,8 @@
 //! A texture has one level and one sample, of a format whose element size the harness knows
 //! ([`element_bytes`](crate::plan::element_bytes)). Its `FILL` is `undefined`, `zero` or
 //! `words SEED` (SplitMix64's words from SEED, cut to the texture's bytes). `undefined` leaves
-//! it as made: Metal leaves a new texture's contents undefined, and so do both runtimes, so a
-//! workload whose outputs read such texels before writing them can differ between runtimes. The
+//! it as made: Metal leaves a new texture's contents undefined, and so does the runtime, so a
+//! workload whose outputs read such texels before writing them can differ between runs. The
 //! others are written by `replaceRegion:` slice by slice, rows tightly packed, which the CPU does
 //! for a shared or managed texture alone: a private texture takes `undefined` alone. A texture
 //! Metal made over an IOSurface is described as a plain shared or managed one; the harness makes

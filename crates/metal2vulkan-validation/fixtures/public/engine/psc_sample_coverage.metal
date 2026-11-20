@@ -1,8 +1,7 @@
-// The functions of the private sample coverage lane (validation/src/runtime_lane/sample_coverage.rs),
-// our own MSL: a fullscreen triangle at depth 0.5; fragment functions that write white, count their
-// runs and the coverage they read (writing no color), or declare early fragment tests; and kernels
-// that read every sample of a 16 x 16 color or depth texture into buffer 1, a mask of the samples
-// written per pixel.
+// The functions of the private sample coverage lane, our own MSL: a fullscreen triangle at depth
+// 0.5; fragment functions that write white, count their runs and the coverage they read (writing no
+// color), or declare early fragment tests; and kernels that read every sample of a 16 x 16 color or
+// depth texture into buffer 1, a mask of the samples written per pixel.
 #include <metal_stdlib>
 using namespace metal;
 

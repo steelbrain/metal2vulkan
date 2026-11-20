@@ -1,5 +1,4 @@
-// The functions of the multisampled word formats' lane
-// (validation/src/runtime_lane/word_samples_msaa.rs), our own MSL, the shapes of our probe
+// The functions of the multisampled word formats' lane, our own MSL, the shapes of our probe
 // `msaa_word_formats.m`: a fullscreen triangle; a fragment function that runs once per sample and
 // writes each sample its own color, read from buffer 0 at `(y * width + x) * samples + sample`
 // (the width, the samples and whether to discard in buffer 1), discarding the last sample of every

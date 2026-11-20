@@ -1,6 +1,6 @@
 // fpv_bfloat_textures.metal (metal2vulkan): kernels reading, sampling,
-// gathering and writing a texture, written from scratch for the bfloat lane
-// (`runtime_lane::bfloat_textures`). Each thread takes its texel at `gid` of a row `width` texels
+// gathering and writing a texture, written from scratch for the bfloat lane. Each thread takes its
+// texel at `gid` of a row `width` texels
 // wide, element `gid.y * width + gid.x` of buffer 0.
 #include <metal_stdlib>
 using namespace metal;

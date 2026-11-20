@@ -553,7 +553,7 @@ impl ReadClass {
 /// from the stream alone as a play that keeps two copies holds them (`docs/REPLAY-STREAM.md`,
 /// section 10). The made-with reads (`made_with`) are served: each runtime's GPU copy starts from
 /// the bytes the buffer was made with. The stale ones (`stale`), of bytes the CPU wrote that no
-/// `didModifyRange:` announced, play as recorded on both runtimes: Metal leaves what the GPU reads
+/// `didModifyRange:` announced, play as recorded: Metal leaves what the GPU reads
 /// there undefined. With no identity record (`no_identity`), a no-copy buffer's writes before its
 /// first use are served and not counted. Where the guest device's identity record keeps one copy,
 /// none is counted (`one_copy`).

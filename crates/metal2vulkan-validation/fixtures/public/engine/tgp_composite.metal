@@ -1,5 +1,5 @@
-// Owned fixture: the shapes of a window server's composite on Metal's tile path, for the runtime
-// lane's cost measurement (`runtime_lane::tile_path_costs`). A pass holds a base color (color 0,
+// Owned fixture: the shapes of a window server's composite on Metal's tile path, for a cost
+// measurement. A pass holds a base color (color 0,
 // an 8-bit or extended-range target the pass loads and stores) and a wide color (color 1, a
 // memoryless `RGBA16Float` the pass clears). Each draw is a rectangle from a buffer's corners,
 // its texture coordinates over the unit square:

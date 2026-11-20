@@ -1,7 +1,7 @@
-// Owned fixture: the functions the metal2vulkan-validation crate's heap textures lane draws
-// with (src/runtime_lane/heap_textures.rs): one triangle over the whole target, and fragments that
-// read a texture under them, directly or through an argument buffer, or write two colors, and a
-// kernel that reads a texture through an argument buffer. Written from scratch for it;
+// Owned fixture: the functions metal2vulkan-rt's copy-over tests draw with
+// (src/tests/copy_over.rs): one triangle over the whole target, and fragments that read a texture
+// under them, directly or through an argument buffer, or write two colors, and a kernel that reads
+// a texture through an argument buffer. Written from scratch for it;
 // `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir examples heap_draws` compiles it. No
 // translator sweep reads this directory.
 #include <metal_stdlib>

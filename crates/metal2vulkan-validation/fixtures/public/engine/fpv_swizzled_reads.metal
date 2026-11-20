@@ -1,6 +1,6 @@
 // fpv_swizzled_reads.metal (metal2vulkan): kernels reading, sampling and gathering a
-// float texture at positions a buffer gives, written from scratch for the swizzle lane
-// (`runtime_lane::extended_swizzles`). Thread `i` writes `o[i]` (buffer 0) from position `p[i]`
+// float texture at positions a buffer gives, written from scratch for the swizzle lane. Thread
+// `i` writes `o[i]` (buffer 0) from position `p[i]`
 // (buffer 1): a texel coordinate for a read, a normalized coordinate for a sample or a gather
 // through the runtime sampler at `[[sampler(0)]]`.
 #include <metal_stdlib>

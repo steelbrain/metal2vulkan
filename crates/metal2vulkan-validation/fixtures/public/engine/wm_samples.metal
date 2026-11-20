@@ -1,7 +1,7 @@
-// The functions of the word merge's multisampled lane (validation/src/runtime_lane/word_samples.rs),
-// our own MSL: a fullscreen triangle and one over the lower left half of the target, a fragment
-// writing the color in buffer 0, and kernels that read every sample of a 4-sample 8 x 8 texture and
-// every texel of a single-sample one into buffer 1.
+// The functions of the word merge's multisampled lane, our own MSL: a fullscreen triangle and one
+// over the lower left half of the target, a fragment writing the color in buffer 0, and kernels
+// that read every sample of a 4-sample 8 x 8 texture and every texel of a single-sample one into
+// buffer 1.
 #include <metal_stdlib>
 using namespace metal;
 

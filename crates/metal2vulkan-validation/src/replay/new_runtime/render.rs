@@ -392,7 +392,7 @@ impl NewRuntime {
     /// A setter record of the render pass descriptor `call` is sent to: each property its map
     /// sets. `defaultColorSampleCount` and `defaultRasterSampleCount`, which change nothing a pass
     /// with an attachment shows (the runtime refuses one without), are not played; a rate map and
-    /// accumulated visibility results are refused, as the old runtime's backend refuses them.
+    /// accumulated visibility results are refused.
     pub(super) fn pass_call(&mut self, call: &Call) -> Result<(), PlayError> {
         match &*call.selector {
             "m2v.setPass" => {

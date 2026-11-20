@@ -5,8 +5,8 @@
 //!
 //! - **Stale:** bytes an `m2v.write` put into the object that no `didModifyRange:` of it
 //!   announced and no GPU write covered since. Where the stream has no identity record, a no-copy
-//!   Managed buffer's writes before its first use are not stale: its GPU copy takes them, as the
-//!   player plays both runtimes (section 5).
+//!   Managed buffer's writes before its first use are not stale: its GPU copy takes them (section
+//!   5).
 //! - **Made with:** the bytes a Managed buffer was made with (a descriptor's `contents`, to its
 //!   `zeroFrom` where it is a no-copy one, a no-copy buffer's pages, `newBufferWithBytes:`'s
 //!   bytes; bytes that are all zero left out, as the GPU copy holds zeros there anyway), before a

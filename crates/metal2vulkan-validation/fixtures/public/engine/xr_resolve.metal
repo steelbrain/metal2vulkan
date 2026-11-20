@@ -1,5 +1,4 @@
-// The functions of the extended-range resolve lane
-// (validation/src/runtime_lane/extended_range_resolve.rs), our own MSL: a fullscreen triangle, and a
+// The functions of the extended-range resolve lane, our own MSL: a fullscreen triangle, and a
 // fragment function that runs once per sample and writes each sample its own color, read from
 // buffer 0 at `(y * width + x) * samples + sample`, the width and the samples in buffer 1.
 #include <metal_stdlib>

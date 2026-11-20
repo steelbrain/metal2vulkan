@@ -1,6 +1,6 @@
 // Owned fixture: a fragment function that reads, at its own pixel, a texture its pass renders as
 // color 0 and writes what it read into color 1 alone, so the draw writes nothing of the color it
-// reads: the in-place reads of the runtime's lane (`runtime_lane::in_place_reads`). Its vertex
+// reads: the in-place reads of the runtime's lane. Its vertex
 // stage is `tob_rect` of `tob_renders.metal`. Written for this repository; no third-party source.
 // Loop-free.
 #include <metal_stdlib>

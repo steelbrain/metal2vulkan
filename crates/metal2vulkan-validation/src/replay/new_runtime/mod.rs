@@ -1074,7 +1074,7 @@ impl NewRuntime {
     /// The texels of `texture`, a Private texture, which the CPU does not reach: a blit copies
     /// its first level's first slice into a Shared buffer of the play's own, laid out as
     /// `texture_bytes` reads a texture the CPU reaches, on the play's read queue (`reads`), and
-    /// the read waits for it, as the old runtime's play reads every texture.
+    /// the read waits for it.
     fn private_texture_bytes(&mut self, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
         let d = texture.descriptor();
         let raw = u64::from(d.pixel_format.as_raw());
@@ -2125,7 +2125,7 @@ impl NewRuntime {
                 let descriptor = self.texture_descriptor(call, 0)?;
                 // A tiled texture of more than one level takes the buffer's bytes at use
                 // (`tiled`); one of one level is the texture over the buffer the first form
-                // makes, as the old runtime makes it.
+                // makes.
                 if call.selector.starts_with("newTiled") && descriptor.mipmap_level_count > 1 {
                     return self.tiled_texture(call, buffer, &descriptor);
                 }
@@ -2218,9 +2218,8 @@ impl NewRuntime {
     }
 }
 
-/// A texture's bytes for a check, laid out as the old runtime's backend lays them out: its first
-/// level and slice, the rows and the image as far apart as Metal's level info puts them, the bytes
-/// between rows zero.
+/// A texture's bytes for a check: its first level and slice, the rows and the image as far apart as
+/// Metal's level info puts them, the bytes between rows zero.
 fn texture_bytes(device: &rt::Device, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
     let d = texture.descriptor();
     let raw = u64::from(d.pixel_format.as_raw());
@@ -2357,7 +2356,7 @@ impl Backend for NewRuntime {
             }
         }
         if !self.tiled.is_empty() {
-            // Skipped encoders too: the old runtime takes the copy at their use.
+            // Skipped encoders too: the copy is taken at their use.
             self.tiled_named(call)?;
         }
         if let Some(&command_buffer) = self.owners.get(&call.receiver) {

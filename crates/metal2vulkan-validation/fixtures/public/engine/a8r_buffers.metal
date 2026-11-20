@@ -1,5 +1,5 @@
-// The texture-buffer and argument-buffer functions of the `A8Unorm` lane
-// (validation/src/runtime_lane/alpha_in_red.rs), our own MSL: kernels that read (as `float` and as
+// The texture-buffer and argument-buffer functions of the `A8Unorm` lane, our own MSL: kernels
+// that read (as `float` and as
 // `half`), write, and read and write a texture buffer at every texel, and one that reads and writes
 // the 8 x 8 storage textures an argument buffer (buffer 2) holds.
 #include <metal_stdlib>

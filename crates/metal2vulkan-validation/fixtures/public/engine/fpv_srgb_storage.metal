@@ -1,6 +1,6 @@
 // fpv_srgb_storage.metal (metal2vulkan): kernels reading and writing an 8-bit
-// sRGB texture at a storage slot, `float` and `half`, written from scratch for the lane
-// `runtime_lane::srgb_storage`. Each thread takes its texel at `gid` of a row `width` texels wide,
+// sRGB texture at a storage slot, `float` and `half`, written from scratch for the sRGB storage
+// lane. Each thread takes its texel at `gid` of a row `width` texels wide,
 // element `gid.y * width + gid.x` of buffer 0.
 #include <metal_stdlib>
 using namespace metal;

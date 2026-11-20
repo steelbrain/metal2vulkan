@@ -1118,9 +1118,9 @@ fn a_steady_time_is_the_lowest_mean_of_windows_of_ten() {
     times[3] = 400.0;
     assert_eq!(steady(&times), Some(100.0));
     assert_eq!(percentile(&times, 50), Some(105.0));
-    // Two runs' completions reported together: each pair's first wait takes both runs' GPU time
-    // and its second none (the old runtime's grouped submissions on ms01's Iris Xe, 4367 us of GPU
-    // a run). The time a run took, not the short wait's: a median of each window of 10 is 174.
+    // Two runs' completions reported together: each pair's first wait takes both runs' GPU time and
+    // its second none (grouped submissions on an Iris Xe, 4367 us of GPU a run). The time a run
+    // took, not the short wait's: a median of each window of 10 is 174.
     let paired: Vec<f64> = (0..200)
         .map(|run| if run % 2 == 0 { 9454.0 } else { 174.0 })
         .collect();
@@ -1402,7 +1402,7 @@ fn the_copy_moves_every_byte_in_whole_threadgroups() {
 }
 
 /// The fixture's two cells kernels on lavapipe's `Device::from_queries` profile. Under the
-/// resident-table domains (the old runtime's) both observe their threadgroup partition with
+/// resident-table domains both observe their threadgroup partition with
 /// partial threadgroups through the lockstep order's barriers, which stand past the bounds test,
 /// so they are SIMD-group barriers, as in the row-indexed kernels the fixture stands for. The
 /// one-row variant (`LoweringInputs::one_row`) of `row_cells`, whose `int` cell arithmetic

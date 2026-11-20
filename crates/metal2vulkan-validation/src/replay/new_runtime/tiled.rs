@@ -1,19 +1,18 @@
 //! Tiled textures over a buffer of more than one level
 //! (`newTiledTextureWithDescriptor:offset:bytesPerRow:`, Apple's SPI, `docs/REPLAY-STREAM.md`
-//! section 10), played as the old runtime plays the call (`Buffer::new_tiled_texture`), which
-//! follows what x86 Macs were measured to do: an ordinary texture of the descriptor whose first
+//! section 10), played as x86 Macs were measured to do: an ordinary texture of the descriptor
+//! whose first
 //! level takes a copy of the buffer's bytes from the offset, rows `bytesPerRow` apart, and whose
 //! later levels are then made from the first as `generateMipmapsForTexture:` makes them, at the
 //! first use after the making. The take is that copy and generation in a blit encoder of a command
 //! buffer of the play's own, committed on the queue of the command buffer whose encoder used the
 //! texture first, just before it and after its copies from the guest's RAM: it reads the bytes as
-//! they are when that command buffer runs, as the old runtime's take, recorded inside it, does. A
-//! format whose mipmaps the runtime refuses or cannot filter keeps its later levels, as the old
-//! runtime's take keeps them. This work is the play's stand-in for the call, counted apart from
+//! they are when that command buffer runs. A format whose mipmaps the runtime refuses or cannot
+//! filter keeps its later levels. This work is the play's stand-in for the call, counted apart from
 //! the stream's (`tiled_*`).
 //!
-//! What differs from the old runtime's take: it runs ahead of the whole command buffer, not just
-//! ahead of the encoder that used the texture first, so what an earlier encoder of that command
+//! The take runs ahead of the whole command buffer, not just ahead of the encoder that used the
+//! texture first, so what an earlier encoder of that command
 //! buffer writes into the bytes or the texture lands after it; a texture an encoder names only
 //! through an argument buffer with no use named is not seen; and a `replaceRegion` of the first
 //! level, which writes the bytes and asks the next use for another take, is refused.
@@ -110,7 +109,7 @@ impl Tiled {
     pub(super) fn line(&self) -> String {
         let c = &self.counts;
         format!(
-            "tiled textures over a buffer {}, played as the old runtime plays the call: {} takes \
+            "tiled textures over a buffer {}: {} takes \
              at a first use, each a copy of the buffer's bytes into the first level ({} bytes) \
              and a generation of the later levels ({} generated, {} kept as the format's are), \
              in command buffers of the play's own; {} ns of GPU time",
@@ -122,7 +121,7 @@ impl Tiled {
 impl NewRuntime {
     /// `newTiledTextureWithDescriptor:offset:bytesPerRow:` on `buffer` of a descriptor of more
     /// than one level: an ordinary texture of `descriptor`, which takes the buffer's bytes at its
-    /// first use. A type other than 2D is refused, as the old runtime refuses it.
+    /// first use. A type other than 2D is refused.
     pub(super) fn tiled_texture(
         &mut self,
         call: &Call,

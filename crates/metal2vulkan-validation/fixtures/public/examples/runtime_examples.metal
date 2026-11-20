@@ -1,5 +1,5 @@
-// Owned fixture: the functions the metal2vulkan-runtime crate's examples run
-// (runtime/examples/). Written from scratch for them; `scripts/regen-air-fixtures/
+// Owned fixture: the functions the harness's authored render workloads and metal2vulkan-rt's draw
+// tests run. Written from scratch for them; `scripts/regen-air-fixtures/
 // regen-air-fixtures.sh --dir examples` compiles it. No translator sweep reads this directory.
 #include <metal_stdlib>
 using namespace metal;
