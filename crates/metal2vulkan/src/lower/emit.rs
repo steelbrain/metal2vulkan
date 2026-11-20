@@ -178,8 +178,9 @@ pub struct EmitCx<'a> {
     env: Vec<Option<SValue>>,
     /// The values bound in `env` since the block opened, so opening the next block clears them.
     bound: Vec<ValueId>,
-    /// Invocation-invariant values emitted since the block opened or in the function's entry
-    /// block, each with the SPIR-V block it was emitted in ([`Invariant`]).
+    /// Invocation-invariant values emitted since the block opened, in the function's entry block
+    /// or in the block the entry hooks end in, each with the SPIR-V block it was emitted in
+    /// ([`Invariant`]).
     memo: Vec<(Invariant, SValue, SBlockId)>,
     /// The SPIR-V blocks the open block's top-level code ran through, in order: a value emitted
     /// in one of them dominates everything the block emits after it.
@@ -187,6 +188,12 @@ pub struct EmitCx<'a> {
     /// The function's entry block: a value emitted there dominates every block, so its memo
     /// entries outlive the block that emitted them.
     entry_block: Option<SBlockId>,
+    /// The block the entry hooks end in, where the walk of the body starts: it dominates every
+    /// block of the body, so its memo entries outlive the block that emitted them too. It is the
+    /// entry block but where a hook closed a construct there: the floor's tail guard
+    /// (`push::emit_tail_guard`) returns from an arm, and the hooks after it, the sink's address
+    /// among them (`access::dynamic::emit_entry`), run in its merge.
+    hooks_block: Option<SBlockId>,
     /// While a workgroup synchronization of a predicated walk is emitted, the calling invocation's
     /// live flag: a lane that is not live takes part with null operands. `None`: every invocation
     /// executing the synchronization is live.
@@ -277,6 +284,7 @@ impl<'a> EmitCx<'a> {
             memo: Vec::new(),
             spine: Vec::new(),
             entry_block: None,
+            hooks_block: None,
             live: None,
             active: None,
             entry_live: None,
@@ -308,16 +316,27 @@ impl<'a> EmitCx<'a> {
     }
 
     /// The value of `key` emitted earlier where it dominates the open SPIR-V block: in that
-    /// block, in a block of the open block's spine, or in the function's entry block.
+    /// block, in a block of the open block's spine, in the function's entry block, or in the
+    /// block the entry hooks end in.
     fn recall(&self, fb: &FunctionBuilder<'_>, key: Invariant) -> Option<SValue> {
         let here = fb.current_block()?;
         self.memo
             .iter()
             .find(|(k, _, _)| *k == key)
-            .filter(|(_, _, at)| {
-                *at == here || Some(*at) == self.entry_block || self.spine.contains(at)
-            })
+            .filter(|(_, _, at)| *at == here || self.dominates_body(*at) || self.spine.contains(at))
             .map(|(_, v, _)| *v)
+    }
+
+    /// Whether block `at` dominates every block of the body: the function's entry block, or the
+    /// block the entry hooks end in.
+    fn dominates_body(&self, at: SBlockId) -> bool {
+        Some(at) == self.entry_block || Some(at) == self.hooks_block
+    }
+
+    /// Record the open block as the one the entry hooks end in, where the walk starts.
+    fn end_hooks(&mut self, fb: &FunctionBuilder<'_>) -> BResult<()> {
+        self.hooks_block = fb.current_block();
+        Ok(())
     }
 
     /// Record `v` as the value of `key` in the open SPIR-V block (replacing an entry that does
@@ -437,7 +456,7 @@ impl<'a> EmitCx<'a> {
     }
 
     /// The root table's sink address, read once where it dominates: `access::dynamic::emit_entry`
-    /// reads it in the function's first block, so no wide access reads the table for it.
+    /// reads it in the block the entry hooks end in, so no wide access reads the table for it.
     pub(crate) fn sink_host(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
         if let Some(v) = self.recall(fb, Invariant::SinkHost) {
             return Ok(v);
@@ -695,10 +714,10 @@ impl<'a> EmitCx<'a> {
             }
         }
         self.spine.truncate(spine);
-        let entry = self.entry_block;
+        let (entry, hooks) = (self.entry_block, self.hooks_block);
         let kept = &self.spine;
         self.memo
-            .retain(|(_, _, at)| Some(*at) == entry || kept.contains(at));
+            .retain(|(_, _, at)| Some(*at) == entry || Some(*at) == hooks || kept.contains(at));
     }
 }
 
@@ -818,6 +837,7 @@ impl<'a> Emitter<'a> {
                 memo: Vec::new(),
                 spine: Vec::new(),
                 entry_block: None,
+                hooks_block: None,
                 live: None,
                 active: None,
                 entry_live: None,
@@ -1494,6 +1514,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
                 .and_then(|()| stage_io::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| tessellation::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| fragment::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| em.cx.end_hooks(&fb))
                 .map_err(Error::from)
                 .and_then(|()| crate::structurize::emit::emit(&structured, &mut fb, &mut em, m));
             match r {
