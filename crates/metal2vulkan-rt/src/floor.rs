@@ -75,16 +75,21 @@ pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[
 ];
 
 /// The device extension of a sampler's border colour through a view's component mapping
-/// (`VK_EXT_border_color_swizzle`): device creation enables it, with both its features
-/// ([`BORDER_SWIZZLE`]), where the device lists it and reports `borderColorSwizzleFromImage`, and
-/// neither otherwise. No form differs: no sampler's create info chains
+/// (`VK_EXT_border_color_swizzle`), after `VK_EXT_custom_border_color`, which it requires and of
+/// which no feature is enabled: device creation enables both, with the border swizzle's two
+/// features (`borderColorSwizzle` and `borderColorSwizzleFromImage`), where the device lists them
+/// and reports `borderColorSwizzleFromImage`, and none otherwise. No form differs: no sampler's
+/// create info chains
 /// `VkSamplerBorderColorComponentMappingCreateInfoEXT` on any device, since a sampler in the arrays
 /// meets every view, and the structure names one mapping. Where the feature is enabled, an
 /// opaque-black border sampled through a view whose mapping is not the identity reads through the
 /// view's mapping, as Metal's border does through the swizzle; elsewhere Vulkan leaves that texel
 /// undefined, and the sampler state's static note says so on every device
 /// ([`SamplerState::precision_note`](crate::SamplerState::precision_note)).
-pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[ash::ext::border_color_swizzle::NAME];
+pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[
+    ash::ext::custom_border_color::NAME,
+    ash::ext::border_color_swizzle::NAME,
+];
 
 /// The translator's name for an extension device creation enables that its shaders may use, or
 /// that its description of the device must enable: the portability subset, where the device lists
@@ -451,9 +456,9 @@ pub(crate) const STEP_RATES: &[Feature] = &[feature!(
     divisor.vertex_attribute_instance_rate_divisor => VertexAttributeInstanceRateDivisor
 )];
 
-/// The features of [`BORDER_SWIZZLE_EXTENSIONS`]: enabled together where the device lists the
-/// extension and reports `borderColorSwizzleFromImage` (Vulkan requires `borderColorSwizzle` of a
-/// device that lists it), and neither otherwise. No answer chooses a second form, and the
+/// The features of `VK_EXT_border_color_swizzle` ([`BORDER_SWIZZLE_EXTENSIONS`]): enabled together
+/// where the device lists the extensions and reports `borderColorSwizzleFromImage` (Vulkan requires
+/// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a second form, and the
 /// translator, whose samplers chain no border mapping, is not told of them.
 pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
     feature!(border_swizzle.border_color_swizzle),
@@ -651,7 +656,7 @@ pub struct Capabilities {
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
     /// [`feedback_loop`](Self::feedback_loop) holds, then [`BORDER_SWIZZLE_EXTENSIONS`] where the
-    /// device lists it and reports both its features.
+    /// device lists them and reports both the border swizzle's features.
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,

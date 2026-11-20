@@ -2963,6 +2963,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
+| `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 
 ### Features
@@ -3188,7 +3189,8 @@ through a copy of the image into its shadow (Render encoders), a known gap.
 ### Border swizzle
 
 Where the device lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage`,
-device creation enables the extension and both its features, and neither otherwise
+device creation enables the extension and both its features, with `VK_EXT_custom_border_color`,
+which the extension requires (none of its features), and none of them otherwise
 (`floor::BORDER_SWIZZLE_EXTENSIONS`). No form differs: no sampler's create info chains
 `VkSamplerBorderColorComponentMappingCreateInfoEXT` on any device, since a sampler in the arrays
 meets every view and that structure names one mapping. With the feature, an opaque-black border

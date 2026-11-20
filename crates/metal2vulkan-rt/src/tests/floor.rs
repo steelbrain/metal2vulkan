@@ -1101,9 +1101,10 @@ fn the_step_rate_feature_is_enabled_where_reported() {
 }
 
 /// A device that lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage` is
-/// given the extension and both its features; one that lists it with `borderColorSwizzle` alone
-/// (as Vulkan requires of every device that lists it), or reports the features without listing
-/// it, is given neither. The translator is told of neither feature.
+/// given the extension, `VK_EXT_custom_border_color` (which it requires: Vulkan's
+/// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`), and both its features; one that lists it
+/// with `borderColorSwizzle` alone (as Vulkan requires of every device that lists it), or reports
+/// the features without listing it, is given none. The translator is told of neither feature.
 #[test]
 fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
     use crate::floor::shader_enables;
@@ -1138,7 +1139,7 @@ fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
         .features
         .border_swizzle
         .border_color_swizzle_from_image = vk::TRUE;
-    assert_eq!(answer(&device), (1, 2), "listed, with from-image");
+    assert_eq!(answer(&device), (2, 2), "listed, with from-image");
     let mut device = at_the_floor();
     let reported = &mut device.features.border_swizzle;
     reported.border_color_swizzle = vk::TRUE;
