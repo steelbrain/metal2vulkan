@@ -1316,8 +1316,9 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
 }
 
 /// What a run through the runtime makes its kernel and binds from, beside its mapped case: the
-/// row's AIR, the modules it links, its buffers' bytes by Metal index ([`runtime_buffers`]), and
-/// the float reductions it executes ([`runtime_reductions`]).
+/// row's AIR, the modules it links, its buffers' bytes by Metal index (each bound buffer padded to
+/// its declared size, as the oracle makes it), and the float reductions it executes
+/// (`check::interface::float_reductions`).
 pub struct RuntimeKernel<'a> {
     pub bitcode: &'a [u8],
     pub linked: &'a [LinkedModule],

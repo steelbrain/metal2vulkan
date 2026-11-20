@@ -1616,14 +1616,14 @@ pub fn float_reductions(
                 let InstKind::Call(call) = &inst.kind else {
                     continue;
                 };
-                let group = match &call.callee {
-                    &Callee::Direct(callee) => {
+                let group = match call.callee {
+                    Callee::Direct(callee) => {
                         if seen.insert(callee) {
                             pending.push(callee);
                         }
                         continue;
                     }
-                    &Callee::Air {
+                    Callee::Air {
                         op: AirIntrinsic::Group(group),
                         ..
                     } => group,
