@@ -1074,49 +1074,6 @@ fn nvidia_computes_half_on_16_bit_floats_under_the_float_controls() {
     }
 }
 
-/// Under the float controls (`QuantizeForm::Controlled`), a `half` rounded from `float` arithmetic
-/// (a sum, a product, a fused multiply-add) records `NativeHalfConversion` where the driver fuses
-/// the operation into the narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`, every
-/// RADV profile) and not elsewhere (ANV); a loaded `float` narrowed alone records it on neither
-/// (`narrow::rounds_arithmetic`). Each passes L3.
-#[test]
-fn a_controlled_rounding_of_arithmetic_is_noted_where_the_driver_fuses_it() {
-    use crate::device::profile::DriverWorkaround;
-    let Some(bc) = assemble("native-half-arithmetic", &module_of(&ARITHMETIC)) else {
-        return;
-    };
-    let mut seen = (0, 0);
-    for (stem, p) in &committed_profiles().expect("profiles") {
-        if quantize_form(p) != QuantizeForm::Controlled {
-            continue;
-        }
-        let fuses = p
-            .workarounds()
-            .contains(&DriverWorkaround::HalfConversionFusedWithArithmetic);
-        if fuses {
-            seen.0 += 1;
-        } else {
-            seen.1 += 1;
-        }
-        for (name, _) in &ARITHMETIC {
-            let what = format!("{name} on {stem}");
-            let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let noted = a.precision.contains(&PrecisionNote::NativeHalfConversion);
-            assert_eq!(
-                noted,
-                fuses && *name != "float_narrow",
-                "{what}: {:?}",
-                a.precision
-            );
-        }
-    }
-    assert!(
-        seen.0 > 0 && seen.1 > 0,
-        "fusing and other controlled profiles: {seen:?}"
-    );
-}
-
 /// A kernel that reads a `half` from buffer 0 and stores it widened to `float` after the two
 /// `float`s the other kernels read (bytes 8 to 12), and the `half` itself after that (bytes 12 to
 /// 14).

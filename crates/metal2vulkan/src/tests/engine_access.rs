@@ -52,7 +52,7 @@ use crate::pipeline::testing::{
     compile, device_nan_bits, engine_dir, link_and_validate, llvm_assemble, meter, typed_module,
     AssembleError,
 };
-use crate::spirv::interp::{run, Buffer, Config, Image, InterpError, Resources};
+use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
 use crate::spirv::ir::{
     ConstBits, ConstKind, GlobalKind, Inst, StorageClass, Type, TypedModule, ValueOrigin,
 };
@@ -348,44 +348,6 @@ fn a_uniform_view_read_at_its_bind_offset_drops_the_residual() {
 /// The committed profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`: the Iris
 /// Xe RPL-P under ANV, where the row was measured.
 const AT_BIND_PROFILE: &str = "intel-irisxe-rplp-anv";
-
-/// A kernel reading byte `i` of a `constant` window of 6 bytes, `i` the first word of its
-/// `device` buffer 2 (an indexed read: no constant offset), into word 0 of buffer 1.
-const INDEXED_BYTE: &str = r#"define void @indexed_byte_load(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, ptr addrspace(1) noundef "air-buffer-no-alias" %2) {
-entry:
-  %i = load i32, ptr addrspace(1) %2, align 4
-  %ix = zext i32 %i to i64
-  %p = getelementptr inbounds [6 x i8], ptr addrspace(2) %0, i64 0, i64 %ix
-  %v = load i8, ptr addrspace(2) %p, align 1
-  %w = zext i8 %v to i32
-  store i32 %w, ptr addrspace(1) %1, align 4
-  ret void
-}
-!air.kernel = !{!10}
-!air.version = !{!17}
-!air.language_version = !{!18}
-!10 = !{ptr @indexed_byte_load, !11, !12}
-!11 = !{}
-!12 = !{!13, !14, !15}
-!13 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 6, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 6, !"air.arg_type_align_size", i32 1, !"air.arg_type_name", !"Six", !"air.arg_name", !"c"}
-!14 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!15 = !{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"at"}
-!17 = !{i32 2, i32 8, i32 0}
-!18 = !{!"Metal", i32 4, i32 0, i32 0}
-"#;
-
-/// The bytes of a uniform texel buffer of `bytes` (a multiple of 16) as its `R32G32B32A32_UINT`
-/// texels, bound at slot `index`.
-fn texel_buffer(index: u32, bytes: &[u8]) -> Image {
-    let texels: Vec<[u32; 4]> = (bytes.as_chunks::<16>().0.iter())
-        .map(|t| {
-            std::array::from_fn(|i| u32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap()))
-        })
-        .collect();
-    let mut image = Image::new(kslot(index), [texels.len() as u32, 1, 1], 1, 1, 1);
-    image.texels = texels;
-    image
-}
 
 /// Whether a function of `m` reads push member `field` with the specialization constant of `key`
 /// at `value`: whether a value the member's word reaches is read by an instruction other than one

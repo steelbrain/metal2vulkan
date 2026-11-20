@@ -24,7 +24,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::device::{Device, DeviceDescription, DevicePolicy, VkProperty};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Error;
 use crate::library::Library;
 use crate::metal::PixelFormat;
@@ -32,15 +32,14 @@ use crate::pipeline::testing::{
     engine_dir, link_standalone, llvm_assemble, moltenvk_msl_compile, AssembleError,
 };
 use crate::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FramebufferFetchInputs,
-    FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, StageSource,
+    ColorAttachmentDescriptor, FramebufferFetchInputs, FunctionDescriptor, LoweringInputs,
+    RenderPipelineDescriptor, StageSource,
 };
-use crate::spirv::testing::{check_words_valid, is_moltenvk_capture};
+use crate::spirv::testing::check_words_valid;
 use crate::Budget;
 
 const OP_ENTRY_POINT: u32 = 15;
 const OP_TYPE_BOOL: u32 = 20;
-const OP_TYPE_FLOAT: u32 = 22;
 const OP_TYPE_VECTOR: u32 = 23;
 const OP_TYPE_STRUCT: u32 = 30;
 const OP_VARIABLE: u32 = 59;
