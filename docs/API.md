@@ -5019,9 +5019,9 @@ bound.
   compare exactly. The largest difference per format, `float` and `half` results together, over
   lavapipe, the M3 on KosmicKrisp and on MoltenVK, a Radeon 780M, an RTX 3090 and an Iris Xe:
   `RGBA8Unorm` `2.44e-4`, `R8Unorm` `1.53e-4`, `RGBA8Snorm` `4.88e-4`, `RGBA16Float` `3.74e-4`,
-  `RGBA16Unorm` `2.16e-4` on lavapipe and KosmicKrisp and `7.8e-6` elsewhere (lavapipe's `half`
-  results keep their `f32` values), and `1.47e-3` for `RGBA8Unorm_sRGB` on the old runtime, which
-  decodes its taps in the module. Through a runtime
+  `RGBA16Unorm` `2.16e-4` on lavapipe, KosmicKrisp and the 3090 and `7.8e-6` elsewhere (lavapipe's
+  `half` results keep their `f32` values), and `1.58e-3` for `RGBA8Unorm_sRGB` on the old runtime,
+  which decodes its taps in the module. Through a runtime
   sampler slot it is announced at a draw or dispatch only where the bound sampler filters (a linear
   minification or magnification filter, anisotropy, a cubic filter or a linear mip filter): a
   nearest sampler's sample is the decoded texel at Metal's position. Through an argument buffer it
