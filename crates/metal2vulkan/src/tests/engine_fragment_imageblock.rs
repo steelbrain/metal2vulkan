@@ -819,9 +819,8 @@ fn the_binder_writes_the_storage_and_refuses_layered_passes() {
 /// function whose only effects are its outputs and its write declares early tests as at one
 /// sample, on MoltenVK on the M3 Max and on RADV alike; a function that states
 /// `TestedStorageWrites` needs, for a draw whose depth test acts, the variant that tests depth in
-/// the shader, before the write, whose plan is refused as not implemented at the depth attachment:
-/// no profile states which depth a sample-rate `FragCoord` holds
-/// (`VkProperty::SampleFragCoordDepth`, `CenterFragCoordDepth`).
+/// the shader, before the write, whose plan is refused at the depth attachment on every device:
+/// each sample's test needs its sample's depth (`Feature::MultisampledShaderDepthTest`).
 #[test]
 fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
     use crate::bind::FragmentTests;
@@ -873,7 +872,7 @@ fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
                 match p.plan(&dev, &shape) {
                     Err(BindError::Unsupported(u)) => assert_eq!(
                         (u.feature, u.needs),
-                        (Feature::FramebufferFetch, Needs::NotImplemented),
+                        (Feature::MultisampledShaderDepthTest, Needs::NotImplemented),
                         "{what}"
                     ),
                     other => panic!("{what}: the plan: {:?}", other.map(|_| ())),

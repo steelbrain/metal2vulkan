@@ -1352,6 +1352,13 @@ pub enum Feature {
     /// access, or the pixel interlock's storage form where the pipeline's state lets it be
     /// exact), or in a shape not implemented.
     FramebufferFetch,
+    /// A fragment function that runs its draw's depth test itself (`lower::fragment::depth_test`)
+    /// at more than one sample, where it does not return its depth: not lowered, on any device.
+    /// Each sample's test needs that sample's depth, and Vulkan states no location for
+    /// `FragCoord.z` under sample shading: devices differ (RADV answers the sample's, MoltenVK the
+    /// pixel centre's), and no device query says which. A function that returns its depth tests
+    /// that, the same at every sample, and is lowered.
+    MultisampledShaderDepthTest,
     /// `[[primitive_id]]` in a fragment function: behind a mesh function on a device without
     /// geometry or tessellation shaders, whose fragment stage reads it from a varying no mesh
     /// function writes; and, of a pipeline whose vertex function writes that varying, the

@@ -48,7 +48,9 @@
 //! flat, sloped and steep cases, under a constant bias, and where the clamp decides; under
 //! perspective, a slope-scaled bias, or a viewport range other than `[0, 1]` it is within 2 ulp.
 //! The module records `PrecisionNote::ComputedSampleDepth`, which no draw's
-//! state can rule out at compile time. Another device is refused at more than one sample.
+//! state can rule out at compile time. Both properties were measured facts, which no query
+//! produces, so on every device a function that does not return its depth is refused at more than
+//! one sample, as its own kind (`Feature::MultisampledShaderDepthTest`).
 //!
 //! **A returned depth**. A function that returns `[[depth(...)]]` tests the depth it returns at
 //! that return, in place of `FragCoord.z`, as Metal tests it: a positive NaN fails the test,
@@ -217,7 +219,11 @@ pub(crate) fn depth_test_form(
         true if returned => false,
         true if measured(VkProperty::SampleFragCoordDepth) => false,
         true if measured(VkProperty::CenterFragCoordDepth) => true,
-        true => return Err(not_implemented()),
+        true => {
+            return Err(Unsupported::not_implemented(
+                Feature::MultisampledShaderDepthTest,
+            ))
+        }
     };
     let mut missing = Vec::new();
     if multisampled && !f.fragment.sample_rate_shading {

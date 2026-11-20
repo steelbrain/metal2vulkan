@@ -11172,7 +11172,6 @@ variant	metal2vulkan::device::DriverWorkaround::MemoryWritingFragmentsRunPerSamp
 variant	metal2vulkan::device::DriverWorkaround::MeshIndexComponentStoresMisplaced	MeshIndexComponentStoresMisplaced
 variant	metal2vulkan::device::DriverWorkaround::NarrowMaskAfterSignedClamp	NarrowMaskAfterSignedClamp
 variant	metal2vulkan::device::DriverWorkaround::OppositeZeroProductsMerged	OppositeZeroProductsMerged
-variant	metal2vulkan::device::DriverWorkaround::PerspectiveReadsExtrapolated	PerspectiveReadsExtrapolated
 variant	metal2vulkan::device::DriverWorkaround::PushReadsLengthenThreadPayload	PushReadsLengthenThreadPayload
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::SerializedStageWrapsLargeModules	SerializedStageWrapsLargeModules
@@ -11913,6 +11912,7 @@ variant	metal2vulkan::error::Feature::MeshShading	MeshShading
 variant	metal2vulkan::error::Feature::MinLodClamp	MinLodClamp
 variant	metal2vulkan::error::Feature::MipmapGeneration	MipmapGeneration
 variant	metal2vulkan::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
+variant	metal2vulkan::error::Feature::MultisampledShaderDepthTest	MultisampledShaderDepthTest
 variant	metal2vulkan::error::Feature::PixelCoverage	PixelCoverage
 variant	metal2vulkan::error::Feature::PixelCoverageAtSampleRate	PixelCoverageAtSampleRate
 variant	metal2vulkan::error::Feature::PixelSamplerCompare	PixelSamplerCompare

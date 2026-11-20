@@ -3829,10 +3829,9 @@ fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
 
 /// At 4 samples a discarding fetch that stores a color through the interlock beside a
 /// `Depth32Float_Stencil8` attachment, without early tests: a draw whose depth test writes would run
-/// the variant whose function tests depth itself, which needs each sample's depth
-/// (`VkProperty::CenterFragCoordDepth` or `SampleFragCoordDepth`). No profile takes either, so the
-/// draw is refused at the depth attachment on every device (MoltenVK on the M3 Max, RADV, Intel's
-/// ANV).
+/// the variant whose function tests depth itself, which needs each sample's depth, so the draw is
+/// refused at the depth attachment on every device (MoltenVK on the M3 Max, RADV, Intel's ANV), as
+/// its own kind: `Feature::MultisampledShaderDepthTest`.
 #[test]
 fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
     use crate::bind::FragmentTests;
@@ -3879,7 +3878,7 @@ fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
             base.plan(&dev, &shape(FragmentTests::Depth { writes: true }))
                 .map(|_| ()),
             Err(BindError::Unsupported(
-                Unsupported::not_implemented(Feature::FramebufferFetch)
+                Unsupported::not_implemented(Feature::MultisampledShaderDepthTest)
                     .at_attachment(Attachment::Depth)
             )),
             "{stem}"
@@ -4005,7 +4004,7 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
         assert_eq!(
             base.plan(&dev, &shape(FragmentTests::Stencil)).map(|_| ()),
             Err(BindError::Unsupported(
-                Unsupported::not_implemented(Feature::FramebufferFetch)
+                Unsupported::not_implemented(Feature::MultisampledShaderDepthTest)
                     .at_attachment(Attachment::Depth)
             )),
             "{stem}"

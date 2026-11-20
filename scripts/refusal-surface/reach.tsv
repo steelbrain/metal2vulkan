@@ -68,6 +68,7 @@ feature	DualSourceBlending	rare	dual-source blending on a device without it
 feature	Barycentrics	rare	barycentric coordinates
 feature	StencilExport	rare	stencil from the shader
 feature	SampleRateShading	rare	per-sample shading
+feature	MultisampledShaderDepthTest	rare	a fragment function whose draw's depth test runs in the shader at more than one sample (tested storage writes, framebuffer fetch beside depth)
 feature	PullModelInterpolation	rare	interpolant inputs read at the centroid, a sample or an offset
 feature	DivergentInterpolation	rare	an interpolant read at a sample or an offset in a branch, a loop or after a discard
 feature	SamplePositions	rare	custom sample positions on a device that takes none at the pass's sample count
