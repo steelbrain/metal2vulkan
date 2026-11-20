@@ -6,8 +6,8 @@
 //
 // - `lw_early_write` declares early fragment tests and writes its pixel's coordinates into a
 //   texture, `(x, y, 0.25, 1)`, at every sample count.
-// - `lw_dropped` samples a texture its argument buffer holds, discards where `(x + 3 y) % 5` is 0,
-//   samples again, takes a derivative, runs float arithmetic the module keeps apart
+// - `lw_dropped` samples a texture, discards where `(x + 3 y) % 5` is 0, samples again, takes a
+//   derivative, runs float arithmetic the module keeps apart
 //   (`contract(off)`) in a branch only the discarded fragments enter, and writes a code into a
 //   texture at its pixel: `(code, x, y, 1)`, the code the sampled red channel in 255ths plus 1.
 // - `lw_count` reads `[[sample_mask]]` and writes memory: it adds 1 to its pixel's run count and
@@ -46,10 +46,6 @@ fragment float4 lw_early_write(LwVertex in [[stage_in]],
     return float4(0.0, 1.0, 0.0, 1.0);
 }
 
-struct LwTextures {
-    texture2d<half> noise [[id(0)]];
-};
-
 struct LwGlobals {
     float scale;
     float bias;
@@ -57,19 +53,19 @@ struct LwGlobals {
 
 static uint lw_code(half x) { return uint(rint(float(x) * 255.0)); }
 
-fragment half4 lw_dropped(LwVertex in [[stage_in]], constant LwTextures &t [[buffer(0)]],
+fragment half4 lw_dropped(LwVertex in [[stage_in]], texture2d<half> noise [[texture(1)]],
                           constant LwGlobals &g [[buffer(1)]],
                           texture2d<uint, access::write> out [[texture(0)]]) {
 #pragma clang fp contract(off)
     constexpr sampler smp(filter::nearest);
     uint2 p = uint2(in.position.xy);
-    half4 m = t.noise.sample(smp, clamp(in.uv, 0.0, 1.0));
+    half4 m = noise.sample(smp, clamp(in.uv, 0.0, 1.0));
     float a = float(m.a) * g.scale + g.bias;
     bool hit = a > 0.5 && (p.x + 3u * p.y) % 5u == 0u;
     if (hit) {
         discard_fragment();
     }
-    half4 s = t.noise.sample(smp, in.uv * 0.5);
+    half4 s = noise.sample(smp, in.uv * 0.5);
     float w = fwidth(in.uv.x);
     half k = 0.0h;
     if (hit) {

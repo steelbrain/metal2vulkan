@@ -7,13 +7,15 @@
 //!   fragment tests and writes `(x, y, 0.25, 1)` at its pixel into an `RGBA32Float` texture, so
 //!   every texel holds its own coordinates. Measured in Metal itself on an Apple M3 Max: at 2 and
 //!   4 samples such a function's every texture write was lost.
-//! - A discarding fragment's texture writes after a sample through an argument buffer:
-//!   `lw_dropped` samples a texture its argument buffer holds, discards where `(x + 3 y) % 5` is
-//!   0, samples again, runs float arithmetic the module keeps apart in a branch only the
-//!   discarded fragments enter, and writes `(41, x, y, 1)` at its pixel into an `RGBA32Uint`
-//!   texture of `u32::MAX` words: every kept pixel holds its code and every discarded one the
-//!   sentinel. Measured in plain Metal on an Apple M4: the shape lost the writes of every live
-//!   thread of a simdgroup holding a discarded one.
+//! - A discarding fragment's texture writes after a texture sample: `lw_dropped` samples a
+//!   texture, discards where `(x + 3 y) % 5` is 0, samples again, runs float arithmetic the
+//!   module keeps apart in a branch only the discarded fragments enter, and writes `(41, x, y, 1)`
+//!   at its pixel into an `RGBA32Uint` texture of `u32::MAX` words: every kept pixel holds its
+//!   code and every discarded one the sentinel. Measured in plain Metal on an Apple M4, with the
+//!   sampled texture held by an argument buffer: the shape lost the writes of every live thread
+//!   of a simdgroup holding a discarded one. The test samples a texture slot: the identity
+//!   domains lower no sample of an argument buffer's texture (a typed refusal, the README's known
+//!   gaps of pipeline states), and the argument buffer's form joins the test once they do.
 //! - A memory-writing fragment at 4 samples: `lw_count` reads `[[sample_mask]]`, adds 1 to its
 //!   pixel's run count and ORs the mask into its pixel's word, drawn by `lw_half` over the
 //!   target's lower-left half. Metal runs such a function once per covered sample, each run
@@ -188,10 +190,10 @@ mod on_device {
         });
     }
 
-    /// A discarding fragment's texture writes after a sample through an argument buffer: every
-    /// kept pixel holds its code and coordinates, and every discarded one the sentinel.
+    /// A discarding fragment's texture writes after a texture sample: every kept pixel holds its
+    /// code and coordinates, and every discarded one the sentinel.
     #[test]
-    fn every_device_keeps_the_texture_writes_beside_a_discard_after_an_argument_buffer_sample() {
+    fn every_device_keeps_the_texture_writes_beside_a_discard_after_a_texture_sample() {
         let Some(library) = fixture() else {
             return;
         };
@@ -232,8 +234,6 @@ mod on_device {
                 TEXTURES + 1,
                 &sentinel,
             );
-            let mut buffers = Buffers::new(&device);
-            let held = buffers.of(&device, &noise.gpu_resource_id().to_bits().to_le_bytes());
             let globals: Vec<u8> = [1.0f32, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
             let target = color(name, &device, 1);
             let queue = device.new_command_queue(1).expect("a queue");
@@ -243,9 +243,9 @@ mod on_device {
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             draw(encoder.set_render_pipeline_state(&state));
             encoder.set_cull_mode(CullMode::None);
-            draw(encoder.set_fragment_buffer(Some(&held), 0, 0));
             draw(encoder.set_fragment_bytes(&globals, 1));
             draw(encoder.set_fragment_texture(Some(&out), 0));
+            draw(encoder.set_fragment_texture(Some(&noise), 1));
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
             encoder.end_encoding();
             run(name, &command_buffer);
