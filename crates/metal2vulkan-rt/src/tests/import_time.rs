@@ -1,18 +1,25 @@
 //! The time of [`crate::Device::import_host_memory`], under a device cfg on every device of the
-//! cfg's kind that imports host memory: the whole call, and each Vulkan call and lock it makes
-//! (`import.rs`, `memory::import`), made by hand in its order beside it, with the runtime's queue
-//! idle and with another thread committing small work all along.
+//! cfg's kind that imports host memory, and of `Device::import_dma_bufs` (Linux) on every one
+//! that binds dma-bufs sparse: the whole call, and each Vulkan call and lock it makes
+//! (`import.rs`, `memory::import`, `memory::sparse_buffer`), made by hand in its order beside it,
+//! with the runtime's queue idle and with another thread committing small work all along.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::lock;
+    #[cfg(target_os = "linux")]
+    use crate::import::dma_buf_type;
     use crate::memory::import_requirements;
     use crate::tests::command::on_device::{finished, on_each_device};
+    #[cfg(target_os = "linux")]
+    use crate::tests::import::on_device::{memfd, udmabuf};
     use crate::tests::import::on_device::{releasing, wait_until};
     use crate::{Device, MemoryClass};
     use ash::vk;
     use std::alloc::Layout;
     use std::collections::VecDeque;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::OwnedFd;
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -188,6 +195,226 @@ mod on_device {
             ms(sorted[sorted.len() / 2]),
             ms(sorted[sorted.len() - 1])
         )
+    }
+
+    /// The steps of `Device::import_dma_bufs`, in its order: the sparse buffer with its memory
+    /// requirements, each fd's query, the pool's lock for the block's numbers, each chunk's
+    /// import, the wait for the runtime queue's lock, the sparse bind under it, and the device's
+    /// lock of its claims. The rest of the call (the sparse space's reservation, the block's
+    /// record) is the whole less these.
+    #[cfg(target_os = "linux")]
+    const DMA_PARTS: [&str; 7] = [
+        "the sparse buffer (vkCreateBuffer, vkGetBufferMemoryRequirements)",
+        "the fds' queries (vkGetMemoryFdPropertiesKHR, one a chunk)",
+        "the pool's lock (the block's numbers)",
+        "the chunks' imports (vkAllocateMemory, one a chunk)",
+        "the wait for the runtime queue's lock",
+        "the bind (vkQueueBindSparse)",
+        "the claims' lock",
+    ];
+
+    /// Dma-bufs of `memfd`'s consecutive ranges of `lens`, with their lengths.
+    #[cfg(target_os = "linux")]
+    fn dma_chunks(memfd: &OwnedFd, lens: &[u64]) -> Vec<(OwnedFd, u64)> {
+        let mut at = 0;
+        (lens.iter())
+            .map(|&len| {
+                let fd = udmabuf(memfd, at, len).expect("a dma-buf");
+                at += len;
+                (fd, len)
+            })
+            .collect()
+    }
+
+    /// The whole call's time over dma-bufs of `memfd`'s ranges of `lens`, in nanoseconds; the
+    /// dma-bufs made before it, and the block dropped and its release waited for after it.
+    #[cfg(target_os = "linux")]
+    fn dma_whole(device: &Device, memfd: &OwnedFd, lens: &[u64]) -> u128 {
+        let chunks = dma_chunks(memfd, lens);
+        let (release, released) = releasing();
+        let start = Instant::now();
+        let made = device.import_dma_bufs(chunks, release);
+        let took = start.elapsed().as_nanos();
+        let (block, _) = made.unwrap_or_else(|error| panic!("an import: {error}"));
+        drop(block);
+        wait_until("the release", || released.load(Ordering::SeqCst));
+        took
+    }
+
+    /// Each of the call's steps' time over dma-bufs of `memfd`'s ranges of `lens`, in
+    /// nanoseconds, made by hand: the bind signals a timeline of the test's own, waited for
+    /// before what the steps made is destroyed, all outside the times.
+    #[cfg(target_os = "linux")]
+    fn dma_parts(device: &Device, memfd: &OwnedFd, lens: &[u64]) -> [u128; DMA_PARTS.len()] {
+        use std::os::fd::{AsRawFd, IntoRawFd};
+        let core = device.core();
+        let ash = &core.device;
+        let fds = (core.imports.dma_buf.as_ref()).expect("dma-buf imports");
+        let handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+        let chunks = dma_chunks(memfd, lens);
+        let len: u64 = lens.iter().sum();
+        let timeline = crate::event::timeline(ash).expect("a timeline");
+        let mut times = [0u128; DMA_PARTS.len()];
+        let start = Instant::now();
+        // SAFETY: the device binds dma-bufs sparse (it has a granule), and `len` is a few
+        // granules, under its `maxBufferSize`.
+        let (buffer, needs) =
+            unsafe { crate::memory::sparse_buffer(core, len) }.expect("a sparse buffer");
+        times[0] = start.elapsed().as_nanos();
+        let start = Instant::now();
+        let mut index = None;
+        for (fd, _) in &chunks {
+            let mut properties = vk::MemoryFdPropertiesKHR::default();
+            // SAFETY: the extensions are enabled; `fd` is open, and the query takes no
+            // ownership.
+            unsafe { fds.get_memory_fd_properties(handle, fd.as_raw_fd(), &mut properties) }
+                .expect("the fd's query");
+            let listed = index.map_or(needs.memory_type_bits, |first: u32| {
+                needs.memory_type_bits & (1 << first)
+            });
+            let taken = dma_buf_type(properties.memory_type_bits, listed, core.imports.coherent);
+            index = Some(taken.expect("the call's type"));
+        }
+        times[1] = start.elapsed().as_nanos();
+        let index = index.expect("a chunk");
+        let start = Instant::now();
+        let _numbers = core.pool.own_numbers().expect("the block's numbers");
+        times[2] = start.elapsed().as_nanos();
+        let start = Instant::now();
+        let mut made = Vec::with_capacity(chunks.len());
+        for (fd, chunk) in chunks {
+            let mut import = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(handle)
+                .fd(fd.into_raw_fd());
+            let mut flags = vk::MemoryAllocateFlagsInfo::default()
+                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+            let info = vk::MemoryAllocateInfo::default()
+                .allocation_size(chunk)
+                .memory_type_index(index)
+                .push_next(&mut import)
+                .push_next(&mut flags);
+            // SAFETY: an import of the dma-buf into a type its query offered and the sparse
+            // buffer takes; the import owns the fd.
+            let memory = unsafe { crate::memory::import_chunk(core, &info) }.expect("an import");
+            made.push((memory, chunk));
+        }
+        times[3] = start.elapsed().as_nanos();
+        let mut offset = 0;
+        let binds: Vec<vk::SparseMemoryBind> = (made.iter())
+            .map(|&(memory, size)| {
+                let bind = vk::SparseMemoryBind::default()
+                    .resource_offset(offset)
+                    .size(size)
+                    .memory(memory);
+                offset += size;
+                bind
+            })
+            .collect();
+        let buffer_binds = [vk::SparseBufferMemoryBindInfo::default()
+            .buffer(buffer)
+            .binds(&binds)];
+        let signals = [timeline];
+        let values = [1u64];
+        let mut timeline_info =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        let info = vk::BindSparseInfo::default()
+            .buffer_binds(&buffer_binds)
+            .signal_semaphores(&signals)
+            .push_next(&mut timeline_info);
+        let start = Instant::now();
+        let queue = lock(&core.queues.runtime);
+        times[4] = start.elapsed().as_nanos();
+        let start = Instant::now();
+        // SAFETY: the runtime's queue binds sparse memory and is held; each bind lies in the new
+        // buffer at a multiple of its alignment, from the first byte of an import of its size,
+        // of a type the buffer takes; the timeline is new, at 0.
+        unsafe { ash.queue_bind_sparse(*queue, &[info], vk::Fence::null()) }.expect("the bind");
+        times[5] = start.elapsed().as_nanos();
+        drop(queue);
+        let start = Instant::now();
+        drop(lock(&core.claims));
+        times[6] = start.elapsed().as_nanos();
+        let semaphores = [timeline];
+        let wait = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        // SAFETY: the timeline is live, and the bind signals it.
+        unsafe { ash.wait_semaphores(&wait, 10_000_000_000) }.expect("the bind's end");
+        // SAFETY: the bind has ended, and nothing uses the buffer, its imports or the timeline;
+        // once the buffer is gone nothing is bound to the imports.
+        unsafe {
+            ash.destroy_buffer(buffer, None);
+            for (memory, bytes) in made {
+                crate::memory::free_chunk(core, memory, bytes);
+            }
+            ash.destroy_semaphore(timeline, None);
+        }
+        times
+    }
+
+    /// The median of `nanos`.
+    #[cfg(target_os = "linux")]
+    fn median(nanos: &[u128]) -> u128 {
+        let mut sorted = nanos.to_vec();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
+
+    /// `Device::import_dma_bufs` of 8 dma-bufs over 29 MiB of one memfd, each a whole number of
+    /// granules, whole and by step, each `REPS` times, with the runtime's queue idle and then
+    /// beside a thread committing small fills all along: each one's median and longest, and the
+    /// whole's median less the steps' summed median, printed. On an instance without the
+    /// validation layer, whose own cost would be the count.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_device_times_a_dma_buf_import_by_part() {
+        let instance = crate::tests::validation::bare(&[]);
+        on_each_device("import_dma_bufs_time", &instance, |name, _, device| {
+            let Some(granule) = device.dma_buf_granule() else {
+                println!("dma-buf import time: {name}: binds no dma-buf sparse; not timed");
+                return;
+            };
+            let chunk = ((29u64 << 20) / 8).next_multiple_of(granule);
+            let lens = [chunk; 8];
+            let memfd = memfd(chunk * 8);
+            if udmabuf(&memfd, 0, granule).is_none() {
+                println!("dma-buf import time: {name}: no /dev/udmabuf here; not timed");
+                return;
+            }
+            for arm in ["idle", "busy"] {
+                let stop = Arc::new(AtomicBool::new(false));
+                let worker = (arm == "busy").then(|| busy(device.clone(), Arc::clone(&stop)));
+                let mut wholes = Vec::with_capacity(REPS);
+                let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
+                for _ in 0..REPS {
+                    wholes.push(dma_whole(&device, &memfd, &lens));
+                    let steps = dma_parts(&device, &memfd, &lens);
+                    for (times, took) in by_part.iter_mut().zip(steps) {
+                        times.push(took);
+                    }
+                }
+                stop.store(true, Ordering::Relaxed);
+                let commits = worker.map_or(0, |worker| worker.join().expect("the busy thread"));
+                let sums: Vec<u128> = (0..REPS)
+                    .map(|rep| by_part.iter().map(|times| times[rep]).sum())
+                    .collect();
+                let rest = median(&wholes).saturating_sub(median(&sums));
+                println!(
+                    "dma-buf import time: {name}: 8 chunks of {chunk} bytes, granule {granule}, \
+                     {arm} ({commits} commits beside): the whole call {}; its steps by hand \
+                     summed {}; the rest (the whole's median less the steps') {:.3} ms",
+                    shown(&wholes),
+                    shown(&sums),
+                    rest as f64 / 1e6
+                );
+                for (part, times) in DMA_PARTS.iter().zip(&by_part) {
+                    println!(
+                        "dma-buf import time: {name}: {arm}: {part} {}",
+                        shown(times)
+                    );
+                }
+            }
+        });
     }
 
     /// `Device::import_host_memory` of 12 KiB, 16 KiB and 29 MiB of host memory, whole and by
