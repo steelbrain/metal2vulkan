@@ -21,12 +21,7 @@ use crate::pipeline::testing::{
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
-const PROFILES: [&str; 4] = [
-    "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "amd-rdna3-radv",
-];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "amd-rdna3-radv"];
 
 /// Metal's answers (`nofastmath-offline`): `(x, frexp mantissa, frexp
 /// exponent, ilogb)`.

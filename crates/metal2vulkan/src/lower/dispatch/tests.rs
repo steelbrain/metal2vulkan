@@ -776,7 +776,7 @@ fn builtin_facts_and_projections() {
 /// whose kernel stage has subgroups (the flattened form reads subgroup builtins).
 #[test]
 fn derivation_modules_are_valid() {
-    for stem in ["moltenvk-m3", "lunarg-desktop-baseline-2023"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect(stem);
         for form in [LocalSizeForm::Spec, LocalSizeForm::Flat] {
             for mr in [false, true] {

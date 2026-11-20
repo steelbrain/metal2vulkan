@@ -32,7 +32,7 @@ use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{Interpolation, IoNumeric, IoRole, IoType, StageBuiltin};
 use crate::pipeline::testing::{
     compile, compile_kept, compile_with, engine_dir, fragment_inputs, llvm_assemble, meter,
-    profile, AssembleError,
+    profile, profile_without, AssembleError,
 };
 use crate::spirv::ir::{BinOp, ConstKind, Constant, Contraction, Inst, TypedModule, ValueOrigin};
 use crate::spirv::testing::check_words_valid;
@@ -112,7 +112,7 @@ fn bool_varyings_are_flat_uints_converted_at_both_ends() {
     // (numeric, components, AIR bits) of a `bool` varying of `n` lanes.
     let bool_ty = |n: u8| (IoNumeric::Uint, n, 1u8);
     let parts = |t: &IoType| (t.numeric, t.components, t.source_bits);
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = prof(stem);
         let v = compile(&bc, "tail_vertex_bool", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let mut r = RenderLinkInputs::new();
@@ -192,9 +192,18 @@ fn a_fragment_primitive_id_takes_the_enabled_alternative() {
         assert!(a.interface.io.builtins.contains(&StageBuiltin::PrimitiveId));
         validate(&a, &p);
     }
-    // The floor has neither: the ID is the flat varying the pipeline's vertex function writes
-    // (`engine_primitive_ids`).
-    let floor = prof("vk12-floor");
+    // `runtime-floor` without `tessellationShader` (below the runtime's floor) has neither: the ID
+    // is the flat varying the pipeline's vertex function writes (`engine_primitive_ids`).
+    let floor = profile_without(
+        "runtime-floor",
+        &[
+            F::TessellationShader,
+            F::ShaderTessellationAndGeometryPointSize,
+            F::MultiviewTessellationShader,
+        ],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor");
     let a = compile(&bc, "tail_fragment_primitive", &floor).expect("floor");
     assert!(a
         .interface
@@ -227,7 +236,7 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
         }
         validate(&a, &p);
     }
-    let floor = prof("vk12-floor");
+    let floor = prof("runtime-floor");
     let a = compile(&bc, "tail_fragment_layer", &floor).expect("floor");
     let io = &a.interface.io;
     assert_eq!(
@@ -344,7 +353,7 @@ fn without_the_feature_the_weights_are_varyings() {
         assert_eq!(stages.forms, [false, true], "{stem}");
         assert!(stages.varyings.is_empty(), "{stem}");
     }
-    let floor = prof("vk12-floor");
+    let floor = prof("runtime-floor");
     for entry in [
         "tail_fragment_barycentric",
         "tail_fragment_barycentric_scalar",

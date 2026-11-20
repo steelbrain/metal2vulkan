@@ -1611,7 +1611,7 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
     for (stem, addressed) in [
         ("lavapipe", true),
         ("moltenvk-m3", true),
-        ("vk12-floor", false),
+        ("runtime-floor", false),
     ] {
         let device = device(stem, DevicePolicy::default());
         let shape = compute_shape(&compute, addressed, BufferRanges::default()).unwrap();
@@ -1696,7 +1696,7 @@ fn the_binder_plans_the_executors_state() {
             length: 4,
         },
     };
-    for stem in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let device = device(stem, DevicePolicy::default());
         let pipeline = compile(&device, &bitcode, "count");
         for address in [
@@ -1753,24 +1753,20 @@ fn identity_is_per_profile_and_per_engine_slot() {
 fn a_restricted_row_has_its_own_engine_slot() {
     use crate::coverage::Leg;
     let native = engine_slot("ubuntu-26.04-lavapipe", None, Leg::Stated);
-    let floor = engine_slot("ubuntu-26.04-lavapipe", Some("vk12-floor"), Leg::Stated);
-    let baseline = engine_slot(
-        "ubuntu-26.04-lavapipe",
-        Some("lunarg-desktop-baseline-2023"),
-        Leg::Stated,
-    );
+    let floor = engine_slot("ubuntu-26.04-lavapipe", Some("runtime-floor"), Leg::Stated);
+    let baseline = engine_slot("ubuntu-26.04-lavapipe", Some("gate-lavapipe"), Leg::Stated);
     let off = engine_slot("ubuntu-26.04-lavapipe", None, Leg::RobustnessOff);
     let floor_off = engine_slot(
         "ubuntu-26.04-lavapipe",
-        Some("vk12-floor"),
+        Some("runtime-floor"),
         Leg::RobustnessOff,
     );
     assert_eq!(native, engine_environment_id("ubuntu-26.04-lavapipe"));
-    assert_eq!(floor, "ubuntu-26.04-lavapipe@engine@vk12-floor");
+    assert_eq!(floor, "ubuntu-26.04-lavapipe@engine@runtime-floor");
     assert_eq!(off, "ubuntu-26.04-lavapipe@engine+robustness-off");
     assert_eq!(
         floor_off,
-        "ubuntu-26.04-lavapipe@engine@vk12-floor+robustness-off"
+        "ubuntu-26.04-lavapipe@engine@runtime-floor+robustness-off"
     );
     let slots = [&native, &floor, &baseline, &off, &floor_off];
     for (index, slot) in slots.iter().enumerate() {

@@ -92,9 +92,10 @@ fn wave64() -> DeviceProfile {
         .clone()
 }
 
-/// The tiers: (profile, tier, subgroup size, threadgroup sizes). `lavapipe` and `swiftshader`,
-/// which cannot pin 32 lanes, emulate their simdgroups through workgroup memory, here on 8- and
-/// 16-lane subgroups.
+/// The tiers: (profile, tier, subgroup size, threadgroup sizes). `lavapipe` and `runtime-floor`
+/// without `shaderInt64` (below the runtime's floor, its buffers bound, as the interpreter runs
+/// them), which cannot pin 32 lanes, emulate their simdgroups through workgroup memory, here on 8-
+/// and 16-lane subgroups.
 fn tiers() -> [(DeviceProfile, Tier, SubgroupSize, &'static [u32]); 4] {
     let committed = |stem| profile(stem, DevicePolicy::default()).expect("profile");
     [
@@ -106,13 +107,19 @@ fn tiers() -> [(DeviceProfile, Tier, SubgroupSize, &'static [u32]); 4] {
             SubgroupSize::W8,
             &[32, 64],
         ),
-        (
-            committed("swiftshader"),
-            Tier::Emulated,
-            SubgroupSize::W16,
-            &[32],
-        ),
+        (floor_words(), Tier::Emulated, SubgroupSize::W16, &[32]),
     ]
+}
+
+/// `runtime-floor` without `shaderInt64` (below the runtime's floor): its buffers are bound, not
+/// addressed.
+fn floor_words() -> DeviceProfile {
+    crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::ShaderInt64],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor")
 }
 
 /// The committed `moltenvk-m3` description without `shaderInt64`: 64-bit integers are held as
@@ -932,7 +939,7 @@ fn products_record_their_precision() {
 /// Every matrix kernel compiles, links, relocates, and passes L3 on every committed profile
 /// exactly where its cross-lane class (a shuffle with a product, the lane alone for blocks) has
 /// a compute tier, and elsewhere is refused as that tier is (`matrix_mixed`'s five buffers fit
-/// `vk12-floor`'s four storage buffers per stage through a uniform view). The plan's size estimate
+/// the runtime floor's four storage buffers per stage through a uniform view). The plan's size estimate
 /// bounds the emitted words.
 #[test]
 fn matrix_kernels_compile_or_refuse_with_the_tier() {

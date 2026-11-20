@@ -340,7 +340,7 @@ fn the_input_and_every_typed_result_cross_the_boundary() {
         restricted(DeviceType::Cpu, "gate-lavapipe"),
         DeviceInput {
             leg: Leg::RobustnessOff,
-            ..restricted(DeviceType::Cpu, "vk12-floor")
+            ..restricted(DeviceType::Cpu, "runtime-floor")
         },
         DeviceInput {
             generated_commands: false,
@@ -415,7 +415,7 @@ fn a_worker_run_under_another_restriction_is_refused() {
         (input(DeviceType::Cpu), Some("gate-lavapipe")),
         (
             restricted(DeviceType::Cpu, "gate-lavapipe"),
-            Some("vk12-floor"),
+            Some("runtime-floor"),
         ),
     ];
     for (input, census) in runs {

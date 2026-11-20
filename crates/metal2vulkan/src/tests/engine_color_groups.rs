@@ -2,8 +2,9 @@
 //! (`pipeline::compile::color_group`): the owned fixtures `engine/color_groups`,
 //! `engine/color_groups_fetch`, `engine/dfk_dead_group` and `engine/dfk_dead_rog` on `lavapipe`
 //! with four color attachments and four fragment output locations (Vulkan's floor, the device of
-//! the groups' lane), on `moltenvk-m3` likewise, on `vk12-floor`, and on `lavapipe` as it is
-//! (eight), where nothing groups. `llvm-as` assembles the fixtures; a missing tool skips visibly.
+//! the groups' lane), on `moltenvk-m3` likewise, on `runtime-floor` likewise (below the runtime's
+//! floor, which requires eight color attachments), and on `lavapipe` as it is (eight), where
+//! nothing groups. `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
 use std::collections::BTreeSet;
 
@@ -185,7 +186,7 @@ fn is_limit(e: &Error, required: u64) -> bool {
 /// Five colors on a device of four draw in two groups: the first four attachments, then the
 /// fifth, each variant's fragment stage writing its group's alone at locations `0..` in a state of
 /// its group's attachments alone, every variant's vertex stage the same module, and each variant
-/// noting the groups. A variant past the last group is no plan's. On `vk12-floor` too; on
+/// noting the groups. A variant past the last group is no plan's. On `runtime-floor` of four too; on
 /// `lavapipe` as it is, one pipeline of five, no note.
 #[test]
 fn five_colors_on_a_device_of_four_draw_in_two_groups() {
@@ -193,7 +194,10 @@ fn five_colors_on_a_device_of_four_draw_in_two_groups() {
         return;
     };
     let d = pipeline(&bc, &bc, "cg_five", &[0, 1, 2, 3, 4]);
-    for (stem, dev) in [("four", four()), ("vk12-floor", device("vk12-floor"))] {
+    for (stem, dev) in [
+        ("four", four()),
+        ("runtime-floor of four", narrowed("runtime-floor")),
+    ] {
         let groups: Vec<RenderPipeline> = (0..2)
             .map(|g| compile(&dev, &d, g).unwrap_or_else(|e| panic!("{stem} group {g}: {e}")))
             .collect();
@@ -401,13 +405,13 @@ fn specialized(
 
 /// A read of a color of another group that the function's constants make dead reads nothing
 /// (`dfk_dead_group`: `dfg_branch`, the read of color 4 in the arm of a branch on constant 0, and
-/// `dfg_gated`, whose color 4 input the constant gates). Five colors on a device of four draw in two
-/// groups, color 4 in the second; on `lavapipe` of four (input attachments), `moltenvk-m3` of four
-/// (the pixel interlock) and `vk12-floor` (no ordered fetch form), specialized with the read dead,
-/// each group's variant compiles as a pipeline of its group's attachments that reads none (no input
-/// or storage attachment, every color a color attachment), passing L3. Specialized live, group 0's
-/// variant, which would read color 4 of group 1, is the pipeline's limit refusal. The misses are
-/// counted by kind before the test fails.
+/// `dfg_gated`, whose color 4 input the constant gates). Five colors on a device of four draw in
+/// two groups, color 4 in the second; on `lavapipe` of four (input attachments), `moltenvk-m3` of
+/// four (the pixel interlock) and `runtime-floor` of four (no ordered fetch form), specialized with
+/// the read dead, each group's variant compiles as a pipeline of its group's attachments that reads
+/// none (no input or storage attachment, every color a color attachment), passing L3. Specialized
+/// live, group 0's variant, which would read color 4 of group 1, is the pipeline's limit refusal.
+/// The misses are counted by kind before the test fails.
 #[test]
 fn a_read_of_another_group_dead_after_specialization_is_no_refusal() {
     let (Some(bc), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_group")) else {
@@ -417,7 +421,7 @@ fn a_read_of_another_group_dead_after_specialization_is_no_refusal() {
     let devices = [
         ("lavapipe of four", four()),
         ("moltenvk-m3 of four", narrowed("moltenvk-m3")),
-        ("vk12-floor", device("vk12-floor")),
+        ("runtime-floor of four", narrowed("runtime-floor")),
     ];
     let mut misses = std::collections::BTreeMap::<String, Vec<String>>::new();
     let mut checked = 0;
@@ -470,11 +474,11 @@ fn interlocks(words: &[u32]) -> bool {
 /// pipeline of groups as in any (`dfk_dead_rog`: `dfr_color`, a color 0 input in group 0, and
 /// `dfr_buffer`, a buffer in group 0, each read in the arm of a branch on constant 0; plain Metal
 /// makes and draws both, dead and live). Five colors on a device of four draw in two groups; on
-/// `lavapipe` and `moltenvk-m3` of four (each with the pixel interlock) and `vk12-floor` (without),
-/// specialized with the read dead, each group's variant compiles as a pipeline of its group's
-/// attachments without an interlock, an input or a storage attachment, passing L3. Specialized
-/// live, group 0's variant, which would order its read in each group's draw, is the pipeline's limit
-/// refusal. The misses are counted by kind before the test fails.
+/// `lavapipe` and `moltenvk-m3` of four (each with the pixel interlock) and `runtime-floor` of four
+/// (without), specialized with the read dead, each group's variant compiles as a pipeline of its
+/// group's attachments without an interlock, an input or a storage attachment, passing L3.
+/// Specialized live, group 0's variant, which would order its read in each group's draw, is the
+/// pipeline's limit refusal. The misses are counted by kind before the test fails.
 #[test]
 fn a_raster_order_group_dead_after_specialization_is_no_refusal_in_groups() {
     let (Some(bc), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_rog")) else {
@@ -484,7 +488,7 @@ fn a_raster_order_group_dead_after_specialization_is_no_refusal_in_groups() {
     let devices = [
         ("lavapipe of four", four()),
         ("moltenvk-m3 of four", narrowed("moltenvk-m3")),
-        ("vk12-floor", device("vk12-floor")),
+        ("runtime-floor of four", narrowed("runtime-floor")),
     ];
     let mut misses = std::collections::BTreeMap::<String, Vec<String>>::new();
     let mut checked = 0;

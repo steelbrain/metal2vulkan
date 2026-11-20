@@ -56,7 +56,7 @@ fn engine_selection_reads_only_the_selected_row_and_names_its_engine() {
         &["--hash", hash.as_str(), "--compile-only"][..],
         &[
             "--profile",
-            "vk12-floor",
+            "runtime-floor",
             "--hash",
             hash.as_str(),
             "--compile-only",
@@ -92,7 +92,13 @@ fn a_fetch_without_an_ordered_form_compiles_noted() {
         eprintln!("SKIPPED the compile check: {why}");
         return;
     }
-    let args = ["--profile", "vk12-floor", "--hash", &hash, "--compile-only"];
+    let args = [
+        "--profile",
+        "runtime-floor",
+        "--hash",
+        &hash,
+        "--compile-only",
+    ];
     let compiled = String::from_utf8(run(&args).stdout).unwrap();
     assert_eq!(compiled.lines().count(), 1, "{compiled}");
     assert!(compiled.contains("\tCOMPILED\t"), "{compiled}");

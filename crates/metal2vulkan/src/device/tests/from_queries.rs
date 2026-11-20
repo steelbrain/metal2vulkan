@@ -2,6 +2,8 @@
 //! nothing it derives.
 
 use super::*;
+use crate::device::requirements::VkLimit;
+use crate::error::{Capability, Feature, Needs};
 
 /// The identities each committed profile is also read under, each with a device type: MoltenVK
 /// on an Apple GPU, the NVIDIA driver on a GA10x, RADV, Intel's Mesa driver and none.
@@ -138,6 +140,46 @@ entry:
 /// the device computes the `half` product in 16 bits) or not: no Vulkan query states that a
 /// device reads an `f32` denormal as Metal does, and a driver may keep one under the 16-bit
 /// controls, so the note is static.
+/// A device whose `maxPushConstantsSize` is below the 256 bytes of the push window every stage is
+/// lowered for is below the floor: `Unsupported{PushWindow}`, needing `MaxPushConstantsSize` 256.
+/// The descriptions below it are committed apart (`validation/profiles/below-floor/`, this test's
+/// input alone): `vk12-floor`, the Vulkan 1.2 minimum, and `swiftshader`, each with 128. Every
+/// committed profile is above it.
+#[test]
+fn a_push_window_below_256_bytes_is_below_the_floor() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/below-floor");
+    let mut below: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|e| e.expect("directory entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    below.sort();
+    assert_eq!(below, ["swiftshader", "vk12-floor"]);
+    for stem in &below {
+        let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("readable");
+        let description = DeviceDescription::from_khronos_json(&text, None).expect("parses");
+        match Device::from_queries(description, DevicePolicy::default()) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::PushWindow, "{stem}");
+                let limit = Capability::Limit {
+                    limit: VkLimit::MaxPushConstantsSize,
+                    required: 256,
+                    available: 128,
+                };
+                assert_eq!(u.needs, Needs::AnyOf(vec![vec![limit]]), "{stem}");
+            }
+            other => panic!("{stem}: {other:?}"),
+        }
+    }
+    for (stem, _) in committed_profiles() {
+        if let Err(e) = Device::from_queries(profile(&stem), DevicePolicy::default()) {
+            panic!("{stem} is committed but below the floor: {e}");
+        }
+    }
+}
+
 #[test]
 fn from_queries_records_the_device_denormals_of_a_float_product() {
     use crate::device::requirements::VkProperty;

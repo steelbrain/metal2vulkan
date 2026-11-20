@@ -64,7 +64,7 @@ const SINK: u64 = 0x0000_0011_0000_0000;
 const STATUS: u64 = 0x0000_0012_0000_0000;
 
 /// Profiles the dispatches run on, each also without buffer robustness (the in-shader check).
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "vk12-floor"];
+const PROFILES: [&str; 2] = ["moltenvk-m3", "lavapipe"];
 
 fn fixture() -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join("kernel_stage_in.ll")) {
@@ -83,7 +83,12 @@ fn device(stem: &str, bare: bool) -> Device {
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    device_of(desc, bare)
+}
+
+/// `desc` as a device, without buffer robustness when `bare`.
+fn device_of(mut desc: DeviceDescription, bare: bool) -> Device {
     if bare {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -91,8 +96,11 @@ fn device(stem: &str, bare: bool) -> Device {
     Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
-/// Each profile of [`PROFILES`], and each without buffer robustness (`true`).
+/// Each profile of [`PROFILES`] and Profile F (`runtime-floor` without device addresses, below
+/// the runtime's floor, whose buffers are all descriptors), and each without buffer robustness
+/// (`true`).
 fn devices() -> Vec<(String, Device, bool)> {
+    use crate::pipeline::testing::{description_f, PROFILE_F};
     let mut out = Vec::new();
     for stem in PROFILES {
         out.push((stem.to_owned(), device(stem, false), false));
@@ -102,6 +110,13 @@ fn devices() -> Vec<(String, Device, bool)> {
             true,
         ));
     }
+    let f = description_f().expect("Profile F");
+    out.push((PROFILE_F.to_owned(), device_of(f.clone(), false), false));
+    out.push((
+        format!("{PROFILE_F} without robustness"),
+        device_of(f, true),
+        true,
+    ));
     out
 }
 

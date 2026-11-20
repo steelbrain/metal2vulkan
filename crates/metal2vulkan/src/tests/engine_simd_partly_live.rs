@@ -8,7 +8,7 @@
 //! threadgroup's thread count) read as zero, so an infinite cell meeting one makes NaN: that is
 //! [`metal`] below, and the literal readings of the authored cases and of our probe's
 //! uncommitted ones are checked against it. On every profile whose kernels emulate their
-//! simdgroups (`lavapipe`, `vk12-floor`) each fixture compiles, passes L3, and runs on the CPU
+//! simdgroups (`lavapipe`, `runtime-floor`) each fixture compiles, passes L3, and runs on the CPU
 //! interpreter at 8, 16, and 32 subgroup lanes in both scheduling orders, giving that answer:
 //!
 //! - whole simdgroups (a branch on the simdgroup index, or on a device word equal across the
@@ -58,7 +58,7 @@ use crate::spirv::ir::TypedModule;
 
 /// The committed profiles whose kernels' simdgroups are emulated: one with device addresses and
 /// one without.
-const PROFILES: [&str; 2] = ["lavapipe", "vk12-floor"];
+const PROFILES: [&str; 2] = ["lavapipe", "runtime-floor"];
 
 /// The poison every output word starts as.
 const POISON: u32 = 0xABAB_ABAB;
@@ -289,6 +289,23 @@ fn words(b: &[u8]) -> Vec<u32> {
 
 fn emulating(stem: &str) -> DeviceProfile {
     profile(stem, DevicePolicy::default()).expect("profile")
+}
+
+/// `runtime-floor` with 4-lane subgroups in the vertex, fragment and compute stages and the basic,
+/// vote, arithmetic, ballot, shuffle, relative shuffle and quad operations (the shape of a
+/// software rasterizer's subgroups): its vertex and fragment functions take the
+/// `PartialFragment` tier, its kernels emulate their simdgroups.
+fn narrow_graphics() -> DeviceProfile {
+    use crate::vk::{ShaderStageFlags as S, SubgroupFeatureFlags as O};
+    let mut desc = crate::pipeline::testing::description("runtime-floor").expect("description");
+    desc.subgroup.size = 4;
+    desc.subgroup.supported_stages = S::VERTEX | S::FRAGMENT | S::COMPUTE;
+    desc.subgroup.supported_operations =
+        O::BASIC | O::VOTE | O::ARITHMETIC | O::BALLOT | O::SHUFFLE | O::SHUFFLE_RELATIVE | O::QUAD;
+    Device::from_queries(desc, DevicePolicy::default())
+        .expect("device")
+        .profile()
+        .clone()
 }
 
 /// The buffers of a `dsm_*` kernel over `n` threads: `in`, `hin` (a, b, c row-major), the
@@ -1042,7 +1059,7 @@ fn multiply_adds_without_fast_flags_keep_their_signed_zeros() {
         }
     }
     let (mut declared, mut noted) = (0, 0);
-    for stem in ["lavapipe", "vk12-floor", "moltenvk-m3", "amd-rdna3-radv"] {
+    for stem in ["lavapipe", "runtime-floor", "moltenvk-m3", "amd-rdna3-radv"] {
         let p = emulating(stem);
         let supported = p.fields().float_controls.f32.signed_zero_inf_nan_preserve;
         for (name, bc, needs) in &kernels {
@@ -1107,15 +1124,16 @@ fn agx_vertex(name: &str, dim: u32) -> String {
 }
 
 /// An AGX multiply-add outside a kernel always takes the ballot form, and on the `PartialFragment`
-/// tier (a vertex or fragment subgroup narrower than 32 lanes, here SwiftShader's 4-lane vertex
-/// stage) the Metal lanes at or above the subgroup's size are permanently inactive: they read as
+/// tier (a vertex or fragment subgroup narrower than 32 lanes, here `runtime-floor` given 4-lane
+/// vertex and fragment subgroups with every non-clustered operation: [`narrow_graphics`]) the
+/// Metal lanes at or above the subgroup's size are permanently inactive: they read as
 /// `+0` cells, and neither the ballot's bit extract nor the shuffle names them (both are poison
 /// there; the interpreter traps them). Each vertex is a subgroup of its own on the interpreter, so
 /// every other owner lane is either not live (below the size) or beyond it (8- and 16-lane
 /// subgroups), and the vertex's cells are the product of its own cells alone.
 #[test]
 fn a_narrow_subgroups_permanently_inactive_lanes_read_as_zero_cells() {
-    let p = emulating("swiftshader");
+    let p = narrow_graphics();
     let input = inputs(Input::B);
     let alone: Lanes<'_> = &|l| l == 0;
     for dim in [8, 4] {

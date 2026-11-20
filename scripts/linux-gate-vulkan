@@ -4,7 +4,7 @@
 #
 #   scripts/linux-gate-vulkan <command> [args...]
 #
-# Reads what scripts/linux-gate passes: M2V_GATE_ICD (lavapipe|swiftshader), M2V_GATE_PROFILE (a
+# Reads what scripts/linux-gate passes: M2V_GATE_ICD (lavapipe), M2V_GATE_PROFILE (a
 # crates/metal2vulkan-validation/profiles stem, or empty), and for the drm-shim recipe M2V_DRM_SHIM_ICD_GLOB.
 #
 # - The selected ICD becomes the only one the loader sees (VK_DRIVER_FILES).
@@ -37,7 +37,6 @@ set -euo pipefail
 shopt -s nullglob
 case "$M2V_GATE_ICD" in
     lavapipe) icds=(/usr/share/vulkan/icd.d/lvp_icd*.json) ;;
-    swiftshader) icds=(/opt/swiftshader/vk_swiftshader_icd.json) ;;
     *) icds=() ;;
 esac
 [ "${#icds[@]}" -eq 1 ] && [ -f "${icds[0]}" ] ||

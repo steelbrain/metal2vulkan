@@ -734,7 +734,7 @@ fn specialized(pipe: &ComputePipeline, plan: &BindingPlan, key: SpecKey) -> Opti
 #[test]
 fn the_binder_specializes_and_charges_the_imageblock() {
     let Some(bc) = owned() else { return };
-    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let dev = device(stem);
         let pipe = pipeline(&dev, &bc, "imageblock_after_threadgroup");
         assert!(pipe

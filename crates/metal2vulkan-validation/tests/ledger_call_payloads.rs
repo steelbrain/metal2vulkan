@@ -203,7 +203,7 @@ fn the_ledger_carries_the_payloads_of_a_call_heavy_body() {
     );
 
     // Planning the call-heavy entry keeps the ledger at the floor of the allocator peak.
-    let profile = load_profile("vk12-floor").expect("profile");
+    let profile = load_profile("runtime-floor").expect("profile");
     let entry = EntryDescriptor::new(&bitcode, EntryRef::Name("call_payloads"));
     let budget = Budget::default();
     let ((plan, report), allocator) =

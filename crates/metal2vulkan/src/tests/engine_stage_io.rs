@@ -29,11 +29,12 @@ use crate::pipeline::stage_io::{
 };
 use crate::pipeline::sym::{Symbol, VaryingKey};
 use crate::pipeline::testing::{
-    compile, engine_dir, llvm_assemble, meter, profile, zero_relocations, AssembleError, Scratch,
+    compile, engine_dir, llvm_assemble, meter, profile, profile_without, zero_relocations,
+    AssembleError, Scratch,
 };
 use crate::spirv::testing::check_words_valid;
 
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"];
+const PROFILES: [&str; 2] = ["moltenvk-m3", "runtime-floor"];
 
 fn fixture() -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join("stage_io.ll")) {
@@ -252,23 +253,33 @@ fn locations_are_relocation_only() {
 }
 
 /// The refusals of the fixture's feature-dependent entries name the capability (the primitive id's
-/// too), and the invariant position compiles with its `Invariant` decoration.
+/// too), and the invariant position compiles with its `Invariant` decoration. The floor states
+/// clip distances, sample-rate shading and dual-source blending, so each of those refusals is on
+/// `runtime-floor` without its feature (below the runtime's floor).
 #[test]
 fn feature_dependent_entries_name_their_capability() {
-    let Some(bc) = fixture() else { return };
-    let floor = prof("vk12-floor");
-    let needs = |entry: &str, feature: Feature, cap: Capability| match compile(&bc, entry, &floor) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, feature, "{entry}");
-            assert_eq!(u.needs, Needs::AnyOf(vec![vec![cap]]), "{entry}");
-        }
-        other => panic!("{entry}: {other:?}"),
-    };
     use crate::device::requirements::VkFeature as F;
+    let Some(bc) = fixture() else { return };
+    let floor = prof("runtime-floor");
+    let needs = |entry: &str, feature: Feature, without: F| {
+        let p = profile_without("runtime-floor", &[without], DevicePolicy::default())
+            .expect("below the runtime's floor");
+        match compile(&bc, entry, &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, feature, "{entry}");
+                assert_eq!(
+                    u.needs,
+                    Needs::AnyOf(vec![vec![Capability::Feature(without)]]),
+                    "{entry}"
+                );
+            }
+            other => panic!("{entry}: {other:?}"),
+        }
+    };
     needs(
         "stage_io_vertex_clip",
         Feature::ClipDistance,
-        Capability::Feature(F::ShaderClipDistance),
+        F::ShaderClipDistance,
     );
     // A vertex `Layer` takes the output feature or a geometry stage that writes it.
     match compile(&bc, "stage_io_vertex_layer", &floor) {
@@ -287,7 +298,7 @@ fn feature_dependent_entries_name_their_capability() {
     needs(
         "stage_io_fragment_point",
         Feature::SampleRateShading,
-        Capability::Feature(F::SampleRateShading),
+        F::SampleRateShading,
     );
     // Without either enabling capability of a fragment `PrimitiveId`, the ID is the flat varying
     // the pipeline's vertex function writes (`engine_primitive_ids`).
@@ -301,7 +312,7 @@ fn feature_dependent_entries_name_their_capability() {
     needs(
         "stage_io_fragment_dual_source",
         Feature::DualSourceBlending,
-        Capability::Feature(F::DualSrcBlend),
+        F::DualSrcBlend,
     );
     let m = prof("moltenvk-m3");
     for entry in [
@@ -561,10 +572,10 @@ fn a_point_size_past_metals_largest_point_is_stored_as_it() {
 }
 
 /// A vertex function writing `[[point_size]]` records `PrecisionNote::DevicePointSize` on a device
-/// whose largest point is below Metal's 511 pixels (lavapipe's 256, ANV's 255.875, the 2023
-/// baseline's 64), which draws a size between the two smaller than Metal; not on one that reaches
-/// 511 (MoltenVK on the M3, the RTX 5080's 2047.94, RADV's 8191.88, SwiftShader's 1023), where the
-/// stored clamp gives Metal's size. A function storing only the default 1.0 records nothing on
+/// whose largest point is below Metal's 511 pixels (lavapipe's 256, ANV's 255.875, the runtime
+/// floor's 63), which draws a size between the two smaller than Metal; not on one that reaches 511
+/// (MoltenVK on the M3, the RTX 5080's 2047.94, RADV's 8191.88), where the stored clamp gives
+/// Metal's size. A function storing only the default 1.0 records nothing on
 /// either.
 #[test]
 fn a_device_below_metals_largest_point_announces_its_point_size() {
@@ -574,11 +585,10 @@ fn a_device_below_metals_largest_point_announces_its_point_size() {
     for (stem, below) in [
         ("lavapipe", true),
         ("intel-irisxe-rplp-anv", true),
-        ("lunarg-desktop-baseline-2023", true),
+        ("runtime-floor", true),
         ("moltenvk-m3", false),
         ("nvidia-rtx5080-laptop", false),
         ("amd-780m-radv", false),
-        ("swiftshader", false),
     ] {
         let p = prof(stem);
         let a = compile(&bc, "stage_io_vertex", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -595,9 +605,8 @@ fn a_device_below_metals_largest_point_announces_its_point_size() {
 /// A vertex function without outputs (a rasterization-disabled `vertex void`) writes the default
 /// point size too. A point-list pipeline's vertex stage must write `PointSize` on a device without
 /// `maintenance5`, under rasterizer discard as well
-/// (`VUID-VkGraphicsPipelineCreateInfo-topology-08773`); `swiftshader` and
-/// `lunarg-desktop-baseline-2023` state no `VK_KHR_maintenance5`, and the module does not know the
-/// topology. The owned `ob3_index_buffer` function returns `void` and stores to a buffer.
+/// (`VUID-VkGraphicsPipelineCreateInfo-topology-08773`); `runtime-floor` states no
+/// `VK_KHR_maintenance5`, and the module does not know the topology. The owned `ob3_index_buffer` function returns `void` and stores to a buffer.
 #[test]
 fn a_vertex_function_without_outputs_writes_the_default_point_size() {
     let bc = match llvm_assemble(&engine_dir().join("ob3_index_buffer.ll")) {
@@ -608,7 +617,7 @@ fn a_vertex_function_without_outputs_writes_the_default_point_size() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected ob3_index_buffer.ll: {why}"),
     };
-    for stem in ["swiftshader", "lunarg-desktop-baseline-2023", "moltenvk-m3"] {
+    for stem in ["runtime-floor", "moltenvk-m3"] {
         let p = prof(stem);
         let a = compile(&bc, "ob3_index_buffer", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(a.interface.io.outputs.is_empty(), "{stem}: a void function");

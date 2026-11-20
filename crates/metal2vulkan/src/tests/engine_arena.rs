@@ -40,7 +40,7 @@ use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, S
 use crate::spirv::ir::TypedModule;
 
 /// Profiles with and without 64-bit integers, 16 and 32 KiB of shared memory.
-const PROFILES: [&str; 4] = ["moltenvk-m3", "swiftshader", "roadmap-2022", "lavapipe"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "lavapipe"];
 
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
@@ -229,10 +229,10 @@ fn the_static_arena_is_checked_against_max_compute_shared_memory_size() {
     };
     let e = compile(&over, "big", &p("moltenvk-m3")).expect_err("over the limit");
     assert_eq!(strip(e), refusal(32772, 32768));
-    let e = compile(&full, "big", &p("roadmap-2022")).expect_err("over 16 KiB");
+    let e = compile(&full, "big", &p("runtime-floor")).expect_err("over 16 KiB");
     assert_eq!(strip(e), refusal(32768, 16384));
     l3(&full, "big", &p("moltenvk-m3"), "moltenvk-m3 32768");
-    l3(&half, "big", &p("roadmap-2022"), "roadmap-2022 16384");
+    l3(&half, "big", &p("runtime-floor"), "runtime-floor 16384");
 }
 
 const REGIONS: &str = r#"@s = internal addrspace(3) global [3 x i32] undef, align 4

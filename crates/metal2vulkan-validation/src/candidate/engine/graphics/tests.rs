@@ -2207,7 +2207,7 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
-    for stem in ["lunarg-desktop-baseline-2023", "vk12-floor"] {
+    for stem in ["runtime-floor"] {
         let unordered = device(stem);
         let mut fetches = 0;
         for shard in 0..64 {
@@ -2489,7 +2489,7 @@ fn public_fragment_imageblock_cases_plan_their_storage_image() {
             );
             planned += 1;
         }
-        match plan_render(&device("swiftshader"), &render, libraries) {
+        match plan_render(&device("runtime-floor"), &render, libraries) {
             Err(Error::Unsupported(refusal)) => {
                 assert_eq!(refusal.feature, metal2vulkan::error::Feature::Imageblocks)
             }

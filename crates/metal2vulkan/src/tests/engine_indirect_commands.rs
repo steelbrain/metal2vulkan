@@ -38,7 +38,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
+    compile, device_f, link_and_validate, llvm_assemble, typed_module, AssembleError, PROFILE_F,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
 use crate::spirv::ir::TypedModule;
@@ -79,9 +79,10 @@ type Spoil = (&'static str, fn(&mut Params));
 
 /// The committed profiles with device addresses, and those without.
 fn profiles() -> (Profiles, Profiles) {
-    committed_profiles()
-        .expect("profiles")
-        .into_iter()
+    let mut all = committed_profiles().expect("profiles");
+    let f = device_f(crate::device::DevicePolicy::default()).expect(PROFILE_F);
+    all.push((PROFILE_F.into(), f.profile().clone()));
+    all.into_iter()
         .partition(|(_, p)| p.fields().buffer_access == BufferAccess::Addressed)
 }
 

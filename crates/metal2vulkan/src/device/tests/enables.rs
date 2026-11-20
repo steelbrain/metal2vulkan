@@ -35,9 +35,11 @@ fn description_error(result: Result<DeviceDescription, Error>) -> String {
     }
 }
 
-/// A 1.2 description exposing only what `extensions` add to the floor.
+/// A 1.2 description, `runtime-floor` as a Vulkan 1.2 context reads it, exposing only what
+/// `extensions` add to it.
 fn floor_with(extensions: &[VkExtension], features: &[VkFeature]) -> DeviceDescription {
-    let mut d = profile("vk12-floor");
+    let mut d = crate::pipeline::testing::description_at_1_2("runtime-floor", false)
+        .expect("runtime-floor");
     assert_eq!(d.api_version, ApiVersion::V1_2);
     d.extensions.extend(extensions.iter().copied());
     d.features.extend(features.iter().copied());
@@ -47,8 +49,9 @@ fn floor_with(extensions: &[VkExtension], features: &[VkFeature]) -> DeviceDescr
 /// On every committed profile the recommendation lists only what the description lists, is closed
 /// (`with_enabled` accepts it, `Device::from_queries` accepts the result), and is a fixed point:
 /// the device made from it needs exactly it, as does the device made from the full description. It
-/// leaves out exactly the buffer update-after-bind features of the three profiles that list them
-/// with `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`.
+/// leaves out nothing: no committed profile lists the buffer update-after-bind features with
+/// `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`
+/// ([`a_recommendation_keeps_vuid_10247`] builds one).
 #[test]
 fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     let mut left_out = Vec::new();
@@ -113,16 +116,7 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     }
     let m = profile("moltenvk-m3").recommended_enables();
     assert!(m.extensions.contains(&VkExtension::KhrPortabilitySubset));
-    let stems: BTreeSet<&str> = left_out.iter().map(|(s, _)| s.as_str()).collect();
-    assert_eq!(
-        stems,
-        set(&[
-            "lunarg-desktop-baseline-2023",
-            "roadmap-2022",
-            "swiftshader"
-        ])
-    );
-    assert_eq!(left_out.len(), 9, "{left_out:?}");
+    assert!(left_out.is_empty(), "{left_out:?}");
 }
 
 /// A description listing `robustBufferAccess` and update-after-bind features: without
@@ -160,16 +154,19 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
     }
 }
 
-/// SwiftShader's committed profile states `robustBufferAccessUpdateAfterBind` false and lists
-/// `robustBufferAccess` with the buffer update-after-bind features (the finding: a device made from
-/// the recommendation failed `vkCreateDevice`). Its recommendation now keeps the rule, so the
+/// `runtime-floor` with the buffer update-after-bind features and
+/// `robustBufferAccessUpdateAfterBind` false, as SwiftShader's report stated them beside
+/// `robustBufferAccess` (the finding: a device made from the recommendation failed
+/// `vkCreateDevice`). Its recommendation keeps the rule, so the
 /// stated robustness can be created; adding the buffer update-after-bind features to the restricted
 /// description changes only the profile's update-after-bind facts, which only the set-1 arrays that
 /// need them read (the function tables', the texel-buffer classes'): the containment encoding and
 /// every other field are the same.
 #[test]
-fn the_swiftshader_recommendation_keeps_vuid_10247() {
-    let desc = profile("swiftshader");
+fn a_recommendation_keeps_vuid_10247() {
+    let mut desc = profile("runtime-floor");
+    desc.features
+        .extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());
     assert!(!desc.robust_buffer_access_update_after_bind);
     assert!(desc.has(VkFeature::RobustBufferAccess));
     assert!(BUFFER_UPDATE_AFTER_BIND.iter().all(|&f| desc.has(f)));
@@ -630,7 +627,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
         ..Requirements::default()
     };
     assert_eq!(
-        profile("vk12-floor").required_enables(&a8),
+        floor_with(&[], &[]).required_enables(&a8),
         Err(Capability::Extension(VkExtension::KhrMaintenance5))
     );
     let m5 = floor_with(
@@ -656,7 +653,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
         ..Requirements::default()
     };
     assert_eq!(
-        profile("vk12-floor").required_enables(&rgba),
+        floor_with(&[], &[]).required_enables(&rgba),
         Ok(EnableSet::new())
     );
     // The API version and missing listed items are the first missing capability.
@@ -665,7 +662,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
         ..Requirements::default()
     };
     assert_eq!(
-        profile("vk12-floor").required_enables(&newer),
+        floor_with(&[], &[]).required_enables(&newer),
         Err(Capability::ApiVersion(ApiVersion { major: 1, minor: 3 }))
     );
     let named = Requirements {
@@ -673,7 +670,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
         ..Requirements::default()
     };
     assert_eq!(
-        profile("vk12-floor").required_enables(&named),
+        floor_with(&[], &[]).required_enables(&named),
         Err(Capability::Extension(VkExtension::ExtShaderStencilExport))
     );
     // The portability subset is part of every set on a device that lists it.
@@ -686,7 +683,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
 /// `Device::from_queries` refuses a description listing a feature it does not expose.
 #[test]
 fn device_new_refuses_unexposed_features() {
-    let mut d = profile("vk12-floor");
+    let mut d = profile("runtime-floor");
     d.features.insert(VkFeature::Maintenance8);
     let e = match Device::from_queries(d.clone(), DevicePolicy::default()) {
         Err(Error::InvalidDescriptor(DescriptorError::DeviceDescription { detail })) => detail,
@@ -734,7 +731,7 @@ fn profile_format_tables_hold_only_exposed_formats() {
             );
         }
     }
-    let mut d = profile("vk12-floor");
+    let mut d = profile("runtime-floor");
     let entry = d.formats.formats[&vk::Format::R8_UNORM];
     d.formats.formats.insert(vk::Format::A8_UNORM, entry);
     let a8 = |d: &DeviceDescription| {

@@ -512,7 +512,7 @@ mod tests {
     fn floor() -> crate::device::DeviceDescription {
         committed_descriptions()
             .into_iter()
-            .find(|(s, _)| s == "vk12-floor")
+            .find(|(s, _)| s == "runtime-floor")
             .unwrap()
             .1
     }

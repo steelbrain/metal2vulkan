@@ -35,12 +35,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
 /// The profiles: the M1 set plus one with 64-bit floats.
-const PROFILES: [&str; 4] = [
-    "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "amd-rdna3-radv",
-];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "amd-rdna3-radv"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Need {
@@ -1260,9 +1255,15 @@ fn wide_divisions_share_one_routine_per_form() {
         return;
     };
     let cases = [
+        // The runtime's floor without `shaderInt64`, a device below that floor.
         (
-            "vk12-floor",
-            profile("vk12-floor", crate::device::DevicePolicy::default()).expect("profile"),
+            "runtime-floor without shaderInt64",
+            crate::pipeline::testing::profile_without(
+                "runtime-floor",
+                &[crate::device::requirements::VkFeature::ShaderInt64],
+                crate::device::DevicePolicy::default(),
+            )
+            .expect("profile"),
             3,
             5,
             0,
@@ -1334,7 +1335,7 @@ fn fused_multiply_adds_take_the_profiles_route() {
     };
     // (profile, OpFmaKHR of the float kernel); its route is the device's `Fma` without them, the
     // `half` kernel's on every profile.
-    for (stem, khr) in [("moltenvk-m3", 3), ("lavapipe", 0), ("vk12-floor", 0)] {
+    for (stem, khr) in [("moltenvk-m3", 3), ("lavapipe", 0), ("runtime-floor", 0)] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let float = kk.name == "fma_float_rounds_once";
@@ -1452,7 +1453,7 @@ fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
         "intel-irisxe-anv",
         "nvidia-rtx50-linux",
         "lavapipe",
-        "vk12-floor",
+        "runtime-floor",
     ] {
         let what = format!("fma_half_rounds_once on {stem} (from_queries)");
         let desc = description(stem).expect("description");
@@ -1627,13 +1628,7 @@ fn dot_is_the_devices_op_dot_on_every_profile() {
                 && w.get(4) == Some(&(crate::spv::GlslStd450Op::Fma as u32))
         }) + count_op(words, crate::spv::Op::FmaKHR)
     };
-    for stem in [
-        "moltenvk-m3",
-        "amd-rdna3-radv",
-        "lavapipe",
-        "vk12-floor",
-        "lunarg-desktop-baseline-2023",
-    ] {
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
         {
             let policy = DevicePolicy::default();
             let p = profile(stem, policy).expect("profile");
@@ -1697,7 +1692,7 @@ fn fast_fmod_is_metals_composition() {
     for (stem, khr, functions) in [
         ("moltenvk-m3", 1, 1),
         ("lavapipe", 0, 1),
-        ("vk12-floor", 0, 1),
+        ("runtime-floor", 0, 1),
     ] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let kk = &ks[0];
@@ -1752,7 +1747,7 @@ fn an_ordered_not_equal_is_the_negated_unordered_equal() {
     let Some(bitcode) = assemble("ordered-not-equal", &module(&ks)) else {
         return;
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
@@ -1818,7 +1813,7 @@ fn an_arcp_division_is_the_devices_quotient() {
     let Some(bitcode) = assemble("fast-divide", &module(&ks)) else {
         return;
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
@@ -2006,7 +2001,7 @@ fn a_division_without_arcp_is_the_devices_quotient() {
     let Some(bitcode) = assemble("precise-divide", &module(&ks)) else {
         return;
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let device_nans =
             p.takes_driver_deviation(crate::error::DriverDeviation::MetalCanonicalNans);
@@ -2087,7 +2082,7 @@ fn fast_sincos_is_the_devices_sine_and_cosine() {
     let Some(bitcode) = assemble("fast-sincos", &text) else {
         return;
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);

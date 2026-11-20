@@ -491,7 +491,10 @@ fn view_aspects_and_the_default_storage_choice() {
     }
     // SwiftShader's `R32_UINT` buffer features lack `STORAGE_WRITE_WITHOUT_FORMAT` though it has
     // `shaderStorageImageWriteWithoutFormat`; lavapipe's state it.
-    assert!(texel_variants.contains("swiftshader"), "{texel_variants:?}");
+    assert!(
+        texel_variants.contains("runtime-floor"),
+        "{texel_variants:?}"
+    );
     assert!(!texel_variants.contains("lavapipe"), "{texel_variants:?}");
     // A view format without a SPIR-V image format is declared formatless.
     let bgra = StorageImageChoice::new(vk::Format::B8G8R8A8_UNORM, StorageImageClass::SrgbEncode);
@@ -584,7 +587,8 @@ fn a_depth_read_as_colour_replicates_its_depth_as_metal_does() {
 /// refused nowhere (without `samplerAnisotropy` the Vulkan sampler is isotropic and the module
 /// emulates Metal's filter or announces the device's), a min reduction reads the weighted average,
 /// refused nowhere, and an axis clamping to zero beside one clamping to a white border reads the one
-/// color, refused nowhere. Every refusal kind occurs on some committed profile.
+/// color, refused nowhere. Every refusal kind occurs on some committed profile or on
+/// `runtime-floor` without `samplerMirrorClampToEdge` (below the runtime's floor, which requires it).
 #[test]
 fn runtime_sampler_values_are_checked_at_plan_time() {
     use crate::bind::state::SamplerDescriptor;
@@ -620,7 +624,17 @@ fn runtime_sampler_values_are_checked_at_plan_time() {
     cases.push(("inverted LOD", d));
     let mut refused = BTreeMap::new();
     let mut accepted = BTreeMap::new();
-    for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
+    let mut profiles = crate::spirv::testing::committed_profiles().expect("profiles");
+    profiles.push((
+        "runtime-floor without samplerMirrorClampToEdge".into(),
+        crate::pipeline::testing::profile_without(
+            "runtime-floor",
+            &[crate::device::requirements::VkFeature::SamplerMirrorClampToEdge],
+            crate::device::DevicePolicy::default(),
+        )
+        .expect("profile"),
+    ));
+    for (stem, p) in profiles {
         for compare in [false, true] {
             let mut slots = BTreeMap::new();
             slots.insert(
@@ -902,7 +916,7 @@ fn a_linear_compare_sampler_needs_no_filterable_view() {
                 }
                 if compare && !filterable {
                     unfilterable += 1;
-                    floor_seen |= stem == "vk12-floor";
+                    floor_seen |= stem == "runtime-floor";
                 }
             }
         }

@@ -1064,7 +1064,7 @@ fn compiled_functions_round_trip_through_the_public_api() {
     let Some(bc) = fixture("store_const") else {
         return;
     };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let dev = device(stem);
         let f = FunctionDescriptor::new(
             Library::from_air(&bc)

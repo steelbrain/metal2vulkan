@@ -167,16 +167,15 @@ fn unrestricted(p: &DeviceProfile) -> bool {
 }
 
 /// The committed profiles the product reads the extension from: the RADV and lavapipe
-/// profiles list it, MoltenVK's and the 1.2 floor's do not.
+/// profiles list it, MoltenVK's and the runtime floor's do not.
 #[test]
 fn the_extension_is_read_from_the_device_description() {
     for (stem, listed) in [
         ("amd-rdna3-radv", true),
         ("lavapipe", true),
-        ("swiftshader", true),
         ("moltenvk-m3", false),
         ("intel-irisxe-anv", false),
-        ("vk12-floor", false),
+        ("runtime-floor", false),
     ] {
         let p = profile(stem, DevicePolicy::default()).expect(stem);
         assert_eq!(unrestricted(&p), listed, "{stem}");

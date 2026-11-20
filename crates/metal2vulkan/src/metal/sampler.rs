@@ -1368,7 +1368,7 @@ mod tests {
     fn device(features: &[VkFeature], remove: &[VkFeature]) -> Device {
         let (_, mut desc) = committed_descriptions()
             .into_iter()
-            .find(|(s, _)| s == "vk12-floor")
+            .find(|(s, _)| s == "runtime-floor")
             .unwrap();
         desc.features.extend(features.iter().copied());
         for f in remove {
@@ -1545,7 +1545,7 @@ mod tests {
         use DeviceLodBias::{Capped, Exact, NotANumber, Withheld};
         let mut floor = committed_descriptions()
             .into_iter()
-            .find(|(s, _)| s == "vk12-floor")
+            .find(|(s, _)| s == "runtime-floor")
             .unwrap()
             .1;
         floor.limits.max_sampler_lod_bias_bits = 15.5f32.to_bits();
@@ -1796,7 +1796,7 @@ mod tests {
         use SamplerMinMagFilter::{Linear, Nearest};
         let (_, mut desc) = committed_descriptions()
             .into_iter()
-            .find(|(s, _)| s == "vk12-floor")
+            .find(|(s, _)| s == "runtime-floor")
             .unwrap();
         desc.features.insert(VkFeature::SamplerAnisotropy);
         desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
@@ -1996,7 +1996,7 @@ mod tests {
         let swizzling = {
             let (_, mut desc) = committed_descriptions()
                 .into_iter()
-                .find(|(s, _)| s == "vk12-floor")
+                .find(|(s, _)| s == "runtime-floor")
                 .unwrap();
             desc.extensions.extend([
                 VkExtension::ExtBorderColorSwizzle,
@@ -2163,7 +2163,7 @@ mod tests {
         let with = |swizzle: bool, rgba4: bool| {
             let (_, mut desc) = committed_descriptions()
                 .into_iter()
-                .find(|(s, _)| s == "vk12-floor")
+                .find(|(s, _)| s == "runtime-floor")
                 .unwrap();
             if swizzle {
                 desc.extensions.extend([
@@ -2255,7 +2255,7 @@ mod tests {
         let with = |features: &[VkFeature]| {
             let (_, mut desc) = committed_descriptions()
                 .into_iter()
-                .find(|(s, _)| s == "vk12-floor")
+                .find(|(s, _)| s == "runtime-floor")
                 .unwrap();
             if !features.is_empty() {
                 desc.extensions.extend([

@@ -615,7 +615,7 @@ mod tests {
         let (_scratch, index) = index();
         let skipped = write_engine_results(
             &index,
-            "vk12-floor",
+            "runtime-floor",
             "fp1",
             &[
                 new_result("a", Outcome::Translated),
@@ -637,12 +637,12 @@ mod tests {
         .unwrap();
         assert_eq!(skipped, 1, "a deadline is transient and never recorded");
         assert_eq!(
-            engine_census(&index, "vk12-floor", "fp1")
+            engine_census(&index, "runtime-floor", "fp1")
                 .unwrap()
                 .defects(),
             0
         );
-        let census = engine_census(&index, "vk12-floor", "fp1").unwrap();
+        let census = engine_census(&index, "runtime-floor", "fp1").unwrap();
         assert_eq!(
             (census.total_sources, census.attempted, census.remaining),
             (3, 2, 1)
@@ -657,7 +657,7 @@ mod tests {
         );
         // The timed-out row is selected again by every mode that selects unattempted rows.
         let select = |mode, after| {
-            select_engine_batch(&index, "vk12-floor", "fp1", mode, after, 10).unwrap()
+            select_engine_batch(&index, "runtime-floor", "fp1", mode, after, 10).unwrap()
         };
         assert_eq!(select(SelectionMode::CurrentFingerprint, None), ["c"]);
         assert_eq!(select(SelectionMode::Discovery, None), ["c"]);
@@ -666,7 +666,7 @@ mod tests {
         // A new fingerprint re-selects everything for a fresh sweep; discovery remembers the
         // profile's earlier success.
         let fresh =
-            |mode| select_engine_batch(&index, "vk12-floor", "fp2", mode, None, 10).unwrap();
+            |mode| select_engine_batch(&index, "runtime-floor", "fp2", mode, None, 10).unwrap();
         assert_eq!(fresh(SelectionMode::CurrentFingerprint), ["a", "b", "c"]);
         assert_eq!(fresh(SelectionMode::Discovery), ["b", "c"]);
         // Another profile's success is not this profile's.
@@ -682,7 +682,7 @@ mod tests {
             .unwrap(),
             ["a", "b", "c"]
         );
-        assert_eq!(engine_recorded_profiles(&index).unwrap(), ["vk12-floor"]);
+        assert_eq!(engine_recorded_profiles(&index).unwrap(), ["runtime-floor"]);
         let outcomes =
             engine_outcomes(&index, "fp1", &["a".into(), "b".into(), "c".into()]).unwrap();
         assert_eq!(outcomes.len(), 2);
@@ -700,7 +700,7 @@ mod tests {
         };
         write_engine_results(
             &index,
-            "vk12-floor",
+            "runtime-floor",
             "fp1",
             &[
                 new_result("a", limit(LimitKind::Budget, "WorkUnits")),
@@ -709,7 +709,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let census = engine_census(&index, "vk12-floor", "fp1").unwrap();
+        let census = engine_census(&index, "runtime-floor", "fp1").unwrap();
         assert_eq!(census.count("limit_exceeded"), 3);
         assert_eq!(census.defects(), 2);
     }
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn readers_never_create_audit_schema() {
         let (_scratch, index) = index();
-        let census = engine_census(&index, "vk12-floor", "fp1").unwrap();
+        let census = engine_census(&index, "runtime-floor", "fp1").unwrap();
         assert_eq!(
             (census.total_sources, census.attempted, census.remaining),
             (3, 0, 3)
@@ -733,10 +733,10 @@ mod tests {
 
     #[test]
     fn engine_fingerprint_separates_profiles() {
-        let floor = crate::engine::load_profile("vk12-floor").unwrap();
+        let floor = crate::engine::load_profile("runtime-floor").unwrap();
         let mvk = crate::engine::load_profile("moltenvk-m3").unwrap();
-        let a = engine_fingerprint("vk12-floor", &floor);
-        assert_eq!(a, engine_fingerprint("vk12-floor", &floor));
+        let a = engine_fingerprint("runtime-floor", &floor);
+        assert_eq!(a, engine_fingerprint("runtime-floor", &floor));
         assert_ne!(a, engine_fingerprint("moltenvk-m3", &mvk));
     }
 
@@ -775,7 +775,7 @@ mod tests {
             product,
             lane_version: ENGINE_CENSUS_VERSION,
             semantics: metal2vulkan::cache::SEMANTICS_VERSION,
-            profile: ("vk12-floor".into(), [1; 32]),
+            profile: ("runtime-floor".into(), [1; 32]),
             tools: vec![
                 ("llvm-as".into(), "LLVM version 23.1.2".into()),
                 ("spirv-val".into(), "SPIRV-Tools v2026.3".into()),
@@ -789,7 +789,7 @@ mod tests {
             before.product.as_bytes(),
             &ENGINE_CENSUS_VERSION.to_le_bytes(),
             &metal2vulkan::cache::SEMANTICS_VERSION.to_le_bytes(),
-            b"vk12-floor",
+            b"runtime-floor",
             &[1; 32],
             b"llvm-as",
             b"LLVM version 23.1.2",
@@ -824,7 +824,7 @@ mod tests {
             changed(|key| key.semantics += 1),
             changed(|key| key.lane_version += 1),
             changed(|key| key.profile = ("moltenvk-m3".into(), [1; 32])),
-            changed(|key| key.profile = ("vk12-floor".into(), [2; 32])),
+            changed(|key| key.profile = ("runtime-floor".into(), [2; 32])),
             changed(|key| key.tools[0].1 = "LLVM version 24.0.0".into()),
             changed(|key| key.tools[1].1 = "unavailable".into()),
         ];
@@ -855,8 +855,8 @@ mod tests {
         );
 
         // This build's keys take the product fingerprint.
-        let floor = crate::engine::load_profile("vk12-floor").unwrap();
-        let current = CensusKey::engine("vk12-floor", &floor);
+        let floor = crate::engine::load_profile("runtime-floor").unwrap();
+        let current = CensusKey::engine("runtime-floor", &floor);
         assert_eq!(current.product, PRODUCT_FINGERPRINT);
         assert_eq!(
             (current.lane_version, current.semantics),
@@ -865,7 +865,10 @@ mod tests {
                 metal2vulkan::cache::SEMANTICS_VERSION
             )
         );
-        assert_eq!(current.profile, ("vk12-floor".into(), floor.fingerprint()));
+        assert_eq!(
+            current.profile,
+            ("runtime-floor".into(), floor.fingerprint())
+        );
         let tools: Vec<_> = current
             .tools
             .iter()
@@ -873,7 +876,7 @@ mod tests {
             .collect();
         assert_eq!(tools, CENSUS_TOOLS);
         assert_eq!(
-            engine_fingerprint("vk12-floor", &floor),
+            engine_fingerprint("runtime-floor", &floor),
             current.fingerprint()
         );
     }
@@ -885,8 +888,8 @@ mod tests {
         let (_scratch, index) = index();
         let mut a = new_result("a", Outcome::Translated);
         a.attempt.words = Some(150);
-        write_engine_results(&index, "vk12-floor", "fp1", &[a]).unwrap();
-        let rows = engine_cost_rows(&index, "vk12-floor", "fp1").unwrap();
+        write_engine_results(&index, "runtime-floor", "fp1", &[a]).unwrap();
+        let rows = engine_cost_rows(&index, "runtime-floor", "fp1").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].cost.words, Some(150));
         Connection::open(&index)
@@ -897,6 +900,9 @@ mod tests {
                    status TEXT NOT NULL);",
             )
             .unwrap();
-        assert_eq!(engine_cost_rows(&index, "vk12-floor", "fp1").unwrap(), rows);
+        assert_eq!(
+            engine_cost_rows(&index, "runtime-floor", "fp1").unwrap(),
+            rows
+        );
     }
 }

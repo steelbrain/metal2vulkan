@@ -109,6 +109,40 @@ pub fn profile(stem: &str, policy: DevicePolicy) -> Result<DeviceProfile, String
     Ok(dev.profile().clone())
 }
 
+/// Committed profile `stem` derived under `policy` without `features`. Without a feature the
+/// runtime's floor requires (`runtime-floor` states each), the device is below that floor: a test
+/// of a form only such a device takes builds it so.
+pub fn profile_without(
+    stem: &str,
+    features: &[crate::device::requirements::VkFeature],
+    policy: DevicePolicy,
+) -> Result<DeviceProfile, String> {
+    let mut desc = description(stem)?;
+    for feature in features {
+        desc.features.remove(feature);
+    }
+    let dev = Device::from_queries(desc, policy).map_err(|e| format!("{stem}: {e}"))?;
+    Ok(dev.profile().clone())
+}
+
+/// The name a test's messages give [`device_f`]'s device.
+pub const PROFILE_F: &str = "runtime-floor without bufferDeviceAddress";
+
+/// `runtime-floor` without `bufferDeviceAddress`: a device below the runtime's floor whose buffers
+/// take the floor form (`BufferAccess::Floor`, Profile F), which no committed profile takes. A
+/// test of that form builds it so.
+pub fn description_f() -> Result<DeviceDescription, String> {
+    let mut desc = description("runtime-floor")?;
+    desc.features
+        .remove(&crate::device::requirements::VkFeature::BufferDeviceAddress);
+    Ok(desc)
+}
+
+/// [`description_f`]'s device, derived under `policy`.
+pub fn device_f(policy: DevicePolicy) -> Result<Device, String> {
+    Device::from_queries(description_f()?, policy).map_err(|e| format!("{PROFILE_F}: {e}"))
+}
+
 /// Committed profile `stem` derived under `policy`, with `storage` storage buffers a stage
 /// (`maxPerStageDescriptorStorageBuffers`).
 pub fn profile_with_storage_buffers(
@@ -123,15 +157,15 @@ pub fn profile_with_storage_buffers(
 }
 
 /// The name [`formatless_floor`]'s profile goes by in a test's messages.
-pub const FORMATLESS_FLOOR: &str = "vk12-floor+formatless";
+pub const FORMATLESS_FLOOR: &str = "Profile F+formatless";
 
-/// `vk12-floor` derived under `policy` with the two optional features that let a shader access a
-/// storage image without its format (`shaderStorageImageReadWithoutFormat` and
-/// `shaderStorageImageWriteWithoutFormat`): the floor, which states neither, beside a device that
-/// leaves a storage texture's format to the bound view.
+/// [`description_f`]'s device derived under `policy` with `shaderStorageImageReadWithoutFormat`,
+/// the optional feature that, beside the floor's `shaderStorageImageWriteWithoutFormat`, lets a
+/// shader access a storage image without its format: Profile F beside a device that leaves a
+/// storage texture's format to the bound view.
 pub fn formatless_floor(policy: DevicePolicy) -> Result<DeviceProfile, String> {
     use crate::device::requirements::VkFeature;
-    let mut desc = description("vk12-floor")?;
+    let mut desc = description_f()?;
     desc.features.extend([
         VkFeature::ShaderStorageImageReadWithoutFormat,
         VkFeature::ShaderStorageImageWriteWithoutFormat,

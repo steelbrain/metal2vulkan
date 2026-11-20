@@ -205,10 +205,10 @@ const MAX_WORK_GROWTH: f64 = 2.6;
 #[test]
 fn compile_cost_grows_linearly_with_the_block_count() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/vk12-floor.json");
+        .join("../metal2vulkan-validation/profiles/runtime-floor.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let description = DeviceDescription::from_khronos_json(&text, None).expect("vk12-floor");
-    let device = Device::from_queries(description, DevicePolicy::default()).expect("vk12-floor");
+    let description = DeviceDescription::from_khronos_json(&text, None).expect("runtime-floor");
+    let device = Device::from_queries(description, DevicePolicy::default()).expect("runtime-floor");
     let Some(small) = assemble(&irreducible_chain(SMALL)) else {
         return;
     };

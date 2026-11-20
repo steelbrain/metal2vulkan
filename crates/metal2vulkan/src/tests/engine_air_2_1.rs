@@ -85,13 +85,25 @@ fn every_entry_of_an_air_2_1_module_compiles() {
 
 /// A status-less read whose alpha the function never uses needs no `OutOfBoundsAlpha`
 /// specialization; the same read with the whole texel used needs it. At least one profile must
-/// ask for it, or the pair proves nothing.
+/// ask for it, or the pair proves nothing: the runtime's floor without `robustImageAccess2` (a
+/// device below that floor, whose reads the shader checks) does.
 #[test]
 fn a_status_less_reads_alpha_is_observed_only_where_the_function_uses_it() {
     let Some(bc) = fixture() else { return };
     let fact = RuntimeFact::OutOfBoundsAlpha { slot: RAW };
     let mut asked = 0;
-    for (stem, p) in &committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    let checked = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[crate::device::requirements::VkFeature::RobustImageAccess2],
+        Default::default(),
+    )
+    .expect("profile");
+    profiles.push((
+        "runtime-floor without robustImageAccess2".to_string(),
+        checked,
+    ));
+    for (stem, p) in &profiles {
         for (entry, uses_alpha) in [("a21_blit_fs", false), ("a21_alpha_fs", true)] {
             let (plan, _) =
                 typed_module(&bc, entry, p).unwrap_or_else(|e| panic!("{entry}: {e:?}"));
@@ -107,6 +119,6 @@ fn a_status_less_reads_alpha_is_observed_only_where_the_function_uses_it() {
     }
     assert!(
         asked > 0,
-        "no committed profile checks this read in the shader, so the pair proves nothing"
+        "no profile checks this read in the shader, so the pair proves nothing"
     );
 }

@@ -225,7 +225,7 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
 
 #[test]
 fn a_program_that_does_not_serve_the_worker_is_a_worker_failure() {
-    let device = device("vk12-floor");
+    let device = device("runtime-floor");
     // `true` exits successfully without a result: the result cannot be read.
     match compile_compute(
         &CompileWorker::program("true"),

@@ -25,7 +25,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spv::Op;
 
-const PROFILES: [&str; 4] = ["amd-rdna3-radv", "lavapipe", "vk12-floor", "moltenvk-m3"];
+const PROFILES: [&str; 4] = ["amd-rdna3-radv", "lavapipe", "runtime-floor", "moltenvk-m3"];
 
 /// Two loops over a private `[4 x i32]`, each counted by an `i<bits>` whose increment carries
 /// `flag`: the first stores `3 * i`, the second sums the elements (18).

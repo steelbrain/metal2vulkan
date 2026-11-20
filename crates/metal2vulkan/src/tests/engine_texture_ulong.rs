@@ -120,6 +120,11 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), without(stem, &all)));
     }
+    // A device that holds 64-bit values as two words (below the runtime's floor).
+    out.push((
+        "lavapipe without shaderInt64".into(),
+        without("lavapipe", &[VkFeature::ShaderInt64]),
+    ));
     out
 }
 
@@ -352,13 +357,13 @@ fn ulong_reads_join_the_two_words_and_writes_split_them() {
         }
         ran += 1;
     }
-    // Only `vk12-floor` (six storage images, four allowed; no declared `Rg32ui` and no formatless
-    // access) refuses it.
+    // Only `runtime-floor` (six storage images, four allowed; no declared `Rg32ui` and no
+    // formatless access) refuses it.
     assert!(
         ran > 0 && wide > 0,
         "ran {ran}, wide {wide}, device gaps {gaps:?}"
     );
-    assert!(gaps.iter().all(|g| g == "vk12-floor"), "{gaps:?}");
+    assert!(gaps.iter().all(|g| g == "runtime-floor"), "{gaps:?}");
 }
 
 /// A sample-access `ulong` read is a fetch of the sampled `RG32` view, a read-access one at

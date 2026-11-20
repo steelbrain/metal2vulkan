@@ -21,7 +21,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spv::Op;
 
-const PROFILES: [&str; 4] = ["amd-rdna3-radv", "lavapipe", "vk12-floor", "moltenvk-m3"];
+const PROFILES: [&str; 4] = ["amd-rdna3-radv", "lavapipe", "runtime-floor", "moltenvk-m3"];
 
 /// The kernels: name, and the latch's attachment.
 const KERNELS: [(&str, &str); 6] = [

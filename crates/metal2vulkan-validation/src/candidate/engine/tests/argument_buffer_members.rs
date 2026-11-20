@@ -558,7 +558,7 @@ fn a_pipeline_state_whose_bytes_a_kernel_reads_never_reaches_a_comparison() {
         assert_eq!(&owner[8..], &[3, 0, 0, 0, 4, 0, 0, 0]);
         let library = Library::from_air(&bitcode).unwrap();
         let function = FunctionDescriptor::new(library.function(entry).unwrap());
-        for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+        for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
             let device = device(stem, DevicePolicy::default());
             for addressed in [false, true] {
                 let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();

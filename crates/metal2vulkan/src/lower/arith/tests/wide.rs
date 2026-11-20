@@ -22,9 +22,9 @@ fn floor() -> DeviceProfile {
     committed_profiles()
         .expect("profiles")
         .into_iter()
-        .find(|(n, _)| n == "vk12-floor")
+        .find(|(n, _)| n == "runtime-floor")
         .map(|(_, p)| p)
-        .expect("vk12-floor")
+        .expect("runtime-floor")
 }
 
 /// [`check_accept`] after L3 on `vk12-floor` (unless a form needs 64-bit floats), the module there

@@ -902,7 +902,7 @@ mod tests {
             &bitcode,
             "fcfold",
             &FunctionConstantValues::defaults(),
-            "vk12-floor",
+            "runtime-floor",
         );
         assert_eq!(
             undefined.attempt.outcome,
@@ -917,7 +917,7 @@ mod tests {
         // One required constant: 0 and 1, each also its defined and covering set.
         assert_eq!(row.specializations.len(), 2, "{row:#?}");
         for set in &row.specializations {
-            let result = attempt(&bitcode, "fcfold", &set.values(), "vk12-floor");
+            let result = attempt(&bitcode, "fcfold", &set.values(), "runtime-floor");
             if set.kinds.contains(&SpecKind::One) {
                 assert_eq!(result.attempt.outcome, Outcome::Translated, "{result:?}");
             }
@@ -1050,7 +1050,8 @@ mod tests {
         assert_eq!(result.attempt.outcome, Outcome::Translated, "{result:?}");
     }
 
-    /// A storage texture on a profile without formatless storage access is supplied the widest
+    /// A storage texture on a profile without formatless storage access (`runtime-floor` without
+    /// `shaderStorageImageWriteWithoutFormat`, below the runtime's floor) is supplied the widest
     /// format of its texel class.
     #[test]
     fn a_storage_texture_is_supplied_the_widest_format_of_its_class() {
@@ -1059,12 +1060,24 @@ mod tests {
         else {
             return;
         };
-        let result = attempt(
+        let mut description = crate::engine::load_description("runtime-floor").unwrap();
+        assert!(description
+            .features
+            .remove(&metal2vulkan::device::VkFeature::ShaderStorageImageWriteWithoutFormat));
+        let profile =
+            metal2vulkan::device::Device::from_queries(description, DevicePolicy::default())
+                .unwrap()
+                .profile()
+                .clone();
+        let result = replay_specialized(
             &bitcode,
             "kernel_write_one_dimensional_textures",
             &FunctionConstantValues::defaults(),
-            "roadmap-2022",
-        );
+            &profile,
+            None,
+            None,
+        )
+        .attempt;
         assert!(
             result
                 .supplied

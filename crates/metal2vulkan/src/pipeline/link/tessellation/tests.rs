@@ -175,7 +175,7 @@ fn the_control_push_range_takes_the_first_free_gap() {
         offset,
         size,
     };
-    let p = profile("lunarg-desktop-baseline-2023");
+    let p = profile("runtime-floor");
     let control_offset = |ranges: &[PushConstantRange]| {
         push_offset(ranges, (control::PUSH_BYTES, 4), Feature::Tessellation, &p)
     };
@@ -193,14 +193,14 @@ fn the_control_push_range_takes_the_first_free_gap() {
         control_offset(&[range(0, 48), range(64, 8)]).expect("too small a gap"),
         72
     );
-    // 128 bytes: a vertex window of 64 and a fragment range to 120 leave no 24-byte gap.
-    match control_offset(&[range(0, 64), range(64, 56)]) {
+    // 256 bytes: a vertex window of 64 and a fragment range to 248 leave no 24-byte gap.
+    match control_offset(&[range(0, 64), range(64, 184)]) {
         Err(Error::Unsupported(u)) => assert_eq!(
             u.needs,
             Needs::AnyOf(vec![vec![Capability::Limit {
                 limit: VkLimit::MaxPushConstantsSize,
-                required: 144,
-                available: 128,
+                required: 272,
+                available: 256,
             }]])
         ),
         other => panic!("{other:?}"),

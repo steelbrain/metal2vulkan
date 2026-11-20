@@ -210,7 +210,7 @@ fn without_the_output_the_viewport_goes_through_the_geometry_stage_or_nowhere() 
             "lavapipe",
             &[F::ShaderOutputViewportIndex, F::MultiViewport],
         ),
-        device("vk12-floor", &[]),
+        device("runtime-floor", &[]),
     ] {
         let (outputs, builtins) = vertex_io(&bc, "rt6_select", &dev);
         assert_eq!(outputs, [IoRole::ViewportIndex], "{builtins:?}");
@@ -269,7 +269,7 @@ fn on_the_floor_a_read_is_zero_and_a_selected_slice_needs_either_feature() {
     let Some(amp) = assemble("vertex_amplification.ll") else {
         return;
     };
-    let floor = device("vk12-floor", &[]);
+    let floor = device("runtime-floor", &[]);
     for (entry, zero) in [
         ("amp_fragment_layer", vec![StageBuiltin::Layer]),
         ("amp_fragment", vec![StageBuiltin::ViewportIndex]),

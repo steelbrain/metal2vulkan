@@ -87,13 +87,13 @@ fn without_offset_operand(stem: &str) -> DeviceProfile {
         .clone()
 }
 
-/// The profiles without the `Offset` operand's features: the floor's, and a device's with them
-/// removed.
+/// The profiles without the `Offset` operand's features: the runtime floor's and a device's with
+/// them removed (the floor's below the runtime's floor, which states `shaderImageGatherExtended`).
 fn armed_profiles() -> Vec<(&'static str, DeviceProfile)> {
     vec![
         (
-            "vk12-floor",
-            profile("vk12-floor", DevicePolicy::default()).expect("vk12-floor"),
+            "runtime-floor without the operand's features",
+            without_offset_operand("runtime-floor"),
         ),
         ("amd-780m-radv-m8", without_offset_operand("amd-780m-radv")),
     ]

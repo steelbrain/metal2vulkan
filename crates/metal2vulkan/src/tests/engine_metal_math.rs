@@ -42,7 +42,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::ir::StorageClass;
 
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"];
+const PROFILES: [&str; 2] = ["moltenvk-m3", "runtime-floor"];
 
 /// `GLSL.std.450` instruction numbers.
 const FSIGN: u32 = 6;

@@ -1,10 +1,11 @@
 //! Profile F end to end.
 //!
 //! Profile F (`BufferAccess::Floor`: no `bufferDeviceAddress` or no `shaderInt64`) reaches every
-//! buffer through a descriptor. Over every public fixture on every committed Profile F device
-//! (`vk12-floor` and `roadmap-2022`, which has device addresses but no 64-bit integers), and on
-//! `vk12-floor` with the formatless storage-image features (`vk12-floor+formatless`), every
-//! compiled function:
+//! buffer through a descriptor. No committed profile is Profile F: the runtime's floor requires
+//! device addresses and 64-bit integers. Over every public fixture on the devices below that floor
+//! this file builds (`runtime-floor` without `bufferDeviceAddress`, and without `shaderInt64`, which
+//! keeps device addresses), and on the first with the formatless storage-image reads
+//! (`Profile F+formatless`), every compiled function:
 //!
 //! - reaches every buffer slot through a descriptor view, never by device address;
 //! - reads no root table and no execution status by address, and needs no pointer translation;
@@ -12,14 +13,12 @@
 //!   plan-time check (the binder's `DescriptorRangeExceeded`), never a device-address variant;
 //! - requires neither `bufferDeviceAddress` nor `PhysicalStorageBufferAddresses`.
 //!
-//! `vk12-floor` is Vulkan 1.2 core: no product path needs an optional feature. Registers hold
-//! narrow integers in `u32`s and every memory leaf is word-composed, so the floor needs neither
-//! `shaderInt16` nor 8- or 16-bit storage. Its inventory equals the formatless floor's except where
-//! a storage texture needs its format as a lowering input, or where a storage heap class, refused on
-//! both, names the formatless access among the features `vk12-floor` lacks, or where a slot's
-//! format is the module's own extended format (a `ulong` texture's `RG32Uint`), which the
-//! formatless floor declares formatless and `vk12-floor` refuses. An integer imageblock slice takes
-//! its texel class from the slot's format on both.
+//! The device without device addresses has the inventory of the formatless one except where a
+//! storage texture needs its format as a lowering input, or where a storage heap class, refused on
+//! both, names the formatless access among the features it lacks, or where a slot's format is the
+//! module's own extended format (a `ulong` texture's `RG32Uint`), which the formatless device
+//! declares formatless and the other refuses. An integer imageblock slice takes its texel class
+//! from the slot's format on both.
 //!
 //! The per-construct refusals (a dynamic-root dereference, the per-stage descriptor limit, a
 //! `BufferRangeLimit` variant) are asserted on the Profile F devices in
@@ -44,20 +43,31 @@ use crate::pipeline::interface::{BufferForm, SlotInterface};
 use crate::pipeline::sym::PushField;
 use crate::pipeline::testing::{
     compile, engine_dir, fixtures_dir, formatless_floor, link_and_validate, llvm_assemble,
-    metal_assemble, meter, profile, AssembleError, FORMATLESS_FLOOR,
+    metal_assemble, meter, AssembleError, FORMATLESS_FLOOR, PROFILE_F,
 };
 
-/// The committed Profile F devices this file checks.
-const PROFILE_F: [&str; 2] = ["vk12-floor", "roadmap-2022"];
+/// The Profile F device with device addresses: `runtime-floor` without `shaderInt64`.
+const NO_INT64: &str = "runtime-floor without shaderInt64";
 
-/// The formatless floor, then each of [`PROFILE_F`].
+/// [`NO_INT64`]'s description.
+fn no_int64() -> DeviceDescription {
+    let mut desc = crate::pipeline::testing::description("runtime-floor").expect("profile");
+    desc.features.remove(&VkFeature::ShaderInt64);
+    desc
+}
+
+/// The formatless floor, then the Profile F devices this file checks: `runtime-floor` without
+/// device addresses, and [`NO_INT64`].
 fn profile_f() -> Vec<(&'static str, DeviceProfile)> {
-    let formatless = formatless_floor(DevicePolicy::default()).expect("profile");
-    let mut out = vec![(FORMATLESS_FLOOR, formatless)];
-    out.extend(PROFILE_F.iter().map(|stem| {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
-        (*stem, p)
-    }));
+    let policy = DevicePolicy::default;
+    let formatless = formatless_floor(policy()).expect("profile");
+    let no_addresses = crate::pipeline::testing::device_f(policy()).expect("profile");
+    let no_int64 = Device::from_queries(no_int64(), policy()).expect("profile");
+    let out = vec![
+        (FORMATLESS_FLOOR, formatless),
+        (PROFILE_F, no_addresses.profile().clone()),
+        (NO_INT64, no_int64.profile().clone()),
+    ];
     for (stem, p) in &out {
         assert_eq!(p.fields().buffer_access, BufferAccess::Floor, "{stem}");
     }
@@ -217,10 +227,10 @@ fn refused_for_a_fixed_extended_format(
 }
 
 /// Every public fixture compiled for a Profile F device uses the static-root descriptor machinery
-/// only and passes L3; and `vk12-floor` refuses exactly what the formatless floor accepts only
-/// through its formatless storage-image bits, or refuses as the formatless floor does naming those
-/// bits too, or refuses a module-fixed extended format that the formatless floor declares
-/// formatless.
+/// only and passes L3; and the device without device addresses refuses exactly what the formatless
+/// floor accepts only through its formatless storage-image bits, or refuses as the formatless
+/// floor does naming those bits too, or refuses a module-fixed extended format that the formatless
+/// floor declares formatless.
 #[test]
 fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
     let profiles = profile_f();
@@ -257,7 +267,7 @@ fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
                 {
                     assert!(
                         formatless == "ok" && floor.starts_with("NeedsInput{StorageTextureFormat"),
-                        "{name} {entry}: {FORMATLESS_FLOOR} {formatless}, vk12-floor {floor}"
+                        "{name} {entry}: {FORMATLESS_FLOOR} {formatless}, {PROFILE_F} {floor}"
                     );
                     format_needed += 1;
                 }
@@ -265,7 +275,7 @@ fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
         }
     }
     eprintln!(
-        "{compiled} Profile F functions compiled; {format_needed} need a format on vk12-floor"
+        "{compiled} Profile F functions compiled; {format_needed} need a format on {PROFILE_F}"
     );
     assert!(compiled > 0, "no fixture compiled");
 }
@@ -319,12 +329,9 @@ fn kernel(name: &str, n: u32, body: &str) -> String {
     )
 }
 
-/// `roadmap-2022` with at most `storage` storage buffers per stage.
-fn roadmap_with(storage: u32) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/roadmap-2022.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+/// [`NO_INT64`] with at most `storage` storage buffers per stage.
+fn no_int64_with(storage: u32) -> DeviceProfile {
+    let mut desc = no_int64();
     desc.limits.max_per_stage_descriptor_storage_buffers = storage;
     Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
@@ -332,7 +339,7 @@ fn roadmap_with(storage: u32) -> DeviceProfile {
         .clone()
 }
 
-/// `roadmap-2022` has `bufferDeviceAddress` but no `shaderInt64`, so it is Profile F: a function
+/// [`NO_INT64`] has `bufferDeviceAddress` but no `shaderInt64`, so it is Profile F: a function
 /// over more storage buffers than the stage allows is refused naming the limit (it never falls back
 /// to device addresses), and a loaded-pointer dereference is refused naming only `shaderInt64`, the
 /// one Profile A requirement the device lacks.
@@ -345,7 +352,7 @@ fn a_profile_f_device_with_device_addresses_still_uses_descriptors_only() {
     let Some(bc) = assemble_text(name, &kernel(name, 3, &body)) else {
         return;
     };
-    let p = roadmap_with(2);
+    let p = no_int64_with(2);
     assert!(p.fields().buffer_access == BufferAccess::Floor);
     match compile(&bc, name, &p) {
         Err(Error::Unsupported(u)) => {
@@ -361,15 +368,18 @@ fn a_profile_f_device_with_device_addresses_still_uses_descriptors_only() {
         }
         other => panic!("expected a descriptor-count refusal, got {other:?}"),
     }
-    let a = compile(&bc, name, &roadmap_with(3)).unwrap_or_else(|e| panic!("{e}"));
-    check_descriptor_only(&a, &roadmap_with(3), name);
+    let a = compile(&bc, name, &no_int64_with(3)).unwrap_or_else(|e| panic!("{e}"));
+    check_descriptor_only(&a, &no_int64_with(3), name);
 
     let name = "chase";
     let body = "  %q = load ptr addrspace(1), ptr addrspace(1) %0, align 8\n  store i32 7, ptr addrspace(1) %q, align 4\n";
     let Some(bc) = assemble_text(name, &kernel(name, 1, body)) else {
         return;
     };
-    let p = profile("roadmap-2022", DevicePolicy::default()).expect("profile");
+    let p = Device::from_queries(no_int64(), DevicePolicy::default())
+        .expect("profile")
+        .profile()
+        .clone();
     match compile(&bc, name, &p) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);

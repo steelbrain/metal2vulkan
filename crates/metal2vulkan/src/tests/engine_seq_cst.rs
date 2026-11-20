@@ -13,7 +13,7 @@ use crate::device::profile::BufferAccess;
 use crate::error::{Error, Feature};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::testing::{
-    compile, link_and_validate, status_reach, status_reach_on, StatusReach,
+    compile, device_f, link_and_validate, status_reach, status_reach_on, StatusReach, PROFILE_F,
 };
 use crate::spirv::testing::committed_profiles;
 use metal2vulkan_devtools::litmus::store_buffering;
@@ -66,7 +66,7 @@ fn increments_and_fences(words: &[u32]) -> (Vec<u32>, usize) {
     (scopes, fences)
 }
 
-/// On every committed profile, each `seq_cst` fence of the store-buffering kernel
+/// On every committed profile and on [`PROFILE_F`] (below the runtime's floor), each `seq_cst` fence of the store-buffering kernel
 /// (`air.atomic.fence` at device and at threadgroup scope, and an LLVM `fence seq_cst`) is an
 /// `OpMemoryBarrier` and an increment of the status word at the fence's scope, the module reaching
 /// the `ExecutionStatus` buffer by address where the profile addresses buffers and through the
@@ -90,7 +90,10 @@ fn a_seq_cst_fence_is_ordered_with_the_command_buffers_others() {
         kernels.push((fence, scope, bc));
     }
     let (mut addressed, mut floor) = (0, 0);
-    for (stem, p) in committed_profiles().expect("committed profiles") {
+    let mut profiles = committed_profiles().expect("committed profiles");
+    let f = device_f(crate::device::DevicePolicy::default()).expect(PROFILE_F);
+    profiles.push((PROFILE_F.into(), f.profile().clone()));
+    for (stem, p) in profiles {
         for (fence, scope, bc) in &kernels {
             let what = format!("{stem}, {}", fence.trim());
             let a = match compile(bc, "sb", &p) {

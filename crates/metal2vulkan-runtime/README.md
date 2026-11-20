@@ -3501,6 +3501,8 @@ integer texture). Vulkan requires at least 500,000 of each texture limit and of 
 totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
 Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. `maxColorAttachments` holds
 Metal's eight color attachments on every device; Vulkan 1.3 requires 4 of it, and Vulkan 1.4 8.
+`maxFragmentOutputAttachments` holds a fragment function's output to each of them; Vulkan 1.3 and
+1.4 require 4 of it, and Roadmap 2026 8.
 A Boolean limit's minimum is 1,
 `VK_TRUE`; `timestampValidBits` is the queue family's.
 
@@ -3524,6 +3526,7 @@ A Boolean limit's minimum is 1,
 | `standardSampleLocations` | `1` | Metal's sample positions: those of 1, 2 and 4 samples are Vulkan's standard locations |
 | `timestampValidBits` | `36` | GPU times of command buffers |
 | `maxColorAttachments` | `8` | every color attachment of a render pass descriptor |
+| `maxFragmentOutputAttachments` | `8` | a fragment function's output to every color attachment |
 
 ### Queue family and memory types
 

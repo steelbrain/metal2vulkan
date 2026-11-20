@@ -36,6 +36,16 @@ pub(super) fn committed_profiles() -> Vec<(String, String)> {
     out
 }
 
+/// `runtime-floor` without `features`. Without a feature the runtime's floor requires, the
+/// description is below that floor: a test of a form only such a device takes builds it so.
+pub(super) fn floor_without(features: &[VkFeature]) -> DeviceDescription {
+    let mut d = profile("runtime-floor");
+    for f in features {
+        d.features.remove(f);
+    }
+    d
+}
+
 /// The description of one committed profile.
 pub(super) fn profile(stem: &str) -> DeviceDescription {
     let (_, text) = committed_profiles()

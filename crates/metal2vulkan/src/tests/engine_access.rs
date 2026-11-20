@@ -59,12 +59,7 @@ use crate::spirv::ir::{
 use crate::spirv::verify::verify;
 
 /// Profiles with and without 64-bit integers and 8/16-bit storage.
-const PROFILES: [&str; 4] = [
-    "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "lavapipe",
-];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "lavapipe"];
 
 fn policy() -> DevicePolicy {
     DevicePolicy::default()
@@ -975,7 +970,7 @@ fn offsets(size: u64) -> Vec<u64> {
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = profile_with(stem, false, true);
         for k in leaf_kernels() {
             let what = format!("{stem} {}", k.name);
@@ -1998,7 +1993,7 @@ fn narrow_units_are_exact_at_every_bind_residual() {
     let profiles: [(&str, &[VkFeature]); 3] = [
         ("moltenvk-m3", &[]),
         ("moltenvk-m3", NO8),
-        ("lunarg-desktop-baseline-2023", &[]),
+        ("runtime-floor", &[]),
     ];
     for (stem, removed) in profiles {
         let p = profile_without(stem, removed);
@@ -2126,6 +2121,10 @@ fn narrow_views_are_declared_where_the_profile_accesses_the_unit() {
     const ATOMIC_OR: u16 = 241;
     const NO16: &[VkFeature] = &[VkFeature::StorageBuffer16BitAccess];
     const NO8: &[VkFeature] = &[VkFeature::StorageBuffer8BitAccess];
+    const NO_NARROW: &[VkFeature] = &[
+        VkFeature::StorageBuffer16BitAccess,
+        VkFeature::StorageBuffer8BitAccess,
+    ];
     let cases: [NarrowCase; 14] = [
         ("moltenvk-m3", &[], "store_half", 2, 0, false),
         ("moltenvk-m3", &[], "store_i8", 2, 0, false),
@@ -2139,18 +2138,12 @@ fn narrow_views_are_declared_where_the_profile_accesses_the_unit() {
         ("moltenvk-m3", NO16, "store_half", 1, 0, true),
         ("moltenvk-m3", NO8, "store_half", 2, 0, false),
         ("moltenvk-m3", NO8, "store_i8", 1, 0, true),
-        // The floor has no narrow storage access: every sub-word store joins its word.
-        ("vk12-floor", &[], "store_half", 1, 0, true),
-        ("vk12-floor", &[], "store_i8", 1, 0, true),
-        (
-            "lunarg-desktop-baseline-2023",
-            &[],
-            "store_half",
-            1,
-            0,
-            true,
-        ),
-        ("lunarg-desktop-baseline-2023", &[], "store_i8", 2, 0, false),
+        // Without narrow storage access (below the runtime's floor, which requires both widths)
+        // every sub-word store joins its word; with 8-bit access alone a byte store does not.
+        ("runtime-floor", NO_NARROW, "store_half", 1, 0, true),
+        ("runtime-floor", NO_NARROW, "store_i8", 1, 0, true),
+        ("runtime-floor", NO16, "store_half", 1, 0, true),
+        ("runtime-floor", NO16, "store_i8", 2, 0, false),
     ];
     let kernels = leaf_kernels();
     for (stem, removed, name, data_views, out_views, atomics) in cases {

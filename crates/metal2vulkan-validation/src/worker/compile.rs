@@ -776,7 +776,7 @@ mod tests {
             return;
         };
         // SwiftShader reads storage images only with a format, so the texture needs its input.
-        let device = worker_device("swiftshader");
+        let device = worker_device("runtime-floor");
         let case = ComputeCase {
             out_of_bounds: Vec::new(),
             creation_bound: crate::budgets::PIPELINE_CREATION_CEILING,
@@ -1055,7 +1055,7 @@ mod tests {
         let Some(bitcode) = fixture("store_const.ll") else {
             return;
         };
-        let device = worker_device("vk12-floor");
+        let device = worker_device("runtime-floor");
         for (source, entry, label) in [
             (bitcode.as_slice(), "no_such_entry", "invalid_descriptor"),
             (b"not bitcode".as_slice(), "main", "invalid_input"),
@@ -1393,7 +1393,7 @@ mod tests {
         };
         compile(
             &CompileWorker::lib_tests_as(&probe.name()).unwrap(),
-            &worker_device("vk12-floor"),
+            &worker_device("runtime-floor"),
             &[crate::acceptance::retained(b"bitcode")],
             &request,
         )

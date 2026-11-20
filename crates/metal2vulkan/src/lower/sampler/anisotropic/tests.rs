@@ -886,7 +886,7 @@ fn anisotropic_samples_at_every_offset_call_one_routine() {
         ("lavapipe", true),
         ("intel-irisxe-anv", true),
         ("nvidia-rtx5080-laptop", true),
-        ("vk12-floor", false),
+        ("runtime-floor", false),
     ] {
         let p = p(stem);
         let images = &p.fields().images;

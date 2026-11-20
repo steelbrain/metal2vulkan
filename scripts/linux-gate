@@ -3,7 +3,7 @@
 # default the Linux job of .github/workflows/ci.yml (scripts/linux-gate-ci).
 #
 #   scripts/linux-gate --cpus N [--slot NAME] [--platform amd64|arm64]
-#                      [--icd lavapipe|swiftshader] [--profile P]
+#                      [--icd lavapipe] [--profile P]
 #                      [--recipe gate | --recipe drm-shim --driver radv|anv|nvk --chip ID]
 #                      [--private-corpus DIR] [--scratch DIR]
 #                      [-- <command> [args...]]
@@ -53,16 +53,15 @@
 #   contain, or lie inside the checkout, the main checkout (a linked worktree's), or the private
 #   corpus, compared by file identity (device and inode), so a symlink, a case variant, or a
 #   firmlink spelling of a protected path is refused too (exit 64).
-# - No GPU passthrough. The command's loader sees exactly one Vulkan ICD (VK_DRIVER_FILES), a CPU
-#   ICD chosen by --icd: `lavapipe` (default; Mesa's llvmpipe, with LP_NUM_THREADS=1) or
-#   `swiftshader` (built into the gate image at /opt/swiftshader). The default command is ci.yml's
-#   Linux job, which records engine `ci-lavapipe` rows, so it runs on lavapipe only: --icd
-#   swiftshader and --profile need an explicit command.
+# - No GPU passthrough. The command's loader sees exactly one Vulkan ICD (VK_DRIVER_FILES), the
+#   CPU ICD --icd names: `lavapipe` (the default and only one; Mesa's llvmpipe, with
+#   LP_NUM_THREADS=1). The default command is ci.yml's Linux job,
+#   which records engine `ci-lavapipe` rows with no profile: --profile needs an explicit command.
 # - --profile P stacks VK_LAYER_KHRONOS_profiles, configured with the committed
 #   crates/metal2vulkan-validation/profiles/P.json, between VK_LAYER_KHRONOS_validation and the ICD (validation spec
 #   §4.1.2), so the device reports P and the validation layer checks against it. It refuses P
 #   when P states anything the device lacks, and it enables the validation layer for every Vulkan
-#   instance of the command. scripts/linux-gate-vulkan, which applies --icd and --profile inside
+#   instance of the command. scripts/linux-gate-vulkan, which applies the ICD and --profile inside
 #   the container, has the details. The gate recipe only. The validation crate's store refuses the
 #   rows of an executor the layer restricts without its request: to record rows
 #   under P, pass `--profiles-layer P` to corpus-vulkan or corpus-pipeline instead.
@@ -77,8 +76,8 @@
 #     nvk   NOUVEAU_CHIPSET, a hexadecimal chipset id (1b3 for GB203, 136 for GP106).
 #   This script checks the spelling's form; a name the shim does not know fails when the driver
 #   opens the device (the amdgpu shim aborts, the Intel shim leaves the device uninitialized).
-#   The chip each committed profile maps to is in docs/VALIDATION.md. That image has neither
-#   SwiftShader nor the profiles layer, so the command sees lavapipe; only a process started
+#   The chip each committed profile maps to is in docs/VALIDATION.md. That image has no profiles
+#   layer, and the command sees lavapipe; only a process started
 #   through scripts/drm-shim-exec sees the shimmed driver, so cargo and rustc never load the
 #   shim. Example:
 #     scripts/linux-gate --cpus 2 --recipe drm-shim --driver radv --chip navi31 -- bash -c \
@@ -99,7 +98,7 @@ set -euo pipefail
 
 usage() {
     echo "usage: scripts/linux-gate --cpus N [--slot NAME] [--platform amd64|arm64]" \
-        "[--icd lavapipe|swiftshader] [--profile P]" \
+        "[--icd lavapipe] [--profile P]" \
         "[--recipe gate | --recipe drm-shim --driver radv|anv|nvk --chip ID]" \
         "[--private-corpus DIR] [--scratch DIR] [-- <command> [args...]]" >&2
     exit 64
@@ -146,16 +145,13 @@ case "$cpus" in
     ''|*[!0-9]*|0) echo "linux-gate: pass --cpus N (the assigned share)" >&2; usage ;;
 esac
 slot=${slot:-default}
-case "$icd" in
-    lavapipe|swiftshader) ;;
-    *) echo "linux-gate: --icd must be lavapipe or swiftshader" >&2; exit 64 ;;
-esac
+[ "$icd" = lavapipe ] || { echo "linux-gate: --icd must be lavapipe" >&2; exit 64; }
 case "$profile" in
     *[!A-Za-z0-9_.-]*|.*) echo "linux-gate: --profile must name a crates/metal2vulkan-validation/profiles/*.json stem" >&2; exit 64 ;;
 esac
-if [ "$#" -eq 0 ] && [ "$icd$profile" != lavapipe ]; then
-    echo "linux-gate: the default command (ci.yml's Linux job) runs on lavapipe with no profile;" \
-        "pass a command after -- to use --icd swiftshader or --profile" >&2
+if [ "$#" -eq 0 ] && [ -n "$profile" ]; then
+    echo "linux-gate: the default command (ci.yml's Linux job) runs with no profile;" \
+        "pass a command after -- to use --profile" >&2
     exit 64
 fi
 if [ -n "$private" ]; then
@@ -261,8 +257,8 @@ run_id="m2v-linux-gate-$slot-$$"
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     echo "linux-gate: building $image" >&2
-    # BuildKit takes no per-build --cpus/--memory. Both images compile (cargo-nextest,
-    # SwiftShader, and the profiles layer; the drm-shim image also bindgen and Mesa), so their
+    # BuildKit takes no per-build --cpus/--memory. Both images compile (cargo-nextest and the
+    # profiles layer; the drm-shim image also bindgen and Mesa), so their
     # compile steps take the share as JOBS (cargo -j, ninja -j), which also bounds their memory.
     docker build --platform "linux/$platform" --build-arg "JOBS=$cpus" -t "$image" \
         -f "$dockerfile" "$root/scripts" >&2

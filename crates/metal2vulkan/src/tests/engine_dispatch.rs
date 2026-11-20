@@ -23,14 +23,14 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, profile, status_reach, status_reach_on,
-    typed_module, AssembleError, Scratch, StatusReach,
+    compile, device_f, engine_dir, link_and_validate, llvm_assemble, profile, status_reach,
+    status_reach_on, typed_module, AssembleError, Scratch, StatusReach, PROFILE_F,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize, TrapKind};
 use crate::spirv::ir::{Inst, StorageClass, Type, TypedModule};
 use crate::spirv::testing::{committed_profiles, spirv_dis};
 
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"];
+const PROFILES: [&str; 2] = ["moltenvk-m3", "runtime-floor"];
 
 const MARKERS: [&str; 6] = [
     "thread_index_marker",
@@ -357,9 +357,10 @@ fn barrier_kernels_run_on_the_interpreter() {
         );
     }
     // The `seq_cst` fence orders through the kernel's binding of the status word where the device
-    // does not address buffers.
-    let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
-    let (plan, m) = typed_module(&bc, "device_fence_store", &floor).expect("device_fence_store");
+    // does not address buffers (below the runtime's floor).
+    let floor = device_f(DevicePolicy::default()).expect(PROFILE_F);
+    let (plan, m) =
+        typed_module(&bc, "device_fence_store", floor.profile()).expect("device_fence_store");
     assert_eq!(
         plan.families.access.status_binding,
         Some(crate::lower::access::absent::StatusBinding::Required)

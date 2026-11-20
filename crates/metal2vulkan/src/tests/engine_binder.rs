@@ -103,6 +103,12 @@ pub(super) fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> 
     Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
+/// Profile F: `runtime-floor` without device addresses, below the runtime's floor, whose buffers
+/// are descriptors at its four storage buffers a stage.
+fn no_addresses(desc: &mut DeviceDescription) {
+    desc.features.remove(&VkFeature::BufferDeviceAddress);
+}
+
 fn no_robustness(desc: &mut DeviceDescription) {
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -466,7 +472,7 @@ entry:\n\
 }
 
 /// Every profile with a compute-capable Vulkan 1.2 floor the M1 milestone names.
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "vk12-floor"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "runtime-floor"];
 
 #[test]
 fn plans_are_total_on_every_committed_profile() {
@@ -594,9 +600,9 @@ fn dispatch_threads_edges_and_group_splits_compute_metal_grid_builtins() {
 }
 
 /// A kernel's `seq_cst` fence orders through the command buffer's status: on a device that does
-/// not address buffers (`vk12-floor`, `lunarg-desktop-baseline-2023`) the plan binds it
+/// not address buffers (Profile F, [`no_addresses`]) the plan binds it
 /// (`WriteSource::ExecutionStatus`) and pushes no status address, and where the device addresses
-/// buffers (`moltenvk-m3`) it pushes the address and binds nothing. Either way each of the
+/// buffers (`runtime-floor`, `moltenvk-m3`) it pushes the address and binds nothing. Either way each of the
 /// dispatch's threads increments `StatusWord::SeqCstFences` of the one status the command buffer
 /// keeps, and the store after the fence lands.
 #[test]
@@ -604,12 +610,18 @@ fn a_seq_cst_fence_reaches_the_status_by_binding_or_address_as_the_device_allows
     let Some(bc) = fixture("dispatch_builtins") else {
         return;
     };
-    for (stem, bound) in [
-        ("vk12-floor", true),
-        ("lunarg-desktop-baseline-2023", true),
-        ("moltenvk-m3", false),
+    let same = |_: &mut DeviceDescription| {};
+    for (stem, tweak, bound) in [
+        (
+            "runtime-floor",
+            no_addresses as fn(&mut DeviceDescription),
+            true,
+        ),
+        ("runtime-floor", same, false),
+        ("moltenvk-m3", same, false),
     ] {
-        let dev = device(stem, |_| {});
+        let dev = device(stem, tweak);
+        let stem = &format!("{stem}{}", if bound { " without addresses" } else { "" });
         let pipe = pipeline(&dev, &bc, "device_fence_store").expect(stem);
         let (_, m) = typed_module(&bc, "device_fence_store", dev.profile()).expect("module");
         let mut w = World::new([(0, Alloc::new(16, 0))]);
@@ -658,7 +670,7 @@ fn bind_offsets_reach_metal_bytes_through_range_and_residual() {
         groups: [1, 1, 1],
         threads_per_group: [1, 1, 1],
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         for robust in [true, false] {
             let dev = if robust {
                 device(stem, |_| {})
@@ -750,7 +762,7 @@ fn threadgroup_lengths_specialize_the_arena_and_are_checked() {
     let Some(bc) = assemble_text("tg_region", &tg_region()) else {
         return;
     };
-    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let dev = device(stem, |_| {});
         let pipe = pipeline(&dev, &bc, "tg_region").expect(stem);
         assert_eq!(
@@ -1073,8 +1085,8 @@ fn descriptor_only_kernels_need_no_root_table_or_addresses() {
     let Some(bc) = assemble_text("grid_ids", &grid_ids()) else {
         return;
     };
-    let dev = device("vk12-floor", |_| {});
-    let pipe = pipeline(&dev, &bc, "grid_ids").expect("vk12-floor");
+    let dev = device("runtime-floor", |_| {});
+    let pipe = pipeline(&dev, &bc, "grid_ids").expect("runtime-floor");
     assert!(!pipe.interface.needs_pointer_translation);
     let w = World::new([(0, Alloc::new(64, 0))]);
     let state = w.state();
@@ -1125,7 +1137,7 @@ fn compared_slots_get_their_guest_bases_and_inline_bytes_are_refused() {
         groups: [1, 1, 1],
         threads_per_group: [1, 1, 1],
     };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let dev = device(stem, |_| {});
         let pipe = pipeline(&dev, &bc, "guest_bases").expect(stem);
         let (_, m) = typed_module(&bc, "guest_bases", dev.profile()).expect("module");
@@ -1246,7 +1258,7 @@ fn limit_pipeline(
     )
 }
 
-/// On Profile F (`vk12-floor`: four storage buffers per stage) the fixture's six
+/// On Profile F ([`no_addresses`]: four storage buffers per stage) the fixture's six
 /// buffer slots fit because the per-stage fallback views two read-only slots as uniform buffers:
 /// the `device` struct first (its window bounds its range), then the `constant` array (its `Whole`
 /// window leaves the range to the binder). The `device` view depends on the alias check, the
@@ -1261,8 +1273,10 @@ fn profile_f_views_read_only_slots_as_uniform_buffers_over_the_storage_limit() {
     let n = 64;
     let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
     let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    for stem in ["vk12-floor", "lunarg-desktop-baseline-2023", "moltenvk-m3"] {
-        let dev = device(stem, |_| {});
+    for (stem, dev) in [
+        ("Profile F", device("runtime-floor", no_addresses)),
+        ("moltenvk-m3", device("moltenvk-m3", |_| {})),
+    ] {
         let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let small = dev
             .profile()
@@ -1332,7 +1346,7 @@ fn profile_f_views_read_only_slots_as_uniform_buffers_over_the_storage_limit() {
     }
 }
 
-/// A shape that binds a buffer larger than `maxUniformBufferRange` (16 KiB on `vk12-floor`) at the
+/// A shape that binds a buffer larger than `maxUniformBufferRange` (16 KiB on Profile F) at the
 /// `constant` array, which the base pipeline views as a uniform buffer, asks for the variant that
 /// keeps it a storage view (`VariantKey::storage_view_slots`, from the length class); instantiating
 /// the base pipeline anyway is `DescriptorRangeExceeded`. The variant views the highest-index
@@ -1345,7 +1359,7 @@ fn a_large_buffer_at_a_uniform_view_asks_for_the_variant_that_keeps_it_storage()
         return;
     };
     let n = 64;
-    let dev = device("vk12-floor", |_| {});
+    let dev = device("runtime-floor", no_addresses);
     let base = limit_pipeline(&dev, &bc, &LoweringInputs::new()).expect("base");
     // `c` holds 8192 words (32 KiB): its length class cannot prove a uniform range.
     let (mut w, want) = limit_world(n, [n, n, 8192, n]);
@@ -1417,8 +1431,8 @@ fn a_device_uniform_view_bound_where_the_pipeline_writes_is_refused() {
         return;
     };
     let n = 64;
-    let dev = device("vk12-floor", |_| {});
-    let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).expect("vk12-floor");
+    let dev = device("runtime-floor", no_addresses);
+    let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).expect("Profile F");
     let one = limit_dispatch(n);
     // The world with `out` bound at bind offset `offset` of a 1 KiB allocation at Metal address
     // `guest`: its `Whole` window reaches from the offset to the allocation's end.
@@ -1470,8 +1484,8 @@ fn an_atomically_loaded_slot_stays_a_storage_view_under_the_fallback() {
     let limit = 40u32;
     let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
     let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    for stem in ["vk12-floor", "lunarg-desktop-baseline-2023"] {
-        let dev = device(stem, |_| {});
+    for stem in ["Profile F"] {
+        let dev = device("runtime-floor", no_addresses);
         let pipe = pipeline(&dev, &bc, ENTRY).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let small = dev
             .profile()

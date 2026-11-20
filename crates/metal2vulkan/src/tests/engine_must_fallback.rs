@@ -204,7 +204,7 @@ fn resources(plan: &Plan, bytes: Vec<u8>) -> Resources {
 /// Profiles that bind buffers, without 8- and 16-bit storage and with them. On each, the aligned
 /// store is three plain word stores, and the unaligned one writes its partial first and last words
 /// with the two atomics each.
-const PROFILES: [&str; 3] = ["vk12-floor", "lunarg-desktop-baseline-2023", "moltenvk-m3"];
+const PROFILES: [&str; 2] = ["runtime-floor", "moltenvk-m3"];
 
 /// The old engine refused this rather than write it wrongly; the engine lowers it, and every
 /// thread's twelve bytes land exactly while every byte around them keeps its value.

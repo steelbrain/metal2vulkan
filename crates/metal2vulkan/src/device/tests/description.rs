@@ -14,14 +14,11 @@ const COMMITTED: &[&str] = &[
     "intel-irisxe-rplp-anv",
     "intel-uhd770-rpls-anv",
     "lavapipe",
-    "lunarg-desktop-baseline-2023",
     "moltenvk-m3",
     "nvidia-pascal-linux",
     "nvidia-rtx50-linux",
     "nvidia-rtx5080-laptop",
-    "roadmap-2022",
-    "swiftshader",
-    "vk12-floor",
+    "runtime-floor",
 ];
 
 #[test]
@@ -101,17 +98,17 @@ fn device_reports_carry_identity_and_formats() {
     assert!(nv.has(VkFeature::ShaderInt64));
 }
 
-/// The floor is Vulkan 1.2 core: no optional feature, not even one the product uses where present
-/// (narrow integers and storage access, formatless storage images), since no product path needs
-/// one.
+/// `runtime-floor` is Vulkan 1.3 core and what the runtime requires of every device: the floor's
+/// features (64-bit and narrow integers, narrow storage access, device addresses, writes without a
+/// format) and none it leaves optional (reads without a format, 64-bit floats), and the Vulkan 1.2
+/// Required Format Support tables' entries for the features it requires.
 #[test]
-fn vk12_floor_is_vulkan_1_2_core() {
-    let d = profile("vk12-floor");
-    assert_eq!(d.api_version, ApiVersion::V1_2);
-    // Vulkan 1.2 requires uniformBufferStandardLayout.
-    assert!(d.has(VkFeature::UniformBufferStandardLayout));
-    assert!(d.has(VkFeature::RobustBufferAccess));
+fn runtime_floor_is_vulkan_1_3_core_and_the_runtime_s_floor() {
+    let d = profile("runtime-floor");
+    assert_eq!(d.api_version, ApiVersion::V1_3);
     for f in [
+        VkFeature::UniformBufferStandardLayout,
+        VkFeature::RobustBufferAccess,
         VkFeature::ShaderInt16,
         VkFeature::ShaderInt64,
         VkFeature::BufferDeviceAddress,
@@ -120,15 +117,16 @@ fn vk12_floor_is_vulkan_1_2_core() {
         VkFeature::SubgroupSizeControl,
         VkFeature::StorageBuffer8BitAccess,
         VkFeature::StorageBuffer16BitAccess,
-        VkFeature::ShaderStorageImageReadWithoutFormat,
         VkFeature::ShaderStorageImageWriteWithoutFormat,
+    ] {
+        assert!(d.has(f), "{f:?}");
+    }
+    for f in [
+        VkFeature::ShaderStorageImageReadWithoutFormat,
+        VkFeature::ShaderFloat64,
     ] {
         assert!(!d.has(f), "{f:?}");
     }
-    // The formats are the Vulkan 1.2 Required Format Support tables' unconditional entries: a
-    // storage view of a 8-bit format needs shaderStorageImageExtendedFormats, and depth attachments
-    // other than D16 and the compressed families are choices.
-    assert_eq!(d.formats.formats.len(), 56);
     for usage in [
         FormatUsage::SampledImage,
         FormatUsage::SampledImageFilterLinear,
@@ -145,8 +143,12 @@ fn vk12_floor_is_vulkan_1_2_core() {
     assert!(d
         .formats
         .supports(vk::Format::D16_UNORM, FormatUsage::DepthStencilAttachment));
+    // A storage view of an 8-bit format: `shaderStorageImageExtendedFormats`, which the floor
+    // requires.
+    assert!(d
+        .formats
+        .supports(vk::Format::R8_UNORM, FormatUsage::StorageImage));
     for (format, usage) in [
-        (vk::Format::R8_UNORM, FormatUsage::StorageImage),
         (vk::Format::D32_SFLOAT, FormatUsage::DepthStencilAttachment),
         (vk::Format::BC1_RGBA_UNORM_BLOCK, FormatUsage::SampledImage),
         (
@@ -158,7 +160,8 @@ fn vk12_floor_is_vulkan_1_2_core() {
     }
     assert_eq!(d.driver_id, None);
     assert_eq!(d.limits.max_compute_shared_memory_size, 16384);
-    assert_eq!(d.limits.max_compute_work_group_size, [128, 128, 64]);
+    assert_eq!(d.limits.max_compute_work_group_size, [1024, 1024, 64]);
+    assert_eq!(d.limits.max_push_constants_size, 256);
     assert_eq!(d.limits.min_storage_buffer_offset_alignment, 256);
 }
 
@@ -170,8 +173,8 @@ fn divisor_first_instance_support_follows_exposure() {
         ("lavapipe", false),
         ("moltenvk-m3", true),
         ("nvidia-rtx50-linux", true),
-        ("lunarg-desktop-baseline-2023", false),
-        ("vk12-floor", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
     ] {
         assert_eq!(
             profile(stem).limits.supports_non_zero_first_instance,
@@ -195,8 +198,10 @@ fn rgba4_opaque_black_swizzled_follows_exposure() {
         r#""a""#,
         &format!(r#""a": {{"extensions": {{"VK_KHR_maintenance10": 1}}, {props}}}"#),
     );
-    let d = DeviceDescription::from_khronos_json(&with, None).unwrap();
+    let mut d = DeviceDescription::from_khronos_json(&with, None).unwrap();
     assert!(d.rgba4_opaque_black_swizzled);
+    // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
+    d.limits.max_push_constants_size = 256;
     let dev =
         crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
     assert!(dev
@@ -230,11 +235,13 @@ fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
                        "features": {{{feature}}}}}"#
         ),
     );
-    let d = DeviceDescription::from_khronos_json(&arm, None).unwrap();
+    let mut d = DeviceDescription::from_khronos_json(&arm, None).unwrap();
     assert!(d
         .extensions
         .contains(&VkExtension::ExtRasterizationOrderAttachmentAccess));
     assert!(d.has(VkFeature::RasterizationOrderColorAttachmentAccess));
+    // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
+    d.limits.max_push_constants_size = 256;
     let dev =
         crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
     assert!(
@@ -261,10 +268,10 @@ fn robust_buffer_access_update_after_bind_is_read_where_stated() {
         ("lavapipe", true),
         ("moltenvk-m3", true),
         ("nvidia-rtx50-linux", true),
-        ("swiftshader", false),
-        ("lunarg-desktop-baseline-2023", false),
-        ("vk12-floor", false),
-        ("roadmap-2022", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
     ] {
         assert_eq!(
             profile(stem).robust_buffer_access_update_after_bind,
@@ -387,7 +394,7 @@ fn portability_stride_alignment_follows_exposure() {
     for stem in [
         "lavapipe",
         "nvidia-rtx50-linux",
-        "vk12-floor",
+        "runtime-floor",
         "amd-rdna3-radv",
     ] {
         assert_eq!(
@@ -534,7 +541,7 @@ fn early_coverage_after_counting_reads_the_maintenance5_structure() {
 #[test]
 fn profile_documents_imply_version_required_features() {
     // The LunarG baseline lists 1.2 structures but not every member 1.2 requires.
-    let d = profile("lunarg-desktop-baseline-2023");
+    let d = profile("runtime-floor");
     assert!(d.has(VkFeature::ShaderSubgroupExtendedTypes));
     assert!(d.has(VkFeature::UniformBufferStandardLayout));
 }
@@ -643,13 +650,13 @@ fn maintenance8_reads_its_extension_structure() {
         ("intel-arl-anv", true),
         ("intel-irisxe-anv", true),
         ("lavapipe", true),
-        ("lunarg-desktop-baseline-2023", false),
+        ("runtime-floor", false),
         ("moltenvk-m3", true),
         ("nvidia-pascal-linux", true),
         ("nvidia-rtx50-linux", true),
-        ("roadmap-2022", false),
-        ("swiftshader", false),
-        ("vk12-floor", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
+        ("runtime-floor", false),
     ] {
         assert_eq!(
             profile(stem).has(VkFeature::Maintenance8),
@@ -702,7 +709,7 @@ fn border_color_swizzle_and_format_extensions_are_read() {
     ] {
         assert!(mvk.extensions.contains(&ext), "moltenvk-m3 lists {ext:?}");
     }
-    assert!(!profile("vk12-floor")
+    assert!(!profile("runtime-floor")
         .extensions
         .contains(&VkExtension::KhrPortabilitySubset));
 }

@@ -1361,7 +1361,7 @@ mod tests {
         let Some(bitcode) = fixture("store_const.ll") else {
             return;
         };
-        let device = crate::engine::load_device("vk12-floor").unwrap();
+        let device = crate::engine::load_device("runtime-floor").unwrap();
         let RowCompile::Compiled(pipeline) = compile_row(
             &bitcode,
             "store_const",
@@ -1388,7 +1388,7 @@ mod tests {
         }
         // Every requirement is enabled, and every device fact met, on a device that is exactly
         // the profile's description and enabled everything it recommends.
-        let description = description("vk12-floor");
+        let description = description("runtime-floor");
         let enabled = description.recommended_enables();
         assert_eq!(
             unenabled(
@@ -1680,11 +1680,34 @@ mod tests {
     /// A post-tessellation vertex row compiles to a tessellation pipeline: the synthesized vertex
     /// and control stages before the function's evaluation stage, a patch list of one control point
     /// per patch, and the row's control-point and patch attributes pulled by the evaluation stage.
-    /// On a device without tessellation shaders it is refused typed, naming the feature.
+    /// On a device without tessellation shaders (`runtime-floor` without them, below the runtime's
+    /// floor) it is refused typed, naming the feature.
     #[test]
     fn post_tessellation_vertex_rows_compile_to_tessellation_pipelines() {
+        use metal2vulkan::device::VkFeature;
         let Some(bitcode) = fixture("tessellation.ll") else {
             return;
+        };
+        let untessellated = {
+            let mut description = description("runtime-floor");
+            for feature in [
+                VkFeature::TessellationShader,
+                VkFeature::ShaderTessellationAndGeometryPointSize,
+                VkFeature::MultiviewTessellationShader,
+            ] {
+                description.features.remove(&feature);
+            }
+            Device::from_queries(description, DevicePolicy::default()).unwrap()
+        };
+        let compile_on = |device: &Device, entry| {
+            compile_row(
+                &bitcode,
+                entry,
+                RowStage::Vertex,
+                Projection::Derived,
+                device,
+                None,
+            )
         };
         let compile = |profile: &str, entry| {
             let device = crate::engine::load_device(profile).unwrap();
@@ -1723,15 +1746,13 @@ mod tests {
             // The fixed vertex stage reads no attribute: every one is pulled.
             assert!(render.vertex_input.attributes.is_empty(), "{entry}");
         }
-        for profile in ["roadmap-2022", "vk12-floor"] {
-            for entry in ["tess_quad_buffer", "tess_triangle_points"] {
-                match compile(profile, entry) {
-                    RowCompile::NotCompiled(outcome, detail) => {
-                        assert_eq!(outcome.label(), "device_capability_missing", "{detail}");
-                        assert!(detail.contains("TessellationShader"), "{detail}");
-                    }
-                    other => panic!("{profile} {entry}: {other:?}"),
+        for entry in ["tess_quad_buffer", "tess_triangle_points"] {
+            match compile_on(&untessellated, entry) {
+                RowCompile::NotCompiled(outcome, detail) => {
+                    assert_eq!(outcome.label(), "device_capability_missing", "{detail}");
+                    assert!(detail.contains("TessellationShader"), "{detail}");
                 }
+                other => panic!("{entry}: {other:?}"),
             }
         }
     }
@@ -1943,7 +1964,8 @@ mod tests {
     /// stage.
     #[test]
     fn a_worker_boundary_failure_is_a_stopped_row() {
-        let device = WorkerDevice::new(description("vk12-floor"), DevicePolicy::default()).unwrap();
+        let device =
+            WorkerDevice::new(description("runtime-floor"), DevicePolicy::default()).unwrap();
         let worker = CompileWorker::program("/nonexistent/compile-worker");
         for stage in [RowStage::Kernel, RowStage::Vertex, RowStage::Fragment] {
             let (row, measured) = compile_row_in_worker(
@@ -1971,14 +1993,14 @@ mod tests {
     #[test]
     fn unenabled_names_every_requirement_the_opened_device_did_not_enable() {
         use metal2vulkan::device::{ApiVersion, StageCreateFlag, VkExtension, VkFeature};
-        let description = description("vk12-floor");
+        let description = description("runtime-floor");
         let mut enabled = EnableSet::new();
         enabled.features.insert(VkFeature::RobustBufferAccess);
         let opened = opened_description(description, &enabled);
         assert!(opened.is_ok(), "{opened:?}");
 
         let mut requirements = Requirements::default();
-        requirements.api_version = Some(ApiVersion { major: 1, minor: 3 });
+        requirements.api_version = Some(ApiVersion { major: 1, minor: 4 });
         requirements.features.insert(VkFeature::RobustBufferAccess);
         requirements.features.insert(VkFeature::ShaderInt64);
         requirements.extensions.insert(VkExtension::ExtRobustness2);
@@ -1988,7 +2010,7 @@ mod tests {
         assert_eq!(
             unenabled(&opened, &requirements),
             [
-                "ApiVersion(ApiVersion { major: 1, minor: 3 })",
+                "ApiVersion(ApiVersion { major: 1, minor: 4 })",
                 "Feature(ShaderInt64)",
                 "Extension(ExtRobustness2)",
                 "Feature(ComputeFullSubgroups)",
@@ -2068,7 +2090,7 @@ mod tests {
     #[test]
     fn device_facts_are_checked_against_the_opened_device_not_the_profile() {
         use metal2vulkan::device::{StageCreateFlag, VkLimit};
-        let mut description = description("vk12-floor");
+        let mut description = description("runtime-floor");
         let push_limit = description.limits.max_push_constants_size;
         let enabled = description.recommended_enables();
         let opened = opened_profile(description.clone(), &enabled);
@@ -2101,10 +2123,11 @@ mod tests {
         flagged
             .stage_flags
             .insert(StageCreateFlag::RequireFullSubgroups);
-        assert!(!enabled
+        let mut partial = enabled.clone();
+        assert!(partial
             .features
-            .contains(&metal2vulkan::device::VkFeature::ComputeFullSubgroups));
-        let opened = opened_profile(description.clone(), &enabled);
+            .remove(&metal2vulkan::device::VkFeature::ComputeFullSubgroups));
+        let opened = opened_profile(description.clone(), &partial);
         assert_eq!(
             unmet_device_facts(&opened, &flagged),
             ["Feature(ComputeFullSubgroups)"]
@@ -2126,14 +2149,14 @@ mod tests {
     #[test]
     fn the_opened_description_keeps_the_enabled_subset_and_refuses_an_unclosed_set() {
         use metal2vulkan::device::{ApiVersion, VkExtension, VkFeature};
-        let description = description("vk12-floor");
-        assert_eq!(description.api_version, ApiVersion::V1_2);
+        let description = description("runtime-floor");
+        assert_eq!(description.api_version, ApiVersion::V1_3);
         let mut enabled = EnableSet::new();
         enabled.features.insert(VkFeature::RobustBufferAccess);
         let opened = opened_description(description.clone(), &enabled).unwrap();
         assert_eq!(opened.features, enabled.features);
         assert!(opened.extensions.is_empty());
-        assert_eq!(opened.api_version, ApiVersion::V1_2);
+        assert_eq!(opened.api_version, ApiVersion::V1_3);
 
         assert!(!description.features.contains(&VkFeature::Maintenance8));
         let mut overstated = enabled.clone();
@@ -2145,12 +2168,10 @@ mod tests {
         // A description that lists a promoted feature and its extension, with the feature
         // enabled but not the extension: not exposed, so refused.
         let mut listing = description;
-        listing.features.insert(VkFeature::SubgroupSizeControl);
-        listing
-            .extensions
-            .insert(VkExtension::ExtSubgroupSizeControl);
+        listing.features.insert(VkFeature::Maintenance5);
+        listing.extensions.insert(VkExtension::KhrMaintenance5);
         let mut unexposed = enabled;
-        unexposed.features.insert(VkFeature::SubgroupSizeControl);
+        unexposed.features.insert(VkFeature::Maintenance5);
         let error = opened_description(listing, &unexposed).unwrap_err();
         assert!(error.contains("without exposing"), "{error}");
     }

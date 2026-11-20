@@ -24,8 +24,10 @@ fn addressed() -> DeviceProfile {
     profile("moltenvk-m3", DevicePolicy::default()).expect("moltenvk-m3")
 }
 
+/// Profile F: a device without device addresses, below the runtime's floor.
 fn floor() -> DeviceProfile {
-    profile("vk12-floor", DevicePolicy::default()).expect("vk12-floor")
+    let dev = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    dev.profile().clone()
 }
 
 fn slot(index: u32) -> Slot {
@@ -498,8 +500,9 @@ fn a_loaded_pointer_is_dynamic_wide_and_makes_every_window_whole() {
     assert_eq!(window_of(&plan, 1), Some(Window::Whole));
 }
 
-/// Profile F refuses the dereference of a dynamic root, naming `bufferDeviceAddress` and
-/// `shaderInt64` (both missing on `vk12-floor`), at the dereferencing instruction.
+/// Profile F refuses the dereference of a dynamic root, naming what it lacks of
+/// `bufferDeviceAddress` and `shaderInt64` (the first, on [`floor`]), at the dereferencing
+/// instruction.
 #[test]
 fn profile_f_refuses_a_dynamic_dereference_naming_buffer_device_address() {
     let (e, _) = loaded_pointer_kernel();
@@ -510,10 +513,9 @@ fn profile_f_refuses_a_dynamic_dereference_naming_buffer_device_address() {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);
             assert_eq!(
                 u.needs,
-                Needs::AnyOf(vec![vec![
-                    Capability::Feature(VkFeature::BufferDeviceAddress),
-                    Capability::Feature(VkFeature::ShaderInt64),
-                ]])
+                Needs::AnyOf(vec![vec![Capability::Feature(
+                    VkFeature::BufferDeviceAddress
+                )]])
             );
             assert!(u.location.is_some());
         }

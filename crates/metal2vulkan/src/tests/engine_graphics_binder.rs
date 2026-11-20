@@ -792,8 +792,9 @@ fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
 /// plan states the same key. That plan writes no descriptor for the source buffer: the vertex stage
 /// reads its root table, whose entry `2 + 0` is the bound buffer (its host and guest addresses,
 /// padded size, and bind offset), and a bind without a device address is refused. On a profile
-/// without device addresses the variant only pulls, and the draw's descriptor range exceeds the
-/// limit.
+/// without device addresses (`lavapipe` without `bufferDeviceAddress`, below the runtime's floor;
+/// the runtime floor's profile states no `Depth32Float` attachment) the variant only pulls, and
+/// the draw's descriptor range exceeds the limit.
 #[test]
 fn a_render_plan_reads_pulled_source_buffers_by_device_address() {
     let Some(bc) = fixture("stage_io") else {
@@ -807,8 +808,21 @@ fn a_render_plan_reads_pulled_source_buffers_by_device_address() {
     };
     let large = 1u64 << 40;
     let (mut addressed, mut viewed) = (0, 0);
-    for stem in ["moltenvk-m3", "lavapipe", "lunarg-desktop-baseline-2023"] {
-        let dev = device(stem);
+    let no_addresses = {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/profiles/lavapipe.json");
+        let text = std::fs::read_to_string(path).expect("profile");
+        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        desc.features
+            .remove(&crate::device::requirements::VkFeature::BufferDeviceAddress);
+        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    };
+    let devices = [
+        ("moltenvk-m3", device("moltenvk-m3")),
+        ("lavapipe", device("lavapipe")),
+        ("lavapipe without bufferDeviceAddress", no_addresses),
+    ];
+    for (stem, dev) in devices {
         let d = render_descriptor(&bc);
         let p = dev
             .compile_render_pipeline(&d, &Budget::standard())
@@ -2002,7 +2016,7 @@ fn a_written_texel_buffer_follows_its_buffer_features() {
     }
     // SwiftShader has `shaderStorageImageWriteWithoutFormat`, but its `R32_UINT` buffer features
     // lack the bit; lavapipe's state it.
-    assert!(declared.contains("swiftshader"), "{declared:?}");
+    assert!(declared.contains("runtime-floor"), "{declared:?}");
     assert!(formatless.contains("lavapipe"), "{formatless:?}");
 }
 
@@ -2174,7 +2188,7 @@ fn texture_buffers_past_the_limit_bind_their_parts() {
         );
         parted.insert(stem.clone());
     }
-    for stem in ["lavapipe", "swiftshader", "moltenvk-m3"] {
+    for stem in ["lavapipe", "moltenvk-m3"] {
         assert!(parted.contains(stem), "{stem}: {parted:?}");
     }
 }
@@ -2216,7 +2230,20 @@ fn out_of_bounds_alpha_follows_the_bound_format() {
         parts: 1,
     };
     let (mut kernels, mut fragments) = (0, 0);
-    for (stem, dev) in devices() {
+    // Every committed profile has `robustImageAccess2`; the specialization is on a device without
+    // it (below the runtime's floor).
+    let without = {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/profiles/runtime-floor.json");
+        let text = std::fs::read_to_string(path).expect("profile");
+        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        desc.features
+            .remove(&crate::device::requirements::VkFeature::RobustImageAccess2);
+        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    };
+    let mut all = devices();
+    all.push(("runtime-floor without robustImageAccess2".into(), without));
+    for (stem, dev) in all {
         let f = dev.profile().fields();
         let Ok(p) = kernel(&dev, &ops, "texel_buffers") else {
             continue;

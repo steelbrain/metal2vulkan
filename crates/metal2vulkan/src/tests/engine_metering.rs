@@ -38,7 +38,7 @@ fn ll_files(dir: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn a_second_compile_of_every_public_fixture_is_charged_the_same() {
-    let profiles = ["vk12-floor", "moltenvk-m3"]
+    let profiles = ["runtime-floor", "moltenvk-m3"]
         .map(|stem| (stem, profile(stem, DevicePolicy::default()).expect(stem)));
     let (mut compared, mut skipped) = (0usize, 0usize);
     for path in ll_files(&fixtures_dir())

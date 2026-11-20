@@ -233,7 +233,7 @@ def main():
     args = parser.parse_args()
     findings = []
     sources = {source["name"]: source for source in regen.SOURCES}
-    files = sorted(args.dir.glob("*.json"))
+    files = sorted(args.dir.glob("*.json")) + sorted((args.dir / regen.BELOW_FLOOR_DIR).glob("*.json"))
     names = {path.stem for path in files}
     for missing in sorted(set(sources) - names):
         findings.append(f"{missing}.json: declared by the regeneration script but not committed")
@@ -241,7 +241,10 @@ def main():
         findings.append(f"{extra}.json: not declared by the regeneration script")
     docs = {}
     for path in files:
-        doc = check_file(path, sources.get(path.stem), findings)
+        source = sources.get(path.stem)
+        if source is not None and path != regen.target_of(args.dir, source):
+            findings.append(f"{path.stem}.json: belongs at {regen.target_of(args.dir, source)}")
+        doc = check_file(path, source, findings)
         if doc is not None:
             docs[path.name] = doc
     if args.schema:

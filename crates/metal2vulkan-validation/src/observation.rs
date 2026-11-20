@@ -988,7 +988,7 @@ mod tests {
             };
         let validation = serde_json::json!({"layer": "VK_LAYER_KHRONOS_validation"});
         let profiles = serde_json::json!({"layer": "VK_LAYER_KHRONOS_profiles"});
-        let restriction = serde_json::json!({"profile": "vk12-floor"});
+        let restriction = serde_json::json!({"profile": "runtime-floor"});
 
         // Native rows, with and without recorded tools.
         assert_eq!(row(serde_json::json!({}), None).validate_content(), Ok(()));
@@ -1008,15 +1008,15 @@ mod tests {
             "profiles_layer": restriction,
         });
         assert_eq!(
-            row(restricted.clone(), Some("vk12-floor")).validate_content(),
+            row(restricted.clone(), Some("runtime-floor")).validate_content(),
             Ok(())
         );
         assert!(row(restricted.clone(), None).validate_content().is_err());
-        assert!(row(restricted, Some("roadmap-2022"))
+        assert!(row(restricted, Some("lavapipe"))
             .validate_content()
             .is_err());
         let inactive = serde_json::json!({"tools": [validation], "profiles_layer": restriction});
-        assert!(row(inactive, Some("vk12-floor"))
+        assert!(row(inactive, Some("runtime-floor"))
             .validate_content()
             .unwrap_err()
             .contains("not active"));

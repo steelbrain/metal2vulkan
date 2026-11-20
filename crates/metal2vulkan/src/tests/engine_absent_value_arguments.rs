@@ -175,7 +175,7 @@ fn an_absent_vertex_attribute_is_not_declared() {
         return;
     };
     let entry = "fca_vertex_absent_attribute";
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         for (on, want) in [(false, vec![0]), (true, vec![0, 1])] {
             let gates: &[u32] = if on { &[0] } else { &[] };

@@ -2,7 +2,8 @@
 //!
 //! - Dynamic-index kernels whose `i64` GEP indices are `zext`/`sext` of an `i1`, `i8`, `i16`, or
 //!   `i32` value (a loaded index, negative ones included, and `thread_position_in_grid`) compile
-//!   on `vk12-floor` (no `shaderInt64`) and `moltenvk-m3`, in both containment encodings, pass
+//!   on `runtime-floor` without `shaderInt64` (below the runtime's floor) and `moltenvk-m3`, in
+//!   both containment encodings, pass
 //!   L3, select the empty `arith.index_extension` strategy, and compute byte-exact results on the
 //!   CPU interpreter.
 //! - An extension defined in another block than its GEPs (the loop-kernel shape: the index is
@@ -11,8 +12,8 @@
 //!   loop-header phi used after the loop, which reads the phi's value from the last iteration even
 //!   when the latch has already written the next one.
 //! - An `i64` index that is not such an extension (a 64-bit load, a shift right of the extended
-//!   value) is a 64-bit value: `moltenvk-m3` holds it as a `u64`, `vk12-floor` as two words, and
-//!   both compile it exactly.
+//!   value) is a 64-bit value: `moltenvk-m3` holds it as a `u64`, `runtime-floor` without
+//!   `shaderInt64` as two words, and both compile it exactly.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -32,16 +33,29 @@ use crate::spirv::interp::{run, Buffer, Config, Resources};
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
-/// A profile without and one with `shaderInt64`.
-const PROFILES: [&str; 2] = ["vk12-floor", "moltenvk-m3"];
+/// `runtime-floor` without `shaderInt64`: below the runtime's floor, a device that holds a 64-bit
+/// value as two words.
+const NO_INT64: &str = "runtime-floor without shaderInt64";
 
-/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding).
+/// A profile without and one with `shaderInt64`.
+const PROFILES: [&str; 2] = [NO_INT64, "moltenvk-m3"];
+
+/// Committed profile `stem` (or [`NO_INT64`]'s device), optionally with buffer robustness disabled
+/// (the in-shader encoding).
 fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
+    let file = if stem == NO_INT64 {
+        "runtime-floor"
+    } else {
+        stem
+    };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
+        .join(format!("{file}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    if stem == NO_INT64 {
+        desc.features.remove(&VkFeature::ShaderInt64);
+    }
     if !robust {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -590,7 +604,7 @@ type WideCase = (
 );
 
 /// An `i64` index that is not an index extension is a 64-bit value. `moltenvk-m3` holds it as a
-/// native `u64`; `vk12-floor` has no `shaderInt64` and holds it as two words. Both compile it and
+/// native `u64`; [`NO_INT64`] has no `shaderInt64` and holds it as two words. Both compile it and
 /// read the element exactly.
 #[test]
 fn an_i64_index_that_is_not_an_extension_is_a_64_bit_value() {
@@ -615,7 +629,7 @@ fn an_i64_index_that_is_not_an_extension_is_a_64_bit_value() {
         let Some(bc) = assemble_text(name, &kernel(name, body, params, false)) else {
             return;
         };
-        for stem in ["vk12-floor", "moltenvk-m3"] {
+        for stem in PROFILES {
             let p = profile_with(stem, true);
             assert_eq!(p.fields().leaf.int64, stem == "moltenvk-m3");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{name} {stem}: {e}"));

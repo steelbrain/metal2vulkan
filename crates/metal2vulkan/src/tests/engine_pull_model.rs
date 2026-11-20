@@ -31,7 +31,7 @@ use super::engine_multisample::{
 use crate::bind::BindState;
 use crate::budget::Budget;
 use crate::device::requirements::{VkExtension, VkFeature, VkProperty};
-use crate::device::{Device, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::metal::PixelFormat;
 use crate::pipeline::artifact::PrecisionNote;
@@ -41,6 +41,9 @@ use crate::pipeline::descriptor::{
 use crate::pipeline::sym::SpecKey;
 use crate::pipeline::RenderPipeline;
 use crate::vk::ShaderStage;
+
+/// `runtime-floor` without `sampleRateShading` (below the runtime's floor).
+const NO_SAMPLE_RATE: &str = "runtime-floor without sampleRateShading";
 
 const VERTEX: &str = "pm_place";
 
@@ -170,9 +173,17 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
     };
     let mut compiled = 0usize;
     let mut refused = Vec::new();
-    for stem in stems() {
-        let dev =
-            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
+    // Every committed profile has `sampleRateShading`; a device without it is below the runtime's
+    // floor.
+    let mut descriptions: Vec<(String, DeviceDescription)> = stems()
+        .into_iter()
+        .map(|s| (s.clone(), description(&s)))
+        .collect();
+    let mut without = description("runtime-floor");
+    without.features.remove(&VkFeature::SampleRateShading);
+    descriptions.push((NO_SAMPLE_RATE.into(), without));
+    for (stem, desc) in descriptions {
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let functions = interpolation_functions(&dev);
         let fields = dev.profile().fields();
         let origin = VkProperty::InterpolateAtOffsetCentered;
@@ -265,7 +276,9 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
     );
     assert!(compiled > 100, "{compiled}");
     assert!(
-        refused.iter().any(|r| r.starts_with("vk12-floor ")),
+        refused
+            .iter()
+            .any(|r| r.starts_with(&format!("{NO_SAMPLE_RATE} "))),
         "a profile without sampleRateShading refuses: {refused:?}"
     );
 }

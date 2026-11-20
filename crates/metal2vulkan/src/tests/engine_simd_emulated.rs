@@ -58,7 +58,7 @@ use crate::spirv::testing::spirv_dis;
 use crate::vk;
 
 /// The committed profiles whose kernels' simdgroups are emulated.
-const PROFILES: [&str; 2] = ["lavapipe", "roadmap-2022"];
+const PROFILES: [&str; 2] = ["lavapipe", "runtime-floor"];
 
 const WIDTHS: [SubgroupSize; 4] = [
     SubgroupSize::W8,
@@ -1312,7 +1312,7 @@ fn divergent_operations_run_predicated_on_lavapipe() {
 
 #[test]
 fn divergent_operations_run_predicated_on_vk12_floor() {
-    divergent_operations_run_predicated("vk12-floor");
+    divergent_operations_run_predicated("runtime-floor");
 }
 
 /// Operations in divergent control flow of every shape the walk predicates run exactly on the lanes
@@ -1334,7 +1334,7 @@ fn simd_divergent_runs_predicated_on_lavapipe() {
 
 #[test]
 fn simd_divergent_runs_predicated_on_roadmap_2022() {
-    simd_divergent_runs_predicated("roadmap-2022");
+    simd_divergent_runs_predicated("runtime-floor");
 }
 
 /// The `OpControlBarrier`s of `kernel` of `bc` compiled on profile `stem` under `policy`.
@@ -1530,7 +1530,7 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     let Some(full) = arena_kernel(4096) else {
         return;
     };
-    let floor = profile("roadmap-2022", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
     match compile(&full, "barrier_k", &floor) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
@@ -1617,7 +1617,7 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
             );
         }
     }
-    let floor = profile("roadmap-2022", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
     assert!(!floor.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "region_k", &floor).expect("region_k");
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
@@ -2183,7 +2183,7 @@ fn simd_masks_run_emulated_on_lavapipe() {
 
 #[test]
 fn simd_masks_run_emulated_on_vk12_floor() {
-    simd_masks_run_emulated("vk12-floor");
+    simd_masks_run_emulated("runtime-floor");
 }
 
 /// The scratch holds one `u32[W]` slot per lane, so an exchange reaches a lane's word with one

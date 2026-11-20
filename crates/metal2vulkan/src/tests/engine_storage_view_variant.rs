@@ -3,17 +3,17 @@
 //! plan's key, for the same shape, states the same key (`BindingPlan::variant`'s contract).
 //!
 //! A synthetic vertex function (four read-only `device` arrays and a `[[stage_in]]` attribute)
-//! fits `vk12-floor`'s four storage buffers per stage until a shape's unaligned vertex buffer asks
+//! fits Profile F's four storage buffers per stage (`runtime-floor` without device addresses, a
+//! device below the runtime's floor) until a shape's unaligned vertex buffer asks
 //! for the pulled-layout variant, whose pulled source is a fifth storage buffer; the owned kernel
 //! `descriptor_limit_uniform_views` needs the fallback on its own. Every shape binds each array
 //! small or large (a length class above `maxUniformBufferRange`).
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use crate::bind::{BindState, BoundBuffer, StageTable};
 use crate::budget::Budget;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
 use crate::library::Library;
 use crate::metal::VertexFormat;
@@ -28,13 +28,9 @@ use crate::pipeline::{
     RenderPipelineDescriptor, RuntimeFact, StageSource, UniformViewChoice,
 };
 
-fn device(stem: &str) -> Device {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+/// Profile F: `runtime-floor` without device addresses, below the runtime's floor.
+fn profile_f() -> Device {
+    crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F")
 }
 
 fn assembled(result: Result<Vec<u8>, AssembleError>, name: &str) -> Option<Vec<u8>> {
@@ -182,7 +178,7 @@ fn a_newly_pulled_layout_keeps_the_large_candidates_storage_views() {
     let Some(bc) = assemble("vertex", VERTEX) else {
         return;
     };
-    let dev = device("vk12-floor");
+    let dev = profile_f();
     let (d, base) = vertex_descriptor(&dev, &bc);
     for index in 1..=4 {
         let s = slot(Stage::Vertex, index);
@@ -226,7 +222,7 @@ fn every_render_variant_plan_states_its_own_key() {
     let Some(bc) = assemble("vertex_all", VERTEX) else {
         return;
     };
-    let dev = device("vk12-floor");
+    let dev = profile_f();
     let (d, base) = vertex_descriptor(&dev, &bc);
     let (mut variants, mut refused) = (0, 0);
     for offset in [0, 50] {
@@ -266,7 +262,7 @@ fn every_kernel_variant_plan_states_its_own_key() {
     ) else {
         return;
     };
-    let dev = device("vk12-floor");
+    let dev = profile_f();
     let compile = |inputs: &LoweringInputs| {
         let lib = Library::from_air(&bc).expect("library");
         let f = lib.function(ENTRY).expect("function");

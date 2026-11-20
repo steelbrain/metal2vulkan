@@ -329,7 +329,7 @@ fn spirv_val_runs_unless_skipped_and_a_rejection_is_a_fallback() {
     std::fs::set_permissions(&rejecting, std::fs::Permissions::from_mode(0o700)).unwrap();
     let input = fixture("ob3_texture_array.air");
     let output = scratch.join("kernel.spv");
-    let profile = profile("vk12-floor");
+    let profile = profile("runtime-floor");
     let args = [
         input.as_os_str(),
         output.as_os_str(),

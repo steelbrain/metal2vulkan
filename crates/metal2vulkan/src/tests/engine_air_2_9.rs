@@ -738,7 +738,7 @@ fn thread_atomics_compute_their_documented_words() {
     let entry = "a27_thread_atomics";
     let threads = 8;
     let want: Vec<u32> = (0..threads).flat_map(thread_atomic_words).collect();
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));

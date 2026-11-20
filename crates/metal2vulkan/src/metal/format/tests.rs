@@ -32,8 +32,8 @@ pub(crate) fn committed_devices() -> Vec<(String, Device)> {
 fn floor_with(formats: &[(vk::Format, vk::FormatFeatureFlags)]) -> DeviceDescription {
     let (_, mut desc) = committed_descriptions()
         .into_iter()
-        .find(|(s, _)| s == "vk12-floor")
-        .expect("vk12-floor is committed");
+        .find(|(s, _)| s == "runtime-floor")
+        .expect("runtime-floor is committed");
     desc.formats = FormatSupport::default();
     for &(format, optimal) in formats {
         desc.formats.formats.insert(
@@ -843,9 +843,10 @@ fn a_swizzled_candidate_needs_the_subset_s_view_swizzle() {
 
 /// The ASTC HDR and PVRTC RGBA formats are their `SFLOAT` and PVRTC1 blocks where the profile
 /// exposes them: on `moltenvk-m3` (a 1.4 device with `VK_IMG_format_pvrtc`) they map directly;
-/// on the 1.2 floor listing the same blocks without the extensions, the refusal names the
-/// extension, and for a PVRTC format the format of its decoded twin's codes, which that floor does
-/// not list either.
+/// on a Vulkan 1.2 device listing the same blocks without the extensions (the runtime's floor read
+/// at 1.2, below that floor: 1.3 made the ASTC HDR blocks core), the refusal names the extension,
+/// and for a PVRTC format the format of its decoded twin's codes, which that device does not list
+/// either.
 #[test]
 fn compressed_extension_formats_follow_exposure() {
     use FormatUsage as U;
@@ -876,7 +877,13 @@ fn compressed_extension_formats_follow_exposure() {
         .into_iter()
         .find(|(s, _)| s == "moltenvk-m3")
         .expect("moltenvk-m3 is committed");
-    let floor = device(floor_with(&cases.map(|(_, format, _)| (format, SAMPLED))));
+    let mut at_1_2 = floor_with(&cases.map(|(_, format, _)| (format, SAMPLED)));
+    at_1_2.api_version = ApiVersion::V1_2;
+    let extensions = at_1_2.extensions.clone();
+    at_1_2
+        .features
+        .retain(|&f| f.exposure().exposed(ApiVersion::V1_2, &extensions));
+    let floor = device(at_1_2);
     for (pf, format, extension) in cases {
         let m =
             vk_format(pf, &sampled, moltenvk.profile()).unwrap_or_else(|e| panic!("{pf:?}: {e}"));
@@ -888,7 +895,7 @@ fn compressed_extension_formats_follow_exposure() {
                 usage: U::SampledImage,
             },
         ]];
-        // A PVRTC format's decoded twin, whose codes' format this floor does not list; an ASTC
+        // A PVRTC format's decoded twin, whose codes' format this device does not list; an ASTC
         // HDR format's, whose halves' format it does not list.
         if crate::bind::PvrtcDecode::of(pf).is_some() {
             let codes = match crate::metal::texel_format::srgb_coded(pf) {
@@ -2699,13 +2706,13 @@ fn packed_sixteen_bit_formats_sit_in_the_vulkan_word_of_their_bits() {
             &sampled,
             committed_devices()
                 .iter()
-                .find(|(s, _)| s == "vk12-floor")
-                .expect("vk12-floor is committed")
+                .find(|(s, _)| s == "runtime-floor")
+                .expect("runtime-floor is committed")
                 .1
                 .profile(),
         )
         .is_err(),
-        "the 1.2 floor exposes no 4-bit word of Metal's channel order"
+        "the runtime floor exposes no 4-bit word of Metal's channel order"
     );
 }
 

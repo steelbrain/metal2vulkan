@@ -317,8 +317,8 @@ fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
 /// feature, in its robustness-off leg (validation runs both): the stated leg compiles the robust
 /// encodings the profile states, the off leg the in-shader ones, on the same device class and
 /// subgroup width. Every committed profile states `robustBufferAccess`, so every one has both legs;
-/// `vk12-floor` states no image robustness, and `moltenvk-m3` states
-/// `robustBufferAccess` without `robustBufferAccess2`.
+/// every one states image robustness too (the floor's Vulkan 1.3 requires `robustImageAccess`),
+/// and `moltenvk-m3` states `robustBufferAccess` without `robustBufferAccess2`.
 #[test]
 fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
     use metal2vulkan::device::Robustness;
@@ -359,12 +359,12 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
             .find(|entry| entry.tier.stem == stem && entry.tier.leg == Leg::Stated)
             .unwrap()
     };
-    assert!(!stated("vk12-floor").profile.images().robust_image_access);
+    assert!(stated("runtime-floor").profile.images().robust_image_access);
     assert!(stated("lavapipe").profile.images().robust_image_access);
     assert_eq!(stated("moltenvk-m3").profile.robustness(), Robustness::Rba);
     assert_eq!(stated("lavapipe").profile.robustness(), Robustness::Rba2);
     // A description that states no robustness feature has no second leg.
-    let mut none = crate::engine::load_description("vk12-floor").unwrap();
+    let mut none = crate::engine::load_description("runtime-floor").unwrap();
     none.features
         .retain(|feature| !ROBUSTNESS_FEATURES.contains(feature));
     assert_eq!(robustness_off(&none), None);
@@ -373,8 +373,10 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
 /// A compile records the containment it compiled under, from its profile and its own module:
 /// the robust and the in-shader leg of one copy census the same strategy names (the name hides
 /// the encoding) under different encodings; a kernel that declares no image has none; a texture
-/// write's image encoding follows the leg's image robustness, and `vk12-floor`, which writes a
-/// storage image only through its declared format, needs the texture's format first; and a kernel that turns an integer into a pointer (a dynamic root) reaches that memory by
+/// write's image encoding follows the leg's image robustness, and a device that writes a storage
+/// image only through its declared format (`runtime-floor` without
+/// `shaderStorageImageWriteWithoutFormat`, below the runtime's floor) needs the texture's format
+/// first; and a kernel that turns an integer into a pointer (a dynamic root) reaches that memory by
 /// device address under names of its own, checked in the shader in both legs, while its descriptor
 /// accesses take each leg's encoding.
 #[test]
@@ -425,17 +427,28 @@ fn a_compile_records_the_containment_it_compiled_under() {
     assert_eq!(write("lavapipe", Leg::RobustnessOff), I::Checked);
     let select_write = llvm_assemble(&engine_dir().join("a4_select_write.ll"))
         .unwrap_or_else(|error| panic!("{error:?}"));
+    let mut formatted = crate::engine::load_description("runtime-floor").unwrap();
+    assert!(formatted
+        .features
+        .remove(&VkFeature::ShaderStorageImageWriteWithoutFormat));
+    let formatted = metal2vulkan::device::Device::from_queries(
+        formatted,
+        metal2vulkan::device::DevicePolicy::default(),
+    )
+    .unwrap()
+    .profile()
+    .clone();
     match compile_module(
         &select_write,
         "a4_select_write",
         &CaseInputs::defaults(),
-        leg("vk12-floor", Leg::Stated),
+        &formatted,
     ) {
         Err(CompileError::Refused(reason)) => assert!(
             reason.starts_with("needs_input StorageTextureFormat"),
             "{reason}"
         ),
-        other => panic!("a4_select_write on vk12-floor: {other:?}"),
+        other => panic!("a4_select_write without formatless writes: {other:?}"),
     }
 
     let round_trip = |leg_of| {
@@ -545,43 +558,54 @@ fn an_image_encoding_names_what_its_device_is_left() {
     let ll = scratch.path().join("image.ll");
     std::fs::write(&ll, switched_read_kernel(false)).unwrap();
     let bitcode = llvm_assemble(&ll).unwrap_or_else(|error| panic!("{error:?}"));
-    for (stem, leg, images, read) in [
+    // `robustImageAccess` alone: `runtime-floor` without `robustImageAccess2` (below the
+    // runtime's floor), and its robustness-off leg.
+    let mut alone = crate::engine::load_description("runtime-floor").unwrap();
+    assert!(alone.features.remove(&VkFeature::RobustImageAccess2));
+    let derive = |description: DeviceDescription| {
+        metal2vulkan::device::Device::from_queries(
+            description,
+            metal2vulkan::device::DevicePolicy::default(),
+        )
+        .unwrap()
+        .profile()
+        .clone()
+    };
+    let floor = &table
+        .iter()
+        .find(|entry| entry.tier.stem == "runtime-floor" && entry.tier.leg == Leg::Stated)
+        .unwrap()
+        .profile;
+    let alone_off = derive(robustness_off(&alone).unwrap());
+    let alone = derive(alone);
+    for (label, profile, images, read) in [
         (
-            "lunarg-desktop-baseline-2023",
-            Leg::Stated,
+            "runtime-floor",
+            floor,
             ImageEncoding::Robust,
             "texture.read.switch",
         ),
         (
-            "swiftshader",
-            Leg::Stated,
+            "robustImageAccess alone",
+            &alone,
             ImageEncoding::RobustWrites,
             "texture.read_clamped.switch",
         ),
         (
-            "swiftshader",
-            Leg::RobustnessOff,
+            "robustImageAccess alone, robustness off",
+            &alone_off,
             ImageEncoding::Checked,
             "texture.read_clamped.switch",
         ),
     ] {
-        let entry = table
-            .iter()
-            .find(|entry| entry.tier.stem == stem && entry.tier.leg == leg)
-            .unwrap_or_else(|| panic!("{stem} {leg:?}"));
-        let census = compile_module(
-            &bitcode,
-            "switched",
-            &CaseInputs::defaults(),
-            &entry.profile,
-        )
-        .unwrap_or_else(|error| panic!("{stem}: {error:?}"))
-        .census;
+        let census = compile_module(&bitcode, "switched", &CaseInputs::defaults(), profile)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"))
+            .census;
         let containment = census.containment.expect("a compiled module's containment");
-        assert_eq!(containment.images, images, "{stem} {leg:?}");
+        assert_eq!(containment.images, images, "{label}");
         assert!(
             census.strategies.contains(read),
-            "{stem} {leg:?}: {:?}",
+            "{label}: {:?}",
             census.strategies
         );
     }
@@ -642,7 +666,7 @@ fn a_vertex_case_compiles_under_its_vertex_descriptor() {
             .unwrap()
             .buffers
     };
-    for stem in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         assert_eq!(
             buffers(&inputs, leg(stem, Leg::Stated)),
             BufferEncoding::Unused,
@@ -749,12 +773,12 @@ fn target(resource: OutOfBoundsResource, form: ContainmentForm) -> OutOfBoundsTa
 }
 
 /// The out-of-bounds fixtures (`engine/ob1_*`) compile each target they declare to the form
-/// and mechanism of the inventory on lavapipe, MoltenVK, and SwiftShader, in both legs: a
+/// and mechanism of the inventory on lavapipe, MoltenVK, and the runtime's floor, in both legs: a
 /// descriptor view left to the device's buffer robustness where the leg enables it and checked in
 /// the shader where it does not, a device address and the arena checked in the shader on every
 /// leg, and an image or texel buffer left to the device's image or buffer robustness where
-/// enabled. The form is the compiled structure's: without device addresses the escaping buffer is
-/// a storage buffer, and a robustness-off leg views the `constant` buffer as a storage buffer.
+/// enabled. The form is the compiled structure's: a robustness-off leg views the `constant`
+/// buffer as a storage buffer.
 #[test]
 fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -800,15 +824,12 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
             ],
         ),
     ];
-    // The mechanism label of each fixture's targets per (stem, leg). SwiftShader states only the
-    // first robustness levels and no device addresses: the buffer whose address escapes is a
-    // descriptor view there.
+    // The mechanism label of each fixture's targets per (stem, leg). MoltenVK and the runtime's
+    // floor state `robustBufferAccess` without `robustBufferAccess2`.
     let expected = |fixture: &str, stem: &str, leg: Leg| -> &str {
         let off = leg == Leg::RobustnessOff;
-        let robust1 = ["moltenvk-m3", "swiftshader"].contains(&stem);
+        let robust1 = ["moltenvk-m3", "runtime-floor"].contains(&stem);
         match fixture {
-            "ob1_device_address" if stem == "swiftshader" && off => "descriptor-view:shader",
-            "ob1_device_address" if stem == "swiftshader" => "descriptor-view:robust",
             "ob1_device_address" => "device-address:shader",
             "ob1_threadgroup" => "arena:shader",
             _ if off => match fixture {
@@ -816,8 +837,6 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
                 "ob1_texel_buffer" => "texel-buffer:shader",
                 _ => "descriptor-view:shader",
             },
-            // `robustImageAccess` alone discards writes; reads are clamped in the shader.
-            "ob1_texture" if stem == "swiftshader" => "image:shader-reads",
             "ob1_texture" => "image:robust2",
             // `robustBufferAccess` alone: the texel buffer is checked in the shader.
             "ob1_texel_buffer" if robust1 => "texel-buffer:shader",
@@ -827,11 +846,10 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
         }
     };
     // The form each target is exercised as: the declared one, but a buffer as its compiled slot
-    // reaches it. A device address that compiles to a descriptor view is a storage buffer, and so
-    // is `ob1_uniform_buffer`'s `constant` buffer, which each thread reads at its own index: a read
-    // whose address may differ between the lanes takes the slot's storage view on every device.
-    let form = |fixture: &str, stem: &str, _: Leg, declared: ContainmentForm| match fixture {
-        "ob1_device_address" if stem == "swiftshader" => F::StorageBuffer,
+    // reaches it. `ob1_uniform_buffer`'s `constant` buffer is a storage buffer, which each thread
+    // reads at its own index: a read whose address may differ between the lanes takes the slot's
+    // storage view on every device.
+    let form = |fixture: &str, _: &str, _: Leg, declared: ContainmentForm| match fixture {
         "ob1_uniform_buffer" => F::StorageBuffer,
         _ => declared,
     };
@@ -843,7 +861,7 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
             ..CaseInputs::defaults()
         };
         for entry in table.iter().filter(|entry| {
-            ["lavapipe", "moltenvk-m3", "swiftshader"].contains(&entry.tier.stem.as_str())
+            ["lavapipe", "moltenvk-m3", "runtime-floor"].contains(&entry.tier.stem.as_str())
         }) {
             let compiled = compile_module(&bitcode, fixture, &inputs, &entry.profile)
                 .unwrap_or_else(|error| panic!("{fixture} on {}: {error:?}", entry.tier.label()));
@@ -868,12 +886,11 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
 }
 
 /// The fixtures of the authorable forms (`engine/ob2_*`) compile each target to its form and an
-/// in-shader check on every committed profile that compiles them, in both legs: the buffer a loaded
-/// pointer reaches is a device address the resident set resolves, the thread-local array a typed
-/// object checked per array level, and the argument buffer's texture array a handle table. The rest
-/// refuse with what they lack, a typed refusal in both legs: the profiles without device addresses
-/// or 64-bit integers the loaded pointer, and those without descriptor indexing the argument
-/// buffer's textures.
+/// in-shader check on every committed profile, in both legs: the buffer a loaded pointer reaches is
+/// a device address the resident set resolves, the thread-local array a typed object checked per
+/// array level, and the argument buffer's texture array a handle table. A device without device
+/// addresses or 64-bit integers refuses the loaded pointer, and one without descriptor indexing the
+/// argument buffer's textures, with what it lacks; every committed profile has them.
 #[test]
 fn the_ob2_fixtures_contain_each_target_in_the_shader_on_every_profile() {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -946,21 +963,8 @@ fn the_ob2_fixtures_contain_each_target_in_the_shader_on_every_profile() {
             }
         }
     }
-    let pointer = [
-        "lunarg-desktop-baseline-2023",
-        "roadmap-2022",
-        "swiftshader",
-        "vk12-floor",
-    ];
-    let handles = ["vk12-floor"];
-    assert_eq!(
-        refused,
-        pointer
-            .map(|stem| ("ob2_loaded_pointer", stem))
-            .into_iter()
-            .chain(handles.map(|stem| ("ob2_handle_array", stem)))
-            .collect::<BTreeSet<_>>()
-    );
+    // Every committed profile has device addresses, 64-bit integers and descriptor indexing.
+    assert!(refused.is_empty(), "{refused:?}");
 }
 
 /// The case of an OB3 fixture: its committed manifest's literals, as the coverage report reads them

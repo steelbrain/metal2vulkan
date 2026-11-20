@@ -805,7 +805,7 @@ while [ $# -gt 0 ]; do
     *) shift 2 ;;
   esac
 done
-[ "$profile" = vk12-floor ] || exit 9
+[ "$profile" = runtime-floor ] || exit 9
 printf '{{"case_id":"%s","environment_id":"%s","status":"match"}}\n' "$id" "{ENV}@engine@$profile$leg" \
   >> "$store/observations/vulkan/{shard}"
 echo "Match $id"
@@ -813,7 +813,7 @@ echo "Match $id"
         ),
     );
     let config = BatchConfig {
-        restricted_to: Some("vk12-floor".into()),
+        restricted_to: Some("runtime-floor".into()),
         ..config(scratch.path(), executor, Duration::from_secs(60))
     };
     let legs = [Leg::Stated, Leg::RobustnessOff].map(Pass::Leg);
@@ -831,7 +831,11 @@ echo "Match $id"
     rows.sort();
     assert_eq!(
         rows,
-        ["@engine@vk12-floor", "@engine@vk12-floor+robustness-off"].map(|slot| format!(
+        [
+            "@engine@runtime-floor",
+            "@engine@runtime-floor+robustness-off"
+        ]
+        .map(|slot| format!(
             r#"{{"case_id":"{}","environment_id":"{ENV}{slot}","status":"match"}}"#,
             matching.case_id
         ))
@@ -842,7 +846,7 @@ echo "Match $id"
             .unwrap()
             .restricted_to
             .as_deref(),
-        Some("vk12-floor")
+        Some("runtime-floor")
     );
 }
 
@@ -1273,14 +1277,14 @@ fn an_out_directory_resumes_only_its_own_build() {
     };
     assert!(BatchBuild::claim(&other_backend).is_err());
     let restricted = BatchConfig {
-        restricted_to: Some("vk12-floor".into()),
+        restricted_to: Some("runtime-floor".into()),
         ..config.clone()
     };
     assert!(BatchBuild::claim(&restricted).is_err());
     // A restricted batch's record names its profile; an unrestricted one's has no field for it.
     assert_eq!(
         BatchBuild::of(&restricted).restricted_to.as_deref(),
-        Some("vk12-floor")
+        Some("runtime-floor")
     );
     assert!(!serde_json::to_string(&recorded)
         .unwrap()

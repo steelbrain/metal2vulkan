@@ -502,7 +502,7 @@ mod tests {
     fn device(dual: bool) -> Device {
         let (_, mut desc) = committed_descriptions()
             .into_iter()
-            .find(|(s, _)| s == "vk12-floor")
+            .find(|(s, _)| s == "runtime-floor")
             .unwrap();
         if dual {
             desc.features.insert(VkFeature::DualSrcBlend);
@@ -636,7 +636,7 @@ mod tests {
     /// their features and are refused, naming the feature, where it does not.
     #[test]
     fn encoder_raster_state_needs_its_features() {
-        let (floor, lavapipe) = (committed("vk12-floor"), committed("lavapipe"));
+        let (floor, lavapipe) = (committed("runtime-floor"), committed("lavapipe"));
         let needs =
             |what, feature| Error::from(Unsupported::needs(what, Capability::Feature(feature)));
         assert_eq!(

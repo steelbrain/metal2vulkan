@@ -138,8 +138,7 @@ const FEATURES: [(&str, &str, VkFeature, Option<VkExtension>); 12] = [
 /// exposed structure (or its version requires it: `fullDrawIndexUint32` from Vulkan 1.4). Where
 /// the source lists the feature's extension it states the member, true or false; a member a
 /// source does not state reads as absent, and is refused. The extensions are enabled exactly
-/// where the source lists them. Every profile but the derived 1.2 floors (whose base drops it,
-/// unrequired by 1.2) states `fullDrawIndexUint32`.
+/// where the source lists them. Every committed profile states `fullDrawIndexUint32`.
 #[test]
 fn render_features_follow_each_source() {
     let mut listed: BTreeMap<VkExtension, usize> = BTreeMap::new();
@@ -156,7 +155,7 @@ fn render_features_follow_each_source() {
             if extension.is_some() {
                 assert_eq!(states, exposed, "{stem}: {structure}.{member}");
             } else {
-                assert_eq!(states, !stem.starts_with("vk12-"), "{stem}: {member}");
+                assert!(states, "{stem}: {member}");
             }
             let required = required_features(desc.api_version).any(|f| f == feature);
             let want = exposed && (stated_true(&json, structure, member) || required);
@@ -186,13 +185,13 @@ fn render_features_follow_each_source() {
     }
     // RADV, ANV, NVIDIA and lavapipe list depth clipping and list restart; RADV, ANV and NVIDIA
     // the clamp control; every Linux venue and MoltenVK the sample locations; every native
-    // profile (RADV, ANV, NVIDIA, lavapipe, SwiftShader) the provoking vertex; RADV, ANV, NVIDIA
+    // profile (RADV, ANV, NVIDIA, lavapipe) the provoking vertex; RADV, ANV, NVIDIA
     // and lavapipe the multi-draw.
     for (extension, at_least) in [
         (VkExtension::ExtDepthClipEnable, 10),
         (VkExtension::ExtDepthClampControl, 5),
         (VkExtension::ExtPrimitiveTopologyListRestart, 10),
-        (VkExtension::ExtProvokingVertex, 15),
+        (VkExtension::ExtProvokingVertex, 14),
         (VkExtension::ExtSampleLocations, 10),
         (VkExtension::ExtMultiDraw, 10),
     ] {
@@ -202,7 +201,7 @@ fn render_features_follow_each_source() {
 }
 
 /// The depth/stencil resolve properties and the two limits are stated by every committed profile
-/// (a device report its device's; a requirements document or derived floor its version's, which
+/// (a device report its device's; the derived floor its version's, which
 /// the regeneration states where its source omits them), and the description derives exactly
 /// the stated modes and booleans. The sample-location properties are stated, and derived, exactly
 /// where the profile lists `VK_EXT_sample_locations`.
@@ -372,7 +371,7 @@ fn an_omitted_resolve_mode_or_index_value_reads_its_versions_guarantee() {
 
 /// `provokingVertexModePerPipeline` is read where `VK_EXT_provoking_vertex` is listed, and holds
 /// as the profile states it: every committed profile that lists the extension states it true
-/// (RADV, ANV, NVIDIA, lavapipe and SwiftShader); MoltenVK lists no extension and has neither the
+/// (RADV, ANV, NVIDIA and lavapipe); MoltenVK lists no extension and has neither the
 /// feature nor the property.
 #[test]
 fn the_provoking_vertex_mode_per_pipeline_follows_each_source() {
@@ -403,5 +402,5 @@ fn the_provoking_vertex_mode_per_pipeline_follows_each_source() {
         }
         listed += usize::from(exposed && stated);
     }
-    assert!(listed >= 15, "{listed}");
+    assert!(listed >= 14, "{listed}");
 }

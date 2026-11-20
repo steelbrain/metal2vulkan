@@ -35,6 +35,8 @@ windows-sys = { workspace = true, features = ["Win32_System_Performance", "Win32
 [dev-dependencies]
 # The tests' fixture assembler and fixture directories. Path-only, so publishing drops it.
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
+# The floor profile's reader (`tests::floor`).
+serde_json.workspace = true
 
 # The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
 [lints.rust]

@@ -382,7 +382,7 @@ pub enum ExecutionClass {
 
 impl ExecutionClass {
     /// The class of a device, or `None` for a description that names no device (a capability
-    /// profile, such as `vk12-floor`, that no host is).
+    /// profile, such as `runtime-floor`, that no host is).
     pub fn of_description(description: &DeviceDescription) -> Option<ExecutionClass> {
         if description.device_type == Some(vk::PhysicalDeviceType::CPU) {
             return Some(ExecutionClass::CpuIcd);

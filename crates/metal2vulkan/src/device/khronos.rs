@@ -947,7 +947,7 @@ fn float_controls(p: &Props<'_>) -> Result<FloatControls, Error> {
 
 /// The limits and subgroup properties every device of `version` guarantees, for the members the
 /// core reads: the Vulkan "Required Limits" table as transcribed by Vulkan-Profiles
-/// `VP_LUNARG_minimum_requirements_1_2` (the source of the committed `vk12-floor` profile), plus
+/// `VP_LUNARG_minimum_requirements_1_2` (the source of `below-floor/vk12-floor`), plus
 /// `maxBufferSize ≥ 2^30` from Vulkan 1.3. A Khronos *profile* document states only what it
 /// raises above its base version, so an omitted member means this value, never "unsupported".
 /// Device reports list every member and are not affected.

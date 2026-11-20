@@ -206,7 +206,7 @@ fn a_metallib_parses_from_its_tags_alone() {
         ));
     }
     // Compiling the broken function fails at decode, typed.
-    let dev = device("lunarg-desktop-baseline-2023");
+    let dev = device("runtime-floor");
     let broken = lib.function("broken").expect("broken");
     assert!(matches!(
         dev.compile_compute_pipeline(&kernel(broken), &Budget::standard()),
@@ -221,7 +221,7 @@ fn a_metallib_function_compiles_after_its_container_check() {
     let Some(bc) = fixture("store_const") else {
         return;
     };
-    let dev = device("lunarg-desktop-baseline-2023");
+    let dev = device("runtime-floor");
     let bytes = metallib(&[MtlbFunction {
         name: "store_const",
         type_code: 2,
@@ -287,7 +287,7 @@ fn a_compute_pipeline_compiles_from_a_function() {
     };
     let lib = Library::from_air(&bc).expect("library");
     let f = lib.function("store_const").expect("function");
-    for stem in ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let dev = device(stem);
         let mut d = kernel(f.clone());
         d.max_total_threads_per_threadgroup = Some(64);
@@ -407,7 +407,7 @@ fn a_compiled_stage_links_without_decoding() {
     assert_eq!(from_compiled.key, dev.compute_pipeline_key(&d));
 
     // A function compiled for another profile is refused, not linked.
-    let other = device("vk12-floor");
+    let other = device("runtime-floor");
     assert_eq!(
         other.compile_compute_pipeline(&d, &Budget::standard()),
         Err(Error::InvalidDescriptor(
@@ -474,7 +474,7 @@ fn function_keys_cover_their_inputs() {
         .expect("library")
         .function("stage_io_vertex_gated")
         .expect("function");
-    let (a, b) = (device("moltenvk-m3"), device("vk12-floor"));
+    let (a, b) = (device("moltenvk-m3"), device("runtime-floor"));
     let mut fd = FunctionDescriptor::new(f);
     let none = LoweringInputs::new();
     let base = a.function_compile_key(&fd, &none);
@@ -792,7 +792,7 @@ fn concurrent_compiles_of_one_function_agree() {
     let Some(bc) = fixture("store_const") else {
         return;
     };
-    let dev = device("lunarg-desktop-baseline-2023");
+    let dev = device("runtime-floor");
     let f = Library::from_air(&bc)
         .expect("library")
         .function("store_const")
@@ -834,7 +834,7 @@ fn determinism_stage_words() -> Option<Vec<(String, Vec<u32>)>> {
     let vertex = lib.function("colored_vertex").expect("vertex");
     let fragment = lib.function("sampled_fragment").expect("fragment");
     let mut out = Vec::new();
-    for stem in ["moltenvk-m3", "lunarg-desktop-baseline-2023"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         for format in [
             metal::PixelFormat::RGBA8Unorm,
             metal::PixelFormat::BGRA8Unorm,
@@ -1051,7 +1051,7 @@ fn a_render_pipeline_compiles_from_functions() {
     };
     let lib = Library::from_air(&bc).expect("library");
     let vertex = lib.function("stage_io_vertex_position").expect("vertex");
-    for stem in ["moltenvk-m3", "lunarg-desktop-baseline-2023"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let dev = device(stem);
         let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
             vertex.clone(),
@@ -1309,7 +1309,7 @@ fn a_queried_render_descriptor_key_covers_each_field_group() {
     assert_eq!(dev.queried_render_descriptor_key(&d.clone()), key);
     assert_eq!(device("moltenvk-m3").queried_render_descriptor_key(&d), key);
     assert_ne!(
-        device("lunarg-desktop-baseline-2023").queried_render_descriptor_key(&d),
+        device("runtime-floor").queried_render_descriptor_key(&d),
         key,
         "the profile"
     );
@@ -1560,7 +1560,7 @@ fn a_render_descriptor_key_covers_its_fields() {
     assert_eq!(dev.render_descriptor_key(&d.clone()), key);
     assert_eq!(device("moltenvk-m3").render_descriptor_key(&d), key);
     assert_ne!(
-        device("lunarg-desktop-baseline-2023").render_descriptor_key(&d),
+        device("runtime-floor").render_descriptor_key(&d),
         key,
         "the profile"
     );
@@ -1660,8 +1660,10 @@ fn a_render_pipeline_requires_extended_dynamic_state_exactly_when_it_makes_one_d
         l3(&pipe.stages[0].spirv, &pipe.requirements, &dev);
         pipe
     };
-    // Vulkan 1.2 without the extension: static states, no requirement.
-    let floor = description("lunarg-desktop-baseline-2023");
+    // Vulkan 1.2 without the extension (`runtime-floor` as a 1.2 context reads it): static states,
+    // no requirement.
+    let floor = crate::pipeline::testing::description_at_1_2("runtime-floor", false)
+        .expect("runtime-floor");
     assert!(!floor.has(VkFeature::ExtendedDynamicState));
     let plain = compile(&floor);
     assert!(plain
@@ -1692,7 +1694,7 @@ fn a_render_pipeline_requires_extended_dynamic_state_exactly_when_it_makes_one_d
     );
 
     // From Vulkan 1.3 the states are core without a feature member: required, nothing to enable.
-    for stem in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let desc = description(stem);
         assert!(desc.api_version >= crate::device::requirements::ApiVersion::V1_3);
         let pipe = compile(&desc);
@@ -1758,7 +1760,9 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
         );
         topology
     };
-    let floor = description("lunarg-desktop-baseline-2023");
+    // `runtime-floor` as a Vulkan 1.2 context reads it, without either extension.
+    let floor = crate::pipeline::testing::description_at_1_2("runtime-floor", false)
+        .expect("runtime-floor");
     assert!(!floor.has(VkFeature::ExtendedDynamicState));
     assert!(!floor.has(VkFeature::ExtendedDynamicState2));
     assert!(!assembly(&compile(&floor)));
@@ -1795,7 +1799,7 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
         Err(Capability::Feature(VkFeature::ExtendedDynamicState2))
     );
     // From Vulkan 1.3: dynamic, nothing to enable.
-    for stem in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let desc = description(stem);
         let pipe = compile(&desc);
         assert!(assembly(&pipe), "{stem}");
@@ -2415,7 +2419,7 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
 /// A render pipeline requires `independentBlend` exactly when the elements of its `pAttachments`
 /// differ, and `dualSrcBlend` exactly when a blend reads the second output. `exf2_skip_one` writes
 /// color attachments 0 and 2, not 1: on `lavapipe` attachment 1 is masked and the feature required
-/// (and enabled); on `vk12-floor`, without the feature, every element is identical, an absent
+/// (and enabled); on `runtime-floor` without the feature, every element is identical, an absent
 /// attachment 1's included, and a written attachment that blends differently is refused typed. A
 /// blend of one and zero, added, of an attachment whose channels convert by a rule other than the
 /// device's (`StageIo::color_writes`) takes no Vulkan blend, so it differs from no other element.
@@ -2449,8 +2453,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
         ));
         d
     };
-    let compile = |stem: &str, d: &RenderPipelineDescriptor| {
-        let desc = description(stem);
+    let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
         let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         let enables = desc
@@ -2477,21 +2480,24 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
         | vk::ColorComponentFlags::B
         | vk::ColorComponentFlags::A;
     let none = vk::ColorComponentFlags::empty();
-    assert!(description("lavapipe").has(INDEPENDENT));
-    assert!(!description("vk12-floor").has(INDEPENDENT));
+    let lavapipe = description("lavapipe");
+    assert!(lavapipe.has(INDEPENDENT));
+    // `runtime-floor` without `independentBlend`, which the runtime's floor requires.
+    let mut floor = description("runtime-floor");
+    floor.features.remove(&INDEPENDENT);
 
     // The unwritten attachment.
     let d = descriptor(&fragment, true);
-    let pipe = compile("lavapipe", &d).expect("lavapipe");
+    let pipe = compile(&lavapipe, &d).expect("lavapipe");
     assert_eq!(masks(&pipe), [all, none, all]);
     assert!(pipe.requirements.features.contains(&INDEPENDENT));
-    let pipe = compile("vk12-floor", &d).expect("vk12-floor");
+    let pipe = compile(&floor, &d).expect("the floor");
     assert_eq!(masks(&pipe), [all, all, all]);
     assert!(!pipe.requirements.features.contains(&INDEPENDENT));
     // An absent attachment 1: its element is the others'.
     let d = descriptor(&fragment, false);
-    for stem in ["lavapipe", "vk12-floor"] {
-        let pipe = compile(stem, &d).expect(stem);
+    for (stem, desc) in [("lavapipe", &lavapipe), ("the floor", &floor)] {
+        let pipe = compile(desc, &d).expect(stem);
         assert!(pipe.graphics.color_attachments[1].is_none());
         assert_eq!(masks(&pipe), [all, all, all], "{stem}");
         assert!(!pipe.requirements.features.contains(&INDEPENDENT), "{stem}");
@@ -2502,7 +2508,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
     if let Some(a) = d.color_attachments[0].as_mut() {
         a.blending_enabled = true;
     }
-    let pipe = compile("lavapipe", &d).expect("lavapipe");
+    let pipe = compile(&lavapipe, &d).expect("lavapipe");
     let blend = |pipe: &RenderPipeline, at: usize| {
         pipe.graphics.color_attachments[at]
             .as_ref()
@@ -2515,7 +2521,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
     if let Some(a) = d.color_attachments[0].as_mut() {
         a.destination_rgb_blend_factor = metal::BlendFactor::OneMinusSourceAlpha;
     }
-    let pipe = compile("lavapipe", &d).expect("lavapipe");
+    let pipe = compile(&lavapipe, &d).expect("lavapipe");
     assert!(blend(&pipe, 0).is_some());
     assert_eq!(blend(&pipe, 2), None);
     assert!(pipe.requirements.features.contains(&INDEPENDENT));
@@ -2523,7 +2529,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
     let at_2 = crate::error::Location::render_pipeline()
         .with_attachment(crate::error::Attachment::Color(2));
     assert_eq!(
-        compile("vk12-floor", &d).unwrap_err(),
+        compile(&floor, &d).unwrap_err(),
         Error::Unsupported(
             Unsupported::needs(
                 Feature::IndependentBlending,
@@ -2547,7 +2553,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
             a.blending_enabled = true;
             a.source_rgb_blend_factor = factor;
         }
-        let pipe = compile("lavapipe", &d).expect("lavapipe");
+        let pipe = compile(&lavapipe, &d).expect("lavapipe");
         assert_eq!(
             pipe.requirements
                 .features
@@ -2727,12 +2733,7 @@ fn each_stage_carries_its_own_constant_blob() {
     let lib = Library::from_air(&bc).expect("library");
     let vertex = lib.function("blob_vertex").expect("vertex");
     let fragment = lib.function("blob_fragment").expect("fragment");
-    for stem in [
-        "moltenvk-m3",
-        "lunarg-desktop-baseline-2023",
-        "lavapipe",
-        "vk12-floor",
-    ] {
+    for stem in ["moltenvk-m3", "runtime-floor", "lavapipe"] {
         let dev = device(stem);
         let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
             vertex.clone(),
@@ -2989,24 +2990,38 @@ fn a_render_pipeline_requires_its_framebuffer_sample_counts() {
 /// The interface states the texture slots a fragment function reads only at its own pixel
 /// (`spirv::requirements::own_pixel`): owned fixture `tob_renders`'s `tob_read`
 /// (`t.read(uint2(in.position.xy))`) on every profile, whether the device's robustness returns
-/// Metal's out-of-bounds texel or the shader clamps the read (both kinds of profile are among
-/// them); not `tob_sample` (a sample at the pixel's center), `tob_read_buffer` (a texture
-/// buffer's texel by arithmetic), nor `tob_solid`, which reads no texture.
+/// Metal's out-of-bounds texel or the shader clamps the read (the runtime's floor without
+/// `robustImageAccess2`, a device below that floor); not `tob_sample` (a sample at the pixel's
+/// center), `tob_read_buffer` (a texture buffer's texel by arithmetic), nor `tob_solid`, which
+/// reads no texture.
 #[test]
 fn the_interface_states_the_textures_read_at_the_fragments_own_pixel() {
+    use crate::device::requirements::VkFeature;
     let Some(bc) = fixture("tob_renders") else {
         return;
     };
     let mut checks = std::collections::BTreeSet::new();
-    for stem in [
+    let mut profiles: Vec<(&str, crate::device::profile::DeviceProfile)> = [
         "intel-irisxe-anv",
         "nvidia-rtx5080-laptop",
         "amd-780m-radv",
         "lavapipe",
         "moltenvk-m3",
-        "vk12-floor",
-    ] {
+        "runtime-floor",
+    ]
+    .map(|stem| {
         let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+        (stem, p)
+    })
+    .into();
+    let clamped = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::RobustImageAccess2],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
+    profiles.push(("runtime-floor without robustImageAccess2", clamped));
+    for (stem, p) in profiles {
         checks.insert(crate::memory::contain::device_reads_texels(&p, false));
         for (entry, own) in [
             ("tob_read", &[0u32][..]),
@@ -3154,7 +3169,7 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
         "amd-780m-radv",
         "lavapipe",
         "moltenvk-m3",
-        "vk12-floor",
+        "runtime-floor",
     ] {
         let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
         let base = crate::pipeline::testing::compile(&bc, "tob_read", &p)

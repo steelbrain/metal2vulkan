@@ -286,7 +286,7 @@ entry:
         .args(roots)
         .args(["--audit", "authored-compile", "--case"])
         .arg(&case_id)
-        .args(["--profile", "vk12-floor"])
+        .args(["--profile", "runtime-floor"])
         .output()
         .unwrap();
     let text = format!(
@@ -297,7 +297,7 @@ entry:
     assert!(output.status.success(), "{text}");
     assert!(
         text.contains(&format!(
-            "authored-compile-cell\t{case_id}\tprofile=vk12-floor\toutcome=compiled\t"
+            "authored-compile-cell\t{case_id}\tprofile=runtime-floor\toutcome=compiled\t"
         )),
         "{text}"
     );

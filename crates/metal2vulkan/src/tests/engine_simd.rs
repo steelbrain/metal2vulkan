@@ -1332,8 +1332,8 @@ fn float_group_arithmetic_without_fast_flags_keeps_signed_zeros() {
             Tier::Emulated,
         ),
         (
-            "vk12-floor",
-            profile("vk12-floor", DevicePolicy::default()).expect("profile"),
+            "runtime-floor",
+            profile("runtime-floor", DevicePolicy::default()).expect("profile"),
             Tier::Emulated,
         ),
     ];

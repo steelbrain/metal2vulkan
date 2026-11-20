@@ -35,7 +35,7 @@ use crate::pipeline::layout::BindingSource;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::sym::{ResourceKind, SamplerRef, SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, profile, AssembleError,
+    compile, engine_dir, link_and_validate, llvm_assemble, profile, profile_without, AssembleError,
 };
 use crate::spirv::testing::committed_profiles;
 
@@ -1277,8 +1277,8 @@ const OP_SWITCH: u16 = 251;
 
 /// A dynamic offset on a gather, and on a fragment's implicit-LOD sample, is the `Offset` operand
 /// of the value Metal applies, its low four bits sign-extended by one `OpBitFieldSExtract`; only
-/// the sample needs `maintenance8`. Without `shaderImageGatherExtended` (the floor) a dynamic gather
-/// offset is taken as `ConstOffset` arms: one switch on its dynamic lane's low four bits, 16 gathers
+/// the sample needs `maintenance8`. Without `shaderImageGatherExtended` (`runtime-floor` without it,
+/// below the runtime's floor) a dynamic gather offset is taken as `ConstOffset` arms: one switch on its dynamic lane's low four bits, 16 gathers
 /// each with a `ConstOffset` and none with `Offset`, and the module needs neither feature. A
 /// runtime sampler's gather snaps a pixel word's coordinate behind the word and moves nothing by
 /// the offset, which the device's sampler places, so it reads the offset once on every device
@@ -1302,7 +1302,12 @@ fn dynamic_offsets_are_offset_operands_of_their_low_four_bits() {
         .features
         .contains(&VkFeature::ShaderImageGatherExtended));
     assert!(!a.requirements.features.contains(&VkFeature::Maintenance8));
-    let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
+    let floor = profile_without(
+        "runtime-floor",
+        &[VkFeature::ShaderImageGatherExtended],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor");
     let a = ok(&bc, "k", &floor);
     assert_eq!(count(&a, OP_SWITCH), 1);
     assert_eq!(

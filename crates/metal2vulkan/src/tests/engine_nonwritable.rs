@@ -467,22 +467,55 @@ fn check(label: &str, words: &[u32], stores: bool) -> Counts {
 
 // ---- Compiling ----
 
-/// The committed profiles every input compiles on, and whether each enables
-/// `fragmentStoresAndAtomics` and `vertexPipelineStoresAndAtomics` (their JSON): a device that
-/// reaches buffers by device address, one that binds them, and the Vulkan 1.2 floor, which binds
-/// them and has neither feature.
+/// `runtime-floor` without `bufferDeviceAddress` (below the runtime's floor): a device that binds
+/// buffers and enables the graphics stages' stores.
+const BOUND: &str = "runtime-floor without bufferDeviceAddress";
+
+/// [`BOUND`] also without the graphics stages' stores and atomics, 8- and 16-bit storage access
+/// and `shaderInt16`: a device that binds buffers, has neither stores feature, and holds no narrow
+/// unit in a slot's views.
+const BARE: &str = "runtime-floor without addresses, stores and narrow access";
+
+/// The profiles every input compiles on, and whether each enables `fragmentStoresAndAtomics` and
+/// `vertexPipelineStoresAndAtomics`: a device that reaches buffers by device address, one that
+/// binds them, and one that binds them and has neither feature.
 const PROFILES: [(&str, bool); 3] = [
     ("nvidia-rtx5080-laptop", true),
-    ("lunarg-desktop-baseline-2023", true),
-    ("vk12-floor", false),
+    (BOUND, true),
+    (BARE, false),
 ];
 
+/// Committed profile `stem`'s description, or [`BOUND`]'s or [`BARE`]'s (`runtime-floor`'s
+/// without their features).
 fn description(stem: &str) -> DeviceDescription {
+    let file = if stem == BOUND || stem == BARE {
+        "runtime-floor"
+    } else {
+        stem
+    };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
+        .join(format!("{file}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    DeviceDescription::from_khronos_json(&text, None).unwrap_or_else(|e| panic!("{stem}: {e}"))
+    let mut desc =
+        DeviceDescription::from_khronos_json(&text, None).unwrap_or_else(|e| panic!("{stem}: {e}"));
+    if stem == BOUND || stem == BARE {
+        desc.features.remove(&VkFeature::BufferDeviceAddress);
+    }
+    if stem == BARE {
+        for f in [
+            VkFeature::FragmentStoresAndAtomics,
+            VkFeature::VertexPipelineStoresAndAtomics,
+            VkFeature::StorageBuffer8BitAccess,
+            VkFeature::StorageBuffer16BitAccess,
+            VkFeature::UniformAndStorageBuffer8BitAccess,
+            VkFeature::UniformAndStorageBuffer16BitAccess,
+            VkFeature::ShaderInt16,
+        ] {
+            desc.features.remove(&f);
+        }
+    }
+    desc
 }
 
 fn device(stem: &str) -> Device {
@@ -491,12 +524,12 @@ fn device(stem: &str) -> Device {
 }
 
 /// The name [`floor_with_16_bit`]'s device goes by in the access sweep.
-const FLOOR_WITH_16_BIT: &str = "vk12-floor+16-bit";
+const FLOOR_WITH_16_BIT: &str = "runtime-floor without addresses, stores and 8-bit access";
 
-/// `vk12-floor` with `shaderInt16` and `storageBuffer16BitAccess`: a slot's views hold the 16-bit
-/// unit and not the 8-bit one.
+/// [`BARE`] with `shaderInt16` and `storageBuffer16BitAccess`: a slot's views hold the 16-bit unit
+/// and not the 8-bit one.
 fn floor_with_16_bit() -> Device {
-    let mut desc = description("vk12-floor");
+    let mut desc = description(BARE);
     desc.features
         .extend([VkFeature::ShaderInt16, VkFeature::StorageBuffer16BitAccess]);
     Device::from_queries(desc, DevicePolicy::default())
@@ -735,7 +768,7 @@ fn bound(bindings: &Bindings, kind: ResourceKind, index: u32) -> (u32, u32) {
 }
 
 /// The profile that binds buffers and enables the fragment stage's stores.
-const BOUND_WITH_STORES: &str = "lunarg-desktop-baseline-2023";
+const BOUND_WITH_STORES: &str = BOUND;
 
 #[test]
 fn only_the_buffer_the_body_never_writes_is_decorated() {
@@ -833,12 +866,9 @@ fn the_walk_catches_a_decoration_on_a_written_buffer() {
 
 #[test]
 fn a_fragment_function_that_only_reads_compiles_without_the_stores_feature() {
-    let Some((words, bindings)) = authored_module(
-        "the read-only fragment function",
-        READ_ONLY,
-        "vk12-floor",
-        &[0],
-    ) else {
+    let Some((words, bindings)) =
+        authored_module("the read-only fragment function", READ_ONLY, BARE, &[0])
+    else {
         return;
     };
     let decorated = decorated_bindings(&words);
@@ -1010,13 +1040,13 @@ fn check_access(
 
 /// The profiles of the access sweep, beside [`floor_with_16_bit`]: each binds buffers and textures
 /// by descriptor, so every slot's memory is a variable of the module. They differ in which narrow
-/// units a slot's views hold, and so in which stores merge into their words: `vk12-floor` has no
-/// 8- or 16-bit storage access, the floor with 16-bit access no `shaderInt8`,
-/// `lunarg-desktop-baseline-2023` no `shaderInt16`, and `moltenvk-m3` both widths.
-const BOUND_PROFILES: [&str; 3] = ["lunarg-desktop-baseline-2023", "vk12-floor", "moltenvk-m3"];
+/// units a slot's views hold, and so in which stores merge into their words: [`BARE`] has no 8- or
+/// 16-bit storage access, the floor with 16-bit access no 8-bit access, and `moltenvk-m3` both
+/// widths.
+const BOUND_PROFILES: [&str; 2] = [BARE, "moltenvk-m3"];
 
-/// A kernel whose four buffers AIR declares `air.write` (the most storage buffers `vk12-floor`
-/// gives a stage): a byte at `gid` of `bytes`, a `ushort` at `gid` of `halves`, a `uint` at `gid`
+/// A kernel whose four buffers AIR declares `air.write` (the most storage buffers the runtime's
+/// floor gives a stage): a byte at `gid` of `bytes`, a `ushort` at `gid` of `halves`, a `uint` at `gid`
 /// of `words`, and a byte at `gid` through a pointer that selects `bytes` or `other` by the
 /// thread's parity (a store with two candidate slots, dispatched by root, `other`'s only store).
 /// A byte or `ushort` store merges into its word through the sub-word store's two atomics, which
@@ -1064,7 +1094,7 @@ fn decorated_with(words: &[u32], decoration: u32) -> BTreeSet<u32> {
 }
 
 /// A store merged into its word reads the word, so its slot reports a read, and nothing declares
-/// the slot's variable unreadable. On `vk12-floor`, with no narrow storage access, every byte and
+/// the slot's variable unreadable. On [`BARE`], with no narrow storage access, every byte and
 /// `ushort` store merges: their slots, `other` through the root dispatch, report `read` and
 /// `write`, and the module's atomics read each of them. On `moltenvk-m3`, whose slots hold both
 /// narrow units, each such store is one plain unit store and every slot reports `write` alone, as
@@ -1087,7 +1117,7 @@ fn a_store_merged_into_its_word_reports_a_read_of_its_slot() {
         (2, "words", false),
         (3, "other", true),
     ];
-    for (stem, narrow_units) in [("vk12-floor", false), ("moltenvk-m3", true)] {
+    for (stem, narrow_units) in [(BARE, false), ("moltenvk-m3", true)] {
         let device = device(stem);
         let function = FunctionDescriptor::new(library.function_at(0).expect("the kernel"));
         let compiled = device

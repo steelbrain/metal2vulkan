@@ -1505,8 +1505,8 @@ mod tests {
     #[test]
     fn committed_profiles_load_and_unknown_stems_are_refused() {
         let stems = committed_profiles().unwrap();
-        assert!(stems.iter().any(|s| s == "vk12-floor"), "{stems:?}");
-        assert!(load_profile("vk12-floor").is_ok());
+        assert!(stems.iter().any(|s| s == "runtime-floor"), "{stems:?}");
+        assert!(load_profile("runtime-floor").is_ok());
         let error = load_profile("../moltenvk-m3").unwrap_err();
         assert!(error.contains("unknown profile"), "{error}");
     }
@@ -1524,7 +1524,7 @@ mod tests {
             }
             Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected store_const.ll: {why}"),
         };
-        let profile = load_profile("vk12-floor").unwrap();
+        let profile = load_profile("runtime-floor").unwrap();
         let attempt = translate_new(&bitcode, "store_const", &profile, None);
         assert_eq!(attempt.outcome, Outcome::Translated, "{attempt:?}");
         assert!(attempt.words.is_some_and(|words| words > 5));
@@ -1553,7 +1553,7 @@ mod tests {
             }
             Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected color_groups.ll: {why}"),
         };
-        for (stem, groups) in [("vk12-floor", 2), ("lavapipe", 1)] {
+        for (stem, groups) in [("runtime-floor", 2), ("lavapipe", 1)] {
             let profile = load_profile(stem).unwrap();
             for (entry, modules) in [("cg_five", groups), ("cg_seven", groups), ("cg_sparse", 1)] {
                 let (attempt, pending) = translate_new_unvalidated(&bitcode, entry, &profile, None);
@@ -1568,7 +1568,7 @@ mod tests {
             }
             let counts = translate_new(&bitcode, "cg_counts", &profile, None);
             let expected = match stem {
-                "vk12-floor" => "device_capability_missing",
+                "runtime-floor" => "device_capability_missing",
                 _ => "translated",
             };
             assert_eq!(
@@ -1604,7 +1604,7 @@ mod tests {
     #[test]
     fn rows_without_retained_bitcode_are_assembled_from_their_text() {
         use metal2vulkan_devtools::engine_dir;
-        let profile = load_profile("vk12-floor").unwrap();
+        let profile = load_profile("runtime-floor").unwrap();
         let text = std::fs::read_to_string(engine_dir().join("store_const.ll")).unwrap();
         let source = RowSource::of(None, text.clone());
         assert_eq!(source, RowSource::Text(Cow::Borrowed(text.as_str())));
@@ -1659,7 +1659,7 @@ mod tests {
     #[test]
     fn a_public_rows_attempt_does_not_follow_its_scratch_directory() {
         use metal2vulkan_devtools::engine_dir;
-        let profile = load_profile("vk12-floor").unwrap();
+        let profile = load_profile("runtime-floor").unwrap();
         let text: String = std::fs::read_to_string(engine_dir().join("store_const.ll"))
             .unwrap()
             .lines()
@@ -1695,7 +1695,7 @@ mod tests {
 
     #[test]
     fn garbage_bitcode_is_typed_invalid_input_not_a_panic() {
-        let profile = load_profile("vk12-floor").unwrap();
+        let profile = load_profile("runtime-floor").unwrap();
         let attempt = translate_new(b"not bitcode", "main", &profile, None);
         assert_eq!(attempt.outcome.label(), "invalid_input", "{attempt:?}");
         assert!(attempt.detail.is_some());

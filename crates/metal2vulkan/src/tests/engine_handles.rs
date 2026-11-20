@@ -50,8 +50,8 @@ use crate::pipeline::sym::{
 };
 use crate::pipeline::testing::{
     compile, compile_given_storage_format, engine_dir, fixtures_dir, link_and_validate,
-    llvm_assemble, profile, profile_with_storage_buffers, status_reach, status_reach_on,
-    storage_buffers, typed_module, AssembleError, StatusReach,
+    llvm_assemble, profile, status_reach, status_reach_on, storage_buffers, typed_module,
+    AssembleError, StatusReach, PROFILE_F,
 };
 use crate::pipeline::{
     heap_sampler_capacity, ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor,
@@ -595,8 +595,9 @@ entry:
 /// A texel buffer's clamp or guard follows the buffer encoding and an image's the image encoding: a
 /// read is left to the device only where its robustness returns Metal's out-of-bounds texel
 /// (`robustBufferAccess2`, `robustImageAccess2`), and a write only where it discards the write
-/// (`robustBufferAccess2`, `robustImageAccess`). On `vk12-floor` (`robustBufferAccess` alone) every
-/// read and write is checked in the shader; on `moltenvk-m3` (`robustBufferAccess` and
+/// (`robustBufferAccess2`, `robustImageAccess`). On `runtime-floor` without image robustness
+/// (`robustBufferAccess` alone, a device below the runtime's floor) every read and write is checked
+/// in the shader; on `moltenvk-m3` (`robustBufferAccess` and
 /// `robustImageAccess2`) a texel buffer's are and an image's are not. A size query at a level the
 /// thread names answers from the first level on every profile, and a texture atomic is guarded
 /// exactly without image
@@ -613,7 +614,7 @@ fn a_switch_is_named_by_the_check_its_arms_take() {
             .map(|(name, u)| (name.clone(), u.uses))
             .collect()
     };
-    let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
+    let floor = without_robust_images("runtime-floor");
     for (op, on_floor, on_m3) in [
         (
             TexelRead,
@@ -645,7 +646,7 @@ fn a_switch_is_named_by_the_check_its_arms_take() {
             return;
         };
         for (stem, p, want) in [
-            ("vk12-floor", &floor, on_floor),
+            ("runtime-floor without image robustness", &floor, on_floor),
             ("moltenvk-m3", &m3(), on_m3),
         ] {
             let a = compile_given_storage_format(&bc, "switched", p, PixelFormat::RGBA32Float)
@@ -4592,7 +4593,7 @@ fn argument_buffer_samplers_are_heap_lookups() {
 /// A kernel reading a texture and its sampler from an argument buffer has one set-1 sampler
 /// array, of `heap_sampler_capacity` elements, on every committed profile that compiles it: the
 /// handle table's 65536 where the update-after-bind sampler limits pass it (MoltenVK's 500000,
-/// lavapipe's, NVIDIA's), the per-stage limit's 16 on the desktop baseline. On the M3's profile
+/// lavapipe's, NVIDIA's), the update-after-bind limits' 12000 on the runtime's floor. On the M3's profile
 /// with its per-stage update-after-bind sampler limit lowered to 100, or its set's to 200, the
 /// array and the answer follow it. A profile that refuses the kernel answers 0, and so does the
 /// M3's without `descriptorBindingPartiallyBound` or `shaderSampledImageArrayNonUniformIndexing`,
@@ -4637,7 +4638,7 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
     for stem in ["moltenvk-m3", "lavapipe", "nvidia-rtx5080-laptop"] {
         assert!(compiled.contains(&(stem, 65536)), "{stem}: {compiled:?}");
     }
-    assert!(compiled.contains(&("lunarg-desktop-baseline-2023", 16)));
+    assert!(compiled.contains(&("runtime-floor", 12000)));
     let m3 = || {
         (committed_descriptions().expect("descriptions").iter())
             .find(|(stem, _)| stem == "moltenvk-m3")
@@ -4669,7 +4670,8 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
 /// A sample through an argument buffer's sampler tests the sampler's entry for a cubic filter
 /// (`RuntimeFact::CubicArgumentSampler`) in a kernel on every profile with the heap, marking the
 /// status by address where the device addresses buffers and through the kernel's binding of it
-/// elsewhere; a fragment function's never does, whose store would cost it the device's
+/// elsewhere (Profile F, `runtime-floor` without device addresses, below the runtime's floor); a
+/// fragment function's never does, whose store would cost it the device's
 /// hidden-surface removal, so the planner refuses a listed cubic sampler beside it.
 #[test]
 fn only_non_fragment_stages_test_argument_samplers_for_a_cubic_filter() {
@@ -4677,7 +4679,10 @@ fn only_non_fragment_stages_test_argument_samplers_for_a_cubic_filter() {
         return;
     };
     let (mut compiled, mut bound) = (0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    let f = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    profiles.push((PROFILE_F.to_string(), f.profile().clone()));
+    for (stem, p) in profiles {
         let (Ok(kernel), Ok(fragment)) = (
             compile(&bc, "argument_sampler_sample", &p),
             compile(&bc, "argument_sampler_fragment", &p),
@@ -4694,11 +4699,8 @@ fn only_non_fragment_stages_test_argument_samplers_for_a_cubic_filter() {
         compiled += 1;
         bound += usize::from(reach == StatusReach::Binding);
     }
-    assert!(compiled > 0, "no committed profile has the heap");
-    assert!(
-        bound > 0,
-        "no committed profile with the heap but no addresses"
-    );
+    assert!(compiled > 0, "no profile has the heap");
+    assert!(bound > 0, "no profile with the heap but no addresses");
 }
 
 /// Whether `a` tests an argument buffer's sampler for a cubic filter.
@@ -4709,8 +4711,8 @@ fn tests_cubic(a: &FunctionArtifact) -> bool {
 }
 
 /// Where the cubic test's binding of the status would take a kernel past its storage buffers (a
-/// device that does not address buffers, `lunarg-desktop-baseline-2023` with its limit lowered
-/// step by step), the kernel gives the binding back: it compiles without the test, as a fragment
+/// device that does not address buffers, Profile F with its limit lowered step by step), the
+/// kernel gives the binding back: it compiles without the test, as a fragment
 /// function does, so the planner refuses a listed cubic sampler beside it. Every compile stays
 /// within the limit, and at the full kernel's own count of storage buffers the kernel keeps the
 /// binding.
@@ -4719,16 +4721,23 @@ fn the_cubic_tests_binding_gives_way_to_the_storage_buffer_limit() {
     let Some(bc) = argument_samplers_fixture() else {
         return;
     };
-    let stem = "lunarg-desktop-baseline-2023";
-    let full = profile(stem, DevicePolicy::default()).expect("profile");
+    let stem = PROFILE_F;
+    let with_storage = |limit: u32| {
+        let mut desc = crate::pipeline::testing::description_f().expect("Profile F");
+        if limit < u32::MAX {
+            desc.limits.max_per_stage_descriptor_storage_buffers = limit;
+        }
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("profile");
+        dev.profile().clone()
+    };
+    let full = with_storage(u32::MAX);
     assert!(has_sampled_heap(&full), "{stem}");
     let kernel = compile(&bc, "argument_sampler_sample", &full).expect("kernel");
     assert_eq!(status_reach(&kernel), StatusReach::Binding);
     let with = storage_buffers(&kernel);
     let mut given_back = None;
     for limit in (0..=with).rev() {
-        let p =
-            profile_with_storage_buffers(stem, DevicePolicy::default(), limit).expect("profile");
+        let p = with_storage(limit);
         let a = match compile(&bc, "argument_sampler_sample", &p) {
             Ok(a) => a,
             Err(Error::Unsupported(u)) if u.feature == Feature::DescriptorCount => break,

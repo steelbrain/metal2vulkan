@@ -265,7 +265,7 @@ fn a_text_is_charged_the_same_wherever_it_is_assembled() {
     let (Some(a), Some(b)) = (assembled(&near), assembled(&far)) else {
         return;
     };
-    let p = profile("vk12-floor", DevicePolicy::default()).expect("vk12-floor");
+    let p = profile("runtime-floor", DevicePolicy::default()).expect("runtime-floor");
     let charged = |bitcode: &[u8]| {
         let mut m = meter();
         let artifact = compile_bitcode(

@@ -55,7 +55,7 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
 /// `vk12-floor` (no `shaderInt64`) and `moltenvk-m3`, each in both encodings.
 fn encodings() -> Vec<(String, DeviceProfile)> {
     let mut out = Vec::new();
-    for stem in ["vk12-floor", "moltenvk-m3"] {
+    for stem in ["runtime-floor", "moltenvk-m3"] {
         for robust in [true, false] {
             out.push((
                 format!("{stem} robust={robust}"),

@@ -49,7 +49,7 @@ use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::check_words_valid;
 use crate::vk;
 
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"];
+const PROFILES: [&str; 2] = ["moltenvk-m3", "runtime-floor"];
 const ENTRY: &str = "stage_io_vertex";
 
 fn fixture() -> Option<Vec<u8>> {

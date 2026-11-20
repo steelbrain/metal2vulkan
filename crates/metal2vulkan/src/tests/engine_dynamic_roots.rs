@@ -37,7 +37,7 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{BufferForm, PushLoc, SlotInterface};
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
+    compile, device_f, link_and_validate, llvm_assemble, typed_module, AssembleError, PROFILE_F,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
 use crate::spirv::ir::{Inst, StorageClass, Type, TypedModule};
@@ -679,8 +679,8 @@ fn profile_f_refuses_a_loaded_pointer_dereference() {
     ) else {
         return;
     };
-    let p = profile("vk12-floor", true, DevicePolicy::default());
-    match compile(&bc, leaf.name, &p) {
+    let f = device_f(DevicePolicy::default()).expect(PROFILE_F);
+    match compile(&bc, leaf.name, f.profile()) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);
             assert_eq!(

@@ -8,8 +8,6 @@ use crate::device::subgroup::{
     SubgroupSizes, Tier,
 };
 use crate::error::{Capability, Feature};
-use crate::metal::format::storage_image_choice;
-use crate::metal::PixelFormat;
 use crate::metal::{ArgumentBuffersTier, ReadWriteTextureTier};
 use crate::pipeline::sym::Stage;
 
@@ -61,14 +59,11 @@ intel-irisxe-anv: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 intel-irisxe-rplp-anv: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 intel-uhd770-rpls-anv: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 lavapipe: -,xO,xO,xO,xO,xO,xM | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
-lunarg-desktop-baseline-2023: -,xO,xO,xO,xO,xO,xM | -,P,xQ,xO,xO,xO,xM | -,L,E,E,E,E,E
 moltenvk-m3: -,xO,xO,xO,xO,xO,xM | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-pascal-linux: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-rtx50-linux: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-rtx5080-laptop: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
-roadmap-2022: -,xO,xO,xO,xO,xO,xM | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
-swiftshader: -,P,xQ,P,P,P,xW | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
-vk12-floor: -,xO,xO,xO,xO,xO,xM | -,xO,xQ,xO,xO,xO,xM | -,L,E,E,E,E,E
+runtime-floor: -,xO,xO,xO,xO,xO,xM | -,xO,xQ,xO,xO,xO,xM | -,L,E,E,E,E,E
 ";
 
 fn table() -> String {
@@ -534,27 +529,14 @@ fn metal_properties_report_d3_d4_values() {
         );
         assert!(m.max_buffer_length > 0, "{stem}");
     }
-    let floor = device("vk12-floor");
+    let floor = device("runtime-floor");
     let m = floor.metal_properties();
-    assert_eq!(m.max_threads_per_threadgroup, [128, 128, 128]);
-    assert_eq!(m.argument_buffers_tier, ArgumentBuffersTier::Tier1);
-    // Vulkan 1.2 requires R32 storage images: tier 1. Tier 2's 8- and 16-bit single-channel formats
-    // need shaderStorageImageExtendedFormats, which the floor lacks, so formatless reads and
-    // writes added to it do not make it tier 2.
-    assert_eq!(m.read_write_texture_tier, ReadWriteTextureTier::Tier1);
-    let mut formatless = profile("vk12-floor");
-    formatless
-        .features
-        .insert(VkFeature::ShaderStorageImageReadWithoutFormat);
-    formatless
-        .features
-        .insert(VkFeature::ShaderStorageImageWriteWithoutFormat);
-    let formatless = Device::from_queries(formatless, DevicePolicy::default()).unwrap();
-    assert_eq!(
-        formatless.metal_properties().read_write_texture_tier,
-        ReadWriteTextureTier::Tier1
-    );
-    assert!(storage_image_choice(PixelFormat::R16Float, formatless.profile()).is_err());
+    assert_eq!(m.max_threads_per_threadgroup, [1024, 1024, 1024]);
+    // Device addresses and update-after-bind sampled and storage images: tier 2.
+    assert_eq!(m.argument_buffers_tier, ArgumentBuffersTier::Tier2);
+    // Tier 2's 8- and 16-bit single-channel storage formats come with
+    // shaderStorageImageExtendedFormats, which the floor requires.
+    assert_eq!(m.read_write_texture_tier, ReadWriteTextureTier::Tier2);
     // Typed storage images are enough: intel-irisxe-anv reads storage images only with a
     // declared format and still has every tier-2 format.
     let irisxe = device("intel-irisxe-anv");
@@ -563,7 +545,8 @@ fn metal_properties_report_d3_d4_values() {
         irisxe.metal_properties().read_write_texture_tier,
         ReadWriteTextureTier::Tier2
     );
-    assert_eq!(m.max_buffer_length, 1 << 27);
+    // Vulkan 1.3's maxBufferSize and maxMemoryAllocationSize guarantees.
+    assert_eq!(m.max_buffer_length, 1 << 30);
     // Without subgroup operations a kernel's simdgroups, matrices included, are emulated; a
     // fragment's are not.
     assert!(m.simd.kernel.matrix);
@@ -571,9 +554,8 @@ fn metal_properties_report_d3_d4_values() {
     let has = |f: &Feature| m.unsupported_features.iter().any(|u| u.feature == *f);
     // 64-bit integers are two words without `shaderInt64`, on every pipeline.
     assert!(!has(&Feature::Int64Arithmetic));
-    for f in [Feature::ArgumentBufferPointers, Feature::RasterOrderGroups] {
-        assert!(has(&f), "vk12-floor should report {f:?}");
-    }
+    assert!(!has(&Feature::ArgumentBufferPointers));
+    assert!(has(&Feature::RasterOrderGroups));
     // Neither rasterization-order access nor the pixel interlock: framebuffer fetch reads input
     // attachments ordered between draws, a note, not a refusal.
     let fragment = floor.profile().fields().fragment;

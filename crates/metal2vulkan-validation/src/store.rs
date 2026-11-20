@@ -2335,7 +2335,7 @@ mod tests {
         let case = make_case("restricted", "AAAAAA==");
         store.put_case(case.clone()).unwrap();
         let refused = NotSupported::Restriction {
-            profile: "lunarg-desktop-baseline-2023".into(),
+            profile: "runtime-floor".into(),
             gaps: vec![
                 "formats.VK_FORMAT_R8_SNORM.optimal_tiling 0xdd83 beyond the device's 0x1dc83"
                     .into(),
@@ -2344,13 +2344,13 @@ mod tests {
         let restricted = |slot: &str, leg: &str| RefusalObservation {
             environment: serde_json::json!({
                 "robustness": {"leg": leg},
-                "profiles_layer": {"profile": "lunarg-desktop-baseline-2023"},
+                "profiles_layer": {"profile": "runtime-floor"},
             }),
             refusal: crate::refusal::Refusal::of(&refused),
             ..refusal(&case, slot, leg)
         };
-        let stated = "env@engine@lunarg-desktop-baseline-2023";
-        let off = "env@engine@lunarg-desktop-baseline-2023+robustness-off";
+        let stated = "env@engine@runtime-floor";
+        let off = "env@engine@runtime-floor+robustness-off";
         store.upsert_refusal(restricted(stated, "stated")).unwrap();
         store
             .upsert_refusal(restricted(off, "robustness_off"))
@@ -2376,7 +2376,7 @@ mod tests {
         assert!(stored[0]
             .refusal
             .detail
-            .contains("profile lunarg-desktop-baseline-2023 states 1 capabilities the device lacks: formats.VK_FORMAT_R8_SNORM"));
+            .contains("profile runtime-floor states 1 capabilities the device lacks: formats.VK_FORMAT_R8_SNORM"));
         // The venue's own slot keeps its row.
         assert_eq!(store.read_candidates(Backend::Vulkan).unwrap().len(), 1);
         assert!(store.layout_errors().unwrap().is_empty());

@@ -31,7 +31,8 @@ use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::StageBuiltin;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    engine_dir, link_and_validate, llvm_assemble, meter, typed_module_with, AssembleError,
+    engine_dir, link_and_validate, llvm_assemble, meter, profile_without, typed_module_with,
+    AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::committed_profiles;
@@ -71,13 +72,24 @@ fn placed(a: &FunctionArtifact, f: PushField) -> bool {
 /// On every committed profile with `vertexPipelineStoresAndAtomics` (the fixture stores from its
 /// vertex functions), both vertex entries pass L3 and state the draw's bases as the binder must
 /// supply them: `BaseVertex` and `BaseInstance` (needing `shaderDrawParameters`) on a profile with
-/// it, the `BaseVertexInstance` push field on one without it; the runtime fact either way. A
-/// profile without the stores refuses the entries for them alone.
+/// it, the `BaseVertexInstance` push field on one without it (`runtime-floor` without it, below
+/// the runtime's floor); the runtime fact either way. A profile without the stores refuses the
+/// entries for them alone.
 #[test]
 fn vertex_entries_read_the_builtins_or_the_push_lanes() {
     let Some(bc) = fixture() else { return };
     let (mut builtins, mut pushed) = (0, 0);
-    for (stem, p) in committed_profiles().expect("committed profiles") {
+    let mut profiles = committed_profiles().expect("committed profiles");
+    profiles.push((
+        "runtime-floor without shaderDrawParameters".into(),
+        profile_without(
+            "runtime-floor",
+            &[VkFeature::ShaderDrawParameters],
+            DevicePolicy::default(),
+        )
+        .expect("below the runtime's floor"),
+    ));
+    for (stem, p) in profiles {
         let draw = p.fields().draw_parameters;
         for entry in [WIDE, NARROW] {
             let what = format!("{stem} {entry}");
@@ -253,7 +265,7 @@ fn device(stem: &str) -> Device {
 fn a_draw_of_patches_pushes_its_base_instance() {
     let Some(bc) = fixture() else { return };
     let lib = Library::from_air(&bc).expect("library");
-    for stem in ["moltenvk-m3", "lavapipe", "lunarg-desktop-baseline-2023"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let dev = device(stem);
         let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
             lib.function(TESSELLATED).expect("function"),

@@ -26,7 +26,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 135 | 120 | 8 | 33 | 74 | 20 | 0 |
+| Translator and front-end refusals | 136 | 121 | 8 | 33 | 74 | 21 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 40 | 58 | 0 | 0 | 37 |
+| Translator and front-end refusals | 0 | 0 | 0 | 41 | 58 | 0 | 0 | 37 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -139,6 +139,7 @@ Columns:
 | `RasterizationRateMap` |  | devices without VkFeature::MultiViewport; devices without VkFeature::ShaderDrawParameters; devices without VkFeature::ShaderOutputViewportIndex; devices without VkLimit::MaxGeometryTotalOutputComponents; devices without a capability the site computes; devices without a capability the site computes (`vec![Capability::Feature(lacks)]`); every device (not implemented) | `ours` | 10: `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_copy, 3 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_viewport, 2 sites)` (+3) | `rare`: rasterization rate maps |
 | `GpuEncodedIndirectCommands` |  | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism); every device (not implemented) | `ours` | 20: `crates/metal2vulkan/src/bind/replay.rs (preprocess)`, `crates/metal2vulkan/src/bind/replay.rs (replay_preprocess_module)` (+12) | `rare`: indirect command buffers encoded by a kernel |
 | `VulkanVersion` | The device's Vulkan version is below the 1.2 floor | devices without ApiVersion::V1_2 | `device` | 2: `crates/metal2vulkan/src/ash_interop/query.rs (query)`, `crates/metal2vulkan/src/device/derive.rs (from_queries)` | `none`: a device below Vulkan 1.2 |
+| `PushWindow` | The device's `maxPushConstantsSize` is below the 256 bytes of the push window every stage is lowered for | devices without VkLimit::MaxPushConstantsSize | `device` | 1: `crates/metal2vulkan/src/device/derive.rs (from_queries)` | `none`: a device whose maxPushConstantsSize is below 256 bytes |
 | `IdentityDomains` | The identity pointer and handle domains (`PointerDomain::Identity`, `HandleDomain::Identity`) | devices without a capability the site computes (`all`); every device (not implemented) | `ours` | 6: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`, `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)` (+4) | `none`: the identity domains, which the runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far |
 | `Constant` | A constants-block record LLVM defines that the typed model has no form for (a block address, a `select` and the other constant expressions of... | - | `-` | via a helper: 3: `crates/metal2vulkan-air/src/bitcode/constants.rs (record, 2 sites)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: LLVM constant forms AIR does not emit |
 | `Attribute` | An LLVM attribute kind that changes the calling ABI and that AIR does not use (`inalloca`, `preallocated`, `byref`, `nest`, the `swift*` kinds) | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/bitcode/attrs.rs (known)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: LLVM ABI attributes AIR does not use |
@@ -478,6 +479,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::RasterizationRateMap`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_copy, 3 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_viewport, 2 sites)`; `crates/metal2vulkan/src/pipeline/link.rs (region_box)`; `crates/metal2vulkan/src/pipeline/link/geometry.rs (check_limits)`; `crates/metal2vulkan/src/pipeline/link/geometry.rs (fan_plan, 3 sites)`
 - `feature::GpuEncodedIndirectCommands`: `crates/metal2vulkan/src/bind/replay.rs (preprocess)`; `crates/metal2vulkan/src/bind/replay.rs (replay_preprocess_module)`; `crates/metal2vulkan/src/bind/replay/draws.rs (draw_replay_module)`; `crates/metal2vulkan/src/bind/replay/draws.rs (draw_replay_preprocess)`; `crates/metal2vulkan/src/bind/replay/merged.rs (draw_merge_module)`; `crates/metal2vulkan/src/lower/access/encode.rs (needs, 3 sites)`; `crates/metal2vulkan/src/lower/access/encode.rs (select_command)`; `crates/metal2vulkan/src/lower/access/mod.rs (plan_replay, 3 sites)`; `crates/metal2vulkan/src/lower/mesh/mod.rs (plan_partial_groups)`; `crates/metal2vulkan/src/lower/select.rs (finish, 2 sites)`; `crates/metal2vulkan/src/lower/simd/divergent.rs (barriers)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (merged)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`; `crates/metal2vulkan/src/pipeline/compile.rs (analyze_one, 2 sites)`
 - `feature::VulkanVersion`: `crates/metal2vulkan/src/ash_interop/query.rs (query)`; `crates/metal2vulkan/src/device/derive.rs (from_queries)`
+- `feature::PushWindow`: `crates/metal2vulkan/src/device/derive.rs (from_queries)`
 - `feature::IdentityDomains`: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`; `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)`; `crates/metal2vulkan/src/lower/sampler/mod.rs (finish)`; `crates/metal2vulkan/src/lower/select.rs (identity_admits)`; `crates/metal2vulkan/src/lower/texture/slot.rs (storage_format)`; `crates/metal2vulkan/src/pipeline/link.rs (identity_set)`
 - `feature::Constant`: `crates/metal2vulkan-air/src/bitcode/constants.rs (record, 2 sites)`; `crates/metal2vulkan/src/error/mod.rs (from)`
 - `feature::Attribute`: `crates/metal2vulkan-air/src/bitcode/attrs.rs (known)`; `crates/metal2vulkan/src/error/mod.rs (from)`

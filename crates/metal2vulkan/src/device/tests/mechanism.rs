@@ -570,7 +570,19 @@ fn profile_dependent_rows_differ_where_the_design_says() {
             index: 0,
         },
     };
-    let floor = device("vk12-floor");
+    // Below the runtime's floor: `runtime-floor` as a Vulkan 1.2 context reads it, without device
+    // addresses, 64-bit integers or shader draw parameters.
+    use crate::device::requirements::VkFeature;
+    let mut below = crate::pipeline::testing::description_at_1_2("runtime-floor", false).unwrap();
+    for f in [
+        VkFeature::BufferDeviceAddress,
+        VkFeature::ShaderInt64,
+        VkFeature::ShaderDrawParameters,
+    ] {
+        below.features.remove(&f);
+    }
+    let floor =
+        crate::device::Device::from_queries(below, crate::device::DevicePolicy::default()).unwrap();
     let addressed = device("nvidia-rtx50-linux");
     assert_eq!(mechanism(&range, floor.profile()), Mechanism::PlanTimeCheck);
     assert_eq!(mechanism(&range, addressed.profile()), Mechanism::Variant);

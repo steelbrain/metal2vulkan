@@ -4,7 +4,7 @@
 # directory kept on this host, resumable and measured. Metal is never run.
 #
 #   scripts/rerecord-venue --venue ID [--kind native-gpu|moltenvk|cpu-icd]
-#                          [--icd lavapipe|swiftshader] [--ref SHA] [--out-root DIR]
+#                          [--icd lavapipe] [--ref SHA] [--out-root DIR]
 #                          [--leg stated|robustness-off]... [--case-id HASH]...
 #                          [--limit CASES] [--budget SECONDS] [--cpus N] [--slot NAME]
 #                          [--private-corpus DIR] [--metal-environment-id ID] [--retry-failed]
@@ -12,10 +12,10 @@
 #
 # - The venue. --venue is the operator environment ID its rows record (the batch stores them in
 #   its engine slots). A venue of crates/metal2vulkan-validation/cutover/c3-venues.json takes its kind from
-#   there; any other (a SwiftShader venue, say) needs --kind. Every venue runs both legs unless
+#   there; any other needs --kind. Every venue runs both legs unless
 #   --leg says otherwise: C3 judges the legs c3-venues.json lists, but coverage needs both on every
-#   venue (a robustness-off requirement is met only by a robustness-off run). --icd picks the CPU
-#   ICD of a cpu-icd venue (default lavapipe). --profiles-layer P records a restricted leg: every
+#   venue (a robustness-off requirement is met only by a robustness-off run). --icd names the CPU
+#   ICD of a cpu-icd venue (lavapipe, the default and only one). --profiles-layer P records a restricted leg: every
 #   run with the device restricted to the committed profile P, its rows in the ID@engine@P
 #   slots (a capability profile on a CPU ICD, or on a GPU where no CPU ICD takes it, or a GPU
 #   restricted to another profile of its own driver class). Where the device lacks what P states,
@@ -112,7 +112,7 @@ case "$venue$leg_flags$case_flags$slot$icd$profile" in
 esac
 case "$budget" in ''|*[!0-9]*) fail "--budget takes whole seconds" ;; esac
 case "$limit" in *[!0-9]*) fail "--limit takes a whole number" ;; esac
-case "$icd" in lavapipe|swiftshader) ;; *) fail "--icd is lavapipe or swiftshader" ;; esac
+case "$icd" in lavapipe) ;; *) fail "--icd is lavapipe" ;; esac
 
 root=$(git rev-parse --show-toplevel) || fail "not in a git checkout"
 cd "$root" || exit 2

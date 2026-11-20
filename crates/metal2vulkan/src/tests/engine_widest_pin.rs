@@ -61,7 +61,7 @@ fn the_widest_pin_rule_picks_each_shuffle_kernel_s_tier_per_profile() {
         ("nvidia-rtx50-linux", Stage::Pins),
         ("nvidia-pascal-linux", Stage::Pins),
         ("lavapipe", Stage::Neither),
-        ("swiftshader", Stage::Neither),
+        ("runtime-floor", Stage::Neither),
         ("moltenvk-m3", Stage::Neither),
     ] {
         let dev = Device::from_queries(

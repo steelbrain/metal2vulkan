@@ -32,7 +32,8 @@ use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, meter, typed_module_with, AssembleError,
+    compile, device_f, link_and_validate, llvm_assemble, meter, typed_module_with, AssembleError,
+    PROFILE_F,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::ir::{Inst, StorageClass, Type, TypedModule};
@@ -52,7 +53,14 @@ const fn slot_guest(i: u64) -> u64 {
     0x0000_0001_0000_0000 + i * 0x1_0000
 }
 
+/// Committed profile `stem`, or [`PROFILE_F`]'s (`runtime-floor` without `bufferDeviceAddress`).
 fn profile(stem: &str) -> DeviceProfile {
+    if stem == PROFILE_F {
+        return device_f(DevicePolicy::default())
+            .expect(PROFILE_F)
+            .profile()
+            .clone();
+    }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -64,11 +72,11 @@ fn profile(stem: &str) -> DeviceProfile {
         .clone()
 }
 
-/// Profile A with and without robust descriptors, and Profile F with and without device
-/// addresses (none of the committed Profile-F profiles has `shaderInt64`).
+/// Profile A with and without robust descriptors, and Profile F ([`PROFILE_F`], below the
+/// runtime's floor).
 fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut out = Vec::new();
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor", "roadmap-2022"] {
+    for stem in ["moltenvk-m3", "lavapipe", PROFILE_F] {
         out.push((stem.to_owned(), profile(stem)));
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -843,7 +851,7 @@ fn profile_f_refuses_a_pointer_made_from_an_integer() {
     let Some(bc) = assemble("from_int", &kernel("from_int", 2, body, "")) else {
         return;
     };
-    for stem in ["vk12-floor", "roadmap-2022", "swiftshader"] {
+    for stem in [PROFILE_F] {
         let p = profile(stem);
         let e = compile(&bc, "from_int", &p).expect_err("refused");
         let Error::Unsupported(u) = e else {
@@ -912,7 +920,7 @@ fn a_null_threadgroup_or_private_select_side_is_no_internal_error() {
         let Some(bc) = assemble(name, &kernel(name, 1, body, globals)) else {
             return;
         };
-        for stem in ["moltenvk-m3", "vk12-floor"] {
+        for stem in ["moltenvk-m3", PROFILE_F] {
             match compile(&bc, name, &profile(stem)) {
                 Ok(_) | Err(Error::Unsupported(_)) => {}
                 Err(e) => panic!("{name} on {stem}: {e:?}"),

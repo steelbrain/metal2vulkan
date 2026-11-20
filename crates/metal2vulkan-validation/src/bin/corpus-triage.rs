@@ -3101,7 +3101,7 @@ mod tests {
     #[test]
     fn engine_worker_translates_retained_bitcode_and_assembles_public_text() {
         use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
-        let profile = engine::load_profile("vk12-floor").unwrap();
+        let profile = engine::load_profile("runtime-floor").unwrap();
         let text = fs::read_to_string(engine_dir().join("store_const.ll")).unwrap();
         let mut source = metal2vulkan_validation::source::SourceRow {
             air_sha256: "11".repeat(32),

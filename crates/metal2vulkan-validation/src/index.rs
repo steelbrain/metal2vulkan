@@ -3120,7 +3120,10 @@ mod tests {
                     "VkPhysicalDeviceProperties": {
                         "deviceName": "Toy GPU", "vendorID": 4098, "deviceID": 5567,
                         "driverVersion": 109060100,
-                        "limits": {"maxComputeWorkGroupInvocations": 1024},
+                        "limits": {
+                            "maxComputeWorkGroupInvocations": 1024,
+                            "maxPushConstantsSize": 256,
+                        },
                     },
                     "VkPhysicalDeviceDriverProperties": {
                         "driverID": "VK_DRIVER_ID_MESA_RADV", "driverInfo": "Mesa 26.2.4",

@@ -204,7 +204,7 @@ fn rename_names_the_contract_does_not_own(source: &str) -> (String, usize) {
 
 /// The two committed profiles every input compiles on: a device that reaches buffers by device
 /// address, and the Vulkan 1.2 floor, which binds them (Profile F).
-const PROFILES: [&str; 2] = ["nvidia-rtx5080-laptop", "vk12-floor"];
+const PROFILES: [&str; 2] = ["nvidia-rtx5080-laptop", "runtime-floor"];
 
 fn devices() -> Vec<(&'static str, Device)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");

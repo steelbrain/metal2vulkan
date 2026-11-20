@@ -1141,7 +1141,7 @@ fn an_additions_bless_refuses_a_changed_cell_and_writes_nothing() {
     corpus.store().put_case(case("delta")).unwrap();
     let fresh = corpus.root().join("fresh.sqlite");
     let report = corpus
-        .additions(&compiler, &["vk12-floor"], Some(&fresh))
+        .additions(&compiler, &["runtime-floor"], Some(&fresh))
         .unwrap();
     assert!(!report.passed() && !report.blessed && !report.written);
     let changed = report

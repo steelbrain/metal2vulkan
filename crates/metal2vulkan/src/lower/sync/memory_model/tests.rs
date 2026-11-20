@@ -7,12 +7,27 @@ fn needs(f: VkFeature) -> Error {
     Unsupported::needs(Feature::CoherentMemory, Capability::Feature(f)).into()
 }
 
+/// The committed profiles, and the runtime's floor without the Vulkan model's device scope and
+/// without the model: devices below that floor, which the floor's own model leaves no committed
+/// profile short of.
+fn profiles() -> Vec<(String, crate::device::profile::DeviceProfile)> {
+    let mut out = committed_profiles().expect("profiles");
+    let scope = VkFeature::VulkanMemoryModelDeviceScope;
+    for without in [&[scope][..], &[VkFeature::VulkanMemoryModel, scope]] {
+        let p =
+            crate::pipeline::testing::profile_without("runtime-floor", without, Default::default())
+                .expect("below the floor");
+        out.push((format!("runtime-floor without {without:?}"), p));
+    }
+    out
+}
+
 /// `GLSL450` needs nothing, with or without `Coherent` resources; the Vulkan model needs
 /// `vulkanMemoryModel`, and with a `Device`-scope operation also `vulkanMemoryModelDeviceScope`,
-/// on every committed profile.
+/// on every committed profile and below the floor ([`profiles`]).
 #[test]
 fn the_vulkan_model_is_checked_against_the_profile() {
-    let profiles = committed_profiles().expect("profiles");
+    let profiles = profiles();
     let (mut refused, mut accepted) = (0, 0);
     for (stem, p) in &profiles {
         for device_scope in [false, true] {
@@ -83,7 +98,7 @@ fn the_default_model_is_glsl450() {
 /// device scope) cannot meet the Vulkan model: its check names the feature the profile lacks.
 #[test]
 fn glsl450_coherent_resources_never_pass_under_the_vulkan_model() {
-    let profiles = committed_profiles().expect("profiles");
+    let profiles = profiles();
     let mut checked = 0;
     for (stem, p) in &profiles {
         if vulkan_model(p) {
@@ -102,5 +117,5 @@ fn glsl450_coherent_resources_never_pass_under_the_vulkan_model() {
         assert_eq!(check(&plan, p), Err(want), "{stem}");
         checked += 1;
     }
-    assert!(checked > 0, "no committed profile lacks the Vulkan model");
+    assert!(checked > 0, "no profile lacks the Vulkan model");
 }

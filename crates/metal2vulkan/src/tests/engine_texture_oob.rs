@@ -1798,8 +1798,8 @@ fn texel_buffer_reads_out_of_bounds_are_zero() {
     // `robustBufferAccess` alone is the shader's check.
     let vk12 = profiles()
         .into_iter()
-        .find(|(s, _)| s == "vk12-floor")
-        .expect("vk12-floor");
+        .find(|(s, _)| s == "runtime-floor")
+        .expect("runtime-floor");
     assert_eq!(class(&vk12.1, true), Class::Shader);
 }
 
@@ -1974,16 +1974,25 @@ fn a_read_where_its_thread_wrote_out_of_bounds_is_zero() {
 }
 
 /// Only a slot the device is left both an out-of-bounds store and an out-of-bounds load of is
-/// `Volatile`: never a slot the function only writes or only reads. A texture atomic alone is both where image robustness
-/// discards it unguarded : the atomic-only `fwd_atomic`, declared `R32Uint` as atomics need, is
-/// `Volatile` on every profile with `robustImageAccess` (`roadmap-2022`, `swiftshader`) and on none
-/// without (`vk12-floor`), where the shader guards it.
+/// `Volatile`: never a slot the function only writes or only reads. A texture atomic alone is both
+/// where image robustness discards it unguarded: the atomic-only `fwd_atomic`, declared `R32Uint`
+/// as atomics need, is `Volatile` on every profile with `robustImageAccess` (`runtime-floor`) and
+/// on none without (`runtime-floor` without image robustness, below the runtime's floor), where the
+/// shader guards it.
 #[test]
 fn only_a_slot_left_both_a_store_and_a_load_is_volatile() {
     let Some(bc) = assemble_text("texture_forward", FORWARD) else {
         return;
     };
-    let all = profiles();
+    let mut all = profiles();
+    const NO_IMAGE_ROBUSTNESS: &str = "runtime-floor without image robustness";
+    all.push((
+        NO_IMAGE_ROBUSTNESS.into(),
+        without(
+            "runtime-floor",
+            &[VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2],
+        ),
+    ));
     let mut atomic_inputs = LowerInputs::new();
     atomic_inputs.storage_images.insert(
         TEXTURE,
@@ -2026,11 +2035,7 @@ fn only_a_slot_left_both_a_store_and_a_load_is_volatile() {
         }
     }
     assert!(volatile > 0);
-    for (stem, want) in [
-        ("roadmap-2022", true),
-        ("swiftshader", true),
-        ("vk12-floor", false),
-    ] {
+    for (stem, want) in [("runtime-floor", true), (NO_IMAGE_ROBUSTNESS, false)] {
         assert_eq!(atomic.get(stem), Some(&want), "fwd_atomic on {stem}");
     }
 }
@@ -2101,7 +2106,7 @@ fn a_heap_read_takes_its_out_of_bounds_alpha_from_its_table_entry() {
             device("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
         ),
         ("moltenvk-m3 unrobust", device("moltenvk-m3", &unrobust)),
-        ("roadmap-2022", device("roadmap-2022", &[])),
+        ("runtime-floor", device("runtime-floor", &[])),
     ];
     let mut ran = Vec::new();
     for (stem, dev) in devices {

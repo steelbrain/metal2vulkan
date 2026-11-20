@@ -59,19 +59,30 @@ enum Planned {
 }
 
 /// Whether every alternative of `sets` needs some format's support, and `device`'s profile
-/// cannot sample one of the formats `case` binds a texture in.
+/// cannot use one of the formats `case` binds a texture in as `sets` names (or sample it).
 fn lacks_a_bound_format(device: &Device, case: &AuthoredCase, sets: &[Vec<Capability>]) -> bool {
-    let sampled = BTreeSet::from([FormatUsage::SampledImage]);
+    // The usages the refusal names (linear filtering, say), and sampling itself.
+    let usages: BTreeSet<FormatUsage> = sets
+        .iter()
+        .flatten()
+        .filter_map(|capability| match capability {
+            Capability::Format { usage, .. } => Some(*usage),
+            _ => None,
+        })
+        .chain([FormatUsage::SampledImage])
+        .collect();
     sets.iter().all(|set| {
         set.iter()
             .any(|capability| matches!(capability, Capability::Format { .. }))
     }) && case.textures.iter().any(|texture| {
-        vk_format(
-            resources::pixel_format(texture.format),
-            &sampled,
-            device.profile(),
-        )
-        .is_err()
+        usages.iter().any(|&usage| {
+            vk_format(
+                resources::pixel_format(texture.format),
+                &BTreeSet::from([usage]),
+                device.profile(),
+            )
+            .is_err()
+        })
     })
 }
 
@@ -163,8 +174,9 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
         {
             return Planned::Refused;
         }
-        // A texture of a format the profile cannot sample is refused typed as the device's gap
-        // (`Feature::Format`, needing that format's support): the case's literal binds it, and no
+        // A texture of a format the profile cannot sample, or filter as the case's sampler
+        // does, is refused typed as the device's gap (`Feature::Format`, needing that format's
+        // support): the case's literal binds it, and no
         // other mapping of the case changes it (the sRGB and packed formats).
         Err(BindError::Unsupported(Unsupported {
             feature: Feature::Format,
@@ -232,7 +244,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
 #[test]
 fn public_texture_cases_plan_their_compiled_variant_without_diagnostics() {
     let cases = public_cases();
-    for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let device = device(stem);
         let mut families = BTreeSet::new();
         let mut planned = 0;
@@ -265,9 +277,9 @@ fn public_texture_cases_plan_their_compiled_variant_without_diagnostics() {
             families.contains("sampler") || families.contains("combined image sampler"),
             "{stem}: no sampler write"
         );
-        // SwiftShader reads storage images only with a format: its storage cases compile with an
-        // input and plan that variant.
-        if stem == "swiftshader" {
+        // The runtime floor reads storage images only with a format: its storage cases compile
+        // with an input and plan that variant.
+        if stem == "runtime-floor" {
             assert!(families.contains("pipeline variant"), "{stem}: no variant");
         }
         // A sparse case whose observed accesses each name their texels answers residency from
@@ -361,18 +373,36 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
         let library = Library::from_air(&bitcode).unwrap();
         let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
         function.constants = compute.constants.clone();
-        for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
+        for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
             let device = device(stem);
             let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
-            let (pipeline, inputs) = variants::compile_compute_for_shape(
+            let compiled = variants::compile_compute_for_shape(
                 &device,
                 &function,
                 &shape,
                 None,
                 None,
                 &Budget::standard(),
-            )
-            .unwrap_or_else(|error| panic!("{} {stem}: compile: {error:?}", case.name));
+            );
+            let sampled = device
+                .profile()
+                .limits()
+                .max_per_stage_descriptor_sampled_images;
+            let (pipeline, inputs) = match compiled {
+                // More elements than the stage's sampled images (the runtime floor's 16): refused
+                // typed, naming the limit.
+                Err(error) if slots.len() > sampled as usize => {
+                    let text = format!("{error:?}");
+                    assert!(
+                        text.contains("MaxPerStageDescriptorSampledImages"),
+                        "{} {stem}: {text}",
+                        case.name
+                    );
+                    continue;
+                }
+                compiled => compiled
+                    .unwrap_or_else(|error| panic!("{} {stem}: compile: {error:?}", case.name)),
+            };
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(
                 variants::compiled_for(&inputs, &plan.variant),
@@ -558,7 +588,7 @@ fn the_public_stage_input_case_compiles_under_the_oracles_descriptor() {
     let library = Library::from_air(&bitcode).unwrap();
     let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
     function.constants = compute.constants.clone();
-    for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let device = device(stem);
         let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
         // Without the descriptor, the kernel asks for it.
@@ -681,7 +711,7 @@ fn public_tile_cases_plan_their_attachments() {
         })
         .collect::<Vec<_>>();
     assert!(!tiles.is_empty(), "no public tile case");
-    for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
+    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let device = device(stem);
         let mut planned = 0;
         for (case, row) in &tiles {

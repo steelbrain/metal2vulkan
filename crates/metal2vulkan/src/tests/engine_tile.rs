@@ -803,7 +803,7 @@ fn a_tile_pipeline_places_its_threadgroup_arguments() {
         s.tile_threadgroup = memory;
         s
     };
-    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let dev = device(stem);
         let pipe = dev
             .compile_tile_pipeline(&d, &Budget::standard())
@@ -967,7 +967,7 @@ fn a_tile_pipeline_binds_its_attachments() {
         Some(PixelFormat::R32Uint),
         Some(PixelFormat::R32Uint),
     ];
-    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let dev = device(stem);
         let d = descriptor(&bc, "k10ts_tile_grid", &formats);
         let pipe = dev

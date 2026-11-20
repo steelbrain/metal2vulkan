@@ -307,7 +307,7 @@ fn an_unordered_device_names_what_an_extended_range_blend_needs() {
         F::OneMinusSourceAlpha,
     ];
     let wanted = crate::lower::fragment::fetch::unordered_extended_fetch();
-    for stem in ["vk12-floor", "roadmap-2022"] {
+    for stem in ["runtime-floor"] {
         let dev = device(stem);
         assert!(
             crate::lower::fragment::fetch::fetch_unordered(dev.profile()),
@@ -381,7 +381,7 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
         "moltenvk-m3",
         "intel-uhd770-rpls-anv",
         "lavapipe",
-        "roadmap-2022",
+        "runtime-floor",
     ] {
         let dev = device(stem);
         let interlock = crate::lower::fragment::interlock_orders(dev.profile());

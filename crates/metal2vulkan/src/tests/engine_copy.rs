@@ -43,10 +43,9 @@ use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, T
 use crate::spirv::ir::{GlobalKind, TypedModule};
 use crate::spirv::testing::zeroes_threadgroup_memory;
 
-const PROFILES: [&str; 5] = [
+const PROFILES: [&str; 4] = [
     "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
+    "runtime-floor",
     "lavapipe",
     "nvidia-pascal-linux",
 ];

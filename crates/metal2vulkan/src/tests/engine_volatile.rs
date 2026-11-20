@@ -33,12 +33,11 @@ const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16
 
 /// Profile A (device addresses) and Profile F (none), with and without robust descriptors,
 /// with and without the Vulkan memory model.
-const PROFILES: [&str; 4] = [
-    "moltenvk-m3",
-    "lavapipe",
-    "vk12-floor",
-    "lunarg-desktop-baseline-2023",
-];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", NO_VULKAN_MODEL];
+
+/// `runtime-floor` without the Vulkan memory model (below the runtime's floor): the GLSL memory
+/// model's form.
+const NO_VULKAN_MODEL: &str = "runtime-floor without vulkanMemoryModel";
 
 const THREADS: u32 = 32;
 
@@ -47,6 +46,17 @@ const WG: StorageClass = StorageClass::Workgroup;
 const PRIV: StorageClass = StorageClass::Private;
 
 fn p(stem: &str) -> DeviceProfile {
+    if stem == NO_VULKAN_MODEL {
+        return crate::pipeline::testing::profile_without(
+            "runtime-floor",
+            &[
+                VkFeature::VulkanMemoryModel,
+                VkFeature::VulkanMemoryModelDeviceScope,
+            ],
+            DevicePolicy::default(),
+        )
+        .expect("below the runtime's floor");
+    }
     profile(stem, DevicePolicy::default()).expect("profile")
 }
 

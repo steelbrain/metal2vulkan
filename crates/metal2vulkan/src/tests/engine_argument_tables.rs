@@ -167,8 +167,8 @@ fn snapshot_profiles() -> Vec<(String, DeviceProfile)> {
 
 /// The kernels compile and validate on every committed profile: where the device has the four
 /// features they declare the heap's function-table array and no snapshot, and where it lacks
-/// one (the 2023 desktop baseline, without non-uniform storage-buffer indexing, and the two
-/// Vulkan 1.2 floors) the stage's snapshot and no array, beside the directory.
+/// one (the runtime's floor, without non-uniform storage-buffer indexing and storage-buffer
+/// update-after-bind) the stage's snapshot and no array, beside the directory.
 #[test]
 fn argument_tables_compile_on_every_profile() {
     let Some((caller, functions)) = fixtures() else {
@@ -204,7 +204,7 @@ fn argument_tables_compile_on_every_profile() {
             snapshots.push(stem);
         }
     }
-    assert_eq!(snapshots, ["lunarg-desktop-baseline-2023", "vk12-floor"]);
+    assert_eq!(snapshots, ["runtime-floor"]);
 }
 
 /// A call through a table loaded from an argument buffer that no linked function can answer
@@ -442,7 +442,7 @@ fn the_plan_writes_the_snapshot_and_its_directory() {
     let Some((caller, functions)) = fixtures() else {
         return;
     };
-    for stem in ["lunarg-desktop-baseline-2023", "vk12-floor"] {
+    for stem in ["runtime-floor"] {
         let dev = device(stem);
         let pipe = pipeline(&dev, &caller, &functions, ONE);
         assert!(
@@ -638,7 +638,7 @@ fn an_argument_table_call_calls_the_entry_its_table_holds() {
         table_bytes(&h, &[]),
     ];
     let heap = directory_of("moltenvk-m3", &caller, &functions);
-    let snapshot_directory = directory_of("vk12-floor", &caller, &functions);
+    let snapshot_directory = directory_of("runtime-floor", &caller, &functions);
     let snapshot = FunctionTableSnapshot::of(state().function_tables.iter().map(|f| f.size))
         .expect("snapshot")
         .bytes(tables.iter().map(Vec::as_slice))
@@ -797,7 +797,7 @@ fn tables_past_the_storage_range_are_read_at_their_addresses() {
     let wide = wide_state();
     assert_eq!(state().shape().function_tables.bytes_class, 0);
     assert_eq!(wide.shape().function_tables.bytes_class, 28);
-    for stem in ["gate-lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for stem in ["gate-lavapipe", "moltenvk-m3", "runtime-floor"] {
         let dev = device(stem);
         let addressed = dev.profile().fields().buffer_access == BufferAccess::Addressed;
         let limit = dev.profile().fields().limits.max_storage_buffer_range;

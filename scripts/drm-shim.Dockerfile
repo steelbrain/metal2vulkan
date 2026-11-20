@@ -5,7 +5,7 @@
 #   MESA_SHA256) with the RADV (amd), ANV (intel), and NVK (nouveau) Vulkan drivers and their noop
 #   drm-shims into /opt/mesa, and nothing else: no gallium, GL, EGL, GBM, or window system. The
 #   final stage is the Linux gate's toolchain (Ubuntu 26.04 by digest, LLVM, SPIR-V tools,
-#   lavapipe, the validation layer, Rust, cargo-nextest; not SwiftShader or the profiles layer)
+#   lavapipe, the validation layer, Rust, cargo-nextest; not the profiles layer)
 #   plus vulkaninfo and a copy of /opt/mesa, so no Mesa build dependency or build tree is kept.
 # - A drm-shim is an LD_PRELOAD library that answers the driver's DRM ioctls as a kernel would for
 #   a chosen GPU and never touches hardware: the driver compiles every pipeline for that GPU, and

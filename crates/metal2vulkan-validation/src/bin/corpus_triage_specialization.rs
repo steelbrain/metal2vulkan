@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(input.libraries, source.lib_sha256s);
         assert_eq!(input.links, links);
         let dir = metal2vulkan_validation::ScratchDir::new("specialization-set-test").unwrap();
-        let profile = engine::load_profile("vk12-floor").unwrap();
+        let profile = engine::load_profile("runtime-floor").unwrap();
         let (mut result, l3) = attempt_input(
             input,
             dir.path(),

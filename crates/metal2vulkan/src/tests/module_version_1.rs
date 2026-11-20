@@ -797,7 +797,7 @@ fn every_public_fixture_decodes_alike_in_module_version_1() {
 }
 
 /// The profile [`engine_fixtures_translate_alike_in_module_version_1`] compiles for.
-const PROFILE: &str = "lunarg-desktop-baseline-2023";
+const PROFILE: &str = "runtime-floor";
 
 /// Every entry point of every opaque-pointer engine fixture, compiled from its module-version-1
 /// re-emission with an empty producer (as Apple's compiler writes it), translates to the SPIR-V

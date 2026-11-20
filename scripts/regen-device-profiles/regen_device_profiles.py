@@ -15,12 +15,14 @@ Source kinds:
   KhronosGroup/Vulkan-Profiles file. A profile that states no formats of its own defers to its
   core version's Required Format Support tables, so it gets the same format blocks as `derived`
   (Vulkan-Profiles does not encode those tables); one that states formats is kept as is.
-* `derived`: the Vulkan 1.2 floor, built from the LunarG 1.2 minimum-requirements
-  profile, with features reduced to the unconditional `VK_VERSION_1_0..1_2` requirements of
-  `vk.xml`, plus the Vulkan 1.2 specification's Required Format Support tables
-  (`required_formats.py`) and the weakest permitted value of each property the
-  product reads, and VK_LAYER_KHRONOS_profiles sets, that the base profile leaves without a
-  requirement (`UNREQUIRED_PROPERTIES`).
+* `derived`: a floor built from a LunarG minimum-requirements profile (`vk12-floor` from the 1.2
+  one, `runtime-floor` from the 1.3 one), with features reduced to the unconditional
+  `VK_VERSION_1_0..1_N` requirements of `vk.xml`, plus the Vulkan 1.2 specification's Required
+  Format Support tables (`required_formats.py`) and the weakest permitted value of each property
+  the product reads, and VK_LAYER_KHRONOS_profiles sets, that the base profile leaves without a
+  requirement (`UNREQUIRED_PROPERTIES`). `runtime-floor` adds the block `m2v_runtime_floor`
+  (`RUNTIME_FLOOR`): the device extensions, features and limits `metal2vulkan-runtime`'s floor
+  requires (`crates/metal2vulkan-runtime/src/floor.rs`, which a runtime test holds it equal to).
 * `vulkaninfo`: a local `vulkaninfo --json` capture. The capture opens a device, so it is never
   taken by this script; pass it with `--capture NAME=PATH`. `vulkaninfo --json` never writes
   `VkFormatProperties3`, so a source that declares `formats` also takes that device's
@@ -51,6 +53,10 @@ import required_formats
 
 REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO / "crates" / "metal2vulkan-validation" / "profiles"
+# Where a source marked `below_floor` goes, under the output directory: a description
+# `Device::from_queries` refuses, apart from the committed profiles every test and census reads.
+# Its one reader is the translator's floor refusal test.
+BELOW_FLOOR_DIR = "below-floor"
 CACHE_DIR = REPO / ".cache" / "device-profiles"
 SCHEMA = "https://schema.khronos.org/vulkan/profiles-0.8-latest.json#"
 CONVERTER = "scripts/regen-device-profiles/regen_device_profiles.py"
@@ -83,6 +89,74 @@ UNREQUIRED_PROPERTIES_BLOCK = "m2v_unrequired_properties"
 UNREQUIRED_PROPERTIES = {
     "VkPhysicalDeviceProperties": {"limits": {"strictLines": False}},
     "VkPhysicalDeviceVulkan11Properties": {"subgroupQuadOperationsInAllStages": False},
+}
+
+# The block `runtime-floor` adds to its Vulkan 1.3 base: what metal2vulkan-runtime's floor
+# requires of every device (`crates/metal2vulkan-runtime/src/floor.rs`: `DEVICE_EXTENSIONS`,
+# `REQUIRED` and `limits()`), each limit at the value the floor needs. A runtime test
+# (`the_floor_profile_states_exactly_the_floor`) holds the committed block equal to floor.rs. The
+# floor's queue family, timestamp bits, memory types and time domains have no profiles-schema form
+# and are not stated.
+RUNTIME_FLOOR_BLOCK = "m2v_runtime_floor"
+# The block a `complete_required` derived profile states the core features its version requires
+# and its base profile omits in.
+REQUIRED_FEATURES_BLOCK = "m2v_required_features"
+RUNTIME_FLOOR = {
+    "extensions": {
+        "VK_KHR_swapchain": 1,
+        "VK_EXT_robustness2": 1,
+        "VK_EXT_calibrated_timestamps": 1,
+    },
+    "features": {
+        "VkPhysicalDeviceFeatures": {member: True for member in (
+            "shaderInt64", "shaderSampledImageArrayDynamicIndexing",
+            "shaderStorageImageArrayDynamicIndexing", "shaderStorageImageWriteWithoutFormat",
+            "shaderStorageImageExtendedFormats", "samplerAnisotropy",
+            "shaderImageGatherExtended", "shaderInt16", "independentBlend",
+            "fragmentStoresAndAtomics", "alphaToOne", "logicOp", "fullDrawIndexUint32",
+            "shaderClipDistance", "tessellationShader", "shaderTessellationAndGeometryPointSize",
+            "largePoints", "dualSrcBlend", "sampleRateShading", "vertexPipelineStoresAndAtomics")},
+        "VkPhysicalDeviceVulkan11Features": {member: True for member in (
+            "storageBuffer16BitAccess", "multiview", "shaderDrawParameters")},
+        "VkPhysicalDeviceVulkan12Features": {member: True for member in (
+            "bufferDeviceAddress", "runtimeDescriptorArray", "descriptorBindingPartiallyBound",
+            "descriptorBindingUpdateUnusedWhilePending",
+            "descriptorBindingSampledImageUpdateAfterBind",
+            "descriptorBindingStorageImageUpdateAfterBind",
+            "shaderSampledImageArrayNonUniformIndexing",
+            "shaderStorageImageArrayNonUniformIndexing", "samplerMirrorClampToEdge",
+            "shaderInt8", "storageBuffer8BitAccess", "scalarBlockLayout",
+            "uniformBufferStandardLayout", "vulkanMemoryModel", "vulkanMemoryModelDeviceScope",
+            "shaderSubgroupExtendedTypes", "timelineSemaphore", "hostQueryReset")},
+        "VkPhysicalDeviceVulkan13Features": {member: True for member in (
+            "subgroupSizeControl", "computeFullSubgroups", "robustImageAccess",
+            "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",
+            "shaderZeroInitializeWorkgroupMemory", "synchronization2", "dynamicRendering")},
+        "VkPhysicalDeviceRobustness2FeaturesEXT": {"nullDescriptor": True,
+                                                   "robustImageAccess2": True},
+    },
+    "properties": {
+        "VkPhysicalDeviceProperties": {"limits": {
+            "maxSamplerAllocationCount": 4000,
+            "maxPushConstantsSize": 256,
+            "maxComputeWorkGroupInvocations": 1024,
+            "maxComputeWorkGroupSize": [1024, 1024, 64],
+            "timestampComputeAndGraphics": True,
+            "standardSampleLocations": True,
+            "maxColorAttachments": 8,
+            "maxFragmentOutputAttachments": 8,
+        }},
+        "VkPhysicalDeviceVulkan12Properties": {
+            "maxPerStageDescriptorUpdateAfterBindSampledImages": 65536,
+            "maxDescriptorSetUpdateAfterBindSampledImages": 65536,
+            "maxPerStageDescriptorUpdateAfterBindStorageImages": 65536,
+            "maxDescriptorSetUpdateAfterBindStorageImages": 65536,
+            "maxPerStageDescriptorUpdateAfterBindSamplers": 12000,
+            "maxDescriptorSetUpdateAfterBindSamplers": 12000,
+            "maxPerStageUpdateAfterBindResources": 131080,
+            "maxUpdateAfterBindDescriptorsInAllPools": 143072,
+        },
+    },
 }
 
 # The block that completes a requirements document (`khronos`) for VK_LAYER_KHRONOS_profiles.
@@ -256,6 +330,36 @@ FEATURE_EXACT_PROPERTIES = {
         ("fullDrawIndexUint32", 4294967295),
 }
 
+# The limits a feature conditions (the specification's "Required Limits" table: a limit's
+# requirement where the device has the feature), by vk.xml structure and member, with the feature
+# and the value the table requires of a device with it: a derived profile whose block requires the
+# feature states that value where its base states the value for a device without it. pointSizeRange
+# is (1.0, 64.0 - ULP) at a pointSizeGranularity of 1.0; maxInterpolationOffset 0.5 - 1 ULP at 4
+# subpixel interpolation offset bits. maxCombinedClipAndCullDistances is conditioned on
+# shaderCullDistance, which no derived profile requires.
+FEATURE_LIMITS = {
+    **{("VkPhysicalDeviceProperties", member): ("tessellationShader", value)
+       for member, value in (
+           ("maxTessellationGenerationLevel", 64),
+           ("maxTessellationPatchSize", 32),
+           ("maxTessellationControlPerVertexInputComponents", 64),
+           ("maxTessellationControlPerVertexOutputComponents", 64),
+           ("maxTessellationControlPerPatchOutputComponents", 120),
+           ("maxTessellationControlTotalOutputComponents", 2048),
+           ("maxTessellationEvaluationInputComponents", 64),
+           ("maxTessellationEvaluationOutputComponents", 64))},
+    ("VkPhysicalDeviceProperties", "maxFragmentDualSrcAttachments"): ("dualSrcBlend", 1),
+    ("VkPhysicalDeviceProperties", "maxSamplerAnisotropy"): ("samplerAnisotropy", 16),
+    ("VkPhysicalDeviceProperties", "minTexelGatherOffset"): ("shaderImageGatherExtended", -8),
+    ("VkPhysicalDeviceProperties", "maxTexelGatherOffset"): ("shaderImageGatherExtended", 7),
+    ("VkPhysicalDeviceProperties", "minInterpolationOffset"): ("sampleRateShading", -0.5),
+    ("VkPhysicalDeviceProperties", "maxInterpolationOffset"): ("sampleRateShading", 0.4375),
+    ("VkPhysicalDeviceProperties", "subPixelInterpolationOffsetBits"): ("sampleRateShading", 4),
+    ("VkPhysicalDeviceProperties", "maxClipDistances"): ("shaderClipDistance", 8),
+    ("VkPhysicalDeviceProperties", "pointSizeRange"): ("largePoints", [1.0, 63.0]),
+    ("VkPhysicalDeviceProperties", "pointSizeGranularity"): ("largePoints", 1.0),
+}
+
 # Members a derived profile's base (VP_LUNARG_minimum_requirements_1_2) states at a value the
 # Vulkan 1.2 specification contradicts, by vk.xml structure and member, with the base's value and
 # the specification's. The derivation states the specification's value in the base's place and
@@ -320,22 +424,17 @@ SOURCES = [
         "name": "vk12-floor",
         "kind": "derived",
         "label": "Vulkan 1.2 required features and minimum limits only",
+        "below_floor": True,
     },
     {
-        "name": "lunarg-desktop-baseline-2023",
-        "kind": "khronos",
-        "url": PROFILES_TAG + "LunarG/VP_LUNARG_desktop_baseline.json",
-        "sha256": "6a609a0ecfac0c57bb050c37dc300147bec4e24a75196aa79dfdb7edd6d36ab1",
-        "profile": "VP_LUNARG_desktop_baseline_2023",
-        "layer_presentation": True,
-    },
-    {
-        "name": "roadmap-2022",
-        "kind": "khronos",
-        "url": PROFILES_TAG + "Khronos/VP_KHR_roadmap.json",
-        "sha256": "41d8e5b2421bcd78e36d346de18933f5e8ac8e13a82bbcb197bed3fb7fec066d",
-        "profile": "VP_KHR_roadmap_2022",
-        "layer_presentation": True,
+        "name": "runtime-floor",
+        "kind": "derived",
+        "label": ("the runtime's floor: Vulkan 1.3 required features and minimum limits, and "
+                  "what metal2vulkan-runtime requires of every device"),
+        "base_profile": "VP_LUNARG_minimum_requirements_1_3",
+        "minor": 3,
+        "complete_required": True,
+        "runtime_floor": True,
     },
     {
         "name": "nvidia-rtx50-linux",
@@ -496,6 +595,7 @@ SOURCES = [
     {
         "name": "swiftshader",
         "kind": "gpuinfo",
+        "below_floor": True,
         "report": 38278,
         "sha256": "122ca1fd87e5fc588a4acfd48eb2428519867c6104ea48e54520da746405fcb5",
     },
@@ -615,9 +715,13 @@ class Registry:
                         self._add_enum(values, enum, number)
             self.extension_types[extension.get("name")] = types
         self.required_by_version = self._required_by_version(root)
-        self.required_features = {
-            member for version in ("VK_VERSION_1_0", "VK_VERSION_1_1", "VK_VERSION_1_2")
-            for _, member in self.required_by_version.get(version, [])}
+        self.required_features = self.required_through(2)
+
+    def required_through(self, minor):
+        """The members `vk.xml` requires without a condition of every version from 1.0 through
+        1.`minor`."""
+        return {member for version in range(minor + 1)
+                for _, member in self.required_by_version.get(f"VK_VERSION_1_{version}", [])}
 
     @staticmethod
     def _add_enum(values, enum, extension_number):
@@ -1255,7 +1359,10 @@ def extract(data, source, formats, registry=None):
 
 def derive(registry, data, source, formats):
     doc = json.loads(data)
-    base = doc["profiles"][MINIMUM_REQUIREMENTS["profile"]]
+    base_profile = source.get("base_profile", MINIMUM_REQUIREMENTS["profile"])
+    minor = source.get("minor", 2)
+    required_by = registry.required_through(minor)
+    base = doc["profiles"][base_profile]
     names = referenced(base["capabilities"])
     capabilities = {}
     dropped = []
@@ -1264,7 +1371,7 @@ def derive(registry, data, source, formats):
         block = copy.deepcopy(doc["capabilities"][name])
         for struct, members in block.get("features", {}).items():
             for member in list(members):
-                if member not in registry.required_features:
+                if member not in required_by:
                     dropped.append(f"{struct}.{member}")
                     del members[member]
         block["features"] = {s: m for s, m in block.get("features", {}).items() if m}
@@ -1286,9 +1393,24 @@ def derive(registry, data, source, formats):
                 corrected.append(f"{struct}.{member}: {json.dumps(stated)} -> "
                                  f"{json.dumps(specified)}")
         capabilities[name] = block
-    missing = sorted(registry.required_features - {
+    missing = sorted(required_by - {
         member for block in capabilities.values()
         for members in block.get("features", {}).values() for member in members})
+    completed = {}
+    if missing and source.get("complete_required"):
+        # A required feature the base omits (VP_LUNARG_minimum_requirements_1_3 lists no
+        # `privateData`): stated in a block of its own, at true, and named in the provenance.
+        # vk.xml names a promoted feature by both its core and its extension structure: the core
+        # version's structure states it.
+        chosen = {}
+        for version in range(minor + 1):
+            for struct, member in registry.required_by_version.get(f"VK_VERSION_1_{version}", []):
+                if member in missing and (member not in chosen
+                                          or struct.startswith("VkPhysicalDeviceVulkan1")):
+                    chosen[member] = struct
+        for member, struct in sorted(chosen.items()):
+            completed.setdefault(struct, {})[member] = True
+        missing = sorted(set(missing) - {m for members in completed.values() for m in members})
     if missing:
         raise SystemExit(f"{source['name']}: base profile lacks required features {missing}")
     uncorrected = sorted(f"{struct}.{member}" for struct, member in SPEC_CORRECTIONS
@@ -1297,19 +1419,28 @@ def derive(registry, data, source, formats):
         raise SystemExit(f"{source['name']}: the base profile no longer states {uncorrected}: "
                          "review SPEC_CORRECTIONS")
     required = list(names)
+    if completed:
+        capabilities[REQUIRED_FEATURES_BLOCK] = {"features": completed}
+        required.append(REQUIRED_FEATURES_BLOCK)
     provenance = {
         "source": "derived",
         "base_url": MINIMUM_REQUIREMENTS["url"],
         "base_sha256": MINIMUM_REQUIREMENTS["sha256"],
-        "base_profile": MINIMUM_REQUIREMENTS["profile"],
+        "base_profile": base_profile,
         "registry": REGISTRY,
-        "rule": ("features reduced to the unconditional VK_VERSION_1_0..1_2 feature "
+        "rule": (f"features reduced to the unconditional VK_VERSION_1_0..1_{minor} feature "
                  "requirements of vk.xml; limits and properties are the base profile's "
                  "minimums, but where the Vulkan 1.2 specification states another "
                  "(spec_corrections)"),
         "dropped_features": sorted(dropped),
         "spec_corrections": sorted(corrected),
     }
+    if completed:
+        provenance["added_features"] = sorted(f"{struct}.{member}"
+                                              for struct, members in completed.items()
+                                              for member in members)
+        provenance["rule"] += (f"; plus the {REQUIRED_FEATURES_BLOCK} block: each such "
+                               "requirement the base profile omits (added_features)")
     def flattened(struct, members):
         nested = members.get("limits") if struct == "VkPhysicalDeviceProperties" else None
         return nested if nested is not None else members
@@ -1329,10 +1460,41 @@ def derive(registry, data, source, formats):
                            "the specification permits for each property the product reads, and "
                            "the profiles layer sets, that the base profile leaves without a "
                            "requirement")
+    if source.get("runtime_floor"):
+        capabilities[RUNTIME_FLOOR_BLOCK] = copy.deepcopy(RUNTIME_FLOOR)
+        required.append(RUNTIME_FLOOR_BLOCK)
+        provenance["rule"] += (f"; plus the {RUNTIME_FLOOR_BLOCK} block: the device extensions, "
+                               "features and limits metal2vulkan-runtime's floor requires "
+                               "(crates/metal2vulkan-runtime/src/floor.rs), each limit at the "
+                               "value the floor needs; its queue family, timestamp bits, memory "
+                               "types and time domains have no profiles-schema form")
+    # A feature a block requires that fixes a property (FEATURE_EXACT_PROPERTIES) or conditions a
+    # limit (FEATURE_LIMITS) states its value where a block states the value without the feature.
+    required_true = {member for block in capabilities.values()
+                     for members in block.get("features", {}).values()
+                     for member, value in members.items() if value is True}
+    exact = []
+    conditioned = {**FEATURE_EXACT_PROPERTIES, **FEATURE_LIMITS}
+    for (struct, member), (feature, value) in sorted(conditioned.items()):
+        if feature not in required_true:
+            continue
+        for block in capabilities.values():
+            members = block.get("properties", {}).get(struct)
+            target = flattened(struct, members) if members is not None else {}
+            if member in target and target[member] != value:
+                exact.append(f"{struct}.{member}: {json.dumps(target[member])} -> "
+                             f"{json.dumps(value)} ({feature})")
+                target[member] = value
+    if exact:
+        provenance["feature_limits"] = exact
+        provenance["rule"] += ("; where a feature a block requires fixes or conditions a "
+                               "property, the specification's value for a device with the "
+                               "feature (feature_limits)")
+    # After the floor's block, so the formats a feature it requires makes unconditional are stated.
     required_format_blocks(capabilities, required, provenance, formats)
     return document(source["name"], base["api-version"], source["label"],
-                    f"Derived by {CONVERTER} from {MINIMUM_REQUIREMENTS['profile']}; "
-                    "see provenance.", capabilities, required, [], provenance)
+                    f"Derived by {CONVERTER} from {base_profile}; see provenance.",
+                    capabilities, required, [], provenance)
 
 
 def import_capture(data, source, supplement=None, registry=None):
@@ -1565,6 +1727,12 @@ def withhold_host_identity(doc):
     return doc
 
 
+def target_of(out, source):
+    """Where `source`'s file goes under the output directory `out`."""
+    directory = out / BELOW_FLOOR_DIR if source.get("below_floor") else out
+    return directory / f"{source['name']}.json"
+
+
 def render(doc):
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
@@ -1587,7 +1755,8 @@ def main():
     for source in SOURCES:
         if args.only and source["name"] not in args.only:
             continue
-        target = args.out / f"{source['name']}.json"
+        target = target_of(args.out, source)
+        target.parent.mkdir(parents=True, exist_ok=True)
         kind = source["kind"]
         recaptured = kind == "vulkaninfo" and source["name"] in captures
         presented = source.get("layer_presentation", False)

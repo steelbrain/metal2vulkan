@@ -213,7 +213,7 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
     // Each profile and its note for each of the kernels, in their order.
     let cases: [(&str, [Option<PrecisionNote>; 2]); 4] = [
         ("lavapipe", [Some(natives[0]); 2]),
-        ("swiftshader", [Some(natives[1]); 2]),
+        ("runtime-floor", [Some(natives[1]); 2]),
         ("moltenvk-m3", [Some(natives[0]); 2]),
         ("amd-780m-radv", [None, Some(natives[0])]),
     ];
@@ -236,7 +236,7 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
     // even, the largest half below 65520 and infinity from it; a half denormal the conversion's,
     // and the quantize's zero (the device's, `NativeHalfQuantize`).
-    for (stem, keeps) in [("lavapipe", true), ("swiftshader", false)] {
+    for (stem, keeps) in [("lavapipe", true), ("runtime-floor", false)] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, &p, x);
         let tie = 1.0 + 2f32.powi(-11);
@@ -419,7 +419,7 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
         ("lavapipe", true, false),
         ("nvidia-rtx5080-laptop", false, false),
         ("moltenvk-m3", true, false),
-        ("vk12-floor", true, true),
+        ("runtime-floor", true, true),
     ];
     for (stem, native, unpacks) in cases {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
@@ -837,7 +837,7 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
     for stem in [
         "moltenvk-m3",
         "lavapipe",
-        "vk12-floor",
+        "runtime-floor",
         "nvidia-pascal-linux",
     ] {
         assert!(

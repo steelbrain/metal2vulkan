@@ -71,7 +71,8 @@ fn planned(index: u32, bound: BoundKind, form: BufferForm) -> PlannedBuffer {
 
 /// On Profile A a large bound buffer under a `BufferRangeLimit` fact needs the variant, in either
 /// form (a fixed point); a small one, an unbound slot, or a slot without the fact does not.
-/// Profile F honors the fact at instantiation and never asks for a variant.
+/// Profile F (below the runtime's floor, [`PROFILE_F`](crate::pipeline::testing::PROFILE_F))
+/// honors the fact at instantiation and never asks for a variant.
 #[test]
 fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
     let deps = [0, 1, 2, 3].map(|n| RuntimeDependency {
@@ -80,7 +81,13 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
     });
     let storage = BufferForm::Descriptor(DescriptorView::Storage);
     let mut seen = [false; 2];
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    let f = crate::pipeline::testing::device_f(Default::default()).expect("Profile F");
+    profiles.push((
+        crate::pipeline::testing::PROFILE_F.to_string(),
+        f.profile().clone(),
+    ));
+    for (stem, p) in profiles {
         let max = u64::from(p.fields().limits.max_storage_buffer_range);
         let big = length_class(max.saturating_add(1));
         let small = length_class(max / 4);
@@ -131,7 +138,7 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
             }
         }
     }
-    assert_eq!(seen, [true, true], "both profile kinds are committed");
+    assert_eq!(seen, [true, true], "both profile kinds are checked");
 }
 
 /// A shape asks for the storage-view variant exactly when it binds, at a slot the pipeline views as
@@ -140,7 +147,8 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
 /// and the slots the pipeline was compiled keeping, so the variant's plan restates it.
 #[test]
 fn a_large_viewed_slot_asks_for_every_large_candidate_to_stay_storage() {
-    let p = crate::pipeline::testing::profile("vk12-floor", Default::default()).expect("profile");
+    let p =
+        crate::pipeline::testing::profile("runtime-floor", Default::default()).expect("profile");
     let max = u64::from(p.fields().limits.max_uniform_buffer_range);
     let big = BoundKind::Buffer {
         device_address: false,

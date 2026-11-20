@@ -294,8 +294,8 @@ fn profile() -> DeviceProfile {
     committed_profiles()
         .unwrap()
         .into_iter()
-        .find(|(name, _)| name == "swiftshader")
-        .expect("committed swiftshader profile")
+        .find(|(name, _)| name == "runtime-floor")
+        .expect("committed runtime-floor profile")
         .1
 }
 

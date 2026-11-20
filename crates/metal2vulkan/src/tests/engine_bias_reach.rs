@@ -331,7 +331,7 @@ fn a_bias_without_the_samplers_own_is_the_bias_operand() {
             fixtures.push((what, bc, "k"));
         }
     }
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
         let prof = p(stem);
         let property = match prof
             .fields()
@@ -427,17 +427,27 @@ fn a_constant_bias_is_decided_at_compile_time_with_the_samplers_own() {
 /// `bias(0.5)`) are scaled by the whole bias through the same finite scaling: no clamp of the bias
 /// to `maxSamplerLodBias` (formerly `FClamp(bias, ±max)` before `Exp2`). Off Metal's own sampler,
 /// the runtime slot among the candidates takes them into Metal's anisotropic filter, emulated where
-/// its word states anisotropy.
+/// its word states anisotropy on a device without `samplerAnisotropy` (the runtime's floor without
+/// it, below that floor).
 #[test]
 fn hoisted_derivatives_take_the_whole_bias() {
     let Some(bc) = assemble_file("sampling_completion.ll") else {
         return;
     };
-    for (stem, emulations) in [("moltenvk-m3", 0), ("vk12-floor", 1)] {
+    let without = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[crate::device::requirements::VkFeature::SamplerAnisotropy],
+        crate::device::DevicePolicy::default(),
+    )
+    .expect("profile");
+    for (stem, profile, emulations) in [
+        ("moltenvk-m3", p("moltenvk-m3"), 0),
+        ("runtime-floor without samplerAnisotropy", without, 1),
+    ] {
         let a = ok_with(
             &bc,
             "fragment_mixed_samplers",
-            &p(stem),
+            &profile,
             &anisotropic_slot_0(),
         );
         let s = shape(&a);
@@ -468,7 +478,7 @@ fn a_base_level_takes_the_whole_bias() {
     let Some(bc) = assemble_file("sampling_completion.ll") else {
         return;
     };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let a = ok(&bc, "sample_bias_kernel", &p(stem));
         let s = shape(&a);
         assert_eq!(s.glsl_count(GLSL_FCLAMP), 0, "{stem}");

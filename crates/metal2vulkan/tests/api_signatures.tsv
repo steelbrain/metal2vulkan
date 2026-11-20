@@ -10775,6 +10775,7 @@ variant	metal2vulkan::error::Feature::PrivatePrimitives	PrivatePrimitives
 variant	metal2vulkan::error::Feature::PrivateRenderState	PrivateRenderState(PrivateRenderField)
 variant	metal2vulkan::error::Feature::ProgramScopeBinding	ProgramScopeBinding
 variant	metal2vulkan::error::Feature::PullModelInterpolation	PullModelInterpolation
+variant	metal2vulkan::error::Feature::PushWindow	PushWindow
 variant	metal2vulkan::error::Feature::QuadOperations	QuadOperations
 variant	metal2vulkan::error::Feature::RasterOrderGroups	RasterOrderGroups
 variant	metal2vulkan::error::Feature::RasterSampleCount	RasterSampleCount

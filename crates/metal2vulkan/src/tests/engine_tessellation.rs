@@ -142,13 +142,21 @@ fn projection() -> VertexFetchProjection {
 /// Committed profiles by stem.
 type Profiles = Vec<(String, DeviceProfile)>;
 
-/// The committed profiles with and without `tessellationShader`.
+/// The committed profiles with and without `tessellationShader`, and among the second
+/// [`NO_TESSELLATION`]: the runtime's floor requires the feature.
 fn profiles() -> (Profiles, Profiles) {
-    committed_profiles()
+    let (with, mut without): (Profiles, Profiles) = committed_profiles()
         .expect("committed profiles")
         .into_iter()
-        .partition(|(_, p)| p.fields().fragment.tessellation_shader)
+        .partition(|(_, p)| p.fields().fragment.tessellation_shader);
+    let below = device(NO_TESSELLATION).profile().clone();
+    without.push((NO_TESSELLATION.to_string(), below));
+    (with, without)
 }
+
+/// The runtime's floor without `tessellationShader` (and the features that need it), a device
+/// below that floor, by the name [`device`] knows it by.
+const NO_TESSELLATION: &str = "runtime-floor without tessellationShader";
 
 /// The operands of every instruction of opcode `op` in `words` (after the header).
 fn instructions(words: &[u32], op: crate::spv::Op) -> Vec<Vec<u32>> {
@@ -727,12 +735,24 @@ attributes #1 = { mustprogress nofree nosync nounwind willreturn memory(none) }
 !20 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
+/// Committed profile `stem` as a device, or [`NO_TESSELLATION`]'s.
 fn device(stem: &str) -> Device {
+    let below = stem == NO_TESSELLATION;
+    let file = if below { "runtime-floor" } else { stem };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
+        .join(format!("{file}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    if below {
+        for f in [
+            VkFeature::TessellationShader,
+            VkFeature::ShaderTessellationAndGeometryPointSize,
+            VkFeature::MultiviewTessellationShader,
+        ] {
+            desc.features.remove(&f);
+        }
+    }
     Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
@@ -1078,7 +1098,7 @@ fn a_tessellation_plan_draws_patches() {
         factor_scale_enabled: true,
         ..Default::default()
     };
-    for stem in ["moltenvk-m3", "lavapipe", "lunarg-desktop-baseline-2023"] {
+    for stem in ["moltenvk-m3", "lavapipe", "nvidia-rtx5080-laptop"] {
         let dev = device(stem);
         let d = tessellation_pipeline(
             &bc,

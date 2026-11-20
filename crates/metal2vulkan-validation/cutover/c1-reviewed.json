@@ -1,58 +1,6 @@
 {
   "entries": [
     {
-      "profile": "lunarg-desktop-baseline-2023",
-      "outcome": "device_capability_missing",
-      "key": "FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess) | Feature(FragmentShaderPixelInterlock)",
-      "class": "device_lacks",
-      "rows": 8,
-      "rows_digest": "7010f0557b7c62397a6f66bf553930ea5dbacd8d429f9a9ea82ca51335adbb62",
-      "new_census": "dae6c9c8021e6a3de6b1ebabf3bfb5e8756e9161930b55f912d7407288c442a8",
-      "old_l3": "eeb826d3de808129cd3c3ef41b11a9386db2aff8b81ce72070990eaa6898fdb9",
-      "review": {
-        "evidence": [
-          "the engine's census of lunarg-desktop-baseline-2023 refuses this entry's rows `device_capability_missing FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess) | Feature(FragmentShaderPixelInterlock)` (rows, rows_digest, new_census)",
-          "the old engine's L3 table of lunarg-desktop-baseline-2023 (old_l3): the rows' old output passes L3 there or has no verdict",
-          "validation/profiles/lunarg-desktop-baseline-2023.json: none of its 41 extensions is VK_EXT_fragment_shader_interlock or a rasterization-order attachment access extension, and no capability block states fragmentShaderPixelInterlock or rasterizationOrderColorAttachmentAccess",
-          "the translator orders a framebuffer fetch in one of two exact forms: an input attachment under rasterization-order attachment access, or each read attachment as a coherent storage image inside the ordered pixel interlock (crates/metal2vulkan/src/lower/fragment/color.rs and fetch.rs); with neither, it refuses the read, naming both forms",
-          "corpus-ab --c1-report at commit 1758b8a9 finds this bucket's rows (new census dae6c9c8, old L3 eeb826d3)",
-          "the user's sign-off of 2026-10-03"
-        ],
-        "note": "The bucket's 8 rows are 6 private rows (0d33931d, 353da437, 92428fc0, 9efdcbd4, f420722e, fe6bea5b) and the public fragment_fetch fixture's fetch_ordered (a4d33db3) and fetch_scalar (f6350577). Each reads a color attachment through Metal's framebuffer fetch, which Metal orders after every earlier fragment of the pixel. The profile states neither rasterizationOrderColorAttachmentAccess nor fragmentShaderPixelInterlock, so neither exact form applies and no exact emulation is known: the engine refuses the rows, naming both forms. No unordered input-attachment read is offered in their place: it could return the attachment before an earlier overlapping fragment's write, a value Metal never shows. The old engine emits one input attachment per color index (src/passes/stage_input/mod.rs), read unordered and unrecorded. The user signed off the 6 private rows as a device limit on 2026-10-03, and the whole bucket the same day as a recorded near-equivalent; with the unordered read removed, the bucket is the device's lack.",
-        "sign_off": {
-          "state": "signed_off",
-          "decision": "sign off this family's rows as a device limit, and the bucket as a recorded near-equivalent that stays open until an exact path exists and does not count against C1 (the user's answers of 2026-10-03); the near-equivalent, an unordered read, is removed, as no fast form may change what a Metal program observes (the user's rule of 2026-10-18)",
-          "date": "2026-10-03"
-        }
-      }
-    },
-    {
-      "profile": "lunarg-desktop-baseline-2023",
-      "outcome": "device_capability_missing",
-      "key": "MinLodClamp needs Feature(ShaderResourceMinLod)",
-      "class": "device_lacks",
-      "rows": 1,
-      "rows_digest": "8510c7fddd77a755b7454c1cae84d4cbfb44527a32a381e1ff47db7313260e21",
-      "new_census": "dae6c9c8021e6a3de6b1ebabf3bfb5e8756e9161930b55f912d7407288c442a8",
-      "old_l3": "eeb826d3de808129cd3c3ef41b11a9386db2aff8b81ce72070990eaa6898fdb9",
-      "review": {
-        "evidence": [
-          "the engine's census of lunarg-desktop-baseline-2023 refuses this entry's rows `device_capability_missing MinLodClamp needs Feature(ShaderResourceMinLod)` (rows, rows_digest, new_census)",
-          "the old engine's L3 table of lunarg-desktop-baseline-2023 (old_l3): the rows' old output passes L3 there or has no verdict",
-          "validation/profiles/lunarg-desktop-baseline-2023.json: its one capability block with features (VP_LUNARG_desktop_baseline_2023_block) grants 29 VkPhysicalDeviceFeatures, and shaderResourceMinLod is not among them",
-          "a nonzero min_lod_clamp on an implicit-level or gradient sample is SPIR-V's MinLod image operand, which needs shaderResourceMinLod",
-          "corpus-ab --c1-report at commit 1758b8a9 finds this bucket's rows (new census dae6c9c8, old L3 eeb826d3)",
-          "the user's sign-off of 2026-10-03"
-        ],
-        "note": "The user signed it off on 2026-10-03. The one row is the public sampling fixture's sample_min_lod (f2af5b3d), a fragment function's implicit-level sample with min_lod_clamp(1.5). Vulkan clamps an implicit level from below only through the MinLod image operand, whose capability needs shaderResourceMinLod, and the profile lacks it. No exact emulation is known. Sampler state cannot carry the clamp, because the clamp is an operand of the call, not of the sampler. A rewrite to an explicit level (the queried level, raised to the clamp) or to scaled gradients replaces the implementation's own level selection, and so its filtering (anisotropy included); neither is shown to equal Metal's clamped implicit sample. The old output passes L3 on this profile: expected from its requirements, not executed.",
-        "sign_off": {
-          "state": "signed_off",
-          "decision": "sign off as a device limit (the user's answer of 2026-10-03)",
-          "date": "2026-10-03"
-        }
-      }
-    },
-    {
       "profile": "moltenvk-m3",
       "outcome": "invalid_input",
       "key": "Canon::CallTypeMismatch",
@@ -178,32 +126,6 @@
         "sign_off": {
           "state": "signed_off",
           "decision": "sign off as old output that was guessed (the user's answer of 2026-10-03)",
-          "date": "2026-10-03"
-        }
-      }
-    },
-    {
-      "profile": "vk12-floor",
-      "outcome": "device_capability_missing",
-      "key": "FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess) | Feature(FragmentShaderPixelInterlock)+Feature(FragmentStoresAndAtomics)",
-      "class": "device_lacks",
-      "rows": 6,
-      "rows_digest": "9d6f4b909eda2168f0f4ed52c894e87defa44a01479140048696b79be7f46a80",
-      "new_census": "fe02751bc8bf5dbf3ee1a60eff5281544a1d8396b5b53a646026224e613b529d",
-      "old_l3": "657baac91087cd17b953e95d2b48b8c3ceae90a0bdd70fe59bdb9f6d67bbc637",
-      "review": {
-        "evidence": [
-          "the engine's census of vk12-floor refuses this entry's rows `device_capability_missing FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess) | Feature(FragmentShaderPixelInterlock)+Feature(FragmentStoresAndAtomics)` (rows, rows_digest, new_census)",
-          "the old engine's L3 table of vk12-floor (old_l3): the rows' old output passes L3 there or has no verdict",
-          "validation/profiles/vk12-floor.json: it states no extension, and its capability blocks state neither fragmentShaderPixelInterlock nor rasterizationOrderColorAttachmentAccess, nor fragmentStoresAndAtomics among the 4 VkPhysicalDeviceFeatures it grants",
-          "the translator orders a framebuffer fetch in one of two exact forms: an input attachment under rasterization-order attachment access, or each read attachment as a coherent storage image inside the ordered pixel interlock (crates/metal2vulkan/src/lower/fragment/color.rs and fetch.rs); with neither, it refuses the read, naming both forms",
-          "corpus-ab --c1-report at commit 1758b8a9 finds this bucket's rows (new census fe02751b, old L3 657baac9)",
-          "the user's sign-off of 2026-10-03"
-        ],
-        "note": "The bucket's 6 rows are 4 private rows (353da437, 92428fc0, 9efdcbd4, f420722e) and the public fragment_fetch fixture's fetch_ordered (a4d33db3) and fetch_scalar (f6350577). Each reads a color attachment through Metal's framebuffer fetch, which Metal orders after every earlier fragment of the pixel. The profile states neither rasterizationOrderColorAttachmentAccess nor fragmentShaderPixelInterlock (nor fragmentStoresAndAtomics, which the storage form's write needs), so neither exact form applies and no exact emulation is known: the engine refuses the rows, naming both forms. No unordered input-attachment read is offered in their place: it could return the attachment before an earlier overlapping fragment's write, a value Metal never shows. The old engine emits one input attachment per color index (src/passes/stage_input/mod.rs), read unordered and unrecorded. The user signed off the 4 private rows as a device limit on 2026-10-03, and the whole bucket the same day as a recorded near-equivalent; with the unordered read removed, the bucket is the device's lack.",
-        "sign_off": {
-          "state": "signed_off",
-          "decision": "sign off this family's rows as a device limit, and the bucket as a recorded near-equivalent that stays open until an exact path exists and does not count against C1 (the user's answers of 2026-10-03); the near-equivalent, an unordered read, is removed, as no fast form may change what a Metal program observes (the user's rule of 2026-10-18)",
           "date": "2026-10-03"
         }
       }

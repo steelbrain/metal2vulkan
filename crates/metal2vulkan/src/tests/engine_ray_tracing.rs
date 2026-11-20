@@ -2057,12 +2057,7 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 }
 
 /// The profiles the count kernels run on: two without ray queries, MoltenVK's, and one with them.
-const COUNT_PROFILES: [&str; 4] = [
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "moltenvk-m3",
-    "lavapipe",
-];
+const COUNT_PROFILES: [&str; 3] = ["runtime-floor", "moltenvk-m3", "lavapipe"];
 
 /// `entry` of `bc` end to end on `stem`: compiled through the device, planned for a stage table
 /// that binds a 16-byte buffer at index 0 and each of `counts` (buffer index, instance count) as

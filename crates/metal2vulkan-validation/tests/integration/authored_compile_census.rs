@@ -290,7 +290,21 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         prepare_case(device, admitted).unwrap_or_else(|error| panic!("preparation: {error}"))
     };
     let profile = |label: &str| CensusProfile::load(&ProfileLeg::parse(label).unwrap()).unwrap();
-    let (lavapipe, floor) = (profile("lavapipe"), profile("vk12-floor"));
+    let lavapipe = profile("lavapipe");
+    // A device without device addresses (`runtime-floor` without `bufferDeviceAddress`, below the
+    // runtime's floor): the GPU-encoded command buffers replay on the host there.
+    let floor = {
+        let mut description =
+            metal2vulkan_validation::engine::load_description("runtime-floor").unwrap();
+        assert!(description
+            .features
+            .remove(&metal2vulkan::device::VkFeature::BufferDeviceAddress));
+        metal2vulkan_validation::worker::compile::WorkerDevice::new(
+            description,
+            metal2vulkan::device::DevicePolicy::default(),
+        )
+        .unwrap()
+    };
 
     let (scratch, case) =
         corpus_with_templates("gpu-encoded-buffers-keep-the-host-encoded-dispatches");
@@ -313,12 +327,12 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         .expect("a device-replayed case's digest");
     let again = compile_prepared(&compute, &worker, &lavapipe.device);
     assert_eq!(again.artifact, Some(digest));
-    let on_host = case_compiles(&compute, &floor.device).unwrap();
+    let on_host = case_compiles(&compute, &floor).unwrap();
     assert_eq!(on_host.host_replayed, 1);
     assert_eq!(on_host.compiles.len(), 1);
     // Where the host replay runs a command buffer, the census compiles less than the run does:
     // no digest.
-    let host = compile_prepared(&compute, &worker, &floor.device);
+    let host = compile_prepared(&compute, &worker, &floor);
     assert_eq!(host.artifact, None, "{host:?}");
 
     let (scratch, case) =

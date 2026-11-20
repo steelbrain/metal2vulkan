@@ -1116,22 +1116,21 @@ fn alpha_to_one_is_refused_only_without_the_feature() {
     let va = artifact(iface(Stage::Vertex, vec![], vec![]), None);
     let fa = artifact(iface(Stage::Fragment, vec![], vec![]), None);
     let inputs = LinkInputs::Render(Box::new(r));
-    // `swiftshader` lists `alphaToOne` as unsupported, and `vk12-floor` states no such member.
-    for stem in ["swiftshader", "vk12-floor"] {
-        let p = profile(stem);
-        assert!(
-            !p.fields().enabled.features.contains(&VkFeature::AlphaToOne),
-            "{stem} has the feature"
-        );
-        assert_eq!(
-            link(&[&va, &fa], &inputs, &p).unwrap_err(),
-            Error::Unsupported(Unsupported::needs(
-                Feature::AlphaToOne,
-                Capability::Feature(VkFeature::AlphaToOne)
-            )),
-            "{stem}"
-        );
-    }
+    // `runtime-floor` without `alphaToOne`, which the runtime's floor requires.
+    let p = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::AlphaToOne],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
+    assert!(!p.fields().enabled.features.contains(&VkFeature::AlphaToOne));
+    assert_eq!(
+        link(&[&va, &fa], &inputs, &p).unwrap_err(),
+        Error::Unsupported(Unsupported::needs(
+            Feature::AlphaToOne,
+            Capability::Feature(VkFeature::AlphaToOne)
+        ))
+    );
     // The same inputs on a device with the feature link, and carry it.
     let p = profile("moltenvk-m3");
     let g = link(&[&va, &fa], &inputs, &p)
@@ -1572,7 +1571,13 @@ fn attachment_states_are_identical_or_need_independent_blend() {
         a.write_mask = mask;
         a
     };
-    let floor = profile("vk12-floor");
+    // `runtime-floor` without `independentBlend`, which the runtime's floor requires.
+    let floor = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::IndependentBlend],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
     let lavapipe = profile("lavapipe");
     assert!(!floor.fields().fragment.independent_blend);
     assert!(lavapipe.fields().fragment.independent_blend);
@@ -1800,7 +1805,13 @@ fn a_dual_source_blend_needs_dual_src_blend() {
             "{factor:?}"
         );
     }
-    let floor = profile("vk12-floor");
+    // `runtime-floor` without `dualSrcBlend`, which the runtime's floor requires.
+    let floor = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::DualSrcBlend],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
     assert!(!floor.fields().fragment.dual_src_blend);
     assert_eq!(
         link(
@@ -1876,7 +1887,13 @@ fn color_outputs_follow_metals_measured_rules() {
         })
     };
     let lavapipe = profile("lavapipe");
-    let floor = profile("vk12-floor");
+    // `runtime-floor` without `independentBlend`, which the runtime's floor requires.
+    let floor = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::IndependentBlend],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
     for p in [&lavapipe, &profile("moltenvk-m3")] {
         // Components against channels.
         for (format, components, ok) in [
@@ -2486,7 +2503,13 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
             assert_eq!(four, want, "{stem} case {i} at 4 samples");
         }
     }
-    let p = profile("vk12-floor");
+    // `runtime-floor` without `sampleRateShading`, which the runtime's floor requires.
+    let p = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::SampleRateShading],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
     assert!(!p.fields().fragment.sample_rate_shading);
     assert_eq!(
         link(&[&va, &cases[1].0], &at(4), &p).unwrap_err(),

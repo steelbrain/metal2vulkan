@@ -221,14 +221,9 @@ fn the_tables_read_the_specification() {
 }
 
 /// Every committed profile covers the tables. A device report states one device, which meets
-/// every requirement that applies to it (including a choice between formats or tables); a
-/// requirements profile states a lower bound, which cannot hold a choice, so only its
-/// unconditional and feature-conditioned entries are checked.
-///
-/// The one expected gap: `lunarg-desktop-baseline-2023` is the intersection of gpuinfo reports
-/// that include portability-subset (MoltenVK) devices on Intel, AMD, and NVIDIA Macs, which lack
-/// the 16-bit packed formats and, on some, `R32` image atomics; the profile states its own
-/// formats, so the regeneration keeps them as they are.
+/// every requirement that applies to it (including a choice between formats or tables); the
+/// derived floor states a lower bound, which cannot hold a choice, so only its unconditional and
+/// feature-conditioned entries are checked.
 #[test]
 fn committed_profiles_cover_the_vulkan_1_2_required_formats() {
     let docs: Vec<(String, Value)> = committed_profiles()
@@ -265,24 +260,5 @@ fn committed_profiles_cover_the_vulkan_1_2_required_formats() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
-    use vk::FormatFeatureFlags2 as F;
-    let mut expected = Table::new();
-    for format in [
-        vk::Format::A1R5G5B5_UNORM_PACK16,
-        vk::Format::B4G4R4A4_UNORM_PACK16,
-        vk::Format::R5G6B5_UNORM_PACK16,
-    ] {
-        expected.insert(format, unconditional[&format]);
-    }
-    for format in [vk::Format::R32_UINT, vk::Format::R32_SINT] {
-        let atomic = FormatProperties {
-            optimal_tiling: F::STORAGE_IMAGE_ATOMIC,
-            ..FormatProperties::default()
-        };
-        expected.insert(format, atomic);
-    }
-    assert_eq!(
-        gaps,
-        BTreeMap::from([("lunarg-desktop-baseline-2023".to_string(), expected)])
-    );
+    assert!(gaps.is_empty(), "{gaps:#?}");
 }

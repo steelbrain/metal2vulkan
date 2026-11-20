@@ -141,7 +141,7 @@ fn locations(words: &[u32], class: u32) -> Vec<u32> {
 }
 
 /// Profiles with and without device addresses, and the floor.
-const PROFILES: [&str; 3] = ["nvidia-rtx5080-laptop", "moltenvk-m3", "vk12-floor"];
+const PROFILES: [&str; 3] = ["nvidia-rtx5080-laptop", "moltenvk-m3", "runtime-floor"];
 
 #[test]
 fn an_unwritten_varying_has_a_producer_for_the_fragment_that_reads_it() {

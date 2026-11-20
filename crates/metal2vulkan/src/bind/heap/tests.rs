@@ -1175,9 +1175,13 @@ fn a_late_cubic_sampler_is_listed_with_its_cubic_bit_beside_tested_stages() {
 #[test]
 fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
     let profile = m3();
-    let floor =
-        crate::pipeline::testing::profile("vk12-floor", crate::device::DevicePolicy::default())
-            .expect("profile");
+    // The runtime's floor requires `samplerAnisotropy`; a device without it is below the floor.
+    let floor = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[crate::device::requirements::VkFeature::SamplerAnisotropy],
+        crate::device::DevicePolicy::default(),
+    )
+    .expect("profile");
     let placement = HeapPlacement::ResourceId;
     let planned = PlannedHandleTable {
         set: 0,
@@ -1256,7 +1260,7 @@ fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
             .enabled
             .features
             .contains(&crate::device::requirements::VkFeature::SamplerAnisotropy),
-        "vk12-floor states samplerAnisotropy"
+        "the floor without samplerAnisotropy states it"
     );
     assert!(
         !held_on(&floor, &sampled, anisotropic),

@@ -416,7 +416,7 @@ mod tests {
     /// The constexpr feature checks are refusals at compile time.
     #[test]
     fn constexpr_feature_checks_refuse() {
-        let p = profile("vk12-floor");
+        let p = profile("runtime-floor");
         // A bicubic sampler's filters are nearest placeholders: its samples are fetches.
         let mut s = state(FIXTURE_WORDS[0]);
         s.mag_filter = Filter::Bicubic;

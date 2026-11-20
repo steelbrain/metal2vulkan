@@ -146,7 +146,7 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
     }
 
     let worker = worker();
-    for stem in ["moltenvk-m3", "vk12-floor", "lavapipe"] {
+    for stem in ["moltenvk-m3", "runtime-floor", "lavapipe"] {
         let device =
             WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
         let profile = device.device().profile();
@@ -278,7 +278,7 @@ fn a_case_with_a_visible_function_table_binds_the_products_table_words() {
     }
 
     let worker = worker();
-    for stem in ["moltenvk-m3", "vk12-floor", "lavapipe"] {
+    for stem in ["moltenvk-m3", "runtime-floor", "lavapipe"] {
         let device =
             WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
         let profile = device.device().profile();

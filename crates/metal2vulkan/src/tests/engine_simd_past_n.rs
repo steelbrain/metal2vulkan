@@ -39,7 +39,7 @@ use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
 
 /// The committed profiles whose kernels' simdgroups are emulated.
-const PROFILES: [&str; 2] = ["lavapipe", "vk12-floor"];
+const PROFILES: [&str; 2] = ["lavapipe", "runtime-floor"];
 
 const WIDTHS: [SubgroupSize; 3] = [SubgroupSize::W8, SubgroupSize::W16, SubgroupSize::W32];
 

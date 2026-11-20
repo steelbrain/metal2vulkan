@@ -148,7 +148,7 @@ fn a_clean_state_takes_the_storage_form() {
             }
         }
     }
-    for stem in ["lavapipe", "vk12-floor", "swiftshader"] {
+    for stem in ["lavapipe", "runtime-floor"] {
         assert!(!interlock_orders(&profile(stem, &[])), "{stem}");
     }
 }
@@ -1144,7 +1144,7 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
             "{stem}"
         );
     }
-    for stem in ["lavapipe", "gate-lavapipe-x86_64", "swiftshader"] {
+    for stem in ["lavapipe", "gate-lavapipe-x86_64"] {
         let p = profile(stem, &[]);
         assert!(!interlock_orders(&p), "{stem}");
         for pf in blended {
@@ -1168,14 +1168,11 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
             )],
         ],
     );
-    for stem in ["vk12-floor", "roadmap-2022"] {
-        let p = profile(stem, &[]);
-        assert_eq!(
-            extended_range_blend(PixelFormat::BGRA10XR, &p),
-            Err(unordered.clone()),
-            "{stem}"
-        );
-    }
+    let p = profile("runtime-floor", &[]);
+    assert_eq!(
+        extended_range_blend(PixelFormat::BGRA10XR, &p),
+        Err(unordered)
+    );
     // The storage form's own device needs, named where the device lacks one.
     let p = profile("moltenvk-m3", &[VkFeature::FragmentStoresAndAtomics]);
     assert!(extended_range_blend(PixelFormat::BGRA10XR, &p)

@@ -49,7 +49,7 @@ fn every_committed_profile_derives() {
 fn occlusion_query_precise_follows_each_source() {
     for (stem, text) in committed_profiles() {
         let stated = text.contains("\"occlusionQueryPrecise\": true");
-        assert_eq!(stated, stem != "vk12-floor", "{stem}");
+        assert_eq!(stated, stem != "runtime-floor", "{stem}");
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
         assert_eq!(
             desc.features.contains(&VkFeature::OcclusionQueryPrecise),
@@ -141,15 +141,20 @@ fn find_structure(v: &serde_json::Value, name: &str, out: &mut Option<serde_json
 
 #[test]
 fn memory_profiles_follow_bda_and_int64() {
-    // roadmap-2022 requires device addresses but not shaderInt64.
-    for stem in ["vk12-floor", "roadmap-2022"] {
+    // Without either, below the runtime's floor, which requires both.
+    for without in [
+        &[VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64][..],
+        &[VkFeature::ShaderInt64],
+    ] {
+        let dev = Device::from_queries(floor_without(without), DevicePolicy::default()).unwrap();
         assert_eq!(
-            device(stem).profile().fields().buffer_access,
+            dev.profile().fields().buffer_access,
             BufferAccess::Floor,
-            "{stem}"
+            "{without:?}"
         );
     }
     for stem in [
+        "runtime-floor",
         "moltenvk-m3",
         "nvidia-rtx50-linux",
         "amd-rdna3-radv",
@@ -165,33 +170,39 @@ fn memory_profiles_follow_bda_and_int64() {
     }
 }
 
-/// A Profile F refusal names what the device lacks of Profile A, never a feature it has.
+/// A Profile F refusal names what the device lacks of Profile A, never a feature it has: on
+/// `runtime-floor` without either feature, and without `shaderInt64` alone.
 #[test]
 fn addressed_needs_name_only_the_missing_features() {
     let bda = Capability::Feature(VkFeature::BufferDeviceAddress);
     let int64 = Capability::Feature(VkFeature::ShaderInt64);
+    let needs = |without: &[VkFeature]| {
+        Device::from_queries(floor_without(without), DevicePolicy::default())
+            .unwrap()
+            .profile()
+            .addressed_needs()
+    };
     assert_eq!(
-        device("vk12-floor").profile().addressed_needs(),
+        needs(&[VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64]),
         vec![bda, int64.clone()]
     );
-    // roadmap-2022 has device addresses; only the 64-bit integers are missing.
-    assert_eq!(
-        device("roadmap-2022").profile().addressed_needs(),
-        vec![int64]
-    );
+    assert_eq!(needs(&[VkFeature::ShaderInt64]), vec![int64]);
 }
 
+/// `runtime-floor` derives the profile of a device at the runtime's floor: addressed buffers,
+/// stores and atomics in every stage, and the formats the Vulkan 1.2 Required Format Support
+/// tables require of it.
 #[test]
-fn vk12_floor_derives_a_floor_profile() {
-    let dev = device("vk12-floor");
+fn runtime_floor_derives_the_floor_profile() {
+    let dev = device("runtime-floor");
     let f = dev.profile().fields();
     assert_eq!(f.robustness, Robustness::Rba);
+    assert_eq!(f.buffer_access, BufferAccess::Addressed);
     assert!(f.descriptors.uniform_buffer_standard_layout);
-    assert!(!f.leaf.vertex_stores_and_atomics);
-    assert!(!f.leaf.fragment_stores_and_atomics);
-    assert!(!f.dynamic_vertex_stride);
-    // The Vulkan 1.2 Required Format Support tables: what they require unconditionally is
-    // supported, and a usage they leave conditional is refused (a typed Format capability).
+    assert!(f.leaf.vertex_stores_and_atomics);
+    assert!(f.leaf.fragment_stores_and_atomics);
+    // What the tables require of it is supported, and a usage they leave to a feature it does not
+    // require is refused (a typed Format capability).
     assert!(!f.vertex_formats.formats.is_empty());
     assert!(!f.storage_formats.formats.is_empty());
     assert!(!f.image_formats.formats.is_empty());
@@ -207,9 +218,16 @@ fn vk12_floor_derives_a_floor_profile() {
     assert_eq!(
         dev.profile()
             .check(&req(vk::Format::R8_UNORM, FormatUsage::StorageImage)),
+        Ok(())
+    );
+    assert_eq!(
+        dev.profile().check(&req(
+            vk::Format::D32_SFLOAT,
+            FormatUsage::DepthStencilAttachment
+        )),
         Err(Capability::Format {
-            format: vk::Format::R8_UNORM,
-            usage: FormatUsage::StorageImage
+            format: vk::Format::D32_SFLOAT,
+            usage: FormatUsage::DepthStencilAttachment
         })
     );
     assert!(!f.subgroup.kernel.pinnable);
@@ -261,7 +279,7 @@ fn robustness2_selects_the_rba2_encoding() {
 
 #[test]
 fn below_1_2_is_refused() {
-    let mut desc = profile("vk12-floor");
+    let mut desc = profile("runtime-floor");
     desc.api_version = ApiVersion { major: 1, minor: 1 };
     match Device::from_queries(desc, DevicePolicy::default()) {
         Err(Error::Unsupported(u)) => {
@@ -305,8 +323,8 @@ fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
             "{half:?}"
         );
     }
-    // roadmap-2022 has device addresses but not shaderInt64.
-    match Device::from_queries(profile("roadmap-2022"), identity) {
+    // `runtime-floor` without `shaderInt64`: device addresses, no 64-bit integers.
+    match Device::from_queries(floor_without(&[VkFeature::ShaderInt64]), identity) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::IdentityDomains);
             let both = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
@@ -465,30 +483,31 @@ fn allocation_sizes_are_no_profile_field() {
 
 #[test]
 fn check_reports_the_first_missing_capability() {
-    let dev = device("vk12-floor");
+    let dev = device("runtime-floor");
     let p = dev.profile();
     assert_eq!(p.check(&Requirements::default()), Ok(()));
     let need = |r: Requirements| p.check(&r);
+    let v1_4 = ApiVersion { major: 1, minor: 4 };
     assert_eq!(
         need(Requirements {
-            api_version: Some(ApiVersion::V1_3),
+            api_version: Some(v1_4),
             ..Requirements::default()
         }),
-        Err(Capability::ApiVersion(ApiVersion::V1_3))
+        Err(Capability::ApiVersion(v1_4))
     );
     assert_eq!(
         need(Requirements {
-            features: [VkFeature::RobustBufferAccess, VkFeature::ShaderInt64].into(),
+            features: [VkFeature::RobustBufferAccess, VkFeature::ShaderFloat64].into(),
             ..Requirements::default()
         }),
-        Err(Capability::Feature(VkFeature::ShaderInt64))
+        Err(Capability::Feature(VkFeature::ShaderFloat64))
     );
     assert_eq!(
         need(Requirements {
-            extensions: [VkExtension::ExtRobustness2].into(),
+            extensions: [VkExtension::ExtShaderStencilExport].into(),
             ..Requirements::default()
         }),
-        Err(Capability::Extension(VkExtension::ExtRobustness2))
+        Err(Capability::Extension(VkExtension::ExtShaderStencilExport))
     );
     assert_eq!(
         need(Requirements {
@@ -540,9 +559,15 @@ fn check_reports_the_first_missing_capability() {
         }),
         Err(Capability::Property(VkProperty::RoundingIndependenceAll))
     );
-    // Stage flags need their enabling features.
+    // Stage flags need their enabling features, which the floor requires: the floor without
+    // `computeFullSubgroups`, a device below it, names it.
+    let without = Device::from_queries(
+        floor_without(&[VkFeature::ComputeFullSubgroups]),
+        DevicePolicy::default(),
+    )
+    .unwrap();
     assert_eq!(
-        need(Requirements {
+        without.profile().check(&Requirements {
             stage_flags: [StageCreateFlag::RequireFullSubgroups].into(),
             ..Requirements::default()
         }),
@@ -599,8 +624,9 @@ fn storage_without_format_follows_each_format() {
         buffer: F::STORAGE_TEXEL_BUFFER | buffer,
         ..Default::default()
     };
-    // The floor states neither formatless feature: the test grants both.
-    let mut desc = profile("vk12-floor");
+    // `runtime-floor` as a Vulkan 1.2 context without `VK_KHR_format_feature_flags2` reads it, with
+    // both formatless features.
+    let mut desc = crate::pipeline::testing::description_at_1_2("runtime-floor", false).unwrap();
     desc.features
         .insert(VkFeature::ShaderStorageImageReadWithoutFormat);
     desc.features
@@ -674,15 +700,6 @@ fn storage_without_format_follows_each_format() {
         [U::StorageImageWriteWithoutFormat]
     );
 
-    // SwiftShader (Vulkan 1.3, no `VkFormatProperties3` in its document): its `R32_UINT` image is
-    // written without a format, as the specification implies, and its texel buffer is not, which
-    // its driver reports (`VUID-vkCmdDispatch-OpTypeImage-07029`); it has no read feature.
-    let swiftshader = device("swiftshader");
-    assert!(profile("swiftshader").has_format_feature_flags2());
-    assert_eq!(
-        usages(&swiftshader, vk::Format::R32_UINT),
-        [U::StorageImageWriteWithoutFormat]
-    );
     // lavapipe's document states `VkFormatProperties3` with all four bits.
     assert_eq!(usages(&device("lavapipe"), vk::Format::R32_UINT), all);
 }
@@ -700,7 +717,7 @@ fn the_profile_holds_the_largest_whole_point_size() {
         ("intel-irisxe-rplp-anv", 255),
         ("lavapipe", 256),
         ("moltenvk-m3", 511),
-        ("vk12-floor", 1),
+        ("runtime-floor", 63),
     ] {
         assert_eq!(
             device(stem).profile().fields().limits.max_point_size,

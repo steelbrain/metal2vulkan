@@ -36,7 +36,7 @@ const C: (u64, u64, u64) = (0x0000_0001_0002_0000, 0x0000_0022_0000_0000, 100);
 /// The device address of the consumer's upload of inline bytes the encoder bound.
 const BYTES: u64 = 0x0000_0023_0000_0040;
 
-/// Every committed profile as a device, by stem.
+/// Every committed profile as a device, by stem, then Profile F's.
 fn devices() -> Vec<(String, Device)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let mut out: Vec<(String, Device)> = std::fs::read_dir(&dir)
@@ -58,6 +58,9 @@ fn devices() -> Vec<(String, Device)> {
         })
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
+    // Profile F, below the runtime's floor: the form of a device without device addresses.
+    let f = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    out.push((crate::pipeline::testing::PROFILE_F.to_string(), f));
     out
 }
 

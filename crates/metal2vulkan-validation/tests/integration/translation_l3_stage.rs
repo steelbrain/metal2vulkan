@@ -56,7 +56,7 @@ fn census(corpus: &Path, hashes: &Path, spirv_val: &Path) -> String {
             "--audit",
             "translation",
             "--profile",
-            "vk12-floor",
+            "runtime-floor",
             "--hash-file",
         ])
         .arg(hashes)

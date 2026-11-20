@@ -808,6 +808,23 @@ fn unmodelled_texture_forms_are_refused() {
                 ok(Ok(a), &p, &stem);
             }
             Err(Error::NeedsInput(_)) if p.fields().descriptors.non_uniform_storage_image => {}
+            // The slot's level views past the stage's storage images (the runtime floor's 4).
+            Err(Error::Unsupported(u))
+                if p.fields().descriptors.non_uniform_storage_image
+                    && u.feature == Feature::DescriptorCount =>
+            {
+                assert!(
+                    matches!(
+                        &u.needs,
+                        crate::error::Needs::AnyOf(alts) if alts.iter().flatten().any(|c| matches!(
+                            c,
+                            crate::error::Capability::Limit { limit, .. }
+                                if *limit == crate::device::requirements::VkLimit::MaxPerStageDescriptorStorageImages
+                        ))
+                    ),
+                    "{stem}: {u:?}"
+                );
+            }
             Err(Error::Unsupported(u)) if !p.fields().descriptors.non_uniform_storage_image => {
                 assert_eq!(
                     (u.feature, u.needs),

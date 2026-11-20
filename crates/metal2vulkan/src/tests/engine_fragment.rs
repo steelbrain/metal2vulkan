@@ -122,6 +122,26 @@ fn refusal(bc: &[u8], entry: &str, p: &DeviceProfile) -> (Feature, Needs) {
     }
 }
 
+/// The runtime's floor without `shaderDemoteToHelperInvocation`, a device below that floor: the
+/// one that predicates a discard.
+const NO_DEMOTE: &str = "runtime-floor without shaderDemoteToHelperInvocation";
+
+fn no_demote() -> DeviceProfile {
+    crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::ShaderDemoteToHelperInvocation],
+        DevicePolicy::default(),
+    )
+    .expect(NO_DEMOTE)
+}
+
+/// The committed profiles and [`NO_DEMOTE`]'s.
+fn discard_profiles() -> Vec<(String, DeviceProfile)> {
+    let mut out = committed_profiles().expect("profiles");
+    out.push((NO_DEMOTE.to_string(), no_demote()));
+    out
+}
+
 /// MSL ≥ 2.3 demotes (or predicates without demote); MSL < 2.3 terminates when nothing tangled
 /// follows, and otherwise takes MSL 2.3's form, a loop or a simdgroup operation after the site
 /// included, as an M4 runs a discarded MSL 2.2 thread as an MSL 2.3 one. A site before a simdgroup
@@ -135,8 +155,7 @@ fn discard_forms_follow_the_d6_matrix() {
     ) else {
         return;
     };
-    let profiles = committed_profiles().expect("profiles");
-    assert!(!profiles.is_empty());
+    let profiles = discard_profiles();
     for (stem, p) in &profiles {
         let helper = if p.fields().fragment.demote_to_helper {
             DiscardForm::Demote
@@ -160,7 +179,8 @@ fn fragment_quads(p: &DeviceProfile) -> bool {
 
 /// Check `entry`, whose discard a simdgroup operation follows, on profile `p`: predicated with one
 /// whole-quad exit where the profile has fragment quad operations, else demoted, else refused
-/// needing demote.
+/// needing demote. Where the discard has its form and the device runs no subgroup operation in the
+/// fragment stage (the runtime's floor), the simdgroup operation is refused needing that stage.
 ///
 /// Where the discard form allows it but the profile lacks `shaderQuadControl` and its driver does
 /// not run Metal's helpers (`DriverDeviation::MetalFullQuads`), the simdgroup operation is refused
@@ -169,7 +189,19 @@ fn simd_after_discard(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) {
     let formed = fragment_quads(p) || p.fields().fragment.demote_to_helper;
     let full_quads = p.fields().subgroup.quad_control
         || p.takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads);
-    if formed && !full_quads {
+    if formed && !p.fields().subgroup.fragment.supported {
+        let stage = crate::pipeline::sym::Stage::Fragment;
+        assert_eq!(
+            refusal(bc, entry, p),
+            (
+                Feature::SubgroupOperations,
+                Needs::AnyOf(vec![vec![Capability::Property(
+                    crate::device::requirements::VkProperty::SubgroupStage(stage)
+                )]])
+            ),
+            "{entry} on {stem}"
+        );
+    } else if formed && !full_quads {
         assert_eq!(
             refusal(bc, entry, p),
             (
@@ -233,14 +265,14 @@ fn discard_guards(m: &TypedModule) -> usize {
 /// A side effect after a demoted discard needs no guard (a helper invocation has none); after a
 /// predicated one it runs only where the invocation was not discarded, under `if !discarded`.
 /// `discard_then_store` demotes where the profile has demote, and is predicated with its store
-/// guarded where it does not (`lunarg-desktop-baseline-2023`). Every module passes L3.
+/// guarded where it does not ([`NO_DEMOTE`]). Every module passes L3.
 #[test]
 fn predication_guards_the_side_effects_after_a_site() {
     let Some(bc) = fixture("fragment_discard") else {
         return;
     };
     let mut predicated = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
+    for (stem, p) in discard_profiles() {
         let f = p.fields();
         if !f.leaf.fragment_stores_and_atomics {
             continue;
@@ -260,14 +292,14 @@ fn predication_guards_the_side_effects_after_a_site() {
         let a = compile(&bc, "discard_then_store", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
     }
-    assert!(predicated > 0, "no committed profile predicates");
+    assert!(predicated > 0, "no profile predicates");
 }
 
 /// The owned fixture `rch_guarded_effects`'s side effects after a predicated discard, each under
 /// `if !discarded`: a store, an atomic and the store its old value indexes (two guards; the
 /// atomic's result is merged with zero for a discarded invocation), a store in a loop, a texture
 /// write, a copy. They are predicated where the profile has no demote
-/// (`lunarg-desktop-baseline-2023`); `rch_guarded_simd`'s simdgroup sum is refused there needing
+/// ([`NO_DEMOTE`]); `rch_guarded_simd`'s simdgroup sum is refused there needing
 /// demote, as no whole-quad exit can be placed on a profile without fragment quad operations. A
 /// device that demotes (`moltenvk-m3`, `intel-arl-anv`) demotes each and guards nothing; the
 /// simdgroup sum, which counts the helpers Metal runs, is refused needing `shaderQuadControl`
@@ -288,12 +320,12 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
         ("rch_guarded_copy", 1),
         ("rch_guarded_simd", 1),
     ];
-    for stem in [
-        "moltenvk-m3",
-        "lunarg-desktop-baseline-2023",
-        "intel-arl-anv",
+    let committed = |stem: &str| profile(stem, DevicePolicy::default()).expect("profile");
+    for (stem, p) in [
+        ("moltenvk-m3", committed("moltenvk-m3")),
+        (NO_DEMOTE, no_demote()),
+        ("intel-arl-anv", committed("intel-arl-anv")),
     ] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (entry, effects) in cases {
             let what = format!("{entry} on {stem}");
             let demotes = p.fields().fragment.demote_to_helper;
@@ -5447,7 +5479,7 @@ fn a_snapshot_read_plans_its_variant_where_the_pipeline_can() {
         "amd-780m-radv",
         "nvidia-rtx5080-laptop",
         "lavapipe",
-        "vk12-floor",
+        "runtime-floor",
     ] {
         let desc = crate::pipeline::testing::description(stem).expect("description");
         let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");

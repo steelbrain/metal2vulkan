@@ -2,13 +2,13 @@
 //!
 //! - `i64` arithmetic (`add`, `sub`, `mul`, `shl` by a constant below 32, `and`, `or`, `xor`)
 //!   over index extensions and constants, whose only uses are index operands of GEPs on
-//!   `u32`-offset pointers, is held as its low word: kernels built on it compile on `vk12-floor`
+//!   `u32`-offset pointers, is held as its low word: kernels built on it compile on [`FLOOR_F`]
 //!   (no `shaderInt64`) and `moltenvk-m3`, in both containment encodings, pass L3, select
 //!   `arith.index_word`, and read and write exactly the element the 64-bit index names, including
 //!   an index whose 64-bit computation wraps through 2³².
 //! - An index word used in another block crosses it as a `u32`.
 //! - `i64` arithmetic with any other use, a shift right, or a shift by 32 or more keeps its
-//!   64-bit form: `moltenvk-m3` as a `u64`, `vk12-floor` as two words.
+//!   64-bit form: `moltenvk-m3` as a `u64`, [`FLOOR_F`] as two words.
 //! - An index of a wide pointer (a loaded pointer) keeps its 64-bit form on Profile A: its offset
 //!   is 64-bit, so the low word would not do.
 //!
@@ -36,13 +36,27 @@ use crate::spirv::interp::{run, Buffer, Config, Resources};
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
-/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding).
+/// `runtime-floor` without `bufferDeviceAddress` and `shaderInt64`: below the runtime's floor, a
+/// Profile F device that holds a 64-bit value as two words.
+const FLOOR_F: &str = "runtime-floor without bufferDeviceAddress and shaderInt64";
+
+/// Committed profile `stem` (or [`FLOOR_F`]'s device), optionally with buffer robustness disabled
+/// (the in-shader encoding).
 fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
+    let file = if stem == FLOOR_F {
+        "runtime-floor"
+    } else {
+        stem
+    };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
+        .join(format!("{file}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    if stem == FLOOR_F {
+        desc.features.remove(&VkFeature::BufferDeviceAddress);
+        desc.features.remove(&VkFeature::ShaderInt64);
+    }
     if !robust {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -53,11 +67,11 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
         .clone()
 }
 
-/// A profile without (`vk12-floor`, Profile F) and one with `shaderInt64` (`moltenvk-m3`,
+/// A profile without ([`FLOOR_F`], Profile F) and one with `shaderInt64` (`moltenvk-m3`,
 /// Profile A), each in both containment encodings.
 fn encodings() -> Vec<(String, DeviceProfile)> {
     let mut out = Vec::new();
-    for stem in ["vk12-floor", "moltenvk-m3"] {
+    for stem in [FLOOR_F, "moltenvk-m3"] {
         for robust in [true, false] {
             out.push((
                 format!("{stem} robust={robust}"),
@@ -292,7 +306,7 @@ fn an_index_word_used_in_other_blocks_crosses_as_a_word() {
 }
 
 /// `i64` arithmetic that is not an index word keeps its 64-bit form: `moltenvk-m3` compiles it as a
-/// native `u64`, and `vk12-floor` (no `shaderInt64`) as two words; neither uses `arith.index_word`,
+/// native `u64`, and [`FLOOR_F`] (no `shaderInt64`) as two words; neither uses `arith.index_word`,
 /// and both pass L3.
 #[test]
 fn index_arithmetic_with_other_uses_or_operators_keeps_64_bits() {
@@ -323,7 +337,7 @@ fn index_arithmetic_with_other_uses_or_operators_keeps_64_bits() {
         let Some(bc) = assemble_text(name, &kernel(name, &body, ("long", 8))) else {
             return;
         };
-        for stem in ["vk12-floor", "moltenvk-m3"] {
+        for stem in [FLOOR_F, "moltenvk-m3"] {
             let p = profile_with(stem, true);
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{name} {stem}: {e}"));
             assert!(
@@ -356,7 +370,7 @@ fn a_wide_pointer_index_keeps_its_64_bit_form() {
     assert!(!a.strategies.entries.contains_key("arith.index_word"));
     assert!(a.strategies.entries.contains_key("arith.int"));
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
-    match compile(&bc, name, &profile_with("vk12-floor", true)) {
+    match compile(&bc, name, &profile_with(FLOOR_F, true)) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);
             assert_eq!(
@@ -378,7 +392,7 @@ fn a_wide_pointer_index_keeps_its_64_bit_form() {
 /// it with `LimitExceeded(WorkUnits)`.
 #[test]
 fn the_index_value_scan_is_metered_and_linear() {
-    let p = profile_with("vk12-floor", true);
+    let p = profile_with(FLOOR_F, true);
     for n in [16usize, 64, 256] {
         let name = format!("index_chains_{n}");
         let mut body = String::from("  %o = load i32, ptr addrspace(1) %2, align 4\n");

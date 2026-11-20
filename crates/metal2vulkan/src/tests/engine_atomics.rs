@@ -49,10 +49,9 @@ use crate::spirv::ir::TypedModule;
 use crate::spirv::verify::verify;
 
 /// Profiles with robust descriptors and without, with and without 64-bit integers.
-const PROFILES: [&str; 5] = [
+const PROFILES: [&str; 4] = [
     "moltenvk-m3",
-    "swiftshader",
-    "roadmap-2022",
+    "runtime-floor",
     "lavapipe",
     "nvidia-pascal-linux",
 ];

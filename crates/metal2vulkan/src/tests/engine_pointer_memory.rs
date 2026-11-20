@@ -66,11 +66,20 @@ const fn alloc_guest(k: u64) -> u64 {
 }
 
 fn profile(stem: &str, robust: bool) -> DeviceProfile {
+    profile_without(stem, robust, &[])
+}
+
+/// Committed profile `stem` without `features` (a device below the runtime's floor where the floor
+/// states one), optionally without buffer robustness.
+fn profile_without(stem: &str, robust: bool, features: &[VkFeature]) -> DeviceProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    for f in features {
+        desc.features.remove(f);
+    }
     if !robust {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -1894,9 +1903,10 @@ fn a_memmove_between_static_slots_compares_metal_addresses() {
         return;
     };
     let mut all = profiles();
-    for stem in ["vk12-floor", "swiftshader", "lunarg-desktop-baseline-2023"] {
-        all.push((stem.to_owned(), profile(stem, false)));
-    }
+    all.push((
+        "runtime-floor without shaderInt64".to_owned(),
+        profile_without("runtime-floor", false, &[VkFeature::ShaderInt64]),
+    ));
     let mut refused = 0;
     for (what, p) in all {
         if !p.fields().leaf.int64 {
@@ -2180,8 +2190,8 @@ fn a_wide_pointers_bits_through_a_cell_are_its_guest_address() {
                 assert_eq!(status[StatusWord::ResidentMisses.index() as usize], 0);
             }
         }
-        for stem in ["vk12-floor", "lunarg-desktop-baseline-2023"] {
-            let p = profile(stem, true);
+        for stem in ["runtime-floor without bufferDeviceAddress"] {
+            let p = profile_without("runtime-floor", true, &[VkFeature::BufferDeviceAddress]);
             match typed_module_with(&bc, &name, &p, &LowerInputs::new()) {
                 Err(crate::error::Error::Unsupported(u)) => assert_eq!(
                     u.feature,

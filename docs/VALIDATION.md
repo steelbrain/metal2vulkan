@@ -45,7 +45,7 @@ hang the host. So everything that opens a device is explicit, bounded and refusa
 | cfg | Adds | Device | Run |
 |---|---|---|---|
 | none | GPU-free tests only | none | the gate |
-| `--cfg m2v_cpu_icd` | Vulkan execution tests | a CPU ICD only (lavapipe, SwiftShader) | Linux CI, with `LP_NUM_THREADS=1` |
+| `--cfg m2v_cpu_icd` | Vulkan execution tests | a CPU ICD only (lavapipe) | Linux CI, with `LP_NUM_THREADS=1` |
 | `--cfg m2v_gpu` | Vulkan and Metal execution tests | a real GPU | explicitly, on a host with a GPU |
 | `--cfg m2v_gpu --cfg m2v_gpu_hazards` | the GPU hazards too | a real GPU | only to test that feature, by name |
 
@@ -324,13 +324,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/matrix
 ## The Linux gate in a container
 
 `scripts/linux-gate` runs CI's Linux job, or any command, in a container: Ubuntu 26.04 pinned by
-digest with CI's packages, plus SwiftShader and `VK_LAYER_KHRONOS_profiles` built from pinned
-commits. It is where CPU-ICD execution runs; the container never sees a host GPU.
+digest with CI's packages, plus `VK_LAYER_KHRONOS_profiles` built from a pinned
+commit. It is where CPU-ICD execution runs; the container never sees a host GPU.
 
 ```sh
 scripts/linux-gate --cpus N [--slot NAME] [--platform amd64|arm64]            # ci.yml's Linux job
 scripts/linux-gate --cpus N [--slot NAME] [--platform amd64|arm64] \
-    [--icd lavapipe|swiftshader] [--profile P] \
+    [--icd lavapipe] [--profile P] \
     [--private-corpus DIR] [--scratch DIR] -- <command> ...                   # any command
 ```
 
@@ -385,9 +385,9 @@ worker under the 20-second and 500-MiB ceilings, resumable in bounded batches (`
 cargo run -p metal2vulkan-validation --release --bin corpus-triage -- \
   --audit authoring-capabilities --limit 100000
 lockf /tmp/m2v-index.lock cargo run --release -p metal2vulkan-validation --bin corpus-triage -- \
-  --audit translation --profile vk12-floor --profile moltenvk-m3 --current-fingerprint --limit 500 --summary-only
+  --audit translation --profile runtime-floor --profile moltenvk-m3 --current-fingerprint --limit 500 --summary-only
 cargo run --release -p metal2vulkan-validation --bin corpus-triage -- \
-  --audit budgets --profile vk12-floor --profile moltenvk-m3 --summary-only
+  --audit budgets --profile runtime-floor --profile moltenvk-m3 --summary-only
 ```
 
 Other corpus tools:

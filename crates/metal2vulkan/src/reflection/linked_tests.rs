@@ -645,7 +645,7 @@ fn a_dropped_unwritten_fragment_input_is_absent_from_the_compiled_fragment() {
     let rgb = ColorWriteMask::RED
         .union(ColorWriteMask::GREEN)
         .union(ColorWriteMask::BLUE);
-    let devices: Vec<(&str, Device)> = ["moltenvk-m3", "vk12-floor"]
+    let devices: Vec<(&str, Device)> = ["moltenvk-m3", "runtime-floor"]
         .into_iter()
         .map(|stem| {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

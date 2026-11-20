@@ -38,7 +38,7 @@ use crate::spirv::testing::check_words_valid;
 use crate::vk;
 
 /// The M1 profiles.
-const M1_PROFILES: [&str; 3] = ["moltenvk-m3", "lunarg-desktop-baseline-2023", "vk12-floor"];
+const M1_PROFILES: [&str; 2] = ["moltenvk-m3", "runtime-floor"];
 
 /// `store_const` as opaque bitcode, or `None` (skipped visibly) without `llvm-as`.
 fn store_const() -> Option<Vec<u8>> {
@@ -172,8 +172,8 @@ fn store_const_passes_the_pipeline_on_every_m1_profile() {
 fn containment_without_robustness_guards_the_store() {
     let Some(bitcode) = store_const() else { return };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/vk12-floor.json");
-    let text = std::fs::read_to_string(path).expect("vk12-floor");
+        .join("../metal2vulkan-validation/profiles/runtime-floor.json");
+    let text = std::fs::read_to_string(path).expect("runtime-floor");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
@@ -185,7 +185,7 @@ fn containment_without_robustness_guards_the_store() {
     let ops = opcodes(&words);
     assert!(ops.contains(&(crate::spv::Op::ArrayLength as u32)));
     assert!(ops.contains(&(crate::spv::Op::SelectionMerge as u32)));
-    let robust = profile("vk12-floor", DevicePolicy::default()).expect("profile");
+    let robust = profile("runtime-floor", DevicePolicy::default()).expect("profile");
     let bare = compile(&bitcode, "store_const", &robust).expect("compile");
     let (_, words) = link_and_validate(&bare, &robust).unwrap_or_else(|e| panic!("{e}"));
     assert!(

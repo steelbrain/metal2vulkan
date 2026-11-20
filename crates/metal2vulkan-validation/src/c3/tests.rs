@@ -3079,6 +3079,7 @@ fn a_venue_profile_states_its_identity() {
                     "VkPhysicalDeviceProperties": {
                         "deviceName": "Toy GPU", "vendorID": 4098, "deviceID": 5567,
                         "driverVersion": 109060100,
+                        "limits": {"maxPushConstantsSize": 256},
                     },
                 }},
                 "driver": {"properties": {
@@ -3572,13 +3573,13 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
     use crate::check::admission::NotSupported;
     let refused = case(1, "restricted");
     let refusal = RefusalObservation {
-        environment_id: engine_slot(RADV, Some("lunarg-desktop-baseline-2023"), Leg::Stated),
+        environment_id: engine_slot(RADV, Some("runtime-floor"), Leg::Stated),
         ..refusal_of(
             &refused,
             RADV,
             Leg::Stated,
             &NotSupported::Restriction {
-                profile: "lunarg-desktop-baseline-2023".into(),
+                profile: "runtime-floor".into(),
                 gaps: vec![
                     "limits.max_compute_work_group_invocations 1536 beyond the device's 1024"
                         .into(),
@@ -3621,7 +3622,7 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
     assert!(report
         .slots
         .iter()
-        .all(|slot| !slot.slot.contains("lunarg-desktop-baseline-2023")));
+        .all(|slot| !slot.slot.contains("runtime-floor")));
     assert!(report.gap_proposals.is_empty() && report.device_gaps.is_empty());
 }
 

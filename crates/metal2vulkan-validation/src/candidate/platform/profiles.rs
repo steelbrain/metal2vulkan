@@ -203,9 +203,8 @@ impl ProfileRestriction {
     /// read at it ([`check_within`], [`check_restricted`]), and the context's feature chain links
     /// what is core at it (`enables::Available::at`), so the context translates for the profile the
     /// product reads, which reads a profile at its own version: read at an earlier one, a Vulkan
-    /// 1.3 document drops each feature and member only that version's core states (`roadmap-2022`
-    /// moves its translation key and ten golden cells). A profile at Vulkan 1.2 runs at 1.2, as
-    /// every restricted context did before.
+    /// 1.3 document drops each feature and member only that version's core states. A profile at
+    /// Vulkan 1.2 runs at 1.2.
     pub fn context_version(&self) -> ApiVersion {
         self.description.api_version.max(ApiVersion::V1_2)
     }
@@ -218,11 +217,8 @@ impl ProfileRestriction {
     /// ([`ProfileRestriction::requirements_only`]) states only what its profile requires: the
     /// product reads a member it omits as its version's guarantee, or as none, and a feature its
     /// version requires as present, while the layer reports the device's own value for an omitted
-    /// member (of a structure the context queries) and an omitted feature as absent. Under
-    /// `lunarg-desktop-baseline-2023` as extracted, the RTX 5080's context
-    /// found `shaderSubgroupExtendedTypes` absent and the five `VK_EXT_subgroup_size_control` and
-    /// `VK_EXT_vertex_attribute_divisor` properties the document lists the extensions of but does
-    /// not state at the device's values. Its regeneration now states every such member
+    /// member (of a structure the context queries) and an omitted feature as absent. Its
+    /// regeneration states every such member
     /// ([`ProfileRestriction::completed_for_layer`]), at the profile's own version, which the
     /// context runs at ([`ProfileRestriction::context_version`]); one that does not is refused.
     pub fn presentation_gap(&self) -> Option<String> {

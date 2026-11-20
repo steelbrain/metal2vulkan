@@ -605,8 +605,13 @@ fn the_stated_leg_enables_what_the_description_states_or_names_it_unmet() {
         ]
         .into()
     );
-    let floor = leg_of("vk12-floor", None);
-    assert_eq!(robustness(&floor), [F::RobustBufferAccess].into());
+    // The runtime floor read at API 1.2: `robustImageAccess` is core from 1.3 and the floor lists
+    // no `VK_EXT_image_robustness`, so only `robustImageAccess2` serves images.
+    let floor = leg_of("runtime-floor", None);
+    assert_eq!(
+        robustness(&floor),
+        [F::RobustBufferAccess, F::RobustImageAccess2].into()
+    );
 
     let unmet = leg_of("lavapipe", Some(F::RobustImageAccess));
     assert_eq!(unmet.unmet_robustness, [F::RobustImageAccess].into());
@@ -659,7 +664,7 @@ fn the_new_list_enables_extended_dynamic_state_where_the_device_lists_it() {
             "{stem}"
         );
     }
-    let (description, enables) = lists("vk12-floor");
+    let (description, enables) = lists("runtime-floor");
     assert!(!description.has(F::ExtendedDynamicState));
     assert!(!enabled_set(&enables)
         .features
@@ -719,7 +724,7 @@ fn the_new_list_enables_extended_dynamic_state2_where_the_device_lists_it() {
             "{stem}"
         );
     }
-    let (description, enables) = lists("vk12-floor");
+    let (description, enables) = lists("runtime-floor");
     assert!(!description.has(F::ExtendedDynamicState2));
     assert!(!enabled_set(&enables)
         .features
@@ -729,9 +734,10 @@ fn the_new_list_enables_extended_dynamic_state2_where_the_device_lists_it() {
 /// On every committed profile (as a context's API-1.2 query reads it), the new list in the stated
 /// robustness leg (which enables the robustness features the description states) is a set the
 /// device can create: `with_enabled` accepts it, so it keeps
-/// VUID-VkDeviceCreateInfo-robustBufferAccess-10247. On SwiftShader,
-/// whose profile states `robustBufferAccessUpdateAfterBind` false, the recommendation left out
-/// the buffer update-after-bind features, so `robustBufferAccess` can be enabled.
+/// VUID-VkDeviceCreateInfo-robustBufferAccess-10247: where a profile states
+/// `robustBufferAccessUpdateAfterBind` false, the list leaves out the buffer update-after-bind
+/// features, so `robustBufferAccess` can be enabled. The runtime's floor states it false and has
+/// none of those features; the product's `a_recommendation_keeps_vuid_10247` adds them to it.
 #[test]
 fn the_new_list_with_the_stated_robustness_keeps_the_co_enable_rules() {
     // The features of VUID-VkDeviceCreateInfo-robustBufferAccess-10247 the vocabulary names (its
@@ -741,7 +747,6 @@ fn the_new_list_with_the_stated_robustness_keeps_the_co_enable_rules() {
         F::DescriptorBindingUniformTexelBufferUpdateAfterBind,
         F::DescriptorBindingStorageTexelBufferUpdateAfterBind,
     ];
-    let mut held = Vec::new();
     for stem in committed_profiles().unwrap() {
         let description = at_1_2(load_description(&stem).unwrap());
         let (supported, available) = modelled(&stem, &description, ApiVersion::V1_2);
@@ -762,26 +767,12 @@ fn the_new_list_with_the_stated_robustness_keeps_the_co_enable_rules() {
                     .all(|feature| !set.features.contains(feature)),
                 "{stem}"
             );
-            if BUFFER_UPDATE_AFTER_BIND
-                .iter()
-                .any(|&feature| description.has(feature))
-            {
-                held.push(stem.clone());
-            }
         }
         let opened = opened_description(description.clone(), &set)
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
         Device::from_queries(opened, DevicePolicy::default())
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
     }
-    assert_eq!(
-        held,
-        [
-            "lunarg-desktop-baseline-2023",
-            "roadmap-2022",
-            "swiftshader"
-        ]
-    );
 }
 
 /// A description and a device's own lists that disagree open no context: a recommended feature
@@ -1233,11 +1224,10 @@ fn a_structure_is_core_from_the_version_the_product_reads_it_core() {
 /// version its engine list is the product's recommendation less the excluded features, the
 /// one closed set `with_enabled` accepts and `Device::from_queries` derives from, as at 1.2
 /// ([`the_new_list_enables_the_recommendation_but_the_excluded`]), and no structure core at the
-/// version is chained through its extension. The profiles at Vulkan 1.2 run at 1.2.
+/// version is chained through its extension.
 #[test]
 fn a_restricted_context_enables_the_recommendation_at_its_profiles_version() {
     use super::super::profiles::ProfileRestriction;
-    let mut at_1_2 = Vec::new();
     for stem in committed_profiles().unwrap() {
         let restriction = ProfileRestriction::committed(&stem).unwrap();
         let version = restriction.context_version();
@@ -1246,9 +1236,6 @@ fn a_restricted_context_enables_the_recommendation_at_its_profiles_version() {
             restriction.description.api_version.max(ApiVersion::V1_2),
             "{stem}"
         );
-        if version == ApiVersion::V1_2 {
-            at_1_2.push(stem.clone());
-        }
         let description = restriction.read_at(version);
         let (supported, available) = modelled(&stem, &description, version);
         for leg in [Leg::Stated, Leg::RobustnessOff] {
@@ -1284,7 +1271,6 @@ fn a_restricted_context_enables_the_recommendation_at_its_profiles_version() {
             }
         }
     }
-    assert_eq!(at_1_2, ["lunarg-desktop-baseline-2023", "vk12-floor"]);
 }
 
 /// A fake Vulkan instance for the cross-check of the executor's feature structures against the

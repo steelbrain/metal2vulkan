@@ -31,7 +31,7 @@ use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkLimit;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Unsupported};
+use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Needs, Unsupported};
 use crate::library::{FunctionArtifact, Library};
 use crate::lower::select::Plan;
 use crate::lower::texture::max_levels;
@@ -111,8 +111,26 @@ fn is(e: &Error, want: &Unsupported) -> bool {
     matches!(e, Error::Unsupported(u) if (&u.feature, &u.needs) == (&want.feature, &want.needs))
 }
 
+/// Whether `e` refuses a stage's level views past the device's storage images a stage
+/// (`maxPerStageDescriptorStorageImages`: the runtime's floor has Vulkan's minimum, 4, fewer than
+/// the levels of its largest texture).
+fn too_few_storage_images(e: &Error) -> bool {
+    let limit = |c: &Capability| {
+        matches!(
+            c,
+            Capability::Limit {
+                limit: VkLimit::MaxPerStageDescriptorStorageImages,
+                ..
+            }
+        )
+    };
+    matches!(e, Error::Unsupported(u) if u.feature == Feature::DescriptorCount
+        && matches!(&u.needs, Needs::AnyOf(alts) if alts.iter().flatten().any(limit)))
+}
+
 /// The module of `entry` on `p`, compiled and validated (L3), or `None` when `p` needs a runtime
-/// input for it (a storage format) or cannot index the level views by a dynamic level.
+/// input for it (a storage format), cannot index the level views by a dynamic level, or has fewer
+/// storage images a stage than they take.
 fn module(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Option<(Plan, TypedModule)> {
     match typed_module(bc, entry, p) {
         Ok(m) => {
@@ -122,6 +140,7 @@ fn module(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Option<(Plan
         }
         Err(Error::NeedsInput(_)) => None,
         Err(e) if is(&e, &no_non_uniform()) && !non_uniform(p) => None,
+        Err(e) if too_few_storage_images(&e) => None,
         Err(e) => panic!("{stem}: {entry}: {e}"),
     }
 }
@@ -1102,8 +1121,10 @@ fn a_read_at_a_missing_level_is_metals_out_of_bounds_texel() {
 
 /// A level-view slot (`txt_level_write`, written at a level from a buffer) declares one storage
 /// descriptor per level the device's largest texture of its type has, with both facts and the
-/// level-count push field; profiles that cannot index storage arrays by a non-uniform value refuse
-/// its dynamic level, typed. A slot whose level count alone is read, or whose size is queried at a
+/// level-count push field, where the stage has that many storage images; a device that cannot
+/// index storage arrays by a non-uniform value (the runtime's floor without
+/// `shaderStorageImageArrayNonUniformIndexing`, below that floor) refuses its dynamic level, typed.
+/// A slot whose level count alone is read, or whose size is queried at a
 /// level (`txt_level_queries`), keeps one descriptor and has the count, on every profile: the
 /// query answers from the first level.
 #[test]
@@ -1113,7 +1134,18 @@ fn level_views_declare_every_level_of_the_largest_texture() {
         return;
     };
     let (mut ok, mut refused) = (0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    let uniform_only = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::ShaderStorageImageArrayNonUniformIndexing],
+        DevicePolicy::default(),
+    )
+    .expect("profile");
+    profiles.push((
+        "runtime-floor without shaderStorageImageArrayNonUniformIndexing".to_string(),
+        uniform_only,
+    ));
+    for (stem, p) in profiles {
         let has_push = |a: &FunctionArtifact, s: u32| {
             a.interface
                 .push
@@ -1156,6 +1188,7 @@ fn level_views_declare_every_level_of_the_largest_texture() {
                 continue;
             }
             Err(Error::NeedsInput(_)) => continue,
+            Err(e) if too_few_storage_images(&e) => continue,
             Err(e) => panic!("{stem}: {e}"),
         };
         assert!(
@@ -1296,14 +1329,25 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
 
 /// A constant level at or past the level views' count indexes them as a dynamic level does
 /// (clamped, `NonUniform`), so it needs `shaderStorageImageArrayNonUniformIndexing` like one:
-/// typed where the profile lacks it, and on every other profile a write that is dropped.
+/// typed where the profile lacks it (`runtime-floor` without it, below the runtime's floor), and
+/// on every other profile a write that is dropped.
 #[test]
 fn a_constant_level_past_every_texture_is_indexed_as_a_dynamic_one() {
     let Some(bc) = assemble("past_every_level", PAST_EVERY_LEVEL) else {
         return;
     };
     let (mut ran, mut refused) = (0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    profiles.push((
+        "runtime-floor without shaderStorageImageArrayNonUniformIndexing".into(),
+        crate::pipeline::testing::profile_without(
+            "runtime-floor",
+            &[crate::device::requirements::VkFeature::ShaderStorageImageArrayNonUniformIndexing],
+            DevicePolicy::default(),
+        )
+        .expect("below the runtime's floor"),
+    ));
+    for (stem, p) in profiles {
         let Some((plan, m)) = module(&bc, "k", &stem, &p) else {
             if !non_uniform(&p) {
                 assert!(

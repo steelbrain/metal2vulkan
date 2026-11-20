@@ -137,7 +137,7 @@ fn varyings(a: &FunctionArtifact) -> Vec<String> {
 #[test]
 fn gated_off_vertex_outputs_leave_the_interface() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         let off = compile_with(&bc, "fc_vertex_gated_outputs", &[], &p);
         assert_eq!(varyings(&off), ["generated(5shadeDv4_f)"], "{stem}");
@@ -185,7 +185,7 @@ fn a_gated_off_color_output_leaves_the_interface() {
             })
             .collect()
     };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         let off = compile_with(&bc, "fc_fragment_gated_color", &[], &p);
         assert_eq!(colors(&off), [0], "{stem}");
@@ -201,7 +201,7 @@ fn a_gated_off_color_output_leaves_the_interface() {
 #[test]
 fn an_unobserved_gated_off_input_compiles() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         let off = compile_with(&bc, "fc_fragment_unobserved_input", &[], &p);
         assert!(off.interface.io.inputs.is_empty(), "{stem}");
@@ -212,7 +212,7 @@ fn an_unobserved_gated_off_input_compiles() {
     // neither ordered form, so it reads color 0's input attachment, ordered between draws alone
     // and noted; `moltenvk-m3` orders a fetch only through the pixel interlock, in a storage form
     // that needs its pipeline's state, which a standalone compile does not have.
-    for stem in ["vk12-floor", "moltenvk-m3"] {
+    for stem in ["runtime-floor", "moltenvk-m3"] {
         let r = compile_bitcode(
             &bc,
             EntryRef::Name("fc_fragment_unobserved_input"),
@@ -224,7 +224,7 @@ fn an_unobserved_gated_off_input_compiles() {
             SPIRV_WORDS,
         );
         match (stem, r) {
-            ("vk12-floor", Ok(a)) => {
+            ("runtime-floor", Ok(a)) => {
                 assert!(
                     a.facts
                         .contains(&RuntimeFact::FramebufferFetch { color: 0 }),
@@ -352,7 +352,7 @@ fn a_present_texture_through_an_absent_sampler_is_an_absent_read() {
 #[test]
 fn an_absent_input_feeding_only_an_absent_output_compiles() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         let v = compile_with(&bc, "fc_vertex_input_to_output", &[], &p);
         assert!(varyings(&v).is_empty(), "{stem}");
@@ -499,7 +499,7 @@ fn inputs(a: &FunctionArtifact) -> Vec<String> {
 #[test]
 fn an_absent_input_stored_into_private_memory_nothing_reads_compiles() {
     let Some(bc) = private_input() else { return };
-    for stem in ["moltenvk-m3", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "runtime-floor"] {
         let p = prof(stem);
         let off = compile_with(&bc, "fc_fragment_private_input", &[], &p);
         assert_eq!(inputs(&off), ["generated(2stDv2_f)"], "{stem}");

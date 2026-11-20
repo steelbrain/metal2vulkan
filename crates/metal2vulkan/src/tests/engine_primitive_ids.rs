@@ -3,7 +3,8 @@
 //! (`IoRole::PrimitiveId`) that its pipeline's vertex function writes from its vertex index, base
 //! vertex and `PushField::VerticesPerPrimitive` (`LoweringInputs::primitive_id_varying`). The
 //! owned fixture `engine/primitive_ids` on `lavapipe` with both features withheld, on
-//! `vk12-floor`, and on `lavapipe` as it is, where the fragment stage declares the builtin.
+//! `runtime-floor` without `tessellationShader` (below the runtime's floor), and on `lavapipe` as
+//! it is, where the fragment stage declares the builtin.
 //! `llvm-as` assembles the fixture; a missing tool skips visibly.
 
 use crate::budget::Budget;
@@ -138,11 +139,21 @@ fn standalone(dev: &Device, bc: &[u8], name: &str) -> CompiledFunction {
 
 /// A fragment function compiled on its own for a device with neither feature reads
 /// `[[primitive_id]]` from a flat `uint` varying, declaring no `PrimitiveId`; with them it reads
-/// the builtin. `vk12-floor` has neither: the function no longer needs either feature.
+/// the builtin. `runtime-floor` without `tessellationShader` has neither: the function no longer
+/// needs either feature.
 #[test]
 fn without_either_feature_the_id_is_a_flat_varying() {
     let Some(bc) = fixture() else { return };
-    for dev in [withheld(8), device("vk12-floor")] {
+    let mut floor = description("runtime-floor").expect("runtime-floor");
+    for f in [
+        VkFeature::TessellationShader,
+        VkFeature::ShaderTessellationAndGeometryPointSize,
+        VkFeature::MultiviewTessellationShader,
+    ] {
+        floor.features.remove(&f);
+    }
+    let floor = Device::from_queries(floor, DevicePolicy::default()).expect("device");
+    for dev in [withheld(8), floor] {
         let f = standalone(&dev, &bc, "pi_ids");
         let io = &f.artifact().interface.io;
         let input = io

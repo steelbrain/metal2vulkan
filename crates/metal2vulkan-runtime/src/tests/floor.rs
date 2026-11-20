@@ -102,6 +102,7 @@ fn at_the_floor() -> Queried {
         limits: vk::PhysicalDeviceLimits::default()
             .max_sampler_allocation_count(4000)
             .max_color_attachments(8)
+            .max_fragment_output_attachments(8)
             .max_push_constants_size(256)
             .max_compute_work_group_invocations(1024)
             .max_compute_work_group_size([1024, 1024, 64])
@@ -592,7 +593,7 @@ fn each_missing_feature_is_named() {
 #[test]
 fn each_low_limit_is_named() {
     type Lower = fn(&mut Queried);
-    let cases: [(Lower, &str, u32); 18] = [
+    let cases: [(Lower, &str, u32); 19] = [
         (
             |d| {
                 d.vulkan12
@@ -696,6 +697,11 @@ fn each_low_limit_is_named() {
         (
             |d| d.limits.max_color_attachments = 7,
             "maxColorAttachments",
+            8,
+        ),
+        (
+            |d| d.limits.max_fragment_output_attachments = 7,
+            "maxFragmentOutputAttachments",
             8,
         ),
     ];
@@ -1500,6 +1506,88 @@ fn the_readme_states_the_floor() {
         .map(flag_names)
         .collect();
     assert_eq!(stated, code, "the README's memory types");
+}
+
+/// The committed `runtime-floor` profile (`metal2vulkan-validation/profiles/runtime-floor.json`,
+/// which the translator's and validation's tests load as the floor's device) states in its
+/// `m2v_runtime_floor` block exactly what the runtime requires: the device extensions, every
+/// required feature and no other, and each limit at the value the floor needs.
+/// `scripts/regen-device-profiles` writes the block.
+#[test]
+fn the_floor_profile_states_exactly_the_floor() {
+    let path = metal2vulkan_devtools::validation_dir().join("profiles/runtime-floor.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let profile: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("parsing {}: {error}", path.display()));
+    let block = &profile["capabilities"]["m2v_runtime_floor"];
+    assert!(
+        block.is_object(),
+        "{} has no m2v_runtime_floor block",
+        path.display()
+    );
+
+    let stated: BTreeSet<String> = block["extensions"]
+        .as_object()
+        .expect("the block's extensions")
+        .keys()
+        .cloned()
+        .collect();
+    let code: BTreeSet<String> = DEVICE_EXTENSIONS
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(stated, code, "the profile's extensions");
+
+    let mut stated = BTreeSet::new();
+    for (structure, members) in block["features"].as_object().expect("the block's features") {
+        for (member, value) in members.as_object().expect("a structure's members") {
+            assert_eq!(
+                value,
+                &serde_json::Value::Bool(true),
+                "{structure}.{member}"
+            );
+            stated.insert((structure.clone(), member.clone()));
+        }
+    }
+    let code: BTreeSet<(String, String)> = REQUIRED
+        .iter()
+        .map(|feature| (feature.structure.to_string(), vulkan_name(feature.member)))
+        .collect();
+    assert_eq!(stated, code, "the profile's features");
+
+    let properties = &block["properties"];
+    let mut stated = BTreeSet::new();
+    for members in [
+        &properties["VkPhysicalDeviceProperties"]["limits"],
+        &properties["VkPhysicalDeviceVulkan12Properties"],
+    ] {
+        for (name, value) in members.as_object().expect("the block's limits") {
+            let number = |value: &serde_json::Value| match value {
+                serde_json::Value::Bool(value) => u32::from(*value),
+                value => value
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .unwrap_or_else(|| panic!("{name}: {value}")),
+            };
+            match value.as_array() {
+                Some(values) => stated.extend(
+                    values
+                        .iter()
+                        .enumerate()
+                        .map(|(at, value)| (format!("{name}[{at}]"), number(value))),
+                ),
+                None => {
+                    stated.insert((name.clone(), number(value)));
+                }
+            }
+        }
+    }
+    let code: BTreeSet<(String, u32)> = limits(&at_the_floor())
+        .into_iter()
+        .map(|(name, _, needed)| (name.to_string(), needed))
+        .collect();
+    assert_eq!(stated, code, "the profile's limits");
 }
 
 #[test]

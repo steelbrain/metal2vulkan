@@ -319,15 +319,21 @@ fn the_emulated_variant_zeroes_its_arena_and_not_its_scratch() {
     }
 }
 
-/// A profile without `shaderZeroInitializeWorkgroupMemory` refuses a function that uses
-/// threadgroup memory through `from_queries`, typed.
+/// A profile without `shaderZeroInitializeWorkgroupMemory` (the runtime's floor without it, a
+/// device below that floor) refuses a function that uses threadgroup memory through
+/// `from_queries`, typed.
 #[test]
 fn a_profile_without_zeroed_workgroup_memory_refuses_threadgroup_memory_through_from_queries() {
     let Some(bc) = assemble("tg_unwritten", &unwritten(false)) else {
         return;
     };
-    const FLOOR: &str = "vk12-floor";
-    let prof = queried(FLOOR);
+    let mut desc = description("runtime-floor").expect("description");
+    desc.features
+        .remove(&VkFeature::ShaderZeroInitializeWorkgroupMemory);
+    let prof = Device::from_queries(desc, DevicePolicy::default())
+        .expect("device")
+        .profile()
+        .clone();
     assert!(!prof
         .fields()
         .enabled

@@ -955,7 +955,13 @@ fn workgroup_initialized() -> TypedModule {
 fn workgroup_initializers_need_zero_initialize_workgroup_memory() {
     let m = workgroup_initialized();
     structure(&m).expect("structurally valid");
-    let floor = profile("vk12-floor");
+    // The runtime's floor without the feature, which the floor requires: a device below it.
+    let floor = crate::pipeline::testing::profile_without(
+        "runtime-floor",
+        &[VkFeature::ShaderZeroInitializeWorkgroupMemory],
+        Default::default(),
+    )
+    .expect("profile");
     assert!(!floor
         .fields()
         .enabled

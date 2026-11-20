@@ -251,7 +251,7 @@ fn foreign_bytes_are_refused() {
     let Some((compiled, pipe)) = store_const(&dev) else {
         return;
     };
-    let other = device("vk12-floor");
+    let other = device("runtime-floor");
     assert_ne!(other.profile().fingerprint(), dev.profile().fingerprint());
     assert_eq!(
         CompiledFunction::from_bytes(&compiled.to_bytes(), &other),
@@ -1492,7 +1492,8 @@ fn the_storage_view_variant_round_trips() {
     use crate::bind::{BindState, BoundBuffer, StageTable};
     use crate::cache::VariantKey;
     use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
-    let dev = device("vk12-floor");
+    // Profile F's descriptor buffers: four storage buffers a stage, below the runtime's floor.
+    let dev = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("device");
     let Some(bc) = fixture("descriptor_limit_uniform_views") else {
         return;
     };
@@ -2107,7 +2108,7 @@ fn a_descriptors_answers_and_reflection_round_trip_under_its_key() {
         DirectArgumentUse, LinkedUseAnswers, LinkedUseGap, UnwrittenFragmentInputs,
     };
     let dev = device("moltenvk-m3");
-    let other = device("vk12-floor");
+    let other = device("runtime-floor");
     let key = PipelineKey::new([3; 32]);
     let wrong_key = PipelineKey::new([4; 32]);
     let mut answers = LinkedUseAnswers::default();

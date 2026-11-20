@@ -73,7 +73,10 @@ let device = Device::from_queries(description, DevicePolicy::default())?;
 ```
 
 `Device::from_queries` needs no Vulkan device: it derives the profile from the description's
-queries alone, reading no vendor, device or driver identity. It refuses a device below Vulkan 1.2 and an inconsistent description or policy. A
+queries alone, reading no vendor, device or driver identity. It refuses a device below Vulkan 1.2,
+one whose `maxPushConstantsSize` is below the 256-byte push window every stage is lowered for
+(`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`), and an inconsistent description
+or policy. A
 `Device` is cheap to clone; every compile and plan takes it.
 
 ### The policy
@@ -1646,7 +1649,7 @@ Every failure is typed; match variants, never messages. A refusal says what woul
 answer:
 
 ```rust
-let floor = committed_device("vk12-floor")?;
+let floor = committed_device("runtime-floor")?;
 let min_lod = FunctionDescriptor::new(sampling.function("sample_min_lod")?);
 match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard()) {
     Err(Error::Unsupported(refusal)) => match (&refusal.feature, &refusal.needs) {

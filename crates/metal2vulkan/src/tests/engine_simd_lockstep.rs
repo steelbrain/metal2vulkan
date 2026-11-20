@@ -1518,7 +1518,7 @@ const CHUNKED: [SubgroupSize; 3] = [SubgroupSize::W8, SubgroupSize::W16, Subgrou
 
 #[test]
 fn a_uniform_conflict_takes_a_threadgroup_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let Some(plan) = check("neighbor", NEIGHBOR, profile_name, 32, &CHUNKED, |t| t ^ 8) else {
             return;
         };
@@ -1549,7 +1549,7 @@ fn a_conflict_in_one_simdgroup_takes_a_simdgroup_barrier() {
         ("carry", CARRY, &carry, 2),
     ] {
         // Emulated simdgroups: a predicated workgroup barrier, exact at every width.
-        for profile_name in ["lavapipe", "roadmap-2022"] {
+        for profile_name in ["lavapipe", "runtime-floor"] {
             let Some(plan) = check(name, body, profile_name, 64, &CHUNKED, expect) else {
                 return;
             };
@@ -1593,7 +1593,7 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups() {
             .properties
             .contains(&VkProperty::SimdgroupLockstep)
     };
-    for profile_name in ["lavapipe", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "runtime-floor"] {
         let Some(plan) = check(
             "arm_then_loop",
             ARM_THEN_LOOP,
@@ -1659,7 +1659,7 @@ fn a_forced_predicated_walk_carries_what_each_instruction_reads() {
             "arith.aggregate.member",
         ),
     ] {
-        for profile_name in ["lavapipe", "roadmap-2022"] {
+        for profile_name in ["lavapipe", "runtime-floor"] {
             let Some(plan) = check(name, body, profile_name, 64, &CHUNKED, expect) else {
                 return;
             };
@@ -1855,7 +1855,7 @@ fn indices_apart_from_a_shared_place_only_clear_their_pairs() {
         for (profile_name, lanes, want) in [
             ("moltenvk-m3", &[SubgroupSize::W32][..], on_m3),
             ("lavapipe", &CHUNKED[..], elsewhere),
-            ("roadmap-2022", &CHUNKED[..], elsewhere),
+            ("runtime-floor", &CHUNKED[..], elsewhere),
         ] {
             let Some(plan) = check(name, body, profile_name, 32, lanes, expect) else {
                 return;
@@ -2020,7 +2020,7 @@ fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
         ("rtl_lockstep_divergent_loop", &counts, divergent),
         ("rtl_lockstep_until", &limits, until),
     ] {
-        for profile_name in ["lavapipe", "roadmap-2022"] {
+        for profile_name in ["lavapipe", "runtime-floor"] {
             let lanes = &CHUNKED[..];
             let p = profile(profile_name, DevicePolicy::default()).expect("profile");
             let (plan, m) = typed_module(&bc, kernel, &p)
@@ -2051,7 +2051,7 @@ fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
 /// Without it the chunked schedule reads a word another chunk already overwrote.
 #[test]
 fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let Some(plan) = check(
             "device_neighbor",
             DEVICE_NEIGHBOR,
@@ -2070,7 +2070,7 @@ fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
         assert_eq!(plan.simd.1, Tier::NoSubgroup, "{profile_name}");
     }
     let rotate = |t: u32| if t < 32 { 2 * ((t + 1) & 31) } else { t };
-    for profile_name in ["lavapipe", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "runtime-floor"] {
         let Some(plan) = check(
             "device_rotate",
             DEVICE_ROTATE,
@@ -2108,7 +2108,7 @@ fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
 /// word another chunk already overwrote.
 #[test]
 fn a_buffer_through_two_thread_slots_is_one_object() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let Some(plan) = check(
             "device_slots",
             DEVICE_SLOTS,
@@ -2130,7 +2130,7 @@ fn a_buffer_through_two_thread_slots_is_one_object() {
 /// Each thread's own device word takes no barrier.
 #[test]
 fn a_threads_own_device_word_takes_no_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let Some(plan) = check("device_own", DEVICE_OWN, profile_name, 32, &CHUNKED, |t| {
             t + 1
         }) else {
@@ -2151,7 +2151,7 @@ fn a_threads_own_device_word_takes_no_barrier() {
 /// Metal's own answer is the arm order its GPU chose, not lockstep's program order.
 #[test]
 fn a_branchs_two_arms_take_no_device_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
         let Some(bc) = assemble("device_arms", DEVICE_ARMS) else {
             return;
         };
@@ -2616,7 +2616,7 @@ fn texture_calls_take_no_device_barrier() {
 /// 32-lane subgroups.
 const LONE_PROFILES: [&str; 4] = [
     "lavapipe",
-    "roadmap-2022",
+    "runtime-floor",
     "nvidia-rtx5080-laptop",
     "moltenvk-m3",
 ];

@@ -1165,7 +1165,7 @@ fn a_validated_instance_reports_every_repeated_message() {
     assert!(settings.is_empty());
 
     // Restricted: the profiles layer below the validation layer, configured with the file.
-    let restriction = ProfileRestriction::committed("vk12-floor").unwrap();
+    let restriction = ProfileRestriction::committed("runtime-floor").unwrap();
     let hidden: BTreeSet<String> = ["VK_EXT_shader_viewport_index_layer".to_owned()].into();
     let restrict = ProfilesSettings::new(ProfilesLayer::Restrict(&restriction, &hidden)).unwrap();
     let (extensions, layers, settings) = with_instance_create_info(
@@ -1212,7 +1212,7 @@ fn a_validated_instance_reports_every_repeated_message() {
                 string,
                 &[&restriction.file.to_string_lossy()]
             ),
-            profiles("profile_name", string, &["VP_M2V_vk12_floor"]),
+            profiles("profile_name", string, &["VP_M2V_runtime_floor"]),
             profiles(
                 "simulate_capabilities",
                 string,

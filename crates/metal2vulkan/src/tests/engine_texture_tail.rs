@@ -958,11 +958,25 @@ const LANE0: &str =
 
 /// `atomic_fetch_max` is `OpAtomicUMax` (uint) or `OpAtomicSMax` (int) on the texel pointer of an
 /// `R32ui` / `R32i` storage image, with and without `.i16` coordinates, its result unread or read
-/// at lane 0; a texel outside the image is guarded exactly without `robustImageAccess`, and
-/// the slot's interface reads and writes it.
+/// at lane 0; a texel outside the image is guarded exactly without `robustImageAccess` (on
+/// `runtime-floor` without it, below the runtime's floor), and the slot's interface reads and
+/// writes it.
 #[test]
 fn texture_atomic_max_is_an_image_atomic() {
     let (mut guarded_n, mut plain_n) = (0, 0);
+    let mut profiles = committed_profiles().expect("profiles");
+    profiles.push((
+        "runtime-floor without image robustness".into(),
+        crate::pipeline::testing::profile_without(
+            "runtime-floor",
+            &[
+                crate::device::requirements::VkFeature::RobustImageAccess,
+                crate::device::requirements::VkFeature::RobustImageAccess2,
+            ],
+            crate::device::DevicePolicy::default(),
+        )
+        .expect("below the runtime's floor"),
+    ));
     for (signed, short, tail) in [
         (false, false, LANE0),
         (false, true, LANE0),
@@ -973,7 +987,7 @@ fn texture_atomic_max_is_an_image_atomic() {
         let Some(bc) = assemble("atomic", &text) else {
             return;
         };
-        for (stem, p) in committed_profiles().expect("profiles") {
+        for (stem, p) in &profiles {
             let what = format!("{stem} signed={signed} short={short}");
             let format = if signed {
                 crate::vk::Format::R32_SINT

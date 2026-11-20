@@ -13,7 +13,7 @@
 //! It compiles a kernel for the committed `moltenvk-m3` profile (and the same kernel as a bare
 //! module's entry, linked alone), prints its pipeline interface, layout, and binding plan,
 //! instantiates one dispatch, round-trips the pipeline through its cache encoding, answers a
-//! pipeline-input request, shows a typed refusal on `vk12-floor`, dispatches a kernel with
+//! pipeline-input request, shows a typed refusal on `runtime-floor`, dispatches a kernel with
 //! `[[stage_in]]`, and compiles, plans, and draws a render pipeline and a tessellation pipeline. `tests/api_preview_example.rs` runs it in the gate and checks that
 //! every code block of `docs/API.md` is quoted from it.
 
@@ -249,8 +249,8 @@ pub fn main() -> Result<()> {
     println!("function constant supplied: {:?}", specialized.key);
 
     // 8. A typed refusal: fragment function `sample_min_lod` clamps its level of detail, which
-    // needs `shaderResourceMinLod`; the `vk12-floor` profile lacks it.
-    let floor = committed_device("vk12-floor")?;
+    // needs `shaderResourceMinLod`; the `runtime-floor` profile lacks it.
+    let floor = committed_device("runtime-floor")?;
     let min_lod = FunctionDescriptor::new(sampling.function("sample_min_lod")?);
     match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard()) {
         Err(Error::Unsupported(refusal)) => match (&refusal.feature, &refusal.needs) {
@@ -260,7 +260,7 @@ pub fn main() -> Result<()> {
             (feature, needs) => println!("refused {feature:?}: {needs:?}"),
         },
         Err(other) => return Err(other.into()),
-        Ok(_) => return Err("vk12-floor compiled sample_min_lod".into()),
+        Ok(_) => return Err("runtime-floor compiled sample_min_lod".into()),
     }
 
     stage_in(&device, &budget)?;

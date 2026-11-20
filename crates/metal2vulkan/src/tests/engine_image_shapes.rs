@@ -156,12 +156,7 @@ fn texture_slot(resource: &ResourceSlot) -> Option<(u32, bool)> {
 
 /// Profiles that bind textures by descriptor and differ in what they support: robust image
 /// access and its absence, formatless storage images, and the floor.
-const PROFILES: [&str; 4] = [
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "moltenvk-m3",
-    "nvidia-rtx5080-laptop",
-];
+const PROFILES: [&str; 3] = ["runtime-floor", "moltenvk-m3", "nvidia-rtx5080-laptop"];
 
 fn device(stem: &str) -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

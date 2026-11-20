@@ -844,7 +844,7 @@ fn a_variant_draws_each_amplification_with_its_push_fields() {
 fn amplification_draws_refuse_what_the_variant_cannot_be() {
     let Some(bc) = fixture() else { return };
     let budget = Budget::standard();
-    let dev = device("lunarg-desktop-baseline-2023");
+    let dev = device("runtime-floor");
     let d = render(&bc, "amp_vertex_store", None, 2);
     let p = dev.compile_render_pipeline(&d, &budget).expect("base");
     let state = amplified(2, &[(0, 1), (0, 0)]);
@@ -897,7 +897,7 @@ fn output_layer_or_geometry() -> Needs {
 fn a_profile_without_shader_output_layer_draws_or_refuses_every_amplification() {
     let Some(bc) = fixture() else { return };
     let budget = Budget::standard();
-    let lunarg = "lunarg-desktop-baseline-2023";
+    let lunarg = "runtime-floor";
     assert!(!description(lunarg).features.contains(&F::ShaderOutputLayer));
     assert!(!description(lunarg).features.contains(&F::GeometryShader));
     let mut lavapipe = description("lavapipe");

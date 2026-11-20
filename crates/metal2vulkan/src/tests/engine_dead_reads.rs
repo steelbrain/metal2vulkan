@@ -174,11 +174,17 @@ fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock
         cases.push((name.to_owned(), dev, interlock, "dfr_output", vec![0]));
     }
     let floor = Device::from_queries(
-        description("vk12-floor").expect("profile"),
+        description("runtime-floor").expect("profile"),
         DevicePolicy::default(),
     )
     .expect("device");
-    cases.push(("vk12-floor".to_owned(), floor, false, "dfr_output", vec![0]));
+    cases.push((
+        "runtime-floor".to_owned(),
+        floor,
+        false,
+        "dfr_output",
+        vec![0],
+    ));
     let mut misses = BTreeMap::<String, Vec<String>>::new();
     let mut checked = 0;
     for (name, dev, interlock, entry, colors) in &cases {

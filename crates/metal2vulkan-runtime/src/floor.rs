@@ -1107,7 +1107,7 @@ fn second_elements_fit(device: &Queried) -> bool {
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
 /// uses.
-pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 18] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     [
@@ -1198,6 +1198,13 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
         (
             "maxColorAttachments",
             limits.max_color_attachments,
+            crate::pass::MAX_COLOR_ATTACHMENTS as u32,
+        ),
+        // A fragment function's output to each of them (Metal's `[[color(0)]]` to `[[color(7)]]`),
+        // so a pipeline drawing to every slot links.
+        (
+            "maxFragmentOutputAttachments",
+            limits.max_fragment_output_attachments,
             crate::pass::MAX_COLOR_ATTACHMENTS as u32,
         ),
     ]

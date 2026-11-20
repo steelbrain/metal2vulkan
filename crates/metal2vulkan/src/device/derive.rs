@@ -21,7 +21,7 @@ use crate::device::profile::{
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
-    VkFeature, VkProperty,
+    VkFeature, VkLimit, VkProperty,
 };
 use crate::device::subgroup::{OpBits, StageSubgroup, SubgroupModel, SubgroupSizes};
 use crate::error::{Capability, DescriptorError, Error, Feature, Unsupported};
@@ -59,7 +59,9 @@ impl Device {
     /// ([`DeviceDescription::from_khronos_json`]) or built field by field
     /// ([`DeviceDescription::new`]) makes a device with no `VkDevice` behind it.
     ///
-    /// Refuses a device below Vulkan 1.2 (`Unsupported{VulkanVersion}`), a description that lists
+    /// Refuses a device below Vulkan 1.2 (`Unsupported{VulkanVersion}`), a device whose
+    /// `maxPushConstantsSize` is below the 256 bytes of the push window every stage is lowered for
+    /// (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`), a description that lists
     /// a feature neither its version nor its listed extensions expose or a feature without the
     /// feature Vulkan requires enabled with it (`InvalidDescriptor`, the invariants
     /// `device::enables` states), a policy that turns containment off while guest isolation
@@ -80,6 +82,18 @@ impl Device {
             return Err(Unsupported::needs(
                 Feature::VulkanVersion,
                 Capability::ApiVersion(ApiVersion::V1_2),
+            )
+            .into());
+        }
+        let push = desc.limits.max_push_constants_size;
+        if push < crate::lower::push::FLOOR_BYTES {
+            return Err(Unsupported::needs(
+                Feature::PushWindow,
+                Capability::Limit {
+                    limit: VkLimit::MaxPushConstantsSize,
+                    required: u64::from(crate::lower::push::FLOOR_BYTES),
+                    available: u64::from(push),
+                },
             )
             .into());
         }

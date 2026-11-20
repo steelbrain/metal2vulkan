@@ -41,7 +41,7 @@ const PROFILES: [&str; 6] = [
     "amd-rdna3-radv",
     "nvidia-rtx50-linux",
     "lavapipe",
-    "roadmap-2022",
+    "runtime-floor",
 ];
 
 /// The poison every output word starts as.
