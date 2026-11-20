@@ -282,7 +282,7 @@ impl Sparse {
 
     /// Binds `binds` into `buffer` by one `vkQueueBindSparse` on the runtime's queue, under its
     /// lock, signalling the timeline's next value, which it returns and which the next submission
-    /// waits for. Counted in [`Metrics::sparse_binds`](crate::Metrics::sparse_binds).
+    /// waits for. Counted in [`Metrics::sparse_binds`].
     ///
     /// Err: [`Error::Vulkan`] where the timeline cannot be made or the bind fails.
     ///
@@ -453,7 +453,7 @@ impl Device {
     /// `release`, Metal's deallocator, after that: on the block-maker thread, or at the device's
     /// teardown on the thread that ends it. `release` makes no call into the runtime and drops no
     /// runtime handle. On an `Err` it is dropped without running.
-    /// [`BlockMappings::unmap`](crate::BlockMappings::unmap) never runs for an imported block. Each
+    /// [`BlockMappings::unmap`] never runs for an imported block. Each
     /// import is one `VkDeviceMemory` allocation and counts against the device's
     /// `maxMemoryAllocationCount`.
     ///
@@ -567,7 +567,7 @@ impl Device {
     /// wait for it: the runtime's next `vkQueueSubmit2` waits for it, once, and so does the block's
     /// free (on the block-maker thread) where nothing used the block. So the caller waits as long as
     /// one import's `vkAllocateMemory` takes for each dma-buf, and one queue call. Counted in
-    /// [`Metrics::sparse_binds`](crate::Metrics::sparse_binds).
+    /// [`Metrics::sparse_binds`].
     ///
     /// The fds: after `Ok` the driver owns each. After a refusal or a failed query the runtime
     /// closes them all: no driver was given any. After a failed import the imports made are freed,
@@ -578,18 +578,18 @@ impl Device {
     /// gone. The block-maker thread then destroys its buffer, frees each import, which ends it, and
     /// runs `release`, Metal's deallocator, after the last: as for [`Device::import_dma_buf`].
     /// Each dma-buf's import is one `VkDeviceMemory` allocation: it counts against the device's
-    /// `maxMemoryAllocationCount`, and in [`Gauges::imports`](crate::Gauges::imports) and
-    /// [`Gauges::blocks`](crate::Gauges::blocks) while it lives.
+    /// `maxMemoryAllocationCount`, and in [`Gauges::imports`] and
+    /// [`Gauges::blocks`] while it lives.
     ///
     /// Err: [`Limit::NoImport`] where [`Device::dma_buf_granule`] is
     /// `None`; [`Limit::ImportAlignment`] for no fds, a length of
     /// 0 or one that is no multiple of the granule (or of the sparse buffer's alignment);
     /// [`Limit::BlockLen`] past the device's longest allocation or buffer;
-    /// [`Limit::SparseAddressSpace`](crate::Limit::SparseAddressSpace);
-    /// [`Limit::ImportType`](crate::Limit::ImportType) where the rule takes no type for an fd, or
+    /// [`Limit::SparseAddressSpace`];
+    /// [`Limit::ImportType`] where the rule takes no type for an fd, or
     /// another type than the first fd's (then `listed` names that type alone);
-    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
-    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where a query, the buffer,
+    /// [`Limit::MemoryAllocations`];
+    /// [`Limit::BlockIds`]; [`Error::Vulkan`] where a query, the buffer,
     /// an import or the bind fails (an fd is no dma-buf of its length or more, or the device is out
     /// of memory or lost); [`Error::Quiesced`].
     #[cfg(unix)]
@@ -783,14 +783,14 @@ impl Device {
     /// consumer's alone. Each import is one `VkDeviceMemory` allocation and counts against the
     /// device's `maxMemoryAllocationCount`.
     ///
-    /// Err: [`Limit::NoImport`](crate::Limit::NoImport) where the device does not import host
-    /// memory; [`Limit::ImportType`](crate::Limit::ImportType) where the rule takes no type;
-    /// [`Limit::ImportAlignment`](crate::Limit::ImportAlignment) for a length of 0, or an address
+    /// Err: [`Limit::NoImport`] where the device does not import host
+    /// memory; [`Limit::ImportType`] where the rule takes no type;
+    /// [`Limit::ImportAlignment`] for a length of 0, or an address
     /// or length that is not a multiple of the device's `minImportedHostPointerAlignment` (or
-    /// below the buffer's memory requirements); [`Limit::BlockLen`](crate::Limit::BlockLen) past
+    /// below the buffer's memory requirements); [`Limit::BlockLen`] past
     /// the device's longest allocation or buffer;
-    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
-    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the query or the
+    /// [`Limit::MemoryAllocations`];
+    /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the query or the
     /// import fails; [`Error::Quiesced`].
     ///
     /// # Safety
