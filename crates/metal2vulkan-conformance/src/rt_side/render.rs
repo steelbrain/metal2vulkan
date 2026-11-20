@@ -159,6 +159,9 @@ impl RtSide<'_> {
         if spec.shader_write {
             usage |= rt::TextureUsage::SHADER_WRITE;
         }
+        if spec.unknown_usage {
+            usage = rt::TextureUsage::empty();
+        }
         descriptor.usage = usage;
         if let Some(over) = &spec.over_buffer {
             if let Some(why) = over.unsafe_stride() {
@@ -188,7 +191,7 @@ impl RtSide<'_> {
             }
             descriptor.sample_count = spec.samples;
         }
-        let index = (spec.shader_read || spec.shader_write)
+        let index = (spec.shader_read || spec.shader_write || spec.unknown_usage)
             .then(|| self.on.next_index(rt::IndexClass::Texture));
         let texture = (self.on.device.new_texture(&descriptor, index)).map_err(of_rt)?;
         Ok(self.keep_texture(texture))

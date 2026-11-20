@@ -5185,6 +5185,9 @@ impl Side for MetalSide {
         if spec.shader_write {
             usage |= MTLTextureUsage::ShaderWrite;
         }
+        if spec.unknown_usage {
+            usage = MTLTextureUsage::Unknown;
+        }
         descriptor.setUsage(usage);
         descriptor.setStorageMode(match spec.shared {
             true => MTLStorageMode::Shared,
@@ -7624,6 +7627,9 @@ impl MetalSide {
         if spec.shader_write {
             usage |= MTLTextureUsage::ShaderWrite;
         }
+        if spec.unknown_usage {
+            usage = MTLTextureUsage::Unknown;
+        }
         descriptor.setUsage(usage);
         // A texture over a buffer holds the buffer's own bytes, so its storage is the buffer's.
         descriptor.setStorageMode(MTLStorageMode::Shared);
@@ -7680,6 +7686,9 @@ impl MetalSide {
         }
         if spec.shader_write {
             usage |= MTLTextureUsage::ShaderWrite;
+        }
+        if spec.unknown_usage {
+            usage = MTLTextureUsage::Unknown;
         }
         descriptor.setUsage(usage);
         descriptor.setStorageMode(MTLStorageMode::Shared);

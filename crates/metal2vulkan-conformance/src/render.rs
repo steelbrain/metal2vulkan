@@ -92,6 +92,9 @@ pub struct TargetSpec {
     pub shader_read: bool,
     /// `MTLTextureUsageShaderWrite` beside `MTLTextureUsageRenderTarget`.
     pub shader_write: bool,
+    /// `MTLTextureUsageUnknown` in place of the usages the two fields above name: the target made
+    /// with usage 0, which Metal takes as every usage.
+    pub unknown_usage: bool,
     /// Whether the target is of shared storage rather than private.
     ///
     /// Private is the default and what an extended-range target is normally made with. A case says
@@ -387,6 +390,7 @@ impl TargetSpec {
             samples: 1,
             shader_read: true,
             shader_write: false,
+            unknown_usage: false,
             shared: false,
             surface: None,
             over_buffer: None,
@@ -407,6 +411,7 @@ impl TargetSpec {
             samples: 1,
             shader_read: false,
             shader_write: false,
+            unknown_usage: false,
             shared: false,
             surface: None,
             over_buffer: None,
@@ -462,6 +467,13 @@ impl TargetSpec {
         self
     }
 
+    /// The target made with `MTLTextureUsageUnknown`, usage 0, which Metal takes as every usage.
+    #[must_use]
+    pub const fn unknown_usage(mut self) -> Self {
+        self.unknown_usage = true;
+        self
+    }
+
     /// The words a case's input fingerprint covers: every field, so a target that moves is a
     /// change to the case's inputs rather than a quiet pass against another target's answer.
     pub fn words(&self) -> Vec<u8> {
@@ -473,6 +485,12 @@ impl TargetSpec {
         bytes.push(u8::from(self.shader_read));
         bytes.push(u8::from(self.shader_write));
         bytes.push(u8::from(self.shared));
+        // Written **only where the target states it**, keyed by its name, for the reasons the
+        // optional fields below are: every target of a stated usage fingerprints to exactly the
+        // bytes it always had, so every recording already committed still reads.
+        if self.unknown_usage {
+            bytes.extend(b"usage:unknown");
+        }
         // Written **only where the target has one**, as a pass writes its optional attachments:
         // a target of its own memory then fingerprints to exactly the bytes it always has, so
         // adding this field left every existing render case's recording valid. Writing a 0 here

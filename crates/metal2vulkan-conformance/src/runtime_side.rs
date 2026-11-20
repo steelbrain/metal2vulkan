@@ -4073,6 +4073,9 @@ impl Side for RuntimeSide<'_> {
         if spec.shader_write {
             usage |= TextureUsage::SHADER_WRITE;
         }
+        if spec.unknown_usage {
+            usage = TextureUsage::empty();
+        }
         descriptor.usage = usage;
         descriptor.resource_options = match spec.shared {
             true => ResourceOptions::shared(),
@@ -6806,6 +6809,9 @@ impl RuntimeSide<'_> {
         if spec.shader_write {
             usage |= TextureUsage::SHADER_WRITE;
         }
+        if spec.unknown_usage {
+            usage = TextureUsage::empty();
+        }
         descriptor.usage = usage;
         // A texture over a buffer holds the buffer's own bytes, so its storage is the buffer's.
         descriptor.resource_options = ResourceOptions::shared();
@@ -6862,6 +6868,9 @@ impl RuntimeSide<'_> {
         }
         if spec.shader_write {
             usage |= TextureUsage::SHADER_WRITE;
+        }
+        if spec.unknown_usage {
+            usage = TextureUsage::empty();
         }
         descriptor.usage = usage;
         descriptor.resource_options = ResourceOptions::shared();

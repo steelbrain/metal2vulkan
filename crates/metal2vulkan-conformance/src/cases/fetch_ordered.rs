@@ -20,7 +20,12 @@
 //! attached is a shape that has been refused before, so what colour 1 holds afterwards is part of
 //! the recorded answer rather than a detail.
 //!
-//! Four cases: each format under each mask, three draw counts a case. Which memory byte a mask
+//! Six cases: each format under each mask, three draw counts a case, and the `BGRA8Unorm` target
+//! under a mask of every channel made twice more, for shader writes as well and of an unknown
+//! usage (usage 0, which Metal takes as every usage). Metal fetches a render target of any usage;
+//! a device that stores the format gives those two a storage view, which is another image to the
+//! driver (Vulkan's general layout its home), so they ask whether a fetch through such a target
+//! answers what one through a shader-read target does. Which memory byte a mask
 //! keeps is the point of having both formats — `BGRA8Unorm` holds blue, green, red and alpha in
 //! that order, so a mask of red and alpha writes bytes 2 and 3 of a `BGRA` texel and bytes 0 and 3
 //! of an `RGBA` one. A device that wrote the attachment through a channel-swapped view without
@@ -123,11 +128,23 @@ fn layout(texel: u32, element: Element) -> ByteLayout {
     }
 }
 
-/// One case: one target format under one colour write mask.
+/// One case: one target format under one colour write mask, of one usage.
 pub struct FetchOrdered {
     name: &'static str,
     format: PixelFormat,
     mask: ColorWriteMask,
+    usage: Usage,
+}
+
+/// The target's usage beside `MTLTextureUsageRenderTarget`.
+#[derive(Clone, Copy)]
+enum Usage {
+    /// `MTLTextureUsageShaderRead`, as the lane's target.
+    Read,
+    /// `MTLTextureUsageShaderRead` and `MTLTextureUsageShaderWrite`.
+    Written,
+    /// `MTLTextureUsageUnknown`, usage 0 in place of every bit.
+    Unknown,
 }
 
 /// Red and alpha alone: the mask the probe drew beside a mask of every channel.
@@ -135,28 +152,46 @@ fn red_alpha() -> ColorWriteMask {
     ColorWriteMask::RED.union(ColorWriteMask::ALPHA)
 }
 
-/// The suite's four cases: each of the two formats under each of the two masks.
+/// The suite's six cases: each of the two formats under each of the two masks, and the
+/// `BGRA8Unorm` target under a mask of every channel made for shader writes and of an unknown
+/// usage.
 pub fn all() -> Vec<FetchOrdered> {
     vec![
         FetchOrdered {
             name: "fetch-ordered-bgra8unorm",
             format: PixelFormat::BGRA8Unorm,
             mask: ColorWriteMask::ALL,
+            usage: Usage::Read,
         },
         FetchOrdered {
             name: "fetch-ordered-bgra8unorm-red-alpha",
             format: PixelFormat::BGRA8Unorm,
             mask: red_alpha(),
+            usage: Usage::Read,
         },
         FetchOrdered {
             name: "fetch-ordered-rgba8unorm",
             format: PixelFormat::RGBA8Unorm,
             mask: ColorWriteMask::ALL,
+            usage: Usage::Read,
         },
         FetchOrdered {
             name: "fetch-ordered-rgba8unorm-red-alpha",
             format: PixelFormat::RGBA8Unorm,
             mask: red_alpha(),
+            usage: Usage::Read,
+        },
+        FetchOrdered {
+            name: "fetch-ordered-bgra8unorm-written",
+            format: PixelFormat::BGRA8Unorm,
+            mask: ColorWriteMask::ALL,
+            usage: Usage::Written,
+        },
+        FetchOrdered {
+            name: "fetch-ordered-bgra8unorm-unknown-usage",
+            format: PixelFormat::BGRA8Unorm,
+            mask: ColorWriteMask::ALL,
+            usage: Usage::Unknown,
         },
     ]
 }
@@ -168,9 +203,15 @@ fn fixture(name: &'static str, entry: &'static str) -> Fixture {
 
 impl FetchOrdered {
     /// The target the case fetches: shared, because its codes go in through `replaceRegion:`, and
-    /// a shader also reads it, as the lane's does.
+    /// a shader also reads it, as the lane's does; made for shader writes as well, or of an
+    /// unknown usage, where the case says so.
     fn target_spec(&self) -> TargetSpec {
-        TargetSpec::read(self.format, [SIDE, SIDE]).shared()
+        let read = TargetSpec::read(self.format, [SIDE, SIDE]).shared();
+        match self.usage {
+            Usage::Read => read,
+            Usage::Written => read.written(),
+            Usage::Unknown => read.unknown_usage(),
+        }
     }
 
     /// Colour 1's target: a plain private `RGBA16Float` render target the pass clears and stores.
@@ -591,14 +632,25 @@ mod tests {
         }
     }
 
-    /// The case's bookkeeping holds: four rows of distinct names, each layout covers its target
-    /// exactly, and colour 1's clear is the `half` codes the recording compares.
+    /// The case's bookkeeping holds: six rows of distinct names whose targets fingerprint apart
+    /// where their usage does, the four read targets as they always have; each layout covers its
+    /// target exactly, and colour 1's clear is the `half` codes the recording compares.
     #[test]
     fn the_cases_bookkeeping_holds() {
         let rows = all();
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 6);
         let names: BTreeSet<&str> = rows.iter().map(|row| row.name).collect();
         assert_eq!(names.len(), rows.len());
+        let targets: BTreeSet<Vec<u8>> = rows.iter().map(|row| row.target_spec().words()).collect();
+        assert_eq!(
+            targets.len(),
+            4,
+            "two formats read, and BGRA8Unorm written and unknown"
+        );
+        for row in rows.iter().filter(|row| matches!(row.usage, Usage::Read)) {
+            let plain = TargetSpec::read(row.format, [SIDE, SIDE]).shared();
+            assert_eq!(row.target_spec().words(), plain.words(), "{}", row.name);
+        }
         for (texel, element, bytes) in [
             (TEXEL, Element::U8, TARGET_BYTES),
             (WIDE_TEXEL, Element::U16, WIDE_BYTES),
