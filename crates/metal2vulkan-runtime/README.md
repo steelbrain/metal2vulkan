@@ -3359,7 +3359,8 @@ alone do not promise it). A device that does not is refused with `Error::BelowFl
 
 On macOS the driver that meets the floor is Mesa's Vulkan driver for Apple GPUs (KosmicKrisp):
 Mesa 26.3.1 on an Apple M3 Max offers every item, `nullDescriptor` and both set layouts among them
-(job m3-max-47313), and the conformance suite's rt side runs on it (m3-max-57732). A consumer
+(job m3-max-47313), `VK_EXT_line_rasterization`'s `bresenhamLines` too (m3-max-60379), and the
+conformance suite's rt side runs on it (m3-max-57732). A consumer
 ships it and loads it through `Instance::with_drivers`. MoltenVK is
 below the floor: it reports no `nullDescriptor`, and its `vkGetDescriptorSetLayoutSupport`, which
 answers by a count of descriptors alone, refuses set 1 (`Missing::SetLayout`; MoltenVK 1.4.2, job
