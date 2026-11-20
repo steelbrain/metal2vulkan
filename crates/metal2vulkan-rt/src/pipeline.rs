@@ -53,8 +53,9 @@ use crate::ring::CHUNK;
 use crate::sampler::{canonical, constexpr_notes, hold_constexpr, release_constexpr};
 use crate::times::host_time;
 use ash::vk;
+use metal2vulkan::cache::Hash256;
 use metal2vulkan::error::{Error as TranslationError, Feature};
-use metal2vulkan::library::CompiledFunction;
+use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
     arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
@@ -951,15 +952,22 @@ fn kept(
     function: &FunctionDescriptor,
     inputs: &LoweringInputs,
 ) -> Option<CompiledFunction> {
-    let translator = &core.translator;
-    let key = translator.function_compile_key(function, inputs);
-    let kept = (core.caches).translation(key.digest(), |bytes| {
-        CompiledFunction::from_bytes_for_key(bytes, &key, translator).ok()
-    });
+    let key = core.translator.function_compile_key(function, inputs);
+    let kept = loaded(core, key.digest());
     if kept.is_some() {
         core.counters.count(Metric::TranslationsLoaded);
     }
     kept
+}
+
+/// The lowering of `FunctionCompileKey` digest `key` a device kept in the cache directory, where
+/// its bytes decode for that key; not counted.
+pub(crate) fn loaded(core: &Core, key: &Hash256) -> Option<CompiledFunction> {
+    let translator = &core.translator;
+    let key = FunctionCompileKey::new(*key);
+    (core.caches).translation(key.digest(), |bytes| {
+        CompiledFunction::from_bytes_for_key(bytes, &key, translator).ok()
+    })
 }
 
 /// The kernel `function` lowered under `inputs`: the lowering a device kept in the cache directory

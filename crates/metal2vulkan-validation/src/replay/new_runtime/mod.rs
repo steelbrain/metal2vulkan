@@ -2817,6 +2817,8 @@ impl Backend for NewRuntime {
             ),
             ("translations", metrics.translations),
             ("translations_loaded", metrics.translations_loaded),
+            ("render_records_read", metrics.render_records_read),
+            ("render_records_stale", metrics.render_records_stale),
             ("ring_writes", metrics.ring_writes),
             ("upload_waits", metrics.upload_waits),
             ("staging_sleeps", metrics.staging_sleeps),

@@ -1,4 +1,5 @@
-//! The cache directory on the host: two generations under one cap, a hit in old moved into young,
+//! The cache directory on the host: two generations under one cap, lowerings and render contents'
+//! records alike, a record read only as its own content's, a hit in old moved into young,
 //! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
 //! is torn or missing, a settled store's removal thread ended with its last look, a removal cut
 //! short (a process's exit in it included) finished by the next
@@ -8,8 +9,8 @@
 //! or reading a file another was writing.
 
 use crate::cache::{
-    blob_name, checksum, frame, prune_blobs, unframe, usable_header, Pending, State, Store,
-    BLOBS_KEPT,
+    blob_name, checksum, frame, prune_blobs, read_record, record_bytes, unframe, usable_header,
+    Caches, Lowerings, Pending, State, Store, BLOBS_KEPT, RECORD_LEN,
 };
 use crate::counters::Counters;
 use std::fs;
@@ -66,6 +67,25 @@ fn name(n: u32) -> String {
     format!("translations/{n:064x}")
 }
 
+/// A digest of `n`'s.
+fn digest(n: u32) -> [u8; 32] {
+    let mut digest = [0; 32];
+    digest[..4].copy_from_slice(&n.to_le_bytes());
+    digest
+}
+
+/// The record of a render content of descriptor key `n`'s, as its file and its bytes.
+fn record_of(n: u32) -> (String, Vec<u8>) {
+    let lowerings = Lowerings {
+        vertex: Some(digest(n + 1_000)),
+        fragment: Some(digest(n + 2_000)),
+    };
+    (
+        Caches::record_file(&digest(n)),
+        record_bytes(&digest(n), &lowerings),
+    )
+}
+
 /// `data` as its blob holds it, after its magic, length and checksum.
 fn framed(data: &[u8]) -> Vec<u8> {
     [&frame(data)[..], data].concat()
@@ -80,34 +100,44 @@ fn state(store: &Store) -> State {
     store.current().expect("the state")
 }
 
+/// Filled past its cap with lowerings and render contents' records in turn, each a record's
+/// length, the store keeps them within it, moving on a generation at each half, and keeps the last
+/// ten whatever their kind.
 #[test]
 fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
+    let len = RECORD_LEN as u64;
+    let file = |n: u32| match n % 2 {
+        0 => (name(n), vec![n as u8; RECORD_LEN]),
+        _ => record_of(n),
+    };
     let scratch = Scratch::new("store-cap");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 10 * len, Counters::new());
     assert_eq!(state(&store), State { young: 1, bytes: 0 });
     for n in 0..40 {
-        assert!(store.put(&name(n), &[n as u8; 100]), "file {n} written");
+        let (name, bytes) = file(n);
+        assert_eq!(bytes.len(), RECORD_LEN, "file {n}'s length");
+        assert!(store.put(&name, &bytes), "file {n} written");
         // While a removal runs, the dead generation is on disk beside old and young.
         assert!(
-            scratch.bytes() <= 1500,
+            scratch.bytes() <= 15 * len,
             "{} bytes after {n}",
             scratch.bytes()
         );
         store.settle();
         let now = state(&store);
-        assert!(now.bytes <= 500, "{now:?} after {n}");
+        assert!(now.bytes <= 5 * len, "{now:?} after {n}");
         assert_eq!(
             bytes_under(&store.generation(now.young)),
             now.bytes,
             "young after {n}"
         );
         assert!(
-            scratch.bytes() <= 1000,
+            scratch.bytes() <= 10 * len,
             "{} bytes after {n}",
             scratch.bytes()
         );
     }
-    // Five files of 100 bytes a generation: the fortieth file is in the eighth.
+    // Five files a generation: the fortieth file is in the eighth.
     assert_eq!(state(&store).young, 8);
     // The last ten files are kept, in old and young, and none before them. (A lookup would move
     // a file of old into young, and young is full.)
@@ -115,13 +145,75 @@ fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
         .map(|n| {
             [7, 8]
                 .iter()
-                .any(|&g| store.generation(g).join(name(n)).exists())
+                .any(|&g| store.generation(g).join(file(n).0).exists())
         })
         .collect();
     assert_eq!(kept, (0..40).map(|n| n >= 30).collect::<Vec<_>>());
+    // A kept record reads as its content's; a removed one is a miss.
+    let read = |n: u32| store.get(&file(n).0, |bytes| read_record(bytes, &digest(n)));
+    assert_eq!(
+        read(39).map(|lowerings| lowerings.fragment),
+        Some(Some(digest(2_039)))
+    );
+    assert_eq!(read(29), None, "a removed record");
     // A file of more than half the cap is not kept.
-    assert!(!store.put(&name(40), &[0; 501]));
+    assert!(!store.put(&name(40), &vec![0; 5 * RECORD_LEN + 1]));
     assert_eq!(store.get(&name(40), whole), None);
+}
+
+/// A render content's record reads back as what was kept, under its own content's key alone:
+/// under another content's key, of another semantics or format version or layout (each sealed
+/// again under its checksum, so the version is what refuses it), with a stage tag that is neither
+/// a lowering nor none, cut short or longer, or with any one bit changed, it is no record.
+#[test]
+fn a_record_reads_only_as_its_own_content_s() {
+    let content = digest(7);
+    let lowerings = Lowerings {
+        vertex: Some(digest(8)),
+        fragment: None,
+    };
+    let bytes = record_bytes(&content, &lowerings);
+    assert_eq!(bytes.len(), RECORD_LEN);
+    assert_eq!(read_record(&bytes, &content), Some(lowerings));
+    assert_eq!(read_record(&bytes, &digest(9)), None, "another content's");
+    let sealed = |at: usize, value: u8| {
+        let mut moved = bytes.clone();
+        moved[at] = value;
+        let end = RECORD_LEN - 8;
+        let sum = checksum(&moved[..end]).to_le_bytes();
+        moved[end..].copy_from_slice(&sum);
+        moved
+    };
+    for (at, what) in [
+        (0, "another layout"),
+        (8, "another semantics version"),
+        (12, "another format version"),
+    ] {
+        let moved = sealed(at, bytes[at] ^ 1);
+        assert_eq!(read_record(&moved, &content), None, "{what}");
+    }
+    // The vertex stage's tag is at 48, the fragment's at 81.
+    assert_eq!(read_record(&sealed(48, 2), &content), None, "a tag of 2");
+    assert_eq!(
+        read_record(&sealed(81, 1), &content),
+        Some(Lowerings {
+            vertex: Some(digest(8)),
+            fragment: Some([0; 32]),
+        }),
+        "the fragment's tag at 81"
+    );
+    assert_eq!(
+        read_record(&sealed(82, 1), &content),
+        None,
+        "a digest beside none"
+    );
+    assert_eq!(read_record(&bytes[..RECORD_LEN - 1], &content), None);
+    assert_eq!(read_record(&[&bytes[..], &[0]].concat(), &content), None);
+    for bit in 0..RECORD_LEN * 8 {
+        let mut flipped = bytes.clone();
+        flipped[bit / 8] ^= 1 << (bit % 8);
+        assert_eq!(read_record(&flipped, &content), None, "bit {bit} flipped");
+    }
 }
 
 #[test]

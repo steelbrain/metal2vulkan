@@ -409,10 +409,10 @@ pub struct DeviceOptions {
     /// Vulkan features the consumer needs for its own raw Vulkan work, each enabled where the
     /// device reports it ([`Device::features`]).
     pub features: Vec<ConsumerFeature>,
-    /// The directory the device keeps the compute and render functions it lowered and its
-    /// pipeline cache in, made where it is missing, so a later device on it, in this process or
-    /// another, takes them in place of lowering and compiling again
-    /// ([`Metrics::translations_loaded`]). The lowerings take at most
+    /// The directory the device keeps the compute and render functions it lowered, each render
+    /// content's record of its lowerings and its pipeline cache in, made where it is missing, so a
+    /// later device on it, in this process or another, takes them in place of lowering and
+    /// compiling again ([`Metrics::translations_loaded`]). The lowerings take at most
     /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, in two generations of half of it
     /// each: a file used again moves into the young one, and the old one is removed whole when
     /// the young one fills. Beside them, one file per pipeline cache header (a kind of device and

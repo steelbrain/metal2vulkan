@@ -2184,6 +2184,20 @@ the lowerings from one device to the next:
   place of lowering (`Metrics::translations_loaded`, beside `Metrics::translations`); a kernel
   variant the translator refused is kept too, and so is its answer that a kernel observes its
   threadgroup partition, which a state on the directory reads in place of asking it again.
+- `renders/`: each render content's record, 122 bytes, named by the hex of the translator's key of
+  its descriptor (`Device::queried_render_descriptor_key`), which reads no function: the
+  `FunctionCompileKey` of its vertex and fragment functions' lowerings. A state of a content the
+  device does not hold reads its record and the two lowerings it names
+  (`Metrics::render_records_read`), so neither function is decoded or specialized. The name covers
+  everything that changes either lowering: every field of the descriptor, the fields the functions'
+  specialization reads among them; each function by its library's AIR hash (its content), its entry,
+  its constant values as supplied, its linked functions and dynamic libraries; the device profile's
+  fingerprint; and the translator's semantics version. The record holds the translator's semantics
+  and artifact format versions and the descriptor's key again under a checksum, so one of another
+  version or another content is a miss and is removed. A record naming a lowering the directory no
+  longer holds is a miss too, counted (`Metrics::render_records_stale`): the state decodes,
+  specializes and lowers as with no record, and keeps the record again. Records are written and
+  counted as lowerings are, within the cap below.
 
 **The pipeline cache.** The reaper makes an empty cache first when it starts, which a creation that
 comes before it waits for (microseconds). Then, off every guest thread, it reads the blob, makes a

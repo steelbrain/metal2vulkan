@@ -9,9 +9,11 @@
 //! modules and their `VkPipeline`s. The device's one map of contents (`kernel_map`), which compute
 //! states use too, holds each content's, so a state of a content the map holds costs the key and a
 //! lookup. A content the map does not hold is decoded, keyed for its compile
-//! (`Device::render_variant_key`) and lowered. The cost of keying on the descriptor: two
-//! descriptors that differ only in a field their compile does not read are two contents, each
-//! compiled.
+//! (`Device::render_variant_key`) and lowered, and its record, the keys of its two lowerings, is
+//! kept in the cache directory under the descriptor's key (`crate::cache`): a device after it on
+//! the directory reads the record and the two lowerings in place of decoding, keying and lowering
+//! the content. The cost of keying on the descriptor: two descriptors that differ only in a field
+//! their compile does not read are two contents, each compiled.
 //!
 //! What a `VkPipeline` bakes is what Vulkan 1.3 cannot leave dynamic: the content, and the
 //! topology class (point, line or triangle) of the draws it serves. Everything Metal sets on the
@@ -45,22 +47,23 @@
 //! ([`FieldValue::Word`]). A per-instance factor step function and an enabled factor scale, which
 //! the replay streams' states never use, are refused ([`RenderPipelineKind::Tessellation`]).
 
-use crate::counters::Gauge;
+use crate::cache::{self, Lowerings};
+use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, RenderPipelineKind};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
 use crate::pipeline::{
-    access, lower, made_through_cache, number_samplers, of_the_device, texture_access, FieldValue,
-    Numbered, PUSH_BYTES,
+    access, loaded, lower, made_through_cache, number_samplers, of_the_device, texture_access,
+    FieldValue, Numbered, PUSH_BYTES,
 };
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
 use crate::sampler::constexpr_notes;
 use crate::times::host_time;
 use ash::vk;
-use metal2vulkan::cache::VariantKey;
+use metal2vulkan::cache::{Hash256, VariantKey};
 use metal2vulkan::device::EnabledCaps;
 use metal2vulkan::metal::BindingAccess;
 use metal2vulkan::pipeline::{
@@ -249,8 +252,12 @@ impl crate::Device {
     /// triangle-class `VkPipeline` is made here. Where the device has a cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it in
     /// place of lowering again, and each `VkPipeline` is made through the pipeline data kept for
-    /// it there. A point or line class's `VkPipeline` comes with the draws. The
-    /// `completionHandler:` forms are not built (no replay stream calls them).
+    /// it there; a content a device made before is read by its record there, kept under the
+    /// translator's key of the descriptor, which names its two lowerings, so its functions are
+    /// neither decoded nor specialized
+    /// ([`Metrics::render_records_read`](crate::Metrics::render_records_read)). A point or line
+    /// class's `VkPipeline` comes with the draws. The `completionHandler:` forms are not built (no
+    /// replay stream calls them).
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
@@ -291,13 +298,22 @@ impl crate::Device {
             Some(compiled) => compiled,
             None => {
                 let budget = Budget::standard();
-                let entries = &core.entries;
-                let keys = (core.translator)
-                    .render_variant_key(descriptor, &VariantKey::new(), &budget, entries)
-                    .map_err(Error::Translation)?;
-                let compiled = RenderCompiled::of(core, descriptor, &keys, &budget, entries);
-                core.note_entries();
-                let compiled = compiled?;
+                let content = key.pipeline.digest();
+                let lowered = match recorded(core, descriptor, content) {
+                    Some(lowered) => lowered,
+                    None => {
+                        let entries = &core.entries;
+                        let keys = (core.translator)
+                            .render_variant_key(descriptor, &VariantKey::new(), &budget, entries)
+                            .map_err(Error::Translation)?;
+                        let lowered = lower_stages(core, descriptor, &keys, &budget, entries);
+                        core.note_entries();
+                        let (lowered, lowerings) = lowered?;
+                        cache::keep_record(core, content, &lowerings);
+                        lowered
+                    }
+                };
+                let compiled = RenderCompiled::of(core, &lowered, &budget)?;
                 (core.kernels).keep_render(key, Arc::new(compiled), &core.counters)
             }
         };
@@ -719,40 +735,93 @@ impl Fixed {
     }
 }
 
+/// `descriptor` with each `Function` stage lowered under `keys` through the cache directory
+/// ([`lower`]), and the keys of the lowerings, which the content's record keeps
+/// ([`cache::keep_record`]).
+fn lower_stages(
+    core: &Core,
+    descriptor: &RenderPipelineDescriptor,
+    keys: &RenderPipelineKeys,
+    budget: &Budget,
+    entries: &StageEntries,
+) -> Result<(RenderPipelineDescriptor, Lowerings), Error> {
+    let mut lowered = descriptor.clone();
+    let mut lowerings = Lowerings {
+        vertex: None,
+        fragment: None,
+    };
+    if let (StageSource::Function(function), Some(inputs)) =
+        (&descriptor.vertex, &keys.vertex_inputs)
+    {
+        let function = lower(core, function, inputs, budget, entries);
+        let function = function.map_err(Error::Translation)?;
+        lowerings.vertex = Some(*function.key().digest());
+        lowered.vertex = StageSource::Compiled(function);
+    }
+    // The fragment function's push fields follow the vertex function's in the floor's one
+    // range, from the vertex function's end.
+    let base = match &lowered.vertex {
+        StageSource::Compiled(vertex) => vertex.fragment_push_base(),
+        StageSource::Function(_) => 0,
+    };
+    if let (Some(StageSource::Function(function)), Some(inputs)) =
+        (&descriptor.fragment, &keys.fragment_inputs)
+    {
+        let mut inputs = inputs.clone();
+        inputs.push_base = base;
+        let function = lower(core, function, &inputs, budget, entries);
+        let function = function.map_err(Error::Translation)?;
+        lowerings.fragment = Some(*function.key().digest());
+        lowered.fragment = Some(StageSource::Compiled(function));
+    }
+    Ok((lowered, lowerings))
+}
+
+/// `descriptor` with each `Function` stage the lowering its content's record names, where the
+/// cache directory holds the record of `content`, the descriptor's key, and every lowering it
+/// names (the key holds each stage's kind, so the record names a lowering for each `Function`
+/// stage the compile lowered, as [`lower_stages`] kept them): read with no decode or
+/// specialization of a function, counted
+/// ([`Metrics::render_records_read`](crate::Metrics::render_records_read), each lowering in
+/// `translations_loaded`). None where it holds no record, and the content takes the path of a
+/// content with no record; a record that names a lowering the directory no longer holds is
+/// counted ([`Metrics::render_records_stale`](crate::Metrics::render_records_stale)).
+fn recorded(
+    core: &Core,
+    descriptor: &RenderPipelineDescriptor,
+    content: &Hash256,
+) -> Option<RenderPipelineDescriptor> {
+    let lowerings = core.caches.record(content)?;
+    let read = |key: Option<Hash256>| key.map(|key| loaded(core, &key));
+    let (vertex, fragment) = (read(lowerings.vertex), read(lowerings.fragment));
+    if matches!(vertex, Some(None)) || matches!(fragment, Some(None)) {
+        core.counters.count(Metric::RenderRecordsStale);
+        return None;
+    }
+    let mut lowered = descriptor.clone();
+    if let Some(Some(vertex)) = vertex {
+        lowered.vertex = StageSource::Compiled(vertex);
+        core.counters.count(Metric::TranslationsLoaded);
+    }
+    if let Some(Some(fragment)) = fragment {
+        lowered.fragment = Some(StageSource::Compiled(fragment));
+        core.counters.count(Metric::TranslationsLoaded);
+    }
+    core.counters.count(Metric::RenderRecordsRead);
+    Some(lowered)
+}
+
 impl RenderCompiled {
-    /// The translation of `descriptor` under `keys`, its stages lowered through the cache
-    /// directory, with its triangle-class `VkPipeline`.
+    /// The translation of `lowered`, a descriptor whose `Function` stages are lowered
+    /// ([`lower_stages`], [`recorded`]), with its triangle-class `VkPipeline`.
     fn of(
         core: &Arc<Core>,
-        descriptor: &RenderPipelineDescriptor,
-        keys: &RenderPipelineKeys,
+        lowered: &RenderPipelineDescriptor,
         budget: &Budget,
-        entries: &StageEntries,
     ) -> Result<RenderCompiled, Error> {
         let translator = &core.translator;
-        let mut lowered = descriptor.clone();
-        if let (StageSource::Function(function), Some(inputs)) =
-            (&descriptor.vertex, &keys.vertex_inputs)
-        {
-            let function = lower(core, function, inputs, budget, entries);
-            lowered.vertex = StageSource::Compiled(function.map_err(Error::Translation)?);
-        }
-        // The fragment function's push fields follow the vertex function's in the floor's one
-        // range, from the vertex function's end.
-        let base = match &lowered.vertex {
-            StageSource::Compiled(vertex) => vertex.fragment_push_base(),
-            StageSource::Function(_) => 0,
-        };
-        if let (Some(StageSource::Function(function)), Some(inputs)) =
-            (&descriptor.fragment, &keys.fragment_inputs)
-        {
-            let mut inputs = inputs.clone();
-            inputs.push_base = base;
-            let function = lower(core, function, &inputs, budget, entries);
-            lowered.fragment = Some(StageSource::Compiled(function.map_err(Error::Translation)?));
-        }
         let pipeline =
-            (translator.compile_render_pipeline(&lowered, budget)).map_err(Error::Translation)?;
+            (translator.compile_render_pipeline(lowered, budget)).map_err(Error::Translation)?;
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
         }
@@ -761,7 +830,7 @@ impl RenderCompiled {
             .limits()
             .supports_non_zero_first_instance;
         let (draws, (numbered, constexprs)) = draws(&pipeline, nonzero_first_instance)?;
-        let samples = descriptor.raster_sample_count;
+        let samples = lowered.raster_sample_count;
         let mut stages = Vec::new();
         let mut notes: Vec<_> = constexpr_notes(translator.profile(), &constexprs).collect();
         for stage in &pipeline.stages {
@@ -823,7 +892,7 @@ impl RenderCompiled {
         core.counters.rise(Gauge::RenderContents);
         // A state whose fragment function reaches an imageblock is not made (`unbuilt`), so its
         // sample is its colors alone.
-        let colors = (descriptor.color_attachments).map(|color| color.map(|c| c.pixel_format));
+        let colors = (lowered.color_attachments).map(|color| color.map(|c| c.pixel_format));
         let imageblock_sample = metal2vulkan::metal::format::imageblock_sample_length(&colors);
         let mut compiled = RenderCompiled {
             core: Arc::clone(core),

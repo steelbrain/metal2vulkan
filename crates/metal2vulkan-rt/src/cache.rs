@@ -52,6 +52,23 @@
 //! so is the translator's answer that a kernel observes its threadgroup partition, under its
 //! variant's key, until that variant's lowering replaces it.
 //!
+//! **The records.** A render content whose functions a device lowered keeps a record under
+//! `renders/`, named by the hex of the translator's key of its descriptor
+//! (`Device::queried_render_descriptor_key`), which reads no function: the `FunctionCompileKey` of
+//! each of its functions' lowerings ([`Lowerings`]). A state of a content the device does not hold
+//! reads its record in place of the translator's key of its compile (`Device::render_variant_key`),
+//! which decodes and specializes both functions, and then reads the lowerings the record names. The
+//! record's name covers everything that can change either lowering: every field of the descriptor,
+//! the fields the specialization reads among them; each function by its library's AIR hash (the
+//! library's content), its entry, its constant values as supplied, its linked functions and its
+//! dynamic libraries; the device profile's fingerprint; and the translator's semantics version. Its
+//! bytes ([`record_bytes`]) hold the translator's semantics and artifact format versions and the
+//! descriptor's key again, under a checksum, so a record of another version or of another content,
+//! or one cut short, is a miss, and is removed. A record whose lowering the store no longer holds
+//! is a miss too, counted (`Metrics::render_records_stale`): the state takes the path of a content
+//! with no record, and keeps the record again. A record is [`RECORD_LEN`] bytes, written and
+//! counted as a lowering is, within the store's cap.
+//!
 //! The files live in two generations, `g<N>/` (young) and `g<N-1>/` (old), which the consumer's cap
 //! ([`DeviceOptions::pipeline_cache_cap`]) bounds at half of it each. A lookup tries young, then
 //! old; a hit in old is renamed into young, which is its mark of use. Generations start at 1, and
@@ -88,6 +105,7 @@ use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::times::host_time;
 use ash::vk;
+use metal2vulkan::cache::{Hash256, ARTIFACT_FORMAT_VERSION, SEMANTICS_VERSION};
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
@@ -132,6 +150,13 @@ const REFUSED: &[u8] = b"m2v-refused";
 const OBSERVES: &[u8] = b"m2v-observes";
 /// The translations' directory, under a generation.
 const TRANSLATIONS: &str = "translations";
+/// The render contents' records' directory, under a generation.
+const RENDERS: &str = "renders";
+/// The first bytes of a render content's record: its layout's name and version.
+const RECORD: &[u8; 8] = b"m2vrndr1";
+/// The length of a render content's record ([`record_bytes`]): its first bytes, two versions, the
+/// descriptor's key, two stages of a tag and a digest each, and the checksum.
+pub(crate) const RECORD_LEN: usize = 8 + 4 + 4 + 32 + 2 * 33 + 8;
 /// The directory, under a generation, an earlier version kept a file of pipeline data per
 /// `VkPipeline` in: removed where it is found.
 const PIPELINES: &str = "pipelines";
@@ -705,6 +730,66 @@ pub(crate) fn frame(data: &[u8]) -> [u8; 24] {
     head
 }
 
+/// What a render content's record holds: the `FunctionCompileKey` digest of each of its
+/// functions' lowerings, `None` for a stage the descriptor gives compiled, or has not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Lowerings {
+    pub(crate) vertex: Option<Hash256>,
+    pub(crate) fragment: Option<Hash256>,
+}
+
+/// The record of the render content of descriptor key digest `content` (the module's doc):
+/// [`RECORD`], the translator's semantics and artifact format versions, `content`, each stage's
+/// tag (1 for a lowering, 0 for none) and digest (zeros for none), and the [`checksum`] of all of
+/// them, [`RECORD_LEN`] bytes.
+pub(crate) fn record_bytes(content: &Hash256, lowerings: &Lowerings) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(RECORD_LEN);
+    bytes.extend_from_slice(RECORD);
+    bytes.extend_from_slice(&SEMANTICS_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&ARTIFACT_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(content);
+    for stage in [lowerings.vertex, lowerings.fragment] {
+        bytes.push(u8::from(stage.is_some()));
+        bytes.extend_from_slice(&stage.unwrap_or_default());
+    }
+    let sum = checksum(&bytes);
+    bytes.extend_from_slice(&sum.to_le_bytes());
+    bytes
+}
+
+/// The lowerings `bytes` record for the render content of descriptor key digest `content`, where
+/// they are the record [`record_bytes`] writes for it under this build's versions; none for
+/// another content's record, another layout or version, or bytes cut short or changed.
+pub(crate) fn read_record(bytes: &[u8], content: &Hash256) -> Option<Lowerings> {
+    let (body, sum) = bytes.split_last_chunk::<8>()?;
+    let (magic, rest) = body.split_first_chunk::<8>()?;
+    let (semantics, rest) = rest.split_first_chunk::<4>()?;
+    let (format, rest) = rest.split_first_chunk::<4>()?;
+    let (key, rest) = rest.split_first_chunk::<32>()?;
+    let (vertex, rest) = recorded_stage(rest)?;
+    let (fragment, rest) = recorded_stage(rest)?;
+    (rest.is_empty()
+        && magic == RECORD
+        && u32::from_le_bytes(*semantics) == SEMANTICS_VERSION
+        && u32::from_le_bytes(*format) == ARTIFACT_FORMAT_VERSION
+        && key == content
+        && u64::from_le_bytes(*sum) == checksum(body))
+    .then_some(Lowerings { vertex, fragment })
+}
+
+/// A stage of a record, its tag and digest, and the bytes after it; none for another tag, or a
+/// digest that is not zeros beside tag 0.
+fn recorded_stage(bytes: &[u8]) -> Option<(Option<Hash256>, &[u8])> {
+    let (&tag, rest) = bytes.split_first()?;
+    let (digest, rest) = rest.split_first_chunk::<32>()?;
+    let stage = match tag {
+        1 => Some(*digest),
+        0 if *digest == [0; 32] => None,
+        _ => return None,
+    };
+    Some((stage, rest))
+}
+
 /// A device's caches: the lowerings in the store, and the `VkPipelineCache` every `VkPipeline`
 /// is made through, with its blob.
 pub(crate) struct Caches {
@@ -729,7 +814,7 @@ pub(crate) struct Caches {
     grown: AtomicBool,
     /// [`PIPELINE_CACHE_BOUND`], lower in a test.
     bound: AtomicU64,
-    /// The lowerings and refusals waiting for the reaper to write them.
+    /// The lowerings, refusals and records waiting for the reaper to write them.
     pending: Mutex<Pending>,
     /// Whether the reaper's writes wait, for a test.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -841,10 +926,25 @@ pub(crate) struct PipelineCache(vk::PipelineCache);
 /// already, they are dropped and counted (`Metrics::cache_writes_dropped`), never waited for: a
 /// lowering is only a cache, and a later state lowers it again.
 pub(crate) fn keep_translation(core: &Core, key: &[u8], bytes: Vec<u8>) {
+    keep(core, Caches::translation_file(key), bytes);
+}
+
+/// Hands the record of the render content of descriptor key digest `content`, the keys of its
+/// functions' lowerings, to the reaper, as [`keep_translation`] does a lowering.
+pub(crate) fn keep_record(core: &Core, content: &Hash256, lowerings: &Lowerings) {
+    keep(
+        core,
+        Caches::record_file(content),
+        record_bytes(content, lowerings),
+    );
+}
+
+/// Hands `bytes` to the reaper, to write as `file` in the store ([`keep_translation`]).
+fn keep(core: &Core, file: String, bytes: Vec<u8>) {
     if core.caches.store.is_none() {
         return;
     }
-    let queued = lock(&core.caches.pending).push(Caches::translation_file(key), bytes);
+    let queued = lock(&core.caches.pending).push(file, bytes);
     match queued {
         true => core.reaper.poke(),
         false => core.counters.count(Metric::CacheWritesDropped),
@@ -1151,6 +1251,20 @@ impl Caches {
         format!("{TRANSLATIONS}/{}", hex(key))
     }
 
+    /// The file, under a generation, of the record of the render content of descriptor key digest
+    /// `content`.
+    pub(crate) fn record_file(content: &Hash256) -> String {
+        format!("{RENDERS}/{}", hex(content))
+    }
+
+    /// The lowerings the record of the render content of descriptor key digest `content` names,
+    /// where the store holds one that reads as its record ([`read_record`]); bytes that do not are
+    /// removed, a miss.
+    pub(crate) fn record(&self, content: &Hash256) -> Option<Lowerings> {
+        let file = Caches::record_file(content);
+        (self.store.as_ref()?).get(&file, |bytes| read_record(bytes, content))
+    }
+
     /// What `decode` makes of the bytes kept for a lowered kernel of key digest `key`, where they
     /// decode. A file that holds the translator's refusal, or its answer that the kernel observes
     /// its partition, is no lowering, and stays.
@@ -1167,7 +1281,7 @@ impl Caches {
         kept.flatten()
     }
 
-    /// The next lowering or refusal waiting for the reaper to write it.
+    /// The next lowering, refusal or record waiting for the reaper to write it.
     pub(crate) fn next_write(&self) -> Option<(String, Vec<u8>)> {
         lock(&self.pending).pop()
     }

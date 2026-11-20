@@ -100,6 +100,10 @@ pub(crate) enum Metric {
     Translations,
     /// [`Metrics::translations_loaded`].
     TranslationsLoaded,
+    /// [`Metrics::render_records_read`].
+    RenderRecordsRead,
+    /// [`Metrics::render_records_stale`].
+    RenderRecordsStale,
     /// [`Metrics::creations_before_seed`].
     CreationsBeforeSeed,
     /// [`Metrics::cache_writes_dropped`].
@@ -159,6 +163,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::DispatchesWithoutEffects,
     Metric::Translations,
     Metric::TranslationsLoaded,
+    Metric::RenderRecordsRead,
+    Metric::RenderRecordsStale,
     Metric::CreationsBeforeSeed,
     Metric::CacheWritesDropped,
     Metric::RingWrites,
@@ -395,6 +401,8 @@ struct Atomics {
     allocation_map_refusals: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
+    render_records_read: AtomicU64,
+    render_records_stale: AtomicU64,
     creations_before_seed: AtomicU64,
     pipeline_cache_looks_skipped: AtomicU64,
     pipeline_cache_lock_waits: AtomicU64,
@@ -543,6 +551,8 @@ impl Counters {
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
+            Metric::RenderRecordsRead => &a.render_records_read,
+            Metric::RenderRecordsStale => &a.render_records_stale,
             Metric::CreationsBeforeSeed => &a.creations_before_seed,
             Metric::CacheWritesDropped => &a.cache_writes_dropped,
             Metric::RingWrites => &a.ring_writes,
@@ -1108,6 +1118,8 @@ impl Counters {
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
+            render_records_read: a.render_records_read.load(Relaxed),
+            render_records_stale: a.render_records_stale.load(Relaxed),
             creations_before_seed: a.creations_before_seed.load(Relaxed),
             pipeline_cache_looks_skipped: a.pipeline_cache_looks_skipped.load(Relaxed),
             pipeline_cache_lock_waits: a.pipeline_cache_lock_waits.load(Relaxed),
@@ -1459,6 +1471,19 @@ pub struct Metrics {
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
+    /// Render contents a state took by their record in the cache directory
+    /// ([`DeviceOptions::pipeline_cache_dir`]): the keys of the content's lowerings, kept under the
+    /// translator's key of its descriptor, which reads no function, so the state read the
+    /// lowerings with no decode or specialization of either function. Each lowering it read is in
+    /// [`translations_loaded`](Self::translations_loaded) too.
+    ///
+    /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
+    pub render_records_read: u64,
+    /// Render contents whose record in the cache directory named a lowering the directory no
+    /// longer held (a removed generation took it, or it was not written): each took the path of
+    /// a content with no record, decoding and specializing its functions, and kept the record
+    /// again.
+    pub render_records_stale: u64,
     /// `VkPipeline` creations that went through the device's empty pipeline cache while the
     /// reaper read and took in the device's blob ([`DeviceOptions::pipeline_cache_dir`]): each
     /// compiled without the blob's data, and those pipelines are not in this run's blob, so a
@@ -1483,9 +1508,9 @@ pub struct Metrics {
     /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub pipeline_cache_lock_wait_max_nanos: u64,
-    /// Lowerings and refusals not kept in the cache directory: each was handed to the reaper,
-    /// which writes them off every guest thread, while the ones waiting for it held 8 MiB, and was
-    /// dropped rather than waited for. A later device lowers it again.
+    /// Lowerings, refusals and render contents' records not kept in the cache directory: each was
+    /// handed to the reaper, which writes them off every guest thread, while the ones waiting for
+    /// it held 8 MiB, and was dropped rather than waited for. A later device lowers it again.
     pub cache_writes_dropped: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
     /// kernels, and the device's pipeline cache blob each time it is written: once creation is

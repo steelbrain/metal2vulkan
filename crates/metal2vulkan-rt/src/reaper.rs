@@ -274,7 +274,7 @@ enum Next {
     Lower(Weak<Compiled>, Which),
     /// Look at the pipeline cache, creation being quiet.
     Look,
-    /// Write a lowering or refusal to the store.
+    /// Write a lowering, refusal or record to the store.
     Write(String, Vec<u8>),
     /// End, after telling the contents whose lowering is left that it will not run.
     End(VecDeque<(Weak<Compiled>, Which)>),

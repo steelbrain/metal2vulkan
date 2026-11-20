@@ -16,21 +16,36 @@
 //!   lowerings are read from the directory, and the triangle class's `VkPipeline` is made from
 //!   its file; the first device writes one pipeline file for each `VkPipeline` it made, and the
 //!   second writes nothing.
+//! - A device on a cache directory a device before it made a render content in takes the content
+//!   by its record, reading the two lowerings it names and specializing neither function; with
+//!   the record removed it specializes both, and a record whose lowering was removed is stale,
+//!   counted. Each kind of input that changes a lowering (the library's content, the function, its
+//!   constant values, a field its specialization reads, and the device profile where the host has
+//!   two devices of the cfg's kind), changed once, misses the record, and a record of another
+//!   content under a content's name is no record of it.
 //!
 //! `llvm-as` assembles the fixtures; without it a test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::cache::{hex, read_record};
     use crate::tests::command::on_device::{each_device, within};
+    use crate::tests::draw::on_device::ABSENT_READ;
     use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         ColorAttachmentDescriptor, Device, DeviceOptions, Error, FunctionDescriptor, Gap, Gauges,
-        Library, Metrics, PixelFormat, RenderPipelineDescriptor, RenderPipelineKind,
-        RenderPipelineState, StageSource,
+        Library, Metrics, PhysicalDevice, PixelFormat, RenderPipelineDescriptor,
+        RenderPipelineKind, RenderPipelineState, StageSource,
     };
-    use metal2vulkan::metal::BlendFactor;
-    use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
-    use std::path::Path;
+    use metal2vulkan::cache::{Hash256, VariantKey};
+    use metal2vulkan::library::{
+        FunctionCompileKey, FunctionConstantValue, FunctionConstantValues,
+    };
+    use metal2vulkan::metal::{BlendFactor, DataType};
+    use metal2vulkan::pipeline::StageEntries;
+    use metal2vulkan::Budget;
+    use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, llvm_assemble_text, AssembleError};
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::SystemTime;
 
@@ -358,6 +373,274 @@ mod on_device {
             }
             let _ = std::fs::remove_dir_all(&dir);
             println!("{name}: a second device lowers nothing and writes nothing");
+        }
+    }
+
+    /// The files of kind `kind` (`renders`, the records, or `translations`, the lowerings) under
+    /// the generations of the cache directory `dir`, by path.
+    fn kept_files(dir: &Path, kind: &str) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for generation in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if generation.file_name().to_string_lossy().starts_with('g') {
+                let kept = std::fs::read_dir(generation.path().join(kind));
+                files.extend(kept.into_iter().flatten().flatten().map(|file| file.path()));
+            }
+        }
+        files.sort();
+        files
+    }
+
+    /// A device of `physical` on the cache directory `dir`.
+    fn on_directory(name: &str, physical: &PhysicalDevice, dir: &Path) -> Device {
+        let options = DeviceOptions {
+            pipeline_cache_dir: Some(dir.to_owned()),
+            ..DeviceOptions::default()
+        };
+        Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// The translator's key of `d`'s descriptor on `device`, which names its record.
+    fn content(device: &Device, d: &RenderPipelineDescriptor) -> Hash256 {
+        *device
+            .core()
+            .translator
+            .queried_render_descriptor_key(d)
+            .digest()
+    }
+
+    /// Drops `device` and waits for its teardown, which ends once the reaper wrote what it was
+    /// given.
+    fn torn_down(device: Device) {
+        let counters = device.counters();
+        drop(device);
+        within("the teardown", || counters.gauges() == Gauges::default());
+    }
+
+    /// A device on a cache directory a device before it made a render content in takes the
+    /// content by its record: it reads the two lowerings the record names, and reads neither
+    /// function's AIR (the translator's stage entries count no read of a stage, to specialize it
+    /// or for a plain answer). The negative control: with the record removed, a device reads the
+    /// same two lowerings but reads both functions' AIR again, and keeps the record again. A record
+    /// whose fragment lowering was removed is stale, counted, and the device lowers that function
+    /// again and reads the vertex function's lowering.
+    #[test]
+    fn every_device_takes_a_render_content_by_its_record_without_specializing() {
+        let Some(library) = library() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-record-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut key = None;
+            for round in 0..4 {
+                if round == 2 {
+                    for record in kept_files(&dir, "renders") {
+                        std::fs::remove_file(record).expect("the record removed");
+                    }
+                }
+                if round == 3 {
+                    let records = kept_files(&dir, "renders");
+                    assert_eq!(records.len(), 1, "{name}: the record kept again");
+                    let bytes = std::fs::read(&records[0]).expect("the record");
+                    let key = key.expect("the content's key");
+                    let lowerings = read_record(&bytes, &key).expect("a record of the content");
+                    let fragment = hex(&lowerings.fragment.expect("the fragment's lowering"));
+                    let lowered = kept_files(&dir, "translations");
+                    let file = lowered.iter().find(|file| file.ends_with(&fragment));
+                    std::fs::remove_file(file.expect("the fragment's lowering"))
+                        .expect("the fragment's lowering removed");
+                }
+                let device = on_directory(name, physical, &dir);
+                key = Some(content(&device, &d));
+                let counters = device.counters();
+                let (read_before, _) = device.core().entries.counts();
+                let made = state(name, &device, &d);
+                let (read_after, _) = device.core().entries.counts();
+                let m = counters.metrics();
+                let counted = (
+                    m.render_records_read,
+                    m.render_records_stale,
+                    m.translations,
+                    m.translations_loaded,
+                );
+                let want = [(0, 0, 2, 0), (1, 0, 0, 2), (0, 0, 0, 2), (0, 1, 1, 1)][round];
+                assert_eq!(
+                    counted, want,
+                    "{name}: device {round}'s records read and stale, lowerings made and read"
+                );
+                let reads = read_after - read_before;
+                assert_eq!(
+                    reads > 0,
+                    round != 1,
+                    "{name}: device {round} read a stage's AIR {reads} times"
+                );
+                drop(made);
+                torn_down(device);
+                let records = kept_files(&dir, "renders").len();
+                assert_eq!(records, 1, "{name}: device {round} leaves one record");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            println!("{name}: a record takes the content with no read of a function's AIR");
+        }
+    }
+
+    /// Each kind of input that changes a render content's lowerings, changed once from a content a
+    /// device made on a cache directory, misses that content's record on a device after it, and
+    /// never reads another content's record: the library's content (one constant of its fragment
+    /// function's body, every name kept), the fragment function, its constant values, and a field
+    /// of the descriptor its specialization reads (the colour attachment moved from index 0 to 1,
+    /// so the colour the function writes has none). The translator's keys of each changed
+    /// content's compile show the change reaches a lowering's key, and the base content, made
+    /// first on the second device, reads its record, so the record is there to miss. The base
+    /// content's record copied over the record of the constant's content is no record of it. The
+    /// device profile is the fifth kind: where the host has two devices of the cfg's kind whose
+    /// profiles differ, the second misses the first's record of the base descriptor; with one, that
+    /// part skips visibly. The translator's semantics and format versions are in every record,
+    /// which `a_record_reads_only_as_its_own_content_s` reads, and the semantics version in every
+    /// key of the translator's.
+    #[test]
+    fn every_device_misses_a_record_for_each_kind_of_input_that_changes_a_lowering() {
+        let Some(examples) = library() else {
+            return;
+        };
+        let assemble = |text: &str| match llvm_assemble_text(text) {
+            Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                None
+            }
+            Err(error) => panic!("the fragment: {error:?}"),
+        };
+        let Some(gated) = assemble(ABSENT_READ) else {
+            return;
+        };
+        let added =
+            "<float 0.000000e+00, float 1.000000e+00, float 0.000000e+00, float 0.000000e+00>";
+        let moved = added.replace("float 1.000000e+00", "float 2.000000e+00");
+        assert_eq!(
+            ABSENT_READ.matches(added).count(),
+            1,
+            "the constant the fragment adds"
+        );
+        let Some(moved) = assemble(&ABSENT_READ.replace(added, &moved)) else {
+            return;
+        };
+        let fragment = |library: &Library, has_t: u8| {
+            let function = library.function("absent_read_fragment");
+            let mut f = FunctionDescriptor::new(function.expect("the function"));
+            f.constants = FunctionConstantValues::defaults()
+                .with_index(0, FunctionConstantValue::new(DataType::Bool, [has_t]));
+            f.specialized = true;
+            StageSource::Function(f)
+        };
+        let with = |fragment: StageSource| {
+            let vertex = examples.function("colored_vertex").expect("the function");
+            let mut d = RenderPipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(vertex),
+            ));
+            d.fragment = Some(fragment);
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+            d
+        };
+        let base = with(fragment(&gated, 0));
+        let mut field = base.clone();
+        field.color_attachments[0] = None;
+        field.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let changes = [
+            ("the library's content", with(fragment(&moved, 0))),
+            (
+                "the fragment function",
+                descriptor(&examples, "colored_fragment", PixelFormat::RGBA8Unorm),
+            ),
+            ("its constant values", with(fragment(&gated, 1))),
+            ("a field its specialization reads", field),
+        ];
+        // The keys of each stage's lowering, as the translator keys the compile.
+        let keys = |device: &Device, d: &RenderPipelineDescriptor| {
+            let keys = (device.core().translator).render_variant_key(
+                d,
+                &VariantKey::new(),
+                &Budget::standard(),
+                &StageEntries::new(),
+            );
+            let keys = keys.unwrap_or_else(|error| panic!("the keys: {error}"));
+            (keys.vertex, keys.fragment)
+        };
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        let dir_of = |n: usize| {
+            let dir = format!("m2v-rt-records-{}-{n}", std::process::id());
+            std::env::temp_dir().join(dir)
+        };
+        let mut contents = Vec::new();
+        for (n, (name, physical)) in devices.iter().enumerate() {
+            let dir = dir_of(n);
+            let _ = std::fs::remove_dir_all(&dir);
+            let first = on_directory(name, physical, &dir);
+            contents.push(content(&first, &base));
+            drop(state(name, &first, &base));
+            let base_keys: (FunctionCompileKey, Option<FunctionCompileKey>) = keys(&first, &base);
+            torn_down(first);
+            let device = on_directory(name, physical, &dir);
+            // The base content's record, copied over the constant's content's.
+            let records = kept_files(&dir, "renders");
+            assert_eq!(records.len(), 1, "{name}: the base content's record");
+            let over = records[0].with_file_name(hex(&content(&device, &changes[2].1)));
+            std::fs::copy(&records[0], &over).expect("the record copied");
+            let counters = device.counters();
+            drop(state(name, &device, &base));
+            let m = counters.metrics();
+            assert_eq!(
+                m.render_records_read, 1,
+                "{name}: the base content's record read"
+            );
+            for (what, d) in &changes {
+                assert_ne!(keys(&device, d), base_keys, "{name}: {what} changes a key");
+                let before = counters.metrics();
+                drop(state(name, &device, d));
+                let after = counters.metrics();
+                let counted = |m: &Metrics| (m.render_records_read, m.render_records_stale);
+                assert_eq!(
+                    counted(&after),
+                    counted(&before),
+                    "{name}: {what}: no record"
+                );
+                assert!(
+                    after.translations > before.translations,
+                    "{name}: {what}: a lowering made"
+                );
+            }
+            torn_down(device);
+            println!("{name}: each kind of input changed once misses the record");
+        }
+        // The device profile: each other device of the cfg's kind on the first's directory, which
+        // holds the first's record of the base content.
+        let first_name = &devices[0].0;
+        let mut others = 0;
+        for ((name, physical), content) in devices.iter().zip(&contents).skip(1) {
+            if *content == contents[0] {
+                println!("{name}: the profile of {first_name}");
+                continue;
+            }
+            let device = on_directory(name, physical, &dir_of(0));
+            let counters = device.counters();
+            drop(state(name, &device, &base));
+            let m = counters.metrics();
+            let counted = (m.render_records_read, m.render_records_stale);
+            assert_eq!(counted, (0, 0), "{name}: no record of {first_name}'s");
+            torn_down(device);
+            others += 1;
+        }
+        if others == 0 {
+            println!("SKIPPED: the device profile: one profile among this cfg's devices");
+        }
+        for n in 0..devices.len() {
+            let _ = std::fs::remove_dir_all(dir_of(n));
         }
     }
 }
