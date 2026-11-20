@@ -1,5 +1,5 @@
 //! The rt side's event and handler probes: the orders of [`crate::event_orders`] and
-//! [`crate::scheduled_handlers`], made as the old runtime's side makes them, on the runtime's
+//! [`crate::scheduled_handlers`], made on the runtime's
 //! events, command buffers and handlers.
 //!
 //! Each probe makes its own queues, as `newCommandQueue` does. The runtime's waits have no bound,
@@ -73,8 +73,7 @@ impl Drop for Raise<'_> {
 }
 
 /// The names a command buffer's handlers logged, in the order they were called, each also sent so
-/// the probe waits for the one it reads after rather than guessing when the log is whole, as the
-/// old runtime's side keeps it.
+/// the probe waits for the one it reads after rather than guessing when the log is whole.
 struct HandlerLog {
     called: Arc<Mutex<Vec<String>>>,
     sender: mpsc::Sender<String>,

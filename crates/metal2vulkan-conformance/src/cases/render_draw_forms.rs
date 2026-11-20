@@ -132,10 +132,9 @@ const RUNS: u32 = 8;
 /// MoltenVK does not enable `robustBufferAccess2` and its driver is not measured to read index 0
 /// past the bound range, so an indexed indirect draw's index fetch is nothing Vulkan bounds: the
 /// GPU reads `indexCount` out of the argument buffer, and a count the index buffer cannot hold
-/// would read past it. The runtime therefore bounds the indices on the GPU **before the pass**
-/// (`metal2vulkan_runtime`'s `index_bounds.rs`) and announces the cost, which is work Metal does
-/// not do. The declaration loosens no value -- it says the announcement is this case's -- so the
-/// case still fails on any texel that moves.
+/// would read past it. The runtime therefore bounds the indices on the GPU **before the pass** and
+/// announces the cost, which is work Metal does not do. The declaration loosens no value -- it says
+/// the announcement is this case's -- so the case still fails on any texel that moves.
 ///
 /// Measured on an Apple M3 Max (macOS 27.0.1, build 26A434, MoltenVK, API 1.2): both cases
 /// announce `metal2vulkan-degrade-indirect-index-bounds-pass` once, and the runtime's own counts
@@ -1192,8 +1191,8 @@ impl Case for Lines {
 /// draws that write.
 ///
 /// The documented boundary of every count these selectors carry. Plain Metal draws nothing for a
-/// draw of no vertices, indices or instances (`metal2vulkan_runtime`'s `render.rs` module docs,
-/// measured on an M4), which is a **defined** answer rather than an undefined one: the band stays
+/// draw of no vertices, indices or instances (measured on an M4), which is a **defined** answer
+/// rather than an undefined one: the band stays
 /// the pass's clear. So it compares exactly, which is the whole reason the boundary is worth a case.
 ///
 /// A target that is all clear would prove nothing, so marks 1 and 10 write the first and last rows

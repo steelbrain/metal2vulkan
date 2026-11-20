@@ -2,10 +2,10 @@
 //! families ([`crate::render_descriptors`], [`crate::compute_descriptors`]), and the stage lists
 //! and buffer mutability every pipeline descriptor family reads.
 //!
-//! Both runtimes take Metal's pipeline descriptors as the translator's
+//! The runtime takes Metal's pipeline descriptors as the translator's
 //! ([`RenderPipelineDescriptor`], [`ComputePipelineDescriptor`]), so the stating and the reading
-//! are one walk for both sides. What neither descriptor holds, its `label` and its
-//! `binaryArchives`, each side answers itself as a [`Field`].
+//! are one walk. What neither descriptor holds, its `label` and its `binaryArchives`, the side
+//! answers itself as a [`Field`].
 
 use crate::case::Field;
 use crate::compute_descriptors::{

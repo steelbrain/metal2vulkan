@@ -17,8 +17,8 @@
 //!
 //! # The two claims the sweep is pointed at
 //!
-//! - **`BufferTypeInfo` is the same as `BindingInfo`.** `metal2vulkan-runtime`'s own
-//!   documentation says so outright: "`MTLPipelineOptionBufferTypeInfo`: the same as
+//! - **`BufferTypeInfo` is the same as `BindingInfo`.** The runtime's documentation said so
+//!   outright: "`MTLPipelineOptionBufferTypeInfo`: the same as
 //!   `BINDING_INFO` (Metal's reflection carries the buffers' types under either)". If that is
 //!   wrong, the mask `1 << 1` alone is where it shows: Metal would answer a reflection with no
 //!   buffer struct type, or no reflection at all, and we would answer the full one.

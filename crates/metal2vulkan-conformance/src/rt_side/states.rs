@@ -1,7 +1,7 @@
-//! The rt side's state and target calls that the old runtime's side answers and the runtime has
-//! the counterpart of: a compute state's limit under its descriptor, a compute state for indirect
-//! commands (the runtime's typed refusal), a compute state of a whole descriptor, a command
-//! queue's slots, a fragment fill and a render target of the mesh family's format.
+//! The rt side's state and target calls that the runtime has the counterpart of: a compute state's
+//! limit under its descriptor, a compute state for indirect commands (the runtime's typed refusal),
+//! a compute state of a whole descriptor, a command queue's slots, a fragment fill and a render
+//! target of the mesh family's format.
 
 use super::{keep, waited_for, RtSide, QUEUE_COMMAND_BUFFERS, WAIT};
 use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, Side, StageInput};

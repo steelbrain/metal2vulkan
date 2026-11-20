@@ -20,9 +20,8 @@
 //! `setTriangleFillMode:` have no step here and must not get one. The runtime's own measurement of
 //! an Apple M4 on macOS 27.0.1 is that **each of those setters raises `APINotSupported` and ends
 //! Metal's process** on a device that does not claim the `Apple10` family — which this suite's
-//! oracle, an Apple M3 Max, does not either
-//! (`metal2vulkan_runtime::indirect_command_buffer`'s module documentation, "Render states a
-//! command does not inherit"). A case that called one would end the recorder, so the calls are
+//! oracle, an Apple M3 Max, does not either (measured). A case that called one would end the
+//! recorder, so the calls are
 //! named here and left out.
 //!
 //! The **descriptor** side of the same feature is a different matter and is here: plain Metal

@@ -30,9 +30,7 @@
 //! # Two shapes this side must never hand Metal
 //!
 //! Reaching the fill means reaching its two known hazards, so both are refused before anything is
-//! encoded rather than left to the device
-//! (`metal2vulkan_runtime::Error::EmptyFillPattern` and `LongTextureBufferFillPattern` record what
-//! each does on an Apple M3 Max):
+//! encoded rather than left to the device (each measured on an Apple M3 Max):
 //!
 //! - a **pattern of no bytes**, where plain Metal reads a unit's bytes from the pattern's address
 //!   all the same — bytes the call never gave it;
@@ -103,7 +101,7 @@ fn fill_texture_selector() -> Sel {
 }
 
 /// The longest pattern a **texture buffer's** fill may take: past this Metal's process ends in the
-/// call (`metal2vulkan_runtime::Error::LongTextureBufferFillPattern`, measured on an Apple M3 Max).
+/// call (measured on an Apple M3 Max).
 /// A fill of any other texture takes a pattern of any length.
 const LONGEST_TEXTURE_BUFFER_PATTERN: usize = 32_752;
 

@@ -2498,8 +2498,7 @@ pub const VISIBILITY_RESULT_TYPE: &str = "visibilityResultType";
 /// to hand Metal:
 ///
 /// - **More positions than the pass's samples.** Measured on an Apple M3 Max: plain Metal ends the
-///   process past the pass's samples
-///   (`metal2vulkan_runtime::RenderPassProblem::SamplePositionsSamples`). There is no safe way to
+///   process past the pass's samples. There is no safe way to
 ///   ask Metal this, so there is no answer to record and the shape may not be built.
 /// - **A coordinate outside `[0, 1)`.** Metal documents the range and its API validation asserts on
 ///   another coordinate; what plain Metal's driver programs for one is unmeasured, and the value

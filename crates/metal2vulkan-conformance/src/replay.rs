@@ -380,7 +380,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// for depth16-texel-reads, nearest-sample-positions and the six half-read-nans cases, and, with
 /// the notes of the render pipeline states the side's passes set, for the three render-then-sample
 /// cases, multi-draw-state-changes, frame-length-chain and kernel-writes-then-fragment-samples,
-/// each divergent at the notices site and at no value the old runtime's ledger does not list.
+/// each divergent at the notices site.
 pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
     notice_allowance(crate::degradation::Degradation::PixelSamplerScaling.code())
 }
@@ -490,8 +490,7 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 /// runtime records for such a sampler state, and for a pipeline whose function samples through
 /// such a constexpr sampler, on every device. Through a view whose component mapping is not the
 /// identity, the border texel is the device's answer where the device does not report
-/// `borderColorSwizzleFromImage`. The old runtime makes the sampler for the view's mapping instead
-/// and announces none.
+/// `borderColorSwizzleFromImage`.
 ///
 /// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
 /// value still compares exactly. A border texel the device answers otherwise than Metal is a row

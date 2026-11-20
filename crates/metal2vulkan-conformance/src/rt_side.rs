@@ -56,14 +56,13 @@ mod states;
 mod tables;
 mod work;
 
-/// How long a wait for a command buffer waits before the side records that it never returned:
-/// the old runtime's side's bound.
+/// How long a wait for a command buffer waits before the side records that it never returned.
 const WAIT: Duration = Duration::from_secs(60);
 
 /// The bytes the command-buffer facts' one blit fills, as the other sides fill.
 const TIMED_BYTES: usize = 256;
 
-/// The bytes the command buffer of a handler's own wait fills, as the old runtime's side fills.
+/// The bytes the command buffer of a handler's own wait fills.
 const HANDLER_FILL: usize = 64;
 
 /// Why the command-buffer facts' queue label and getters are not this side's to answer.
@@ -1305,7 +1304,7 @@ impl Side for RtSide<'_> {
         Ok(self.keep_texture(texture))
     }
 
-    /// The program on the runtime, as the old runtime's side runs it (`rt_side::work`); a
+    /// The program on the runtime (`rt_side::work`); a
     /// program that generates mipmaps announces the blit encoder's static note of them, and one
     /// that makes a texture its static note.
     fn work(&mut self, work: &crate::work::Work) -> Answer<crate::work::Done> {
@@ -1465,7 +1464,7 @@ impl Side for RtSide<'_> {
             .without_resource_state_encoder(Failure::unavailable("resource_state_command_encoder")))
     }
 
-    /// A wait made from a command buffer's own handler, as the old runtime's side makes it: a
+    /// A wait made from a command buffer's own handler: a
     /// command buffer with one small fill, whose handler `wait.from` names makes the wait
     /// `wait.wait` names on that same command buffer, and sends back what the wait answered. Both
     /// waits here are bounded, so a wait the runtime neither refused nor returned from is recorded

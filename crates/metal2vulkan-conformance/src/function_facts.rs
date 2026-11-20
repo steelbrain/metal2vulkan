@@ -340,7 +340,7 @@ pub(crate) fn attribute(attribute: &metal2vulkan::reflection::Attribute) -> Attr
 }
 
 /// The constant values the case states, as the translator's `MTLFunctionConstantValues`, which
-/// both runtimes take.
+/// the runtime takes.
 ///
 /// The runtime holds values by index and by name, which is the two single setters; a range is
 /// **expanded** into one value an index from its first, which is what

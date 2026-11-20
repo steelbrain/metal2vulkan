@@ -17,9 +17,8 @@
 //! `Sample0` is one value, so a case over it alone has no filter axis to sweep: it can show that
 //! sample 0's stencil is what the resolve holds, and no more. The question a *pair* asks is the one
 //! the runtime's own code makes answerable and no case has ever put beside Metal — the stencil
-//! resolve and the depth resolve are chosen together
-//! (`metal2vulkan_runtime`'s `resolve.rs`, one `match` over `(stencil_resolves, stencil_filter)`
-//! whose other arm reads `depth_filter`), so a side that let the depth attachment's filter decide
+//! resolve and the depth resolve are chosen together, so a side that let the depth attachment's
+//! filter decide
 //! the stencil's would be **right on one of the three depth filters and wrong on the other two**.
 //! No sweep of either filter on its own can see that. `resolve-stencil-under-depth-filters` states
 //! both in one pass, three times, and reads both resolve textures:
@@ -88,8 +87,8 @@
 //! `StoreAndMultisampleResolve`, deliberately: a separate depth texture stored beside a separate
 //! stencil one renders through a combined scratch image whose multisampled aspects are copied back
 //! after the pass, and on a device whose fragment depth does not store a value unchanged that copy
-//! is an announced near-equivalent (`metal2vulkan_runtime`'s `depth_stencil_scratch.rs`,
-//! `Degradation::DrawnDepthCopy`). A resolving store that keeps no samples needs no copy back, so
+//! is an announced near-equivalent (`Degradation::DrawnDepthCopy`). A resolving store that keeps
+//! no samples needs no copy back, so
 //! the cell asks about the resolve and nothing else. The store-action pair is already answered by
 //! the case above it and by `resolve-depth-filters-4`.
 //!
@@ -324,9 +323,8 @@ fn cell(at: usize) -> ScissorBox {
 ///
 /// `MTLTextureUsageShaderRead` beside the render-target usage, and not a detail: a device that
 /// resolves a combined format's aspects one at a time, or has no mode for the depth filter beside
-/// it, reads the attachment's samples through a sampled view
-/// (`metal2vulkan_runtime`'s `depth_stencil_resolve.rs` and `depth_stencil_scratch.rs`), and an
-/// attachment Metal made without the usage is a texture those paths cannot take. The usage is
+/// it, reads the attachment's samples through a sampled view, and an attachment Metal made without
+/// the usage is a texture those paths cannot take. The usage is
 /// therefore part of what the case means on every venue, not something the side may choose.
 fn stencil_target() -> TargetSpec {
     TargetSpec::read(STENCIL_FORMAT, [SIDE; 2]).multisampled(SAMPLES)

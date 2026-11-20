@@ -22,7 +22,7 @@ fn of_rt(error: rt::Error) -> Failure {
 }
 
 /// The runtime's usage for the raw bits a case states: `MTLResourceUsageRead`, `Write` and
-/// `Sample`, a refusal of any other bit, as the old runtime's side refuses it, and `Unavailable` for
+/// `Sample`, a refusal of any other bit, and `Unavailable` for
 /// no bit, a usage the runtime's type does not state.
 fn usage(bits: u64) -> Answer<rt::ResourceUsage> {
     if bits & !7 != 0 {

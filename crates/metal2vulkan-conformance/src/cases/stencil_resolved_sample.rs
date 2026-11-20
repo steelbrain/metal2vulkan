@@ -30,9 +30,8 @@
 //!   than two sweeps.
 //!
 //! Our runtime answers `DepthResolvedSample` after `Min` or `Max` through a whole private path —
-//! `metal2vulkan_runtime`'s `depth_stencil_resolve.rs`, eight bit-plane draws after the pass that
-//! read every sample's depth and stencil through sampled views — and until this case no run ever
-//! put a byte of it beside Metal's.
+//! eight bit-plane draws after the pass that read every sample's depth and stencil through
+//! sampled views — and until this case no run ever put a byte of it beside Metal's.
 //!
 //! # The patterns, and what each tells apart
 //!
@@ -311,9 +310,9 @@ fn cell(at: usize) -> ScissorBox {
 ///
 /// `MTLTextureUsageShaderRead` beside the render-target usage, and not a detail: the stencil of the
 /// depth-picked sample is drawn after the pass from the attachment's samples read through sampled
-/// views (`metal2vulkan_runtime`'s `depth_stencil_resolve.rs`), and an attachment Metal made
-/// without the usage is a texture that path cannot take. The usage is therefore part of what the
-/// case means on every venue, not something the side may choose.
+/// views, and an attachment Metal made without the usage is a texture that path cannot take. The
+/// usage is therefore part of what the case means on every venue, not something the side may
+/// choose.
 fn combined_target() -> TargetSpec {
     TargetSpec::read(COMBINED, [SIDE; 2]).multisampled(SAMPLES)
 }

@@ -19,16 +19,14 @@
 //! a copy keeps its bits.
 //!
 //! **What each side makes.** Metal's side lays the surface as the table says and reads the layout
-//! back before a texture lies over it (`metal_surface`). The old runtime's side makes a buffer of
-//! the surface's length that stands for it, as the runtime takes an IOSurface
-//! (`Buffer::new_texture_with_iosurface_plane`). The new runtime's side makes the surface as its
-//! consumer does: an exported surface of the planes (`Device::new_exported_surface`), laid by the
-//! runtime's own rule, which the device's queries make in place or in the copy form. The
+//! back before a texture lies over it (`metal_surface`). The runtime's side makes the surface as
+//! its consumer does: an exported surface of the planes (`Device::new_exported_surface`), laid by
+//! the runtime's own rule, which the device's queries make in place or in the copy form. The
 //! `-nvidia` cases make it by NVIDIA's decoder's route, an opaque handle at a pitch multiple of 4
 //! and a start multiple of 1, and the others by VA-API's, a dma-buf first at 256-byte multiples
-//! (`SurfaceRoute`); Metal's side and the old runtime's make the same surface for both. The replay
-//! prints, for each case, how many surfaces of each form it made. A case reads the texture's texels
-//! alone, never the surface's bytes, so where a side laid the planes is not compared.
+//! (`SurfaceRoute`); Metal's side makes the same surface for both. The replay prints, for each
+//! case, how many surfaces of each form it made. A case reads the texture's texels alone, never the
+//! surface's bytes, so where a side laid the planes is not compared.
 
 use crate::allowance::Allowance;
 use crate::case::{

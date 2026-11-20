@@ -10,9 +10,8 @@
 //!   is comparing that we kept what the program handed us;
 //! - **a fact about the compiled thing** — `staticThreadgroupMemoryLength`,
 //!   `imageblockSampleLength` and `imageblockMemoryLengthForDimensions:` are computed from the
-//!   function and the attachment formats, and our side computes them itself, by rules
-//!   `metal2vulkan-runtime`'s own documentation says were measured on an Apple M3 Max and an
-//!   M4. Those are the ones with something to get wrong.
+//!   function and the attachment formats, and our side computes them itself, by rules measured on
+//!   an Apple M3 Max and an M4. Those are the ones with something to get wrong.
 //!
 //! # What is left out, and why
 //!

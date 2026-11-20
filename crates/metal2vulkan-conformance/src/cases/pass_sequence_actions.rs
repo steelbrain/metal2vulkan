@@ -89,8 +89,8 @@
 //!   (`Degradation::DontCareLoadTiles`). A cell over it would compare two rasterizers rather than
 //!   Metal's rule, which is the reading `pass_bound_pairs` and `pass_attachment_pairs` both
 //!   reached. `MTLStoreActionDontCare` as pass A's **store** is a different matter and is swept:
-//!   Metal's answer there is the earlier texels, measured over 926 passes on an M3 Max
-//!   (`metal2vulkan_runtime`'s `kept_bytes.rs`), and the eight runs of each cell are what say
+//!   Metal's answer there is the earlier texels, measured over 926 passes on an M3 Max, and the
+//!   eight runs of each cell are what say
 //!   whether it held.
 //! - **A resolving store followed by a load.** `MTLStoreActionMultisampleResolve` writes the
 //!   resolve texture and keeps nothing of the multisampled one, and
@@ -156,7 +156,7 @@ const ASPECT_FRAGMENT: &str = "stx_stencil_with_depth";
 const SIDE: u32 = 40;
 
 /// The side, in pixels, of the tiles Metal's `Clear` load clears in past the render area, on both
-/// axes: what `metal2vulkan_runtime`'s `clear_reach.rs` measured on an M3 Max and an M4.
+/// axes: what a probe measured on an M3 Max and an M4.
 ///
 /// Stated as the number this family **expects Metal to answer**; the recording is what says
 /// whether it does.

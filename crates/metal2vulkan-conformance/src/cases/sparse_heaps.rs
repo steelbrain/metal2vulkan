@@ -255,9 +255,7 @@ fn tails_by_texture_type() -> SparseHeapCase {
 /// level's bytes are **not** its blocks' bytes: each axis is padded to a power of two blocks, and
 /// a level counts at least one tile row however small it is. Both are needed — the plain product
 /// is wrong on all 13 and the padded product alone on 5, each short by exactly one page — and the
-/// two together reproduce every recorded row. `sparse::tail_size_in_bytes` now does that, and
-/// `metal2vulkan-runtime`'s `tests::sparse::every_recorded_mip_tail_is_metals` holds it to this
-/// family's recordings.
+/// two together reproduce every recorded row.
 ///
 /// The case stays apart from the shapes the model always got right, because that is what made the
 /// difference readable: a family that mixed them would have reported 13 differences among 100

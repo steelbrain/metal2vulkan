@@ -83,7 +83,7 @@
 //!
 //! - **A non-resolving store action beside a resolve texture.** `Store` or `DontCare` with
 //!   `resolveTexture` set is measured to resolve nothing and leave the texture untouched
-//!   (`metal2vulkan_runtime`'s `resolve.rs`, a probe on an M4), and it is also a shape **Metal's
+//!   (a probe on an M4), and it is also a shape **Metal's
 //!   API validation stops**. The suite's record mode runs a validated leg beside the plain one, so
 //!   a case here would be one keystroke from an assertion that ends the process, and this family
 //!   does not find out by trying. It stays a runtime-lane fact.
@@ -259,10 +259,9 @@ fn cell(at: usize) -> ScissorBox {
 ///
 /// `MTLTextureUsageShaderRead` beside the render-target usage, and not a detail: a device with no
 /// `MIN` or `MAX` depth resolve mode, and one that resolves a combined format's aspects one at a
-/// time, reads the attachment's samples through a sampled view
-/// (`metal2vulkan_runtime`'s `depth_stencil_resolve.rs`), and an attachment Metal made without the
-/// usage is a texture that path cannot take. The usage is therefore part of what the case means on
-/// every venue, not something the side may choose.
+/// time, reads the attachment's samples through a sampled view, and an attachment Metal made
+/// without the usage is a texture that path cannot take. The usage is therefore part of what the
+/// case means on every venue, not something the side may choose.
 fn depth_target(samples: u32) -> TargetSpec {
     TargetSpec::read(DEPTH_FORMAT, [SIDE; 2]).multisampled(samples)
 }

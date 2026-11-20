@@ -56,7 +56,7 @@
 //! **And it corrects the reason, which is the more useful half.** "A pitch equal to the row is the
 //! refused shape" was the reading that made this ordering feel necessary, and it is **wrong**. The
 //! rule the `R8Unorm` row broke is that a 2D texture over a buffer takes a `bytesPerRow` that is a
-//! **multiple of 16** (`metal2vulkan-runtime`'s `linear_plan`, `LINEAR_ALIGNMENT`), which is the
+//! **multiple of 16**, which is the
 //! alignment Metal's own `minimumLinearTextureAlignmentForPixelFormat:` answers for every format a
 //! buffer can back. 8 is not a multiple of 16; that row's pitch being its row as well was a
 //! coincidence of an 8 x 8 `R8Unorm` texture. 16, 32 and 256 all satisfy the rule, and a pitch
@@ -84,9 +84,7 @@
 //!   Each cleared texel holds `20 60 9F DF`, the four clear channels as `RGBA8Unorm` codes 32, 96,
 //!   159 and 223.
 //! - **`DontCare`, at every pitch: not one of the 2,048 bytes moved** — the texels included. The
-//!   clear value never reaches the buffer at all. That is the answer
-//!   `metal2vulkan-runtime`'s own `kept_bytes` states from its own `DontCare`-store probe, and it
-//!   is now a recorded Metal fact of the suite's rather than a module's prose.
+//!   clear value never reaches the buffer at all. That is a recorded Metal fact of the suite's.
 //!
 //! **What Metal promises of those texels is less than what it did.** Apple's page for
 //! `MTLStoreAction.dontCare`: "The GPU has permission to discard the rendered contents of the
@@ -111,7 +109,7 @@
 //! way depends on the device, so the second venue here is not breadth over the first — it is cover
 //! for a path the first never takes.
 //!
-//! `metal2vulkan-runtime` renders a target whose rows the device's own linear image cannot lay out
+//! Our runtime renders a target whose rows the device's own linear image cannot lay out
 //! as Metal does into a **shadow** image and copies back (`shadowed-texture`). Where the image
 //! really does lie over the buffer's bytes and the pass stores nothing of it, it renders into a
 //! **kept image** instead so the buffer keeps its bytes (`kept_bytes`, `dont-care-stand-in`). The

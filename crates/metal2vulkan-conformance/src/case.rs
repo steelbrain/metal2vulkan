@@ -2951,9 +2951,9 @@ pub enum CommandDraw {
 /// A surface a case makes a texture over one plane of ([`Side::surface_texture`]): its
 /// four-character OSType, its planes where the case lays them, and the plane the texture covers.
 ///
-/// The layout is what Metal's side asks `IOSurfaceCreate` for and the old runtime's stand-in buffer
-/// holds. A case of this shape writes and reads the texture's texels alone, never the surface's
-/// bytes, so a side that lays the planes its own way (the new runtime's exported surface) answers
+/// The layout is what Metal's side asks `IOSurfaceCreate` for. A case of this shape writes and
+/// reads the texture's texels alone, never the surface's bytes, so a side that lays the planes its
+/// own way (the runtime's exported surface) answers
 /// the same texels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SurfaceTexture {
@@ -2969,8 +2969,8 @@ pub struct SurfaceTexture {
     pub length: u64,
     /// The plane the texture covers, whose format and extent it takes.
     pub plane: u32,
-    /// The route the new runtime's side makes the surface by. Metal's side and the old runtime's
-    /// lay it as the case states and read nothing of it, so it is not one of the case's inputs.
+    /// The route the runtime's side makes the surface by. Metal's side lays it as the case states
+    /// and reads nothing of it, so it is not one of the case's inputs.
     pub route: SurfaceRoute,
 }
 

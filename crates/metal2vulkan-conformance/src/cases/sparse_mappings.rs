@@ -1842,10 +1842,7 @@ mod tests {
     /// [`moved_tiles`] is what the walk above believes a move does, and what the move rows' reads
     /// are placed by. Believing it is not the same as checking it: this holds it to Metal's own
     /// four readings, by tile, so a change to the rule that still let the guard pass fails here
-    /// instead. The runtime has the mirror of this test over the same eight shapes
-    /// (`metal2vulkan-runtime`'s `tests::sparse::a_move_is_metals_run_of_destination_tiles`); this
-    /// one is the suite's, and the two were written from the same probe output rather than from
-    /// each other.
+    /// instead. It was written from the probe output.
     #[test]
     fn every_move_rows_pairing_is_the_probes_own_reading() {
         // Metal's own reading for each row: the source tile, then the destination tile it landed

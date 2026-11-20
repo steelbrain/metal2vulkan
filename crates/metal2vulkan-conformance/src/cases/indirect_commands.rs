@@ -1853,8 +1853,7 @@ pub struct DrawnCommands;
 /// the whole difference the row has, so the declaration names a code and loosens no value.
 ///
 /// - **`render-pass-split`**, announced on **both** venues: the runtime draws the barrier
-///   command 1 of the row keeps in a render pass instance of its own
-///   (`metal2vulkan_runtime`'s `render/executions.rs`).
+///   command 1 of the row keeps in a render pass instance of its own.
 ///
 /// The row's `RGBA8Unorm` store is the device's own conversion, a native note the suite declares
 /// for every case ([`crate::replay::NATIVE_NOTES`]).

@@ -345,8 +345,8 @@ impl Case for ResolveThenLoad {
 
     fn allowances(&self) -> Vec<Allowance> {
         // No value is loosened. The buffers the kernel and the blits write are `Shared`
-        // ([`crate::replay::shared_memory_notice`]): the old runtime's side announced it on the
-        // RTX 2080 (job m3-max-55760), and nothing else differed there.
+        // ([`crate::replay::shared_memory_notice`]): it was announced on the RTX 2080 (job
+        // m3-max-55760), and nothing else differed there.
         vec![crate::replay::shared_memory_notice()]
     }
 

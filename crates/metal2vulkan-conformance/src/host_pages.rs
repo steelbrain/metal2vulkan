@@ -5,8 +5,7 @@
 //! memory **the program owns**, handed to Metal by
 //! `newBufferWithBytesNoCopy:length:options:deallocator:`, because that is the only shape in which
 //! a Metal program can say "this memory is read-only" — Metal's private `MTLResourceOptions`
-//! bit 24, which the old runtime named
-//! `ResourceOptions::PRIVATE_BIT`. With the
+//! bit 24. With the
 //! bit, the GPU's writes to the memory go nowhere, and matching that exactly on every driver is
 //! the owner's standing rule.
 //!

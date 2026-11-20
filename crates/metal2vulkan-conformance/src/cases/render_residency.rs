@@ -454,8 +454,7 @@ impl Case for RenderBarriers {
         // One notice is declared, and it is what the barrier calls themselves cost. **A Metal
         // memory barrier between draws of one pass orders the draws after it behind the draws
         // before it, which Vulkan gives across render pass instances**, so the runtime ends the
-        // instance at the barrier and begins another (`metal2vulkan_runtime`'s `fence.rs`, counted
-        // as that crate's `work_counts::Split::Barrier`). Metal does not split its pass, so the
+        // instance at the barrier and begins another. Metal does not split its pass, so the
         // runtime announces the difference in work.
         //
         // Measured on an Apple M3 Max (macOS 27.0.1, build 26A434), under the exact policy and

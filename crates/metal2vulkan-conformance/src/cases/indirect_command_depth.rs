@@ -41,19 +41,18 @@
 //! here, and this module adds two of its own, both on a measurement rather than on caution:
 //!
 //! - **A command that sets a pipeline on a buffer that inherits one** raises `Invalid` in the
-//!   runtime and **ends plain Metal's process** (`metal2vulkan_runtime`'s
-//!   `IndirectComputeCommand::set_compute_pipeline_state`, measured). So no row crosses
+//!   runtime and **ends plain Metal's process** (measured). So no row crosses
 //!   `inheritPipelineState` with a command's own `setRenderPipelineState:`: the cell cannot be
 //!   recorded at all, and [`INHERITED_STATE`] names it in its own documentation instead.
 //! - **An inherited pipeline state made without `supportIndirectCommandBuffers`** faults the GPU
 //!   at the executing encoder, so the parent pipeline [`INHERITED_STATE`] binds is made with the
 //!   flag exactly as the commands' own are.
 //!
-//! [`BIND_LIMITS`] sets a buffer at an index at and past its descriptor's maximum, which is the
-//! one row here whose answer is a **refusal of ours**: plain Metal keeps such a binding for its
-//! own getters (`metal2vulkan_runtime`'s `IndirectCommandBuffer::set_buffer`, measured on an
-//! M3 Max) where we raise `Invalid`. That row **executes nothing**, so no over-long binding ever
-//! reaches a GPU, and the gap it holds visible is listed in `known-gaps.tsv`.
+//! [`BIND_LIMITS`] sets a buffer at an index at and past its descriptor's maximum, which is the one
+//! row here whose answer is a **refusal of ours**: plain Metal keeps such a binding for its own
+//! getters (measured on an M3 Max) where we raise `Invalid`. That row **executes nothing**, so no
+//! over-long binding ever reaches a GPU, and the gap it holds visible is listed in
+//! `known-gaps.tsv`.
 
 use crate::allowance::Allowance;
 use crate::case::STAGE_VERTEX;
@@ -1939,10 +1938,9 @@ const DECLARED_BINDS: u32 = 2;
 /// index at the maximum, and one two past it.
 ///
 /// Both are small on purpose. A binding past the slot array lands in the **same command's** record
-/// on plain Metal ("plain Metal keeps it for its private getters", `metal2vulkan_runtime`'s
-/// `IndirectCommandBuffer::set_buffer`), and the row **executes nothing**, so no binding at or past
-/// the count ever reaches a GPU — which is why the indices are 2 and 4 and not something that would reach
-/// another command's record or another page.
+/// on plain Metal, which keeps it for its private getters, and the row **executes nothing**, so no
+/// binding at or past the count ever reaches a GPU — which is why the indices are 2 and 4 and not
+/// something that would reach another command's record or another page.
 const OVER_INDICES: [u32; 2] = [DECLARED_BINDS, DECLARED_BINDS + 2];
 
 /// The row's descriptor: dispatches of threadgroups and [`DECLARED_BINDS`] kernel buffers.

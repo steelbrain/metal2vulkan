@@ -742,9 +742,8 @@ impl Case for Facing {
         // state**, so the draw after `setTriangleFillMode:MTLTriangleFillModeLines` needs a
         // pipeline the pass had not made, and a draw whose pipeline is being made cannot record
         // into an instance that recorded inline: it records into a new render pass instance after
-        // it (`metal2vulkan_runtime`'s `render/inline_first.rs`, counted as that crate's
-        // `work_counts::Split::PendingPipeline`). A mid-pass fill-mode change therefore splits the
-        // Vulkan render pass, which is work Metal does not do, and the runtime announces it.
+        // it. A mid-pass fill-mode change therefore splits the Vulkan render pass, which is work
+        // Metal does not do, and the runtime announces it.
         //
         // Measured on an Apple M3 Max (macOS 27.0.1, build 26A434), under the exact policy and
         // under the runtime's own defaults alike: our leg announces

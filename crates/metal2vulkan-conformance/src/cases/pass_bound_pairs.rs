@@ -6,9 +6,9 @@
 //! The two numbers were swept on the **descriptor** ([`crate::pass_descriptors`]'s number sweep
 //! reads each of the pass's eight numbers at 0, 1, its documented limit and either side of it) and
 //! no case ever rendered through a render area smaller than its attachment. Our runtime, meanwhile,
-//! carries a whole measured model of what Metal does there (`metal2vulkan_runtime`'s
-//! `clear_reach.rs`: 44 Metal cases on an M3 Max and an M4, every answer the same on both, each
-//! with and without API validation), and every rule in it was reached by a probe and by nothing
+//! carries a whole measured model of what Metal does there (44 Metal cases on an M3 Max and an
+//! M4, every answer the same on both, each with and without API validation), and every rule in it
+//! was reached by a probe and by nothing
 //! else:
 //!
 //! - a **`Clear`** load of an attachment the pass stores clears it from the origin over the render
@@ -174,8 +174,8 @@ const FRAGMENT: &str = "rt6_resolve_white";
 const SIDE: u32 = 40;
 
 /// The side, in pixels, of the tiles Metal's `Clear` load clears in past the render area, on both
-/// axes: what `metal2vulkan_runtime`'s `clear_reach.rs` measured on an M3 Max and an M4 at every
-/// format, sample count and tile size it tried.
+/// axes: what a probe measured on an M3 Max and an M4 at every format, sample count and tile size
+/// it tried.
 ///
 /// It is stated here as the **number this family expects Metal to answer**, and the recording is
 /// what says whether it does: the grid is built so that a different tile size moves at least one

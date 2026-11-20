@@ -10,8 +10,8 @@
 //! `allocatedSize` is its length, it is the buffer allocated next, which no case can state; over
 //! a buffer of 20000 bytes, whose `allocatedSize` is 32768, it is the rest of the buffer's own
 //! allocation, and it reads zero. The runtime's lie in the buffer's memory too, as a buffer of
-//! 16 KiB or more holds its allocation, its length rounded up to 16 KiB, zero when made
-//! (`metal2vulkan-runtime`'s `buffer_texture.rs`), so this family asks the second shape, where
+//! 16 KiB or more holds its allocation, its length rounded up to 16 KiB, zero when made, so this
+//! family asks the second shape, where
 //! Metal's answer is one a case can compare: a 16 by 256 `RGBA8Uint` texture at
 //! offset 4096, its rows 64 bytes apart, over 20000 bytes. Its rows 0 to 247 lie inside the
 //! length, row 248 crosses it 32 bytes (8 texels) in, and rows 249 to 255 lie past it.
