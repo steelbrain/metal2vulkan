@@ -3,7 +3,7 @@
 //!
 //! - Without a slot's `SrgbTexture` variant every access reads the device's decode through the
 //!   slot's sRGB view, declaring no table: `PrecisionNote::SrgbTexelDecode` under the bound
-//!   format's class off Metal's own texture unit, `VkProperty::MetalSampler` on it.
+//!   format's class.
 //! - Under the variant (a format the device cannot sample, held as its UNORM twin) every access
 //!   decodes what the twin's view reads (one texel's codes, or the device's filter of them) by
 //!   the transfer through the device's `Pow`, declaring no table, and notes `SrgbTexelDecode`
@@ -29,7 +29,7 @@ use crate::metal::texel_format::srgb_twin_on;
 use crate::metal::{self, PixelFormat, TextureType};
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{SlotClass, SlotRef, SpecKey, Stage};
+use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
@@ -295,16 +295,13 @@ fn an_srgb_swizzle_across_alpha_swizzles_in_the_function_on_a_twin() {
 /// Every access of an 8-bit sRGB texture slot records `RuntimeFact::SrgbTexture`. Without the
 /// variant every one of them (a read, a fetch, a nearest, linear, mipmapped or bicubic sample, a
 /// gather, a runtime sampler's sample) reads the device's own decode and declares no Metal table:
-/// on lavapipe it notes `PrecisionNote::SrgbTexelDecode` under the bound format's class (an
-/// `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's), and on MoltenVK, whose
-/// decode is Metal's own, it requires `VkProperty::MetalSampler` instead. Under the variant every
-/// access decodes what the twin's view reads by the MSL transfer through the device's `Pow`,
-/// declaring no table, and notes `SrgbTexelDecode` outright, on both devices. On MoltenVK a
-/// filtered sample records `PrecisionNote::HalfSampleFilter` or
-/// `PrecisionNote::FloatSampleFilter` (`lower::sampler::linear::metal_filtered_ycbcr`), a `half`
-/// access that converts the device's texel by the bound format's class (outside the variant)
-/// states `RuntimeFact::TexelFormat`, and every sample and gather the device makes requires the
-/// property. Every form validates on both devices.
+/// on lavapipe and MoltenVK it notes `PrecisionNote::SrgbTexelDecode` under the bound format's
+/// class (an `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's). Under the
+/// variant every access decodes what the twin's view reads by the MSL transfer through the
+/// device's `Pow`, declaring no table, and notes `SrgbTexelDecode` outright, on both devices. No
+/// access records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter`, states
+/// `RuntimeFact::TexelFormat` or requires `VkProperty::MetalSampler`. Every form validates on both
+/// devices.
 #[test]
 fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
     use crate::device::requirements::VkProperty;
@@ -312,43 +309,40 @@ fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
     let linear = sampler_words(1, 0, false);
     let bicubic = sampler_words(2, 0, false);
     let fetch = sampler_words(0, 0, true);
-    // Each access, and whether it reads one texel (not a filter's).
+    // Each access, and whether it reads a `half`.
     let cases = [
-        ("read half", Access::Read, true, true),
-        ("read float", Access::Read, false, true),
-        ("fetch half", Access::Sample(fetch), true, true),
-        ("fetch float", Access::Sample(fetch), false, true),
-        ("nearest half", Access::Sample(nearest), true, true),
-        ("nearest float", Access::Sample(nearest), false, true),
+        ("read half", Access::Read, true),
+        ("read float", Access::Read, false),
+        ("fetch half", Access::Sample(fetch), true),
+        ("fetch float", Access::Sample(fetch), false),
+        ("nearest half", Access::Sample(nearest), true),
+        ("nearest float", Access::Sample(nearest), false),
         (
             "nearest level",
             Access::Sample(sampler_words(0, 1, false)),
             false,
-            true,
         ),
-        ("gather red half", Access::Gather(0), true, true),
-        ("gather alpha half", Access::Gather(3), true, true),
-        ("gather float", Access::Gather(0), false, true),
-        ("bicubic half", Access::Sample(bicubic), true, true),
-        ("bicubic float", Access::Sample(bicubic), false, true),
-        ("linear half", Access::Sample(linear), true, false),
-        ("linear float", Access::Sample(linear), false, false),
+        ("gather red half", Access::Gather(0), true),
+        ("gather alpha half", Access::Gather(3), true),
+        ("gather float", Access::Gather(0), false),
+        ("bicubic half", Access::Sample(bicubic), true),
+        ("bicubic float", Access::Sample(bicubic), false),
+        ("linear half", Access::Sample(linear), true),
+        ("linear float", Access::Sample(linear), false),
         (
             "mip linear",
             Access::Sample(sampler_words(0, 2, false)),
             false,
-            false,
         ),
-        ("runtime half", Access::Runtime, true, false),
-        ("runtime float", Access::Runtime, false, false),
+        ("runtime half", Access::Runtime, true),
+        ("runtime float", Access::Runtime, false),
     ];
     let consts = FunctionConstantValues::defaults();
-    for (name, access, half, codes) in cases {
+    for (name, access, half) in cases {
         let Some(bc) = assemble(name, &kernel(access, half)) else {
             return;
         };
         for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
-            let metal = stem == "moltenvk-m3";
             for variant in [false, true] {
                 let what = format!("{name} on {stem}, variant {variant}");
                 let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(variant))
@@ -358,36 +352,27 @@ fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
                         .contains(&RuntimeFact::SrgbTexture { slot: TEXTURE }),
                     "{what}"
                 );
-                assert_eq!(
+                assert!(
                     plan.precision.contains(&PrecisionNote::SrgbTexelDecode),
-                    !metal || variant,
                     "{what}"
                 );
                 let noted = |pf| bound_note(&plan.specialized, pf);
                 for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::ASTC4x4SRGB] {
-                    assert_eq!(noted(pf), !variant && !metal, "{what} {pf:?}");
+                    assert_eq!(noted(pf), !variant, "{what} {pf:?}");
                 }
                 assert!(!noted(PixelFormat::RGBA8Unorm), "{what}");
-                // On MoltenVK a `half` access outside the variant converts its texel by the
-                // format's class, whose rounding to `half` is Metal's there only through Metal's
-                // own texture unit; a bicubic sample's taps are fetched.
-                let converts = metal && half && !variant && name != "bicubic half";
-                assert_eq!(
-                    plan.facts
+                assert!(
+                    !plan
+                        .facts
                         .contains(&RuntimeFact::TexelFormat { slot: TEXTURE }),
-                    converts,
                     "{what}"
                 );
-                assert_eq!(
-                    plan.precision.contains(&PrecisionNote::FloatSampleFilter),
-                    !codes && !half && metal,
-                    "{what}"
-                );
-                assert_eq!(
-                    plan.precision.contains(&PrecisionNote::HalfSampleFilter),
-                    !codes && half && metal,
-                    "{what}"
-                );
+                for note in [
+                    PrecisionNote::FloatSampleFilter,
+                    PrecisionNote::HalfSampleFilter,
+                ] {
+                    assert!(!plan.precision.contains(&note), "{what}: {note:?}");
+                }
                 let a = compile_bitcode(
                     &bc,
                     EntryRef::Name("k"),
@@ -408,22 +393,10 @@ fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
                     variant && name != "gather alpha half",
                     "{what}"
                 );
-                // Every sample and gather the device makes (not a read, a pixel fetch or a
-                // bicubic sample's fetched taps), and every decode of the device's.
-                let sampled = !matches!(
-                    name,
-                    "read half"
-                        | "read float"
-                        | "fetch half"
-                        | "fetch float"
-                        | "bicubic half"
-                        | "bicubic float"
-                );
-                assert_eq!(
-                    a.requirements
+                assert!(
+                    !a.requirements
                         .properties
                         .contains(&VkProperty::MetalSampler),
-                    metal && (!variant || sampled || converts),
                     "{what}"
                 );
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -725,15 +698,6 @@ fn slot_views(plan: &crate::bind::BindingPlan, slot: SlotRef) -> Vec<crate::bind
         .collect()
 }
 
-/// Whether `profile`'s device decodes through Metal's own texture unit.
-fn metal_sampler(dev: &Device) -> bool {
-    dev.profile()
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler)
-}
-
 /// Whether `p`'s stage notes `PrecisionNote::SrgbTexelDecode` where slot 0 binds a texture of
 /// `pf`, as the runtime reads it at a dispatch (`StageModule::bound_format_clauses`).
 fn notes_bound(p: &ComputePipeline, pf: PixelFormat) -> bool {
@@ -747,8 +711,8 @@ fn notes_bound(p: &ComputePipeline, pf: PixelFormat) -> bool {
 /// A slot bound in an 8-bit sRGB format joins the plan's variant exactly where the device holds
 /// the format as its UNORM twin (`metal::texel_format::srgb_twin_on`), from the device's format
 /// features alone. Where the device samples the format the slot joins nothing, every binding of
-/// the slot views the image in that sRGB format (the device decodes it), and off Metal's own
-/// texture unit the pipeline notes `PrecisionNote::SrgbTexelDecode` under the bound format, which
+/// the slot views the image in that sRGB format (the device decodes it), and the pipeline notes
+/// `PrecisionNote::SrgbTexelDecode` under the bound format, which
 /// an `RGBA8Unorm` texture does not take. Where the device holds the twin, the variant's pipeline
 /// plans the same key, every binding of the slot views the twin, and every access (the device's
 /// codes or its filter of them, decoded by the device's transfer) notes `SrgbTexelDecode`,
@@ -768,7 +732,6 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
             return;
         };
         for (stem, dev) in devices() {
-            let metal = metal_sampler(&dev);
             let plain = pipeline(&dev, &bc, &inputs(false));
             assert!(!notes_bound(&plain, PixelFormat::RGBA8Unorm), "{stem}");
             for pf in [
@@ -806,7 +769,7 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
                             "{what}"
                         );
                     }
-                    assert_eq!(notes_bound(&plain, pf), !metal, "{what}");
+                    assert!(notes_bound(&plain, pf), "{what}");
                     decoded += 1;
                     continue;
                 }
@@ -870,8 +833,8 @@ fn a_slot_bound_in_srgb_joins_the_variant_only_where_the_device_holds_its_twin()
 
 /// An ASTC sRGB slot samples the device's decode wherever the device samples a format of it: its
 /// own block where the device has ASTC (ANV, MoltenVK), its decoded twin's `R8G8B8A8_SRGB` view
-/// elsewhere (`bind::AstcDecode`). It joins no variant, and off Metal's own texture unit the
-/// pipeline notes `PrecisionNote::SrgbTexelDecode` under the bound format.
+/// elsewhere (`bind::AstcDecode`). It joins no variant, and the pipeline notes
+/// `PrecisionNote::SrgbTexelDecode` under the bound format.
 #[test]
 fn an_astc_srgb_slot_samples_the_devices_decode() {
     let Some(bc) = assemble("astc read", &kernel(Access::Read, true)) else {
@@ -879,7 +842,6 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
     };
     let (mut decoded, mut native) = (0, 0);
     for (stem, dev) in devices() {
-        let metal = metal_sampler(&dev);
         let plain = pipeline(&dev, &bc, &inputs(false));
         for pf in [PixelFormat::ASTC4x4SRGB, PixelFormat::ASTC12x10SRGB] {
             let what = format!("{stem} {pf:?}");
@@ -903,7 +865,7 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
             } else {
                 native += 1;
             }
-            assert_eq!(notes_bound(&plain, pf), !metal, "{what}");
+            assert!(notes_bound(&plain, pf), "{what}");
         }
     }
     assert!(decoded > 0, "no committed profile holds an ASTC sRGB twin");
@@ -914,14 +876,11 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
 }
 
 /// A `half` sample the device decodes and filters (a linear one with a linear mip filter)
-/// rounds the device's `f32` texel to nearest even. On MoltenVK, whose decode and filter are
-/// Metal's own texture unit's, that `f32` is Metal's `float` value, whose rounding to `half` is
-/// Metal's (`metals_srgb_float_steps_round_to_their_half_steps`): the pipeline requires
-/// `VkProperty::MetalSampler`, no clause of `PrecisionNote::HalfTexelConversion` holds of an 8-bit
-/// sRGB format bound there, and the note holds under a format of no measured family. On
-/// lavapipe, whose decode and conversion are the device's, the note holds under every format.
+/// rounds the device's `f32` texel to nearest even: on lavapipe and MoltenVK, whose decode and
+/// conversion are the device's, the pipeline requires no `VkProperty::MetalSampler` and records
+/// `PrecisionNote::HalfTexelConversion` outright, which holds under every bound format.
 #[test]
-fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
+fn the_device_s_srgb_decode_converts_to_half_noted() {
     use crate::device::requirements::VkProperty;
     let Some(bc) = assemble(
         "mip linear half",
@@ -931,73 +890,41 @@ fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
     };
     let mut seen = 0;
     for (stem, dev) in devices() {
-        let metal = match stem.as_str() {
-            "lavapipe" => false,
-            "moltenvk-m3" => true,
-            _ => continue,
-        };
+        if !matches!(stem.as_str(), "lavapipe" | "moltenvk-m3") {
+            continue;
+        }
         seen += 1;
         let p = pipeline(&dev, &bc, &inputs(false));
-        assert_eq!(
-            p.requirements
+        assert!(
+            !p.requirements
                 .properties
                 .contains(&VkProperty::MetalSampler),
-            metal,
             "{stem}"
         );
         for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::BGRA8UnormSRGB] {
             let plan = p.plan(&dev, &state(Some(pf)).shape()).expect("plan");
             assert!(plan.variant.srgb_textures.is_empty(), "{stem} {pf:?}");
-            // On MoltenVK the note's clauses test the bound format, which the runtime reads at
-            // the dispatch: none holds of an 8-bit sRGB format.
             let notes = p.stage.precision_notes_under(&plan.specialization);
-            let bound = p
-                .stage
-                .bound_format_clauses(PrecisionNote::HalfTexelConversion, &|_| {
-                    Some(bound_texel_format(pf))
-                });
-            match metal {
-                true => assert!(bound.is_empty(), "{stem} {pf:?}: {bound:?}"),
-                false => assert!(
-                    notes.contains(&PrecisionNote::HalfTexelConversion),
-                    "{stem} {pf:?}: {notes:?}"
-                ),
-            }
-        }
-        if !metal {
             assert!(
-                p.stage
-                    .precision_notes
-                    .contains(&PrecisionNote::HalfTexelConversion),
-                "{stem}: {:?}",
-                p.stage.precision_notes
+                notes.contains(&PrecisionNote::HalfTexelConversion),
+                "{stem} {pf:?}: {notes:?}"
             );
-            assert!(
-                !p.stage
-                    .specialized_notes
-                    .iter()
-                    .any(|s| s.note == PrecisionNote::HalfTexelConversion),
-                "{stem}: {:?}",
-                p.stage.specialized_notes
-            );
-            continue;
         }
-        // The module keeps the note for a format of no measured family: its slot's
-        // `UnmeasuredTexels` specialization, 1 for such a format.
-        let other = crate::metal::texel_format::TexelFormat::OTHER.0;
-        let value = |key: &SpecKey| match key {
-            SpecKey::UnmeasuredTexels(_) => 1,
-            _ => other,
-        };
-        let held = p.stage.specialized_notes.iter().any(|s| {
-            s.note == PrecisionNote::HalfTexelConversion
-                && s.when.iter().any(|c| {
-                    c.all
-                        .iter()
-                        .all(|t| ((value(&t.key) & t.mask) == t.bits) == t.equal)
-                })
-        });
-        assert!(held, "{stem}: {:?}", p.stage.specialized_notes);
+        assert!(
+            p.stage
+                .precision_notes
+                .contains(&PrecisionNote::HalfTexelConversion),
+            "{stem}: {:?}",
+            p.stage.precision_notes
+        );
+        assert!(
+            !p.stage
+                .specialized_notes
+                .iter()
+                .any(|s| s.note == PrecisionNote::HalfTexelConversion),
+            "{stem}: {:?}",
+            p.stage.specialized_notes
+        );
     }
     assert_eq!(seen, 2);
 }

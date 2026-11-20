@@ -111,13 +111,15 @@ fn check_artifact(a: &FunctionArtifact, what: &str) {
         "{what}"
     );
     // The local size is the `WorkgroupSize` spec composite of `sx, sy, sz`, 4-byte `u32`
-    // constants defaulting to 1.
+    // constants defaulting to 1, and the threadgroup runs as one row under `DeepThreadgroup`,
+    // defaulting to false.
     assert_eq!(
         i.spec,
         vec![
             StageSpec::new(SpecKey::LocalSize(Axis::X), 4, 1),
             StageSpec::new(SpecKey::LocalSize(Axis::Y), 4, 1),
-            StageSpec::new(SpecKey::LocalSize(Axis::Z), 4, 1)
+            StageSpec::new(SpecKey::LocalSize(Axis::Z), 4, 1),
+            StageSpec::new(SpecKey::DeepThreadgroup, 4, 0)
         ],
         "{what}"
     );
@@ -151,7 +153,7 @@ fn store_const_passes_the_pipeline_on_every_m1_profile() {
             compile(&bitcode, "store_const", &p).unwrap_or_else(|e| panic!("{stem}: compile: {e}"));
         check_artifact(&a, stem);
         let (table, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(table.spec.len(), 3, "{stem}");
+        assert_eq!(table.spec.len(), 4, "{stem}");
         let ops = opcodes(&words);
         for op in [
             crate::spv::Op::SpecConstantComposite,

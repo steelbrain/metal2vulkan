@@ -10,8 +10,7 @@
 //! The body is a chain of `float` multiplies and adds, which the interpreter computes exactly.
 //! `llvm-as` assembles the module; without it the test skips visibly.
 
-use crate::device::profile::DriverWorkaround;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -177,42 +176,16 @@ fn run_words(m: &TypedModule, plan: &Plan, words: &[u32], stem: &str) -> Vec<u32
         .collect()
 }
 
-/// vk12-floor's device under MoltenVK 1.4.1, whose SPIRV-Cross writes every function inlined.
-fn moltenvk_floor() -> crate::device::profile::DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/vk12-floor.json");
-    let mut desc = DeviceDescription::from_khronos_json(
-        &std::fs::read_to_string(&path).expect("profile"),
-        None,
-    )
-    .expect("description");
-    desc.driver_id = Some(crate::vk::DriverId::MOLTENVK);
-    desc.driver_version = 10401;
-    Device::from_queries(desc, DevicePolicy::default())
-        .expect("device")
-        .profile()
-        .clone()
-}
-
 #[test]
 fn a_function_applied_twice_is_compiled_once_on_every_profile() {
     let Some(bitcode) = assembled() else {
         return;
     };
     let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
-    let mvk = moltenvk_floor();
-    // A driver that inlines every routine at each call and one that takes the routines as they
-    // are: both compile the AIR inliner's two copies, and both roll them.
-    assert!(mvk
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::FunctionsInlinedAtEveryCall));
-    assert!(!floor
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::FunctionsInlinedAtEveryCall));
+    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    // Both compile the AIR inliner's two copies, and both roll them.
     let want = [body(1.0).to_bits(), body(2.0).to_bits()];
-    for (p, stem) in [(&floor, "vk12-floor"), (&mvk, "MoltenVK")] {
+    for (p, stem) in [(&floor, "vk12-floor"), (&mvk, "moltenvk-m3")] {
         let (_, _, once) = compile_kept(&bitcode, "once", p).expect("once");
         let (art, plan, kept) = compile_kept(&bitcode, "twice", p).expect("twice");
         let (w1, w2) = (

@@ -1,14 +1,9 @@
 //! A product by a constant `-0.0` beside a product of the same value by `+0.0`: the owned fixture
 //! `sfold_precise` (its authored case `float-operations-decided-by-a-bound-constant-precise`)
-//! multiplies one loaded `float4` by the function constants `+0.0` and `-0.0`. ANV's compiler
-//! keeps one multiply for two such products in one block, so both answer the first one's zero
-//! (`DriverWorkaround::OppositeZeroProductsMerged`, measured on the Iris Xe of RPL-P under Mesa
-//! 26.2.6). On a profile carrying it no `f32` product of the module has a constant factor with a
-//! `-0.0` component (`ProductForm::PositiveZeroFactors`); on every other profile whose products are
-//! `OpFMul`, the fixture's products keep their `-0.0` factor. `llvm-as` assembles the fixture;
-//! without it the test skips visibly.
+//! multiplies one loaded `float4` by the function constants `+0.0` and `-0.0`. On every profile
+//! whose products are `OpFMul`, the fixture's products keep their `-0.0` factor as given.
+//! `llvm-as` assembles the fixture; without it the test skips visibly.
 
-use crate::device::profile::DriverWorkaround;
 use crate::library::{FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
 use crate::pipeline::testing::{llvm_assemble, typed_module_specialized, AssembleError};
@@ -81,30 +76,23 @@ fn negative_zero_factors(m: &TypedModule) -> usize {
 }
 
 #[test]
-fn a_negative_zero_factor_is_a_positive_one_negated_on_anv() {
+fn a_negative_zero_factor_is_kept_on_every_profile() {
     let Some(bc) = assemble() else { return };
     let values = constants();
-    let mut carried = 0;
     let mut multiplied = 0;
     for (stem, p) in committed_profiles().expect("committed profiles") {
         let (plan, m) = typed_module_specialized(&bc, "sfold", &p, &values)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         let form = plan.families.arith.product;
-        let merges = p
-            .fields()
-            .workarounds
-            .contains(&DriverWorkaround::OppositeZeroProductsMerged);
-        let factors = negative_zero_factors(&m);
-        if merges {
-            assert_eq!(form, ProductForm::PositiveZeroFactors, "{stem}");
-            assert_eq!(factors, 0, "{stem}: a product by a -0.0 constant");
-            carried += 1;
-        } else if form == ProductForm::Multiply {
-            assert!(factors > 0, "{stem}: the -0.0 factor as given");
+        assert_ne!(form, ProductForm::PositiveZeroFactors, "{stem}");
+        if form == ProductForm::Multiply {
+            assert!(
+                negative_zero_factors(&m) > 0,
+                "{stem}: the -0.0 factor as given"
+            );
             multiplied += 1;
         }
     }
-    assert!(carried > 0, "no committed profile carries the workaround");
     assert!(
         multiplied > 0,
         "no committed profile multiplies by the factor as given"

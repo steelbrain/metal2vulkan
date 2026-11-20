@@ -856,16 +856,15 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
             ],
         ),
     ];
-    // The device's tessellator orders the triangles on every profile with it but MoltenVK's on an
-    // Apple GPU, which hands the patches to Metal's tessellator.
-    let mut ordered = [0usize; 2];
+    // The device's tessellator orders the triangles its own way on every profile.
     for (stem, _) in &with {
         let dev = device(stem);
-        let own_order = dev
-            .profile()
-            .workarounds()
-            .contains(&DriverWorkaround::TessellatorNotMetals);
-        ordered[usize::from(own_order)] += 1;
+        assert!(
+            dev.profile()
+                .workarounds()
+                .contains(&DriverWorkaround::TessellatorNotMetals),
+            "{stem}"
+        );
         for (entry, t, domain, points, expected) in &cases {
             let d = tessellation_pipeline(&bc, &fragments, entry, Some("tess_fragment"), Some(*t));
             let p = dev
@@ -1011,9 +1010,7 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
             ) {
                 notes.push(PrecisionNote::TessellationFractionalSpacing);
             }
-            if own_order {
-                notes.push(PrecisionNote::TessellationTriangleOrder);
-            }
+            notes.push(PrecisionNote::TessellationTriangleOrder);
             notes.sort_unstable();
             assert_eq!(tessellation_notes(&p.stages[2]), notes, "{stem} {entry}");
             for i in [0, 1, 3] {
@@ -1025,10 +1022,6 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
             }
         }
     }
-    assert!(
-        ordered.iter().all(|&n| n > 0),
-        "profiles with Metal's tessellator and with their own: {ordered:?}"
-    );
     // Without it, two stages: the vertex function draws the tessellator's triangles as a
     // triangle list from the draw's work buffer and records, and owns the index buffers.
     let mut compiled = vec![0; cases.len()];

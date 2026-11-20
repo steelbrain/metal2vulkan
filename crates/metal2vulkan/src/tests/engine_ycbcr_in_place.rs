@@ -1171,11 +1171,11 @@ fn in_place_gathers_are_metals() {
 
 /// A function that samples a slot and gathers it through one runtime sampler, as a probe that
 /// samples or gathers as each lane asks: its compile on MoltenVK on the M3 binds the texture's
-/// image and notes the device's filter of the format there (`PrecisionNote::HalfSampleFilter` and
-/// `FloatSampleFilter`, announced `ycbcr-filter-not-exact`), and states the in-place form with
-/// the sampler, whose compile reads the planes for both and notes no pixel sampler's scaling: the
-/// model's sample where the bound word filters linearly and addresses no border, noting the filter
-/// there alone, and Metal's taps.
+/// image and samples it through the device's sampler (`PrecisionNote::DeviceSampling`), noting no
+/// filter of the format (`PrecisionNote::HalfSampleFilter`, `FloatSampleFilter`), and states the
+/// in-place form with the sampler, whose compile reads the planes for both and notes no pixel
+/// sampler's scaling: the model's sample where the bound word filters linearly and addresses no
+/// border, noting the filter there alone (announced `ycbcr-filter-not-exact`), and Metal's taps.
 #[test]
 fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -1196,7 +1196,8 @@ fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
         let image =
             compile_with(&bc, "k", &p, &inputs(false)).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(
-            notes(&image).contains(&filter),
+            notes(&image).contains(&PrecisionNote::DeviceSampling)
+                && !notes(&image).contains(&filter),
             "{what}: {:?}",
             notes(&image)
         );
@@ -1260,8 +1261,8 @@ fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
 }
 
 /// A slot whose every access the form reads states `RuntimeFact::YCbCrInPlace` with the runtime
-/// samplers it samples through, on a profile that takes the form (lavapipe, a CPU device; MoltenVK
-/// on the M3, an integrated one) and on no other (the RTX 5080, a discrete one); a dynamic offset,
+/// samplers it samples through, on every profile (lavapipe, a CPU device; MoltenVK on the M3, an
+/// integrated one; the RTX 5080, a discrete one); a dynamic offset,
 /// `min_lod_clamp` and a 3D texture keep it from the form, and a gather from the device's own
 /// conversion alone (`device`). Its compile under the variant states the same fact, so its plan
 /// names the same variant.
@@ -1312,13 +1313,9 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
         let Some(bc) = assemble(name, &body) else {
             return;
         };
-        for (stem, takes) in [
-            ("lavapipe", true),
-            ("moltenvk-m3", true),
-            ("nvidia-rtx5080-laptop", false),
-        ] {
+        for stem in ["lavapipe", "moltenvk-m3", "nvidia-rtx5080-laptop"] {
             let p = profile(stem, DevicePolicy::default()).expect("profile");
-            assert_eq!(p.fields().ycbcr_in_place, takes, "{stem}");
+            assert!(p.fields().ycbcr_in_place, "{stem}");
             let what = format!("{name} on {stem}");
             let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(false))
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -1330,8 +1327,8 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
                 } if *slot == TEXTURE => Some((*samplers, *device)),
                 _ => None,
             });
-            assert_eq!(stated, samplers.filter(|_| takes), "{what}");
-            if let (Some((s, device)), true) = (samplers, takes) {
+            assert_eq!(stated, samplers, "{what}");
+            if let Some((s, device)) = samplers {
                 let (variant, _) = typed_module_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}, in place: {e}"));
                 assert!(variant.facts.contains(&fact(s, device)), "{what}, in place");
@@ -1454,137 +1451,6 @@ fn a_planes_image_slot_samples_through_the_device_s_conversion() {
         let (plan, _) = typed_module_with(&bc, "k", &lavapipe(), &inputs(true))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(device_state(&plan), Some(false), "{name}");
-    }
-}
-
-/// A sample of a slot through a runtime sampler slot, with a `half` and a `float` result, on
-/// MoltenVK on the M3 notes the device's filter of a two-plane YCbCr format bound there
-/// (`PrecisionNote::HalfSampleFilter`, `FloatSampleFilter`) only where the sampler bound at the
-/// slot filters: each clause tests the texture slot's bound format
-/// (`SpecKey::BoundTexelFormat`) and the sampler slot's bound word
-/// (`SpecKey::BoundSamplerWord`, `lower::sampler::linear::filtering_word`), as the runtime reads
-/// them at each draw or dispatch. One holds under each two-plane YCbCr format tried
-/// (`YCBCR8_420_2P`, `YCBCR10_422_2P`, `YCBCR8_444_2P_sRGB`) for a linear minification,
-/// magnification or mip filter and for anisotropy; none for a nearest sampler with no mip filter
-/// or a nearest one, whose sample reads the one texel the view holds, Metal's read; and none under
-/// another format (`RGBA16Float`, the code-reading `RGB8_420_2P`) whatever the word. lavapipe,
-/// which samples natively, records neither note.
-#[test]
-fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
-    use crate::bind::SamplerDescriptor;
-    use crate::metal::texel_format::texel_format;
-    use crate::metal::{SamplerMinMagFilter as F, SamplerMipFilter as Mip};
-    use crate::pipeline::artifact::{PrecisionNote, SpecClause};
-    let sampler = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Sampler,
-        index: 0,
-    };
-    let desc = |min, mag, mip, anisotropy| {
-        let mut d = SamplerDescriptor::new();
-        (d.min_filter, d.mag_filter, d.mip_filter) = (min, mag, mip);
-        d.max_anisotropy = anisotropy;
-        d
-    };
-    // Each bound sampler, and whether a sample through it filters.
-    let words = [
-        (
-            "nearest",
-            desc(F::Nearest, F::Nearest, Mip::NotMipmapped, 1),
-            false,
-        ),
-        (
-            "nearest mip filter",
-            desc(F::Nearest, F::Nearest, Mip::Nearest, 1),
-            false,
-        ),
-        (
-            "linear",
-            desc(F::Linear, F::Linear, Mip::NotMipmapped, 1),
-            true,
-        ),
-        (
-            "linear min",
-            desc(F::Linear, F::Nearest, Mip::NotMipmapped, 1),
-            true,
-        ),
-        (
-            "linear mag",
-            desc(F::Nearest, F::Linear, Mip::NotMipmapped, 1),
-            true,
-        ),
-        (
-            "linear mip filter",
-            desc(F::Nearest, F::Nearest, Mip::Linear, 1),
-            true,
-        ),
-        (
-            "anisotropic",
-            desc(F::Nearest, F::Nearest, Mip::NotMipmapped, 16),
-            true,
-        ),
-    ];
-    let formats = [
-        (PixelFormat::YCBCR84202P, true),
-        (PixelFormat::YCBCR104222P, true),
-        (PixelFormat::YCBCR84442PSRGB, true),
-        (PixelFormat::RGBA16Float, false),
-        (PixelFormat::RGB84202P, false),
-    ];
-    let holds = |clause: &SpecClause, value: &dyn Fn(SpecKey) -> Option<u32>| {
-        clause.all.iter().all(|t| {
-            let v = value(t.key).unwrap_or_else(|| panic!("an unvalued test {t:?}"));
-            ((v & t.mask) == t.bits) == t.equal
-        })
-    };
-    for float in [false, true] {
-        let what = format!("a runtime sampler's sample, float {float}");
-        let Some(bc) = assemble(
-            &what,
-            &kernel_of(None, Form::Plain { offset: (0, 0) }, float),
-        ) else {
-            return;
-        };
-        let note = match float {
-            true => PrecisionNote::FloatSampleFilter,
-            false => PrecisionNote::HalfSampleFilter,
-        };
-        let native = compile_with(&bc, "k", &lavapipe(), &inputs(false))
-            .unwrap_or_else(|e| panic!("{what} on lavapipe: {e}"));
-        assert!(
-            !native.precision.contains(&note) && native.specialized.iter().all(|s| s.note != note),
-            "{what} on lavapipe: {:?}",
-            native.precision
-        );
-        let a =
-            compile_with(&bc, "k", &m3(), &inputs(false)).unwrap_or_else(|e| panic!("{what}: {e}"));
-        let noted: Vec<&SpecClause> = a
-            .specialized
-            .iter()
-            .filter(|s| s.note == note)
-            .flat_map(|s| &s.when)
-            .collect();
-        assert!(!noted.is_empty(), "{what}: {:?}", a.specialized);
-        for clause in &noted {
-            let keys: Vec<SpecKey> = clause.all.iter().map(|t| t.key).collect();
-            assert!(
-                keys.contains(&SpecKey::BoundTexelFormat(TEXTURE))
-                    && keys.contains(&SpecKey::BoundSamplerWord(sampler)),
-                "{what}: {clause:?}"
-            );
-        }
-        for (name, d, filters) in &words {
-            let word = SamplerWord::of(d).0;
-            for (pf, ycbcr) in formats {
-                let value = |key: SpecKey| match key {
-                    SpecKey::BoundTexelFormat(t) if t == TEXTURE => Some(texel_format(pf).0),
-                    SpecKey::BoundSamplerWord(s) if s == sampler => Some(word),
-                    _ => None,
-                };
-                let held = noted.iter().any(|c| holds(c, &value));
-                assert_eq!(held, *filters && ycbcr, "{what}: {name} over {pf:?}");
-            }
-        }
     }
 }
 

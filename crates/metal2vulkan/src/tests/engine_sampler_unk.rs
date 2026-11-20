@@ -283,24 +283,17 @@ fn glsl(a: &FunctionArtifact, number: u32) -> usize {
 /// name is `sampler.sample_cube_grad`, and the module records `CubeGradientFootprint`. The 3D and
 /// depth 2D and 2D array gradient samples pass their gradients unchanged (`sampler.sample_grad`),
 /// and a module whose gradients are all 2D (the 2D fixture's, through a runtime sampler) records no
-/// such note. On a driver that
-/// hands a compute pipeline's cube gradients to Metal's `gradientcube`
-/// (`CubeGradientRoute::Metal`), the kernel hands Metal's own gradients, exactly: no note.
+/// such note, on every profile.
 #[test]
 fn explicit_cube_gradients_take_metals_footprint() {
-    let handed = handed_metal();
     let Some((compiled, _)) = each("unk_sample_grad", "unk_sample_grad", |stem, a| {
         assert_eq!(uses(a, "sampler.sample_cube_grad"), 6, "{stem}");
         assert_eq!(uses(a, "sampler.sample_grad"), 5, "{stem}");
-        let metal = handed.iter().any(|m| m == stem);
         assert_eq!(glsl(a, GLSL_LENGTH), 0, "{stem}");
-        if !metal {
-            let samples = uses(a, "sampler.sample_cube_grad") as usize;
-            assert!(glsl(a, GLSL_FMAX) >= 4 * samples, "{stem}");
-        }
-        assert_eq!(
+        let samples = uses(a, "sampler.sample_cube_grad") as usize;
+        assert!(glsl(a, GLSL_FMAX) >= 4 * samples, "{stem}");
+        assert!(
             a.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            !metal,
             "{stem}: {:?}",
             a.precision
         );
@@ -308,7 +301,6 @@ fn explicit_cube_gradients_take_metals_footprint() {
         return;
     };
     assert!(compiled >= 4, "{compiled}");
-    assert!(!handed.is_empty(), "no profile hands Metal's gradients");
     let Some((compiled, _)) = each("a4_sample_grad", "a4_sample_grad", |stem, a| {
         assert_eq!(uses(a, "sampler.sample_cube_grad"), 0, "{stem}");
         assert!(uses(a, "sampler.sample_grad") > 0, "{stem}");
@@ -334,9 +326,8 @@ const CUBE_GRAD_TEXTURES: usize = 2;
 /// Metal's level and taps: each texture's routine, which its samples call, queries the level count
 /// and loops over its taps, `AnisotropicFilter` is recorded and `CubeGradientFootprint` is not;
 /// with the feature, and through the isotropic sampler on every profile, the device's sample at
-/// Metal's footprint: no loop, no level query, `CubeGradientFootprint` recorded. On a driver that
-/// hands a compute pipeline's cube gradients to Metal's `gradientcube`, the kernel hands Metal's
-/// own through either sampler: no note. Neither module has a `Length`.
+/// Metal's footprint: no loop, no level query, `CubeGradientFootprint` recorded. Neither module
+/// has a `Length`.
 #[test]
 fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
     let path = engine_dir().join("unk_cube_grad_lod.ll");
@@ -360,21 +351,18 @@ fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
         return;
     };
     let mut compiled = 0;
-    let handed = handed_metal();
     for (stem, p) in profiles() {
         let Some(i) = artifact(&iso, "unk_cube_grad_lod", &stem, &p) else {
             continue;
         };
-        let metal = handed.contains(&stem);
         let shader = !p.fields().images.sampler_anisotropy;
         assert_eq!(glsl(&i, GLSL_LENGTH), 0, "{stem}");
         let samples = uses(&i, "sampler.sample_cube_grad") as usize;
         assert!(samples > 0, "{stem}");
         assert_eq!(count(&i, OP_IMAGE_QUERY_LEVELS), 0, "{stem}");
         assert_eq!(count(&i, OP_LOOP_MERGE), 0, "{stem}");
-        assert_eq!(
+        assert!(
             i.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            !metal,
             "{stem}"
         );
         assert!(
@@ -403,7 +391,7 @@ fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
         );
         assert_eq!(
             a.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            !metal && !shader,
+            !shader,
             "{stem}: {:?}",
             a.precision
         );
@@ -527,14 +515,4 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
         by_word += 1;
     }
     assert!(by_word >= 5, "{by_word}");
-}
-
-/// The test profiles whose driver hands a compute pipeline's cube gradients to Metal's
-/// `gradientcube` as given (`CubeGradientRoute::Metal`).
-fn handed_metal() -> Vec<String> {
-    profiles()
-        .into_iter()
-        .filter(|(_, p)| p.fields().cube_gradients.compute == CubeGradientRoute::Metal)
-        .map(|(stem, _)| stem)
-        .collect()
 }

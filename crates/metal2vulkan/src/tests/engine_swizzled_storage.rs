@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts, WriteSource};
 use crate::budget::Budget;
 use crate::device::profile::{Containment, DeviceProfile};
-use crate::device::requirements::{VkFeature, VkProperty};
+use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature};
 use crate::library::Library;
@@ -948,15 +948,13 @@ fn spec_word(pipeline: &ComputePipeline, plan: &crate::bind::BindingPlan, key: S
 }
 
 /// A sampled slot (`access::read`) bound to a swizzled texture of a packed normalized format
-/// joins the plan's variant on a device that does not sample through Metal's own sampler, whose
-/// view's swizzle would move a channel's code onto another channel's lane before the function
+/// joins the plan's variant: the device's view's swizzle would move a channel's code onto another channel's lane before the function
 /// converts it by its own code scale: the variant's pipeline plans the same key for the same
 /// shape, binds the view unswizzled for the function to swizzle (`shader_swizzle`, the
 /// unswizzled texture's mapping) and specializes the slot's `TextureSwizzle` to the swizzle's word.
 /// A swizzle that reads every
-/// texel as none does (`RGB1` of `B5G6R5Unorm`, whose alpha reads 1) leaves the variant, and a
-/// device with Metal's own sampler keeps the view's swizzle. On every committed profile that
-/// holds the format.
+/// texel as none does (`RGB1` of `B5G6R5Unorm`, whose alpha reads 1) leaves the variant. On every
+/// committed profile that holds the format.
 #[test]
 fn a_sampled_slot_bound_to_a_swizzled_packed_texture_swizzles_in_its_function() {
     let gbar = C::new(S::Green, S::Blue, S::Alpha, S::Red);
@@ -978,17 +976,11 @@ fn a_sampled_slot_bound_to_a_swizzled_packed_texture_swizzles_in_its_function() 
             })
             .expect("the texture's view")
     };
-    let (mut joined, mut kept) = (0, 0);
+    let mut joined = 0;
     for (stem, dev) in devices() {
         let Some(plain) = pipeline(&dev, &bc, &LowerInputs::new()) else {
             continue;
         };
-        let metal = dev
-            .profile()
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
         for pf in [
             PixelFormat::B5G6R5Unorm,
             PixelFormat::A1BGR5Unorm,
@@ -1006,12 +998,6 @@ fn a_sampled_slot_bound_to_a_swizzled_packed_texture_swizzles_in_its_function() 
                     continue;
                 }
             };
-            if metal {
-                assert!(plan.variant.swizzled_storage.is_empty(), "{what}");
-                assert!(!view(&plan).shader_swizzle, "{what}");
-                kept += 1;
-                continue;
-            }
             assert_eq!(
                 plan.variant.swizzled_storage,
                 BTreeSet::from([SLOT]),
@@ -1041,14 +1027,14 @@ fn a_sampled_slot_bound_to_a_swizzled_packed_texture_swizzles_in_its_function() 
             joined += 1;
         }
     }
-    assert!(joined > 0 && kept > 0, "{joined} joined, {kept} kept");
+    assert!(joined > 0, "no profile joined the variant");
 }
 
 /// A sample through a runtime sampler (`fpv_swizzled_reads`' `fpv_swz_sample`, a combined image
 /// sampler) of a swizzled packed normalized texture joins the variant as a read does, on every
-/// committed profile without Metal's own sampler: its combined image's view takes no swizzle
-/// (`shader_swizzle`, the unswizzled texture's mapping), the variant plans the same key again and
-/// specializes the slot's swizzle. With Metal's own sampler the view keeps the swizzle.
+/// committed profile: its combined image's view takes no swizzle (`shader_swizzle`, the
+/// unswizzled texture's mapping), the variant plans the same key again and specializes the slot's
+/// swizzle.
 #[test]
 fn a_combined_sampler_of_a_swizzled_packed_texture_swizzles_in_its_function() {
     use crate::bind::{BoundSampler, ImageSource, SamplerDescriptor};
@@ -1097,18 +1083,12 @@ fn a_combined_sampler_of_a_swizzled_packed_texture_swizzles_in_its_function() {
             })
             .expect("the combined image's view")
     };
-    let (mut joined, mut kept) = (0, 0);
+    let mut joined = 0;
     for (stem, dev) in devices() {
         let entry = "fpv_swz_sample";
         let Some(plain) = pipeline_of(&dev, &bc, entry, &LowerInputs::new()) else {
             continue;
         };
-        let metal = dev
-            .profile()
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
         for pf in [
             PixelFormat::B5G6R5Unorm,
             PixelFormat::A1BGR5Unorm,
@@ -1125,12 +1105,6 @@ fn a_combined_sampler_of_a_swizzled_packed_texture_swizzles_in_its_function() {
                 );
                 continue;
             };
-            if metal {
-                assert!(plan.variant.swizzled_storage.is_empty(), "{what}");
-                assert!(!view(&plan).shader_swizzle, "{what}");
-                kept += 1;
-                continue;
-            }
             assert_eq!(
                 plan.variant.swizzled_storage,
                 BTreeSet::from([SLOT]),
@@ -1153,7 +1127,7 @@ fn a_combined_sampler_of_a_swizzled_packed_texture_swizzles_in_its_function() {
             joined += 1;
         }
     }
-    assert!(joined > 0 && kept > 0, "{joined} joined, {kept} kept");
+    assert!(joined > 0, "no profile joined the variant");
 }
 
 /// A swizzled texture's shape states its level count, which a storage slot reading its levels

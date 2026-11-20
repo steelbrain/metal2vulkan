@@ -145,7 +145,6 @@ const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
 const OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD: u16 = 90;
 const OP_IMAGE_GATHER: u16 = 96;
 const OP_IMAGE_QUERY_LOD: u16 = 105;
-const OP_FUNCTION_CALL: u16 = 57;
 
 const OP_QUANTIZE_TO_F16: u16 = 116;
 const OP_F_ORD_EQUAL: u16 = 180;
@@ -329,14 +328,13 @@ fn runtime_samplers_select_pixel_coordinates_by_specialization() {
 /// A sample through a runtime sampler slot is the device's on every committed profile: the
 /// function reads only the coordinates bit of the slot's word (`SamplerWord::PIXEL_COORDINATES`),
 /// never its filter, address modes or levels, and the module requires the device's own sampler
-/// (`VkProperty::MetalSampler` on MoltenVK, `VkProperty::DeviceSampling` elsewhere) and validates.
+/// (`VkProperty::DeviceSampling`) and validates.
 #[test]
 fn a_runtime_samplers_sample_is_the_device_s() {
     let Some(bc) = fixture() else {
         return;
     };
     let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
-    let (mut metal, mut device) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let a = ok(&bc, "sample_level", &p);
         assert_eq!(
@@ -345,24 +343,13 @@ fn a_runtime_samplers_sample_is_the_device_s() {
             "{stem}"
         );
         assert_eq!(uses(&a, "sampler.sample"), 1, "{stem}");
-        let property = match p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler)
-        {
-            true => {
-                metal += 1;
-                VkProperty::MetalSampler
-            }
-            false => {
-                device += 1;
-                VkProperty::DeviceSampling
-            }
-        };
-        assert!(a.requirements.properties.contains(&property), "{stem}");
+        assert!(
+            a.requirements
+                .properties
+                .contains(&VkProperty::DeviceSampling),
+            "{stem}"
+        );
     }
-    assert!(metal > 0 && device > 0, "metal {metal}, device {device}");
 }
 
 /// A runtime sampler's sample at a level (a dynamic level, `1.5`, `1.0`, a kernel's dynamic bias)
@@ -581,6 +568,7 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
             &cubic_half,
         ),
     ];
+    let mut wrong = Vec::new();
     for (fixture, entry, cubic, unconditional) in stages {
         let Some(bc) = assembled(fixture) else {
             return;
@@ -598,12 +586,9 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
             .copied()
             .filter(|n| !held.contains(n))
             .collect();
-        assert_eq!(
-            always,
-            unconditional.iter().copied().collect(),
-            "{what}: {:?}",
-            a.specialized
-        );
+        if always != unconditional.iter().copied().collect() {
+            wrong.push(format!("{what}: {always:?} ({:?})", a.specialized));
+        }
         // The centre's note: under a nearest pixel state's specialization alone.
         let pixel_state = |t: &crate::pipeline::SpecTest| match t.key {
             SpecKey::NearestPixelSampler(_) => t.mask == 1 && t.bits == 1 && t.equal,
@@ -639,6 +624,7 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
             );
         }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// A kernel whose one comparison samples `depth2d<float, sample>` slot 0 through runtime sampler
@@ -989,23 +975,21 @@ fn gathers_gradients_and_pixel_constexpr_samplers() {
         .all(|k| !matches!(k, SpecKey::SamplerState { .. })));
 }
 
-/// A `half` sample of a texture slot converts its texel by the bound format's class: the slot's
-/// `TexelFormat` fact and specialization, a call of the module's conversion routine (whose words
-/// the census counts once), and the `HalfTexelConversion` note. A `float` sample takes none of
-/// them.
+/// A `half` sample of a texture slot is the device's texel rounded to nearest even, which records
+/// the `HalfTexelConversion` note outright: no `TexelFormat` fact or specialization of the slot,
+/// and no call of the module's conversion routine. A `float` sample takes none of them.
 #[test]
-fn half_samples_convert_by_the_bound_format() {
+fn half_samples_take_the_device_s_texel_noted() {
     let Some(bc) = fixture() else {
         return;
     };
     let p = m3();
     let t = slot(Stage::Kernel, SlotClass::Texture, 0);
     let h = ok(&bc, "sample_grad", &p);
-    assert!(h.facts.contains(&RuntimeFact::TexelFormat { slot: t }));
-    assert!(h.interface.reads_key(SpecKey::TexelFormat(t)));
+    assert!(!h.facts.contains(&RuntimeFact::TexelFormat { slot: t }));
+    assert!(!h.interface.reads_key(SpecKey::TexelFormat(t)));
     assert!(h.precision.contains(&PrecisionNote::HalfTexelConversion));
-    assert_eq!(count(&h, OP_FUNCTION_CALL), 1);
-    assert!(h.strategies.entries.contains_key("texture.half_texel"));
+    assert!(!h.strategies.entries.contains_key("texture.half_texel"));
     let f = ok(&bc, "sample_level", &p);
     assert!(f
         .facts

@@ -15,10 +15,8 @@
 //!   function shares one projection and one module. What the device's conversion of a format may
 //!   answer otherwise than Metal's fetch -- a normalized format's quotient, a narrow float's NaN
 //!   read as `float` -- is noted where the render pipeline links, on its vertex stage
-//!   (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`), or, where the
-//!   device is measured to convert a normalized format as Metal does, required of the device in
-//!   its place (`VkProperty::MetalNormalizedVertexFetch`), so neither keys a translation
-//!   (`a_pipeline_notes_what_the_device_converts_from_one_translation`).
+//!   (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`), so no note
+//!   keys a translation (`a_pipeline_notes_what_the_device_converts_from_one_translation`).
 //! - **one module per pulled format.** A format the fixed-function path cannot fetch is decoded in
 //!   the shader, and each decode is its own code. Of the 45-format sweep only `FloatRGB9E5` is
 //!   pulled on the suite's venue, as on every device (`metal::vertex::attribute_fetch`).
@@ -234,24 +232,20 @@ fn a_half_read_compiles_two_modules_for_the_whole_sweep() {
 /// vertex descriptor, on its vertex stage, while one translation of the function serves every
 /// format the device fetches. Over `vertex-format-float4`'s and `-half4`'s sweeps, a normalized
 /// format's pipeline records `PrecisionNote::DeviceVertexConversion` whatever width the function
-/// reads it at on lavapipe and RADV, which do not take `DriverDeviation::MetalNormalizedVertexFetch`;
-/// on `moltenvk-m3`, which does, it records none and requires
-/// `VkProperty::MetalNormalizedVertexFetch`, but for a 16-bit format read as `half`, whose `float`
-/// rounds to `half` twice and keeps the note. A narrow float's records
+/// reads it at, on `moltenvk-m3`, lavapipe and RADV alike. A narrow float's records
 /// `PrecisionNote::DeviceNanEncoding` where the function reads it as a 32-bit `float` (a `half`
-/// read keeps the code's own bits), and every other fixed-function format's records neither and
-/// requires no such property. Every such creation of one entry keys its vertex function alike
-/// (`RenderPipelineKeys::vertex`), so a runtime translates it once, and its vertex stage is one
-/// module. The function compiled alone records neither note and requires no such property: its
+/// read keeps the code's own bits), and every other fixed-function format's records neither. No
+/// pipeline requires `VkProperty::MetalNormalizedVertexFetch`. Every such creation of one entry
+/// keys its vertex function alike (`RenderPipelineKeys::vertex`), so a runtime translates it once,
+/// and its vertex stage is one module. The function compiled alone records neither note: its
 /// module is every format's.
 #[test]
 fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     use crate::budget::Budget;
     use crate::device::requirements::VkProperty;
     use crate::device::Device;
-    use crate::error::DriverDeviation;
     use crate::library::Library;
-    use crate::lower::stage_io::fetch::{encoding, Encoding};
+    use crate::lower::stage_io::fetch::encoding;
     use crate::pipeline::testing::description;
     use crate::pipeline::{FunctionDescriptor, RenderPipelineDescriptor, StageSource};
     let Some(bc) = fixture() else { return };
@@ -265,17 +259,11 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
             DevicePolicy::default(),
         )
         .expect("device");
-        // MoltenVK on the M3 Max's identity is measured to convert every normalized code as
-        // Metal does; lavapipe and RADV are not.
-        let metal = dev
-            .profile()
-            .takes_driver_deviation(DriverDeviation::MetalNormalizedVertexFetch);
-        assert_eq!(metal, stem == PROFILE, "{stem}");
         for entry in [TO_FLOAT4, TO_HALF4] {
             let function = FunctionDescriptor::new(library.function(entry).expect("entry"));
             let mut keys = BTreeSet::new();
             let mut modules = BTreeSet::new();
-            let (mut converted, mut relied, mut nans, mut fixed) = (0, 0, 0, 0);
+            let (mut converted, mut nans, mut fixed) = (0, 0, 0);
             for (at, &format) in formats.iter().enumerate() {
                 let what = format!("{stem} {entry} {}", format.name());
                 let mut d = RenderPipelineDescriptor::new(StageSource::Function(function.clone()));
@@ -296,19 +284,7 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                 }
                 fixed += 1;
                 let e = encoding(format).expect("encoding");
-                // A 16-bit code's `float` quotient rounded to `half` again is not Metal's `half`
-                // at every code, however the device converts it.
-                let twice = entry == TO_HALF4
-                    && matches!(
-                        e,
-                        Encoding::Int {
-                            bits: 16,
-                            normalized: true,
-                            ..
-                        }
-                    );
-                let measured = e.is_normalized() && metal && !twice;
-                let conversion = e.is_normalized() && !measured;
+                let conversion = e.is_normalized();
                 let nan = e.widens_narrow_float() && entry == TO_FLOAT4;
                 assert_eq!(
                     (
@@ -318,14 +294,8 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                     (conversion, nan),
                     "{what}: {notes:?}"
                 );
-                assert_eq!(
-                    requires, measured,
-                    "{what}: the pipeline requires the measured conversion exactly where it \
-                     records no note for it: {:?}",
-                    pipeline.requirements.properties
-                );
+                assert!(!requires, "{what}: {:?}", pipeline.requirements.properties);
                 converted += usize::from(conversion);
-                relied += usize::from(measured);
                 nans += usize::from(nan);
                 keys.insert(
                     dev.render_pipeline_key(&d, &Budget::standard())
@@ -340,18 +310,11 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                 "{stem} {entry}: translations and modules of {fixed} fixed-function creations"
             );
             // Every normalized format, and every narrow float read as `float`, is fetched in
-            // fixed function on the three devices: on `moltenvk-m3` the 19 normalized formats
-            // rely on the measured conversion but the eight 16-bit ones read as `half`, which
-            // note it, and elsewhere all 19 note it.
-            let noted = match (metal, entry) {
-                (false, _) => 19,
-                (true, TO_FLOAT4) => 0,
-                (true, _) => 8,
-            };
+            // fixed function on the three devices, and all 19 normalized formats note it.
             assert_eq!(
-                (converted, relied, nans),
-                (noted, 19 - noted, if entry == TO_FLOAT4 { 5 } else { 0 }),
-                "{stem} {entry}: the creations noting each, and relying on the measured conversion"
+                (converted, nans),
+                (19, if entry == TO_FLOAT4 { 5 } else { 0 }),
+                "{stem} {entry}: the creations noting each"
             );
             // The function compiled under the shared projection notes neither.
             let p = dev.profile();

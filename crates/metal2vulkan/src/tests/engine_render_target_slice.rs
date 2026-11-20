@@ -16,8 +16,8 @@
 //! - Amplified draws are never views on either variant: they draw one amplification at a time.
 //!
 //! Every module that compiles passes L3 (`spirv-val` and requirements within the profile), and
-//! the dropped vertex module converts to MSL and compiles as MoltenVK's does (`spirv-cross` and
-//! `xcrun metal`, compile only). `llvm-as` assembles the fixtures; a missing tool skips visibly.
+//! the dropped vertex module on MoltenVK, which has no geometry stage to write a slice, converts to
+//! MSL and compiles as MoltenVK's does (`spirv-cross` and `xcrun metal`, compile only). `llvm-as` assembles the fixtures; a missing tool skips visibly.
 //! No GPU is used.
 
 use std::path::Path;
@@ -166,7 +166,7 @@ fn a_pass_of_one_layer_runs_the_vertex_function_without_its_layer() {
         (&bc, "amp_vertex_layer", Some("amp_fragment_layer")),
         (&public, "vertex_amplification_id_layer", None),
     ];
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["amd-780m-radv", "lavapipe"] {
         let dev = device(stem);
         for (bc, vertex, fragment) in pipelines {
             let what = format!("{stem} {vertex} {fragment:?}");
@@ -266,20 +266,6 @@ fn a_pass_of_one_layer_runs_the_vertex_function_without_its_layer() {
                     "{what}"
                 );
             }
-
-            if stem == "moltenvk-m3" {
-                let words = &dropped
-                    .stages
-                    .iter()
-                    .find(|m| m.stage == vk::ShaderStage::VERTEX)
-                    .expect("vertex")
-                    .spirv;
-                match moltenvk_msl_compile(words) {
-                    Ok(()) => {}
-                    Err(AssembleError::Missing(why)) => eprintln!("SKIPPED: {why}"),
-                    Err(AssembleError::Rejected(why)) => panic!("{what}: MoltenVK's MSL: {why}"),
-                }
-            }
         }
     }
 }
@@ -291,7 +277,7 @@ fn a_fragment_reading_its_slice_alone_asks_for_no_variant() {
     let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
         return;
     };
-    let dev = device("moltenvk-m3");
+    let dev = device("amd-780m-radv");
     let p = dev
         .compile_render_pipeline(
             &render(&bc, "amp_vertex", Some("amp_fragment_layer"), 1),
@@ -314,8 +300,8 @@ fn a_fragment_reading_its_slice_alone_asks_for_no_variant() {
 /// `Layer` output (the capability a module declares at the 1.2 floor is the feature's), so the
 /// refusal names what would store the slice rather than failing as a requirement beyond the
 /// profile: `geometryShader`, as `amp_vertex_layer`'s slice (`slices[vid & 1]`) differs among a
-/// primitive's vertices, which only the synthesized geometry stage stores without the output
-/// MoltenVK hands to Metal.
+/// primitive's vertices, which only the synthesized geometry stage stores. The dropped variant's
+/// vertex module converts to MSL that Metal compiles.
 #[test]
 fn the_dropped_variant_needs_no_output_layer() {
     let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
@@ -346,6 +332,15 @@ fn the_dropped_variant_needs_no_output_layer() {
         .expect("dropped variant");
     valid(&p, &dev, "without shaderOutputLayer");
     assert!(!p.requirements.features.contains(&F::ShaderOutputLayer));
+    let words = &(p.stages.iter())
+        .find(|m| m.stage == vk::ShaderStage::VERTEX)
+        .expect("vertex")
+        .spirv;
+    match moltenvk_msl_compile(words) {
+        Ok(()) => {}
+        Err(AssembleError::Missing(why)) => eprintln!("SKIPPED: {why}"),
+        Err(AssembleError::Rejected(why)) => panic!("MoltenVK's MSL: {why}"),
+    }
     let plan = p.plan(&dev, &pass(1).shape()).expect("plan");
     assert_eq!(plan.variant, key);
     plan.instantiate_draw(&pass(1), &draw()).expect("draw");
@@ -367,7 +362,7 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
     let function = |name: &str| {
         FunctionDescriptor::new(lib.function(name).unwrap_or_else(|e| panic!("{name}: {e}")))
     };
-    let dev = device("moltenvk-m3");
+    let dev = device("amd-780m-radv");
     let budget = Budget::standard();
     let reader = function("amp_fragment_layer");
     let d = render(&bc, "amp_vertex_layer", Some("amp_fragment_layer"), 1);
@@ -487,7 +482,7 @@ fn the_pipeline_states_which_indices_its_vertex_function_writes() {
         return;
     };
     let budget = Budget::standard();
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["amd-780m-radv", "lavapipe"] {
         let dev = device(stem);
         for (vertex, fragment, layer, viewport, memory) in [
             ("amp_vertex_layer", None, true, false, false),

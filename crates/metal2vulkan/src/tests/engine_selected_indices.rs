@@ -33,7 +33,7 @@ use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::requirements::{VkFeature as F, VkProperty};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Capability, DriverDeviation, Error, Feature, Needs};
+use crate::error::{Capability, Error, Feature, Needs};
 use crate::library::Library;
 use crate::metal::PixelFormat;
 use crate::pipeline::descriptor::{
@@ -309,9 +309,9 @@ fn on_the_floor_a_read_is_zero_and_a_selected_slice_needs_either_feature() {
 /// (`engine/rt6_first_vertex`) stores them through the synthesized geometry stages behind the
 /// device's own outputs too, as Vulkan takes `Layer` and `ViewportIndex` only where every vertex
 /// of a primitive stores the same; one whose slice is the same at every vertex
-/// (`rt6_layered_vertex`) keeps the builtin. MoltenVK, which hands the builtins to Metal
-/// (`DriverDeviation::MetalFirstVertexIndices`), keeps them too, its modules requiring that.
-/// Without `geometryShader` or the deviation, the pipeline is refused needing `geometryShader`.
+/// (`rt6_layered_vertex`) keeps the builtin. No module requires
+/// `VkProperty::MetalFirstVertexIndices`. Without `geometryShader` (MoltenVK's, and lavapipe's with
+/// the feature removed), the pipeline is refused needing `geometryShader`.
 #[test]
 fn indices_that_differ_among_a_primitive_s_vertices_go_through_the_geometry_stage() {
     let Some(layered) = assemble("rt6_layered.ll") else {
@@ -365,31 +365,16 @@ fn indices_that_differ_among_a_primitive_s_vertices_go_through_the_geometry_stag
         .requirements
         .properties
         .contains(&VkProperty::MetalFirstVertexIndices));
-    let moltenvk = device("moltenvk-m3", &[]);
-    assert!(moltenvk
-        .profile()
-        .takes_driver_deviation(DriverDeviation::MetalFirstVertexIndices));
-    let (outputs, builtins) = vertex_io(&bc, "rt6_first_vertex", &moltenvk);
-    assert!(builtins.contains(&StageBuiltin::Layer), "{builtins:?}");
-    assert!(
-        builtins.contains(&StageBuiltin::ViewportIndex),
-        "{builtins:?}"
-    );
-    assert!(!outputs.contains(&IoRole::SelectedLayer), "{outputs:?}");
-    let p = moltenvk
-        .compile_render_pipeline(&d, &budget)
-        .expect("MoltenVK pipeline");
-    assert_eq!(geometry_stages(&p, &moltenvk, "MoltenVK"), 0);
-    assert!(p
-        .requirements
-        .properties
-        .contains(&VkProperty::MetalFirstVertexIndices));
-    let without = device("lavapipe", &[F::GeometryShader]);
-    match without.compile_render_pipeline(&d, &budget) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::LayeredRendering);
-            assert_eq!(u.needs, any_of(&[F::GeometryShader]));
+    for without in [
+        device("moltenvk-m3", &[]),
+        device("lavapipe", &[F::GeometryShader]),
+    ] {
+        match without.compile_render_pipeline(&d, &budget) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::LayeredRendering);
+                assert_eq!(u.needs, any_of(&[F::GeometryShader]));
+            }
+            other => panic!("{other:?}"),
         }
-        other => panic!("{other:?}"),
     }
 }

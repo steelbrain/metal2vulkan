@@ -1553,11 +1553,8 @@ fn a_signed_integer_attachment_compiles_the_fragment_for_it() {
 /// signed-integer attachment makes it decode the function); a fragment compiled on its own under it
 /// links into the same pipeline, and one compiled without it, which would read `[[position]]` and
 /// its center varyings where Vulkan shades, is refused as needing the input. A pipeline of one
-/// sample keeps the fragment's common-path key. `moltenvk-m3`, whose `InterpolateAtOffset` reads
-/// off the pixel center, reads the center varyings at the pixel center itself, as Metal does, so
-/// its pipeline is as lavapipe's. As the Apple8 family under macOS 27 (`deviceID` 0x1B00_0208), not
-/// measured so, the key is the same and the sample-rate function's center varyings have no pixel
-/// form: the pipeline is refused naming the property it lacks, compiled under the input or not.
+/// sample keeps the fragment's common-path key. On `moltenvk-m3` as on lavapipe the center
+/// varyings are read at the pixel center through a centered `InterpolateAtOffset`.
 #[test]
 fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
     let Some(bc) = fixture("multisample") else {
@@ -1580,26 +1577,8 @@ fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
         mantissa: 10,
         signed: true,
     }); 4];
-    // The Apple8 family under macOS 27, as MoltenVK's `deviceID` encodes it.
-    const APPLE8_MACOS_27: u32 = 0x1B00_0208;
-    for (stem, release) in [
-        ("moltenvk-m3", None),
-        ("moltenvk-m3", Some(APPLE8_MACOS_27)),
-        ("lavapipe", None),
-    ] {
-        let dev = match release {
-            None => device(stem),
-            Some(device_id) => {
-                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../metal2vulkan-validation/profiles")
-                    .join(format!("{stem}.json"));
-                let text = std::fs::read_to_string(&path).expect("profile");
-                let mut desc =
-                    DeviceDescription::from_khronos_json(&text, None).expect("description");
-                desc.device_id = device_id;
-                Device::from_queries(desc, DevicePolicy::default()).expect("device")
-            }
-        };
+    for stem in ["moltenvk-m3", "lavapipe"] {
+        let dev = device(stem);
         let mut multisampled = with_color_writes(&dev, LoweringInputs::new(), &[(0, half)]);
         multisampled.multisampled = true;
         let four = descriptor(StageSource::Function(fragment.clone()), 4);
@@ -1610,25 +1589,6 @@ fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
         let common = with_color_writes(&dev, LoweringInputs::new(), &[(0, half)]);
         let plain = round_tripped(&dev, &fragment, &common);
         let foreign = descriptor(StageSource::Compiled(plain.clone()), 4);
-        if release.is_some() {
-            let needs_centered: metal2vulkan::error::Error =
-                metal2vulkan::error::Unsupported::needs(
-                    metal2vulkan::error::Feature::SampleRateShading,
-                    metal2vulkan::error::Capability::Property(
-                        metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered,
-                    ),
-                )
-                .into();
-            for d in [&four, &foreign] {
-                assert_eq!(
-                    dev.compile_render_pipeline(d, &Budget::standard())
-                        .unwrap_err(),
-                    needs_centered,
-                    "{stem}"
-                );
-            }
-            continue;
-        }
         let pipeline = dev
             .compile_render_pipeline(&four, &Budget::standard())
             .expect("multisampled pipeline");
@@ -1813,14 +1773,16 @@ fn compiled_render_stages_round_trip_through_the_public_api() {
 
         // Each stage compiles on its own under the inputs its pipeline's keys hand out: a
         // vertex function's are the vertex-fetch projection over the attributes it reads, a
-        // fragment function's on the common path only how its `RGBA8Unorm` attachment takes its
-        // float output where the device does not convert as Metal does.
+        // fragment function's on the common path how its `RGBA8Unorm` attachment takes its
+        // float output where the device does not convert as Metal does, and where its push
+        // fields start, at the vertex function's push end.
         let vertex_inputs = keys.vertex_inputs.clone().expect("vertex inputs");
         assert!(vertex_inputs.vertex_fetch.is_some(), "{stem}");
-        let common = with_color_writes(&dev, LoweringInputs::new(), &[(0, UNORM8)]);
-        assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
         let v = round_tripped(&dev, &vertex, &vertex_inputs);
         assert_eq!(*v.key(), keys.vertex, "{stem}");
+        let mut common = with_color_writes(&dev, LoweringInputs::new(), &[(0, UNORM8)]);
+        common.push_base = v.fragment_push_base();
+        assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
         let f = round_tripped(&dev, &fragment, &common);
         assert_eq!(Some(*f.key()), keys.fragment, "{stem}");
         let from_compiled = descriptor(StageSource::Compiled(v), StageSource::Compiled(f));

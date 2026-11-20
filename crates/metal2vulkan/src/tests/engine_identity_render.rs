@@ -168,6 +168,7 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
         );
         // The stages compiled apart, then linked.
         let keys = (device.render_pipeline_key(&d, &budget)).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(keys.pipeline, p.key, "{stem}");
         let function = |s: &Option<StageSource>| match s {
             Some(StageSource::Function(f)) => f.clone(),
             _ => panic!("a function stage"),
@@ -179,13 +180,17 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
         ))
         .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         assert_eq!(vertex.fragment_push_base(), 64, "{stem}");
+        // The keys hand the fragment its push base, the vertex function's end.
         let mut inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+        assert_eq!(inputs.push_base, 64, "{stem}");
         let compiled = |inputs: &crate::pipeline::lower_inputs::LoweringInputs| {
             (device.compile_function(&function(&d.fragment), inputs, &budget))
                 .unwrap_or_else(|e| panic!("{stem}: {e:?}"))
         };
+        // A fragment compiled from 0 does not link behind it.
         let mut apart = d.clone();
         apart.vertex = StageSource::Compiled(vertex.clone());
+        inputs.push_base = 0;
         apart.fragment = Some(StageSource::Compiled(compiled(&inputs)));
         match device.compile_render_pipeline(&apart, &budget) {
             Err(Error::InvalidDescriptor(DescriptorError::PushBase {

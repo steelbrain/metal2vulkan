@@ -624,8 +624,7 @@ fn the_estimate_bounds_every_simd_kernel() {
 
 /// A kernel with a tangled instruction declares `MaximallyReconvergesKHR` where the profile has
 /// maximal reconvergence (reconvergence guaranteed), and records `ImplementationDefined` where it
-/// has neither mode: as its field alone through `Device::new`, and beside
-/// `PrecisionNote::DeviceReconvergence` through `Device::from_queries`.
+/// has neither mode, beside `PrecisionNote::DeviceReconvergence`.
 #[test]
 fn reconvergence_follows_the_profile() {
     let Some(bc) = assemble("simd_ops") else {
@@ -650,16 +649,7 @@ fn reconvergence_follows_the_profile() {
             && !text.contains("SubgroupUniformControlFlowKHR")
     );
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
-    // Through `Device::new`, the field alone, which the old runtime announces.
-    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
-    // Through `Device::from_queries`, the stage records the device's reconvergence as a note.
-    let desc = crate::pipeline::testing::description("nvidia-pascal-linux").expect("description");
-    let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
-    let a = compile(&bc, "simd_vote_k", queries.profile()).expect("compile");
-    assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
     assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
-    let a = compile(&bc, "simd_vote_k", &maximal).expect("compile");
-    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }
 
 /// Float sums record the device's association order.
@@ -677,21 +667,12 @@ fn float_sums_record_their_precision() {
 
 /// A vertex function of simdgroup operations (`rvc_simd_vertex`: a sum, shuffles and a ballot;
 /// `rvc_simd_vertex_fill`: a fill with an explicit width) records
-/// `PrecisionNote::VertexSimdgroupGrouping` exactly where the vertex stage takes no required
-/// subgroup size and the driver is measured to group vertices otherwise than Apple's GPUs (ANV, on
-/// every GPU at every release: each committed ANV profile); RADV, whose vertex stage cannot be pinned
-/// either but groups as Apple's GPUs do, and NVIDIA, which pins it, do not, and a profile without
-/// subgroup operations in the vertex stage refuses the function. On ANV a kernel of simdgroup
-/// operations and a vertex function of none record no such note.
+/// `PrecisionNote::VertexSimdgroupGrouping` on no committed profile, a profile without subgroup
+/// operations in the vertex stage refusing the function; on ANV a kernel of simdgroup operations
+/// and a vertex function of none record no such note either.
 #[test]
-fn vertex_simdgroup_functions_record_the_grouping_where_the_driver_regroups_vertices() {
+fn vertex_simdgroup_functions_record_no_grouping() {
     let note = PrecisionNote::VertexSimdgroupGrouping;
-    let anv = [
-        "intel-arl-anv",
-        "intel-irisxe-anv",
-        "intel-irisxe-rplp-anv",
-        "intel-uhd770-rpls-anv",
-    ];
     for (stem, entry) in [
         ("rvc_simd_vertex", "simd_functions_in_a_vertex_function"),
         (
@@ -703,10 +684,8 @@ fn vertex_simdgroup_functions_record_the_grouping_where_the_driver_regroups_vert
             return;
         };
         for (name, p) in committed_profiles().expect("profiles") {
-            let want = anv.contains(&name.as_str());
-            match compile(&bc, entry, &p) {
-                Ok(a) => assert_eq!(a.precision.contains(&note), want, "{stem} on {name}"),
-                Err(e) => assert!(!want, "{stem} on {name}: {e}"),
+            if let Ok(a) = compile(&bc, entry, &p) {
+                assert!(!a.precision.contains(&note), "{stem} on {name}");
             }
         }
     }
@@ -726,80 +705,11 @@ fn vertex_simdgroup_functions_record_the_grouping_where_the_driver_regroups_vert
     );
 }
 
-/// On a profile that takes `DriverDeviation::MetalVertexSimdgroups` and whose device does not list
-/// the vertex stage among its subgroup stages (the committed MoltenVK captures), the vertex
-/// functions of simdgroup operations and `gsm2_vertex_votes_shifts`' votes and relative shuffles
-/// compile: each requires `VkProperty::MetalVertexSimdgroups` in place of `SubgroupStage(Vertex)`,
-/// declares no `SubgroupLocalInvocationId` (the fill's lane is the exclusive sum of 1 at entry,
-/// which MoltenVK runs as Metal's `simd_prefix_exclusive_sum`) and validates. On every other
-/// profile none requires the property, and one whose vertex stage has no subgroups refuses them.
-#[test]
-fn vertex_simdgroups_compile_where_the_driver_runs_them_unadvertised() {
-    use crate::error::DriverDeviation;
-    let mut unadvertised = 0;
-    for (stem, entry) in [
-        ("rvc_simd_vertex", "simd_functions_in_a_vertex_function"),
-        (
-            "rvc_simd_vertex_fill",
-            "simd_shuffle_and_fill_down_in_a_vertex_function",
-        ),
-        (
-            "gsm2_vertex_votes_shifts",
-            "simd_votes_in_a_vertex_function",
-        ),
-        (
-            "gsm2_vertex_votes_shifts",
-            "simd_shifts_in_a_vertex_function",
-        ),
-    ] {
-        let Some(bc) = assemble(stem) else {
-            return;
-        };
-        for (name, p) in committed_profiles().expect("profiles") {
-            let stage = VkProperty::SubgroupStage(Stage::Vertex);
-            let takes = p.takes_driver_deviation(DriverDeviation::MetalVertexSimdgroups)
-                && !p.fields().enabled.properties.contains(&stage);
-            let a = match compile(&bc, entry, &p) {
-                Ok(a) => a,
-                Err(e) => {
-                    assert!(
-                        !takes && !p.fields().subgroup.vertex.supported,
-                        "{stem} on {name}: {e}"
-                    );
-                    continue;
-                }
-            };
-            let properties = &a.requirements.properties;
-            assert_eq!(
-                properties.contains(&VkProperty::MetalVertexSimdgroups),
-                takes,
-                "{stem} on {name}"
-            );
-            assert_eq!(properties.contains(&stage), !takes, "{stem} on {name}");
-            let (_, words) = link_and_validate(&a, &p).expect("valid");
-            if takes {
-                let text = spirv_dis(&words);
-                assert!(
-                    !text.contains("SubgroupLocalInvocationId"),
-                    "{stem} on {name}: the lane builtin"
-                );
-                assert!(text.contains("ExclusiveScan"), "{stem} on {name}: the lane");
-                unadvertised += 1;
-            }
-        }
-    }
-    assert_eq!(
-        unadvertised, 4,
-        "the four functions on the MoltenVK capture"
-    );
-}
-
 /// `gsm2_vertex_quad_permutes`' quad broadcasts and shuffle-xors by a constant lane or mask in
 /// vertex functions are shuffles through the ballot of the live lanes on every committed profile,
 /// since a vertex quad may lack a lane past the draw's vertex count: each function compiles,
-/// declares no quad capability, and validates, on the MoltenVK capture too, whose vertex stage
-/// runs unlisted without the quad class. A profile whose vertex stage has no subgroups refuses
-/// them.
+/// declares no quad capability, and validates. A profile whose vertex stage has no subgroups
+/// (MoltenVK's) refuses them.
 #[test]
 fn vertex_quad_permutes_shuffle_through_the_live_lanes() {
     let Some(bc) = assemble("gsm2_vertex_quad_permutes") else {
@@ -834,21 +744,19 @@ fn vertex_quad_permutes_shuffle_through_the_live_lanes() {
                     && text.contains("OpGroupNonUniformBallotBitExtract"),
                 "{entry} on {name}"
             );
-            shuffled += usize::from(name.starts_with("moltenvk-"));
+            shuffled += 1;
         }
     }
-    assert_eq!(shuffled, 3, "the three functions on the MoltenVK capture");
+    assert!(shuffled >= 3, "{shuffled} functions compiled");
 }
 
 /// A fragment function of simdgroup operations (`fragment_discard_counts`: sums before and after a
 /// discard) records `PrecisionNote::FragmentSimdgroupGrouping` on every committed profile that
-/// compiles it and does not take `MetalFragmentSimdgroups`, and on the MoltenVK profile, which
-/// takes it, records none. A fragment that reads only its quad lane (`simd_masks`' `quad_lane_f`)
+/// compiles it. A fragment that reads only its quad lane (`simd_masks`' `quad_lane_f`)
 /// records none anywhere, and neither does a vertex function of simdgroup operations
 /// (`rvc_simd_vertex`).
 #[test]
-fn fragment_simdgroup_functions_record_the_grouping_where_the_driver_is_not_metal_s() {
-    use crate::error::DriverDeviation;
+fn fragment_simdgroup_functions_record_the_grouping() {
     let note = PrecisionNote::FragmentSimdgroupGrouping;
     let (Some(counts), Some(masks), Some(vertex)) = (
         assemble("fragment_discard_counts"),
@@ -859,17 +767,9 @@ fn fragment_simdgroup_functions_record_the_grouping_where_the_driver_is_not_meta
     };
     let mut noted = 0;
     for (name, p) in committed_profiles().expect("profiles") {
-        let want = !p.takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups);
-        match compile(&counts, "discard_counts", &p) {
-            Ok(a) => {
-                assert_eq!(
-                    a.precision.contains(&note),
-                    want,
-                    "discard_counts on {name}"
-                );
-                noted += usize::from(want);
-            }
-            Err(e) => assert!(want, "discard_counts on {name}: {e}"),
+        if let Ok(a) = compile(&counts, "discard_counts", &p) {
+            assert!(a.precision.contains(&note), "discard_counts on {name}");
+            noted += 1;
         }
         if let Ok(a) = compile(&masks, "quad_lane_f", &p) {
             assert!(!a.precision.contains(&note), "quad_lane_f on {name}");
@@ -993,8 +893,7 @@ fn sixty_four_bit_group_operations_are_not_metal() {
 /// committed `moltenvk-m3` description with `shaderMaximalReconvergence` cleared), a kernel with a
 /// tangled instruction declares `SubgroupUniformControlFlowKHR`, requires that feature and its
 /// extensions, passes L3, and records `ImplementationDefined` (the mode does not define
-/// reconvergence after divergence): as its field alone through `Device::new`, and beside
-/// `PrecisionNote::DeviceReconvergence` through `Device::from_queries`.
+/// reconvergence after divergence), beside `PrecisionNote::DeviceReconvergence`.
 #[test]
 fn uniform_control_flow_mode_without_maximal_reconvergence() {
     let Some(bc) = assemble("simd_ops") else {
@@ -1012,7 +911,6 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
     let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
@@ -1036,10 +934,6 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         .requirements
         .extensions
         .contains(&VkExtension::KhrShaderSubgroupUniformControlFlow));
-    assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
-    // The field alone through `Device::new`; beside the note through `Device::from_queries`.
-    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
-    let a = compile(&bc, "simd_vote_k", queries.profile()).expect("compile");
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
     assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }
@@ -1265,9 +1159,7 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
 /// `uint` or `ushort` parameter or as a Metal 3.1 program-scope `uint`, and beside the shuffles and
 /// ballot of `fragment_lane_shuffles`, is the lane of its tier's 32-lane simdgroup, over every
 /// committed profile and the wave64-only device ([`wave64`], the shape of AMD GCN):
-/// - where the profile takes `MetalFragmentSimdgroups` (MoltenVK on the M3 Max and the M4) the
-///   module requires `VkProperty::MetalFragmentSimdgroups` and records no grouping note;
-/// - on every other profile whose fragment stage runs 32-lane subgroups (`Tier::Direct`), or 64- or
+/// - on every profile whose fragment stage runs 32-lane subgroups (`Tier::Direct`), or 64- or
 ///   128-lane ones split into 32-lane clusters (`Tier::Cluster32`, the wave64 device: the lane is
 ///   the subgroup lane's low five bits) it requires no property and records
 ///   `PrecisionNote::FragmentSimdgroupGrouping`;
@@ -1283,7 +1175,7 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
 #[test]
 fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_gives_one() {
     use crate::device::subgroup::width_needs;
-    use crate::error::{Capability, DriverDeviation, Needs};
+    use crate::error::{Capability, Needs};
     let Some(bc) = assemble("gsm2_fragment_lanes") else {
         return;
     };
@@ -1291,16 +1183,12 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
     let note = PrecisionNote::FragmentSimdgroupGrouping;
     let lane = OpBits::BASIC;
     let shuffles = lane.union(OpBits::BALLOT).union(OpBits::SHUFFLE);
-    let (mut taken, mut noted, mut narrow, mut clustered) = (Vec::new(), 0, 0, 0);
+    let (mut noted, mut narrow, mut clustered) = (0, 0, 0);
     let profiles = committed_profiles().expect("profiles");
     for (stem, p) in profiles
         .into_iter()
         .chain([("wave64".to_owned(), wave64())])
     {
-        let takes = p.takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups);
-        if takes {
-            taken.push(stem.clone());
-        }
         let model = &p.fields().subgroup;
         for (entry, ops) in [
             ("fragment_lane", lane),
@@ -1311,17 +1199,12 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
             let tier = subgroup::tier(&SimdClass::CrossLane(ops), Stage::Fragment, model);
             match (compile(&bc, entry, &p), &tier) {
                 (Ok(a), Ok(t @ (Tier::Direct | Tier::Cluster32))) => {
-                    assert_eq!(
-                        a.requirements.properties.contains(&property),
-                        takes,
+                    assert!(
+                        !a.requirements.properties.contains(&property),
                         "{stem} {entry}: the property"
                     );
-                    assert_eq!(
-                        a.precision.contains(&note),
-                        !takes,
-                        "{stem} {entry}: the note"
-                    );
-                    noted += usize::from(!takes);
+                    assert!(a.precision.contains(&note), "{stem} {entry}: the note");
+                    noted += 1;
                     let (_, words) = link_and_validate(&a, &p)
                         .unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
                     let text = spirv_dis(&words);
@@ -1354,7 +1237,6 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
                     );
                 }
                 (Err(Error::Unsupported(u)), Ok(Tier::PartialFragment)) => {
-                    assert!(!takes, "{stem} {entry}: refused with the deviation: {u}");
                     let needs = Needs::AnyOf(vec![
                         vec![Capability::Property(property)],
                         width_needs(Stage::Fragment, model.stage(Stage::Fragment)),
@@ -1382,7 +1264,6 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
             "{stem}: the width reads no subgroup"
         );
     }
-    assert_eq!(taken, ["moltenvk-m3"]);
     assert!(
         noted > 0 && narrow > 0 && clustered > 0,
         "noted {noted}, narrow {narrow}, clustered {clustered}"
@@ -1596,9 +1477,7 @@ fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
 /// A fragment function whose group operations read, combine, or count other lanes declares
 /// `RequireFullQuadsKHR` on every committed profile with `shaderQuadControl`, needs that feature,
 /// and reads every lane by a shuffle through the ballot of the live lanes (no quad instruction: a
-/// quad may lack a lane); a profile without it whose driver runs Metal's helpers
-/// (`DriverDeviation::MetalFullQuads`, `moltenvk-m3`) compiles it without the mode, requiring
-/// `VkProperty::MetalFullQuads`; any other profile without it whose stage has the classes refuses
+/// quad may lack a lane); a profile without it (`moltenvk-m3`) whose stage has the classes refuses
 /// the function, needing the feature. A fragment that only reads its quad lane (`simd_masks`'
 /// `quad_lane_f`) declares no such mode and needs no such feature anywhere.
 #[test]
@@ -1607,10 +1486,9 @@ fn fragment_group_operations_run_full_quads() {
     let (Some(quads), Some(masks)) = (assemble("gsm2_quad_ops"), assemble("simd_masks")) else {
         return;
     };
-    let (mut full, mut metals, mut refused) = (0, 0, 0);
+    let (mut full, mut refused) = (0, 0);
     for (name, p) in committed_profiles().expect("profiles") {
         let control = p.fields().subgroup.quad_control;
-        let metal_helpers = p.takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads);
         for entry in [
             "fragment_quad_fills",
             "fragment_quad_fills_and_rotations",
@@ -1618,19 +1496,6 @@ fn fragment_group_operations_run_full_quads() {
             "fragment_quad_scans",
         ] {
             match compile(&quads, entry, &p) {
-                Ok(a) if !control && metal_helpers => {
-                    assert!(
-                        a.requirements
-                            .properties
-                            .contains(&VkProperty::MetalFullQuads)
-                            && !a
-                                .requirements
-                                .features
-                                .contains(&VkFeature::ShaderQuadControl),
-                        "{entry} on {name}"
-                    );
-                    metals += 1;
-                }
                 Ok(a) => {
                     assert!(control, "{entry} on {name}");
                     assert!(
@@ -1677,7 +1542,6 @@ fn fragment_group_operations_run_full_quads() {
         }
     }
     assert!(full >= 4 * 10, "{full} fragment functions with full quads");
-    assert_eq!(metals, 4, "fragment functions with Metal's full quads");
     assert!(
         refused > 0,
         "no profile refused a fragment function for quad control"

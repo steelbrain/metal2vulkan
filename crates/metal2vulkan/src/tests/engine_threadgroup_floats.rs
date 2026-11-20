@@ -1,17 +1,15 @@
 //! A kernel's threadgroup memory on `Device::from_queries`' profiles
-//! (`ThreadgroupMemory::Native`), against `Device::new`'s (`Contained`).
+//! (`ThreadgroupMemory::Native`).
 //!
 //! - Where every access of the arena is a whole, aligned `float` word (a scalar, a `float2` or a
 //!   `float4`), the arena is a `Workgroup` `float` array of its own words: one access chain and one
 //!   typed load or store per lane, with no check. A static arena and one of `[[threadgroup(n)]]`
 //!   regions both. Every answer is exact, in both scheduling orders.
-//! - Through `Device::new` the same kernels keep their composed `u32` words and checks, with the
-//!   same answers.
-//! - No threadgroup access is contained through `from_queries`: a composed arena's (an `int`
-//!   word's) and a typed threadgroup object's are not, where `Device::new` checks and clamps them.
-//! - The array is Metal's allocation: a region filling `maxComputeSharedMemorySize` is planned
-//!   through `from_queries` as through `Device::new`, one byte more is refused by both, and a static
-//!   arena's array is its own words. An arena filling the limit answers every word.
+//! - No threadgroup access is contained: a composed arena's (an `int` word's) and a typed
+//!   threadgroup object's carry no check.
+//! - The array is Metal's allocation: a region filling `maxComputeSharedMemorySize` is planned, one
+//!   byte more is refused, and a static arena's array is its own words. An arena filling the limit
+//!   answers every word.
 //!
 //! An access past threadgroup memory is undefined, in Metal as here; no test reads one.
 //!
@@ -47,25 +45,14 @@ const PROFILES: [&str; 4] = [
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
-/// `stem` through `Device::from_queries` under `policy`.
-fn queried_with(stem: &str, policy: DevicePolicy) -> Device {
+/// `stem` through `Device::from_queries`.
+fn queried_device(stem: &str) -> Device {
     let desc = description(stem).expect("description");
-    Device::from_queries(desc, policy).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn queried(stem: &str) -> DeviceProfile {
-    queried_with(stem, DevicePolicy::default())
-        .profile()
-        .clone()
-}
-
-/// `stem` through `Device::new`.
-fn through_new(stem: &str) -> Device {
-    Device::from_queries(
-        description(stem).expect("description"),
-        DevicePolicy::default(),
-    )
-    .expect("device")
+    queried_device(stem).profile().clone()
 }
 
 fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
@@ -433,9 +420,7 @@ type Spec<'a> = &'a [(SpecKey, u64)];
 
 /// Each kernel through `from_queries` is of `float` words: one `Workgroup` `float` array (of 64
 /// words for the static 64), 12 access chains into it (one a lane: 1 + 4 stored, 1 + 4 + 2
-/// loaded), the `.floats` census names, no threadgroup check, and the exact answers. Through
-/// `Device::new` the same kernel keeps its `u32` words, more blocks and bitcasts, and its checks,
-/// with the same answers.
+/// loaded), the `.floats` census names, no threadgroup check, and the exact answers.
 #[test]
 fn an_arena_of_float_accesses_is_a_float_array_through_from_queries() {
     let Some(st) = assemble("tg_static", &static_kernel(64)) else {
@@ -449,7 +434,6 @@ fn an_arena_of_float_accesses_is_a_float_array_through_from_queries() {
     let cases: [Case<'_>; 2] = [(&st, "tg_static", &[]), (&rg, "tg_region", &short)];
     for stem in PROFILES {
         let prof = queried(stem);
-        let new = through_new(stem);
         for (bc, entry, spec) in cases {
             let what = format!("{entry} on {stem}");
             let a = compile(bc, entry, &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -475,25 +459,6 @@ fn an_arena_of_float_accesses_is_a_float_array_through_from_queries() {
             }
             assert!(!contains_threadgroup(&census), "{what}: {census:?}");
             assert_eq!(run_both(&m, &resources(&plan, spec)), want(), "{what}");
-
-            // Through `Device::new`: composed words and their checks.
-            let rp = new.profile();
-            let c = compile(bc, entry, rp).unwrap_or_else(|e| panic!("{what}: rows: {e}"));
-            let cs = shape(&c.module.words);
-            assert_eq!(cs.float_arrays, vec![None], "{what}: rows: {cs:?}");
-            assert!(
-                s.labels < cs.labels && s.merges < cs.merges && s.bitcasts < cs.bitcasts,
-                "{what}: floats {s:?} against composed {cs:?}"
-            );
-            let (plan, m) = typed_module(bc, entry, rp).expect("module");
-            let tg = plan.families.access.local.tg.as_ref().expect("an arena");
-            assert_eq!(tg.words, TgWords::Composed, "{what}: rows");
-            assert!(contains_threadgroup(&plan.census()), "{what}: rows");
-            assert_eq!(
-                run_both(&m, &resources(&plan, spec)),
-                want(),
-                "{what}: rows"
-            );
         }
     }
 }
@@ -554,8 +519,8 @@ declare i32 @air.atomic.local.add.u.i32(ptr addrspace(3), i32, i32, i32, i1)
 "#;
 
 /// No threadgroup access is contained through `from_queries` ([`COMPOSED`]): its composed arena's
-/// loads, stores and atomic, and its typed threadgroup object's accesses, carry no check, where
-/// `Device::new`'s carry theirs; the answers are the same, word 0 the 64 threads' atomic adds.
+/// loads, stores and atomic, and its typed threadgroup object's accesses, carry no check; word 0
+/// is the 64 threads' atomic adds.
 #[test]
 fn no_threadgroup_access_is_contained_through_from_queries() {
     let Some(bc) = assemble("tg_composed", COMPOSED) else {
@@ -566,31 +531,24 @@ fn no_threadgroup_access_is_contained_through_from_queries() {
     want.extend((0..64u32).map(|t| 63 - t));
     let length = [(SpecKey::TgLength(0), 256)];
     for stem in PROFILES {
-        let new = through_new(stem);
-        for (prof, how) in [
-            (queried(stem), "from_queries"),
-            (new.profile().clone(), "Device::new"),
-        ] {
-            let what = format!("tg_composed on {stem} through {how}");
-            let a = compile(&bc, "tg_composed", &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
-            link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "tg_composed", &prof).expect("module");
-            let tg = plan.families.access.local.tg.as_ref().expect("an arena");
-            assert_eq!(tg.words, TgWords::Composed, "{what}");
-            let census = plan.census();
-            let checked = contains_threadgroup(&census);
-            assert_eq!(checked, how == "Device::new", "{what}: {census:?}");
-            assert_eq!(
-                run_both(&m, &resources_of(&plan, &length, 128)),
-                want,
-                "{what}"
-            );
-        }
+        let prof = queried(stem);
+        let what = format!("tg_composed on {stem}");
+        let a = compile(&bc, "tg_composed", &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
+        link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let (plan, m) = typed_module(&bc, "tg_composed", &prof).expect("module");
+        let tg = plan.families.access.local.tg.as_ref().expect("an arena");
+        assert_eq!(tg.words, TgWords::Composed, "{what}");
+        let census = plan.census();
+        assert!(!contains_threadgroup(&census), "{what}: {census:?}");
+        assert_eq!(
+            run_both(&m, &resources_of(&plan, &length, 128)),
+            want,
+            "{what}"
+        );
     }
 }
 
-/// The array is Metal's allocation: through `from_queries` as through `Device::new`, a region
-/// filling `maxComputeSharedMemorySize` is planned and one 16 bytes longer is refused
+/// The array is Metal's allocation: through `from_queries`, a region filling `maxComputeSharedMemorySize` is planned and one 16 bytes longer is refused
 /// (`ThreadgroupMemorySize`). A static arena two words short of the limit is an array of its own
 /// words.
 #[test]
@@ -599,50 +557,45 @@ fn the_float_array_is_metals_allocation() {
         return;
     };
     for stem in PROFILES {
-        for (dev, how) in [
-            (queried_with(stem, DevicePolicy::default()), "from_queries"),
-            (through_new(stem), "Device::new"),
-        ] {
-            let what = format!("{stem} through {how}");
-            let lib = Library::from_air(&bc).expect("library");
-            let f = lib.function("tg_region").expect("function");
-            let d =
-                ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-            let pipe = dev
-                .compile_compute_pipeline(&d, &Budget::standard())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(
-                pipe.metal_info.static_threadgroup_memory_length, 0,
-                "{what}"
+        let dev = queried_device(stem);
+        let what = stem;
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function("tg_region").expect("function");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let pipe = dev
+            .compile_compute_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(
+            pipe.metal_info.static_threadgroup_memory_length, 0,
+            "{what}"
+        );
+        let state = |len: u32| {
+            let mut t = StageTable::default();
+            t.buffers.insert(
+                0,
+                BoundBuffer::Buffer {
+                    length: 192 * 4,
+                    offset: 0,
+                    gpu_address: 0,
+                    device_address: None,
+                    attribute_stride: None,
+                },
             );
-            let state = |len: u32| {
-                let mut t = StageTable::default();
-                t.buffers.insert(
-                    0,
-                    BoundBuffer::Buffer {
-                        length: 192 * 4,
-                        offset: 0,
-                        gpu_address: 0,
-                        device_address: None,
-                        attribute_stride: None,
-                    },
-                );
-                t.threadgroup_lengths.insert(0, len);
-                let mut s = BindState::default();
-                s.stages.insert(Stage::Kernel, t);
-                s
-            };
-            let max = dev.profile().fields().limits.max_compute_shared_memory_size;
-            assert!(
-                pipe.plan(&dev, &state(max).shape()).is_ok(),
-                "{what}: exactly full"
-            );
-            match pipe.plan(&dev, &state(max + 16).shape()) {
-                Err(BindError::Unsupported(u)) => {
-                    assert_eq!(u.feature, Feature::ThreadgroupMemorySize, "{what}");
-                }
-                other => panic!("{what}: {other:?}"),
+            t.threadgroup_lengths.insert(0, len);
+            let mut s = BindState::default();
+            s.stages.insert(Stage::Kernel, t);
+            s
+        };
+        let max = dev.profile().fields().limits.max_compute_shared_memory_size;
+        assert!(
+            pipe.plan(&dev, &state(max).shape()).is_ok(),
+            "{what}: exactly full"
+        );
+        match pipe.plan(&dev, &state(max + 16).shape()) {
+            Err(BindError::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::ThreadgroupMemorySize, "{what}");
             }
+            other => panic!("{what}: {other:?}"),
         }
         let prof = queried(stem);
         let words = prof.fields().limits.max_compute_shared_memory_size / 4;

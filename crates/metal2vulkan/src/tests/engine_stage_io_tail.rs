@@ -18,7 +18,6 @@
 //! the stage-only numbering. `llvm-as` assembles the fixture; a missing tool skips visibly. No
 //! GPU is used.
 
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::VkFeature as F;
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::{Capability, Error, Feature, Needs};
@@ -245,41 +244,29 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
 }
 
 /// `[[barycentric_coord]]` reads `BaryCoordKHR` (perspective) or `BaryCoordNoPerspKHR`, through
-/// `SPV_KHR_fragment_shader_barycentric`, on a profile with the feature. On MoltenVK 1.4.1, whose
-/// SPIRV-Cross rejects a shader reading both, a function that reads both is refused as the driver's
-/// defect, and one form alone compiles.
+/// `SPV_KHR_fragment_shader_barycentric`, on a profile with the feature (RADV's and MoltenVK's): a
+/// function reading both forms, and one reading one form alone.
 #[test]
 fn barycentric_coordinates_read_the_khr_builtins() {
     let Some(bc) = fixture() else { return };
-    {
-        let stem = "moltenvk-m3";
+    for stem in ["amd-780m-radv", "moltenvk-m3"] {
+        let p = prof(stem);
+        let a = compile(&bc, "tail_fragment_barycentric", &p).expect("barycentric");
         assert_eq!(
-            refused(
-                compile(&bc, "tail_fragment_barycentric", &prof(stem)),
-                "tail_fragment_barycentric"
-            ),
-            (
-                Feature::Barycentrics,
-                Needs::DriverDefect(DriverWorkaround::BothBarycentricFormsRejected)
-            ),
+            a.interface.io.builtins,
+            [
+                StageBuiltin::BaryCoord { perspective: false },
+                StageBuiltin::BaryCoord { perspective: true },
+            ],
             "{stem}"
         );
+        let r = &a.requirements;
+        assert!(r
+            .spirv_capabilities
+            .contains(&spirv_cap(Cap::FragmentBarycentricKHR)));
+        assert!(r.features.contains(&F::FragmentShaderBarycentric));
+        validate(&a, &p);
     }
-    let p = prof("amd-780m-radv");
-    let a = compile(&bc, "tail_fragment_barycentric", &p).expect("barycentric");
-    assert_eq!(
-        a.interface.io.builtins,
-        [
-            StageBuiltin::BaryCoord { perspective: false },
-            StageBuiltin::BaryCoord { perspective: true },
-        ]
-    );
-    let r = &a.requirements;
-    assert!(r
-        .spirv_capabilities
-        .contains(&spirv_cap(Cap::FragmentBarycentricKHR)));
-    assert!(r.features.contains(&F::FragmentShaderBarycentric));
-    validate(&a, &p);
     for stem in ["amd-780m-radv", "moltenvk-m3"] {
         let p = prof(stem);
         let s = compile(&bc, "tail_fragment_barycentric_scalar", &p).expect("scalar barycentric");

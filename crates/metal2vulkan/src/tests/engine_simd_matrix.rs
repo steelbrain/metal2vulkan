@@ -462,14 +462,12 @@ fn public_block_fixture_matches_the_msl_formulas() {
         // The copy loop's stores at `tid + 32 i` may meet between threads of a simdgroup that
         // share `thread_position_in_threadgroup` (a threadgroup narrower than 32 threads), where
         // no barrier every thread of the simdgroup reaches orders them: the kernel takes the
-        // `Emulated` tier, but on moltenvk-m3 (the `Direct` row), whose device runs a simdgroup's
-        // 32 threads in lockstep itself and keeps the kernel's tier, and on the 64-lane RDNA3 row
-        // (`Cluster32`), whose entry reconverges maximally: a subgroup barrier where the threads
+        // `Emulated` tier, but on moltenvk-m3's 32-lane row (`Direct`) and the 64-lane RDNA3 row
+        // (`Cluster32`), whose entries reconverge maximally: a subgroup barrier where the threads
         // diverge orders the threads that run it together, the lanes Apple's simdgroup runs it for,
         // so the kernel keeps its tier. The cells below are Metal's on every row.
         let (tier, key) = match tier {
-            Tier::Direct => (tier, "barrier.lockstep.device"),
-            Tier::Cluster32 => {
+            Tier::Direct | Tier::Cluster32 => {
                 assert!(p.fields().subgroup.maximal_reconvergence, "{stem}");
                 (tier, "barrier.lockstep.simdgroup")
             }
@@ -988,8 +986,20 @@ fn matrix_kernels_compile_or_refuse_with_the_tier() {
                     );
                     ok += 1;
                 }
+                // Threadgroup memory Metal zeroes, on a device that does not zero it.
+                Err(Error::Unsupported(u)) if u.feature == Feature::ZeroedThreadgroupMemory => {
+                    assert!(
+                        !(p.fields().enabled.features)
+                            .contains(&VkFeature::ShaderZeroInitializeWorkgroupMemory),
+                        "{stem} {name}"
+                    );
+                    refused += 1;
+                }
                 Err(Error::Unsupported(u)) => {
-                    let want = tier.clone().expect_err("a refused tier");
+                    let want = match tier.clone() {
+                        Err(want) => want,
+                        Ok(t) => panic!("{stem} {name}: refused on tier {t:?}: {u}"),
+                    };
                     assert_eq!(u.feature, want.feature, "{stem} {name}");
                     refused += 1;
                 }

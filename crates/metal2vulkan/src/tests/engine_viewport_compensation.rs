@@ -128,6 +128,7 @@ fn a_compensated_vertex_function_states_its_compensation() {
         ("stage_io", "stage_io_vertex_clip", 2),
         ("vertex_amplification", "amp_post_tessellation", 0),
     ];
+    let mut over = Vec::new();
     for stem in ["lavapipe", "moltenvk-m3", "intel-irisxe-rplp-anv"] {
         let p = profile_of(description(stem));
         for (fixture_stem, entry, own) in entries {
@@ -196,13 +197,15 @@ fn a_compensated_vertex_function_states_its_compensation() {
                     "{stem} {entry}: depth {depth} point guard {point_guard} adds {added} words \
                      to {plain_words}"
                 );
-                assert!(
-                    (0..=bound).contains(&added),
-                    "{stem} {entry} {depth}: {added} words"
-                );
+                if !(0..=bound).contains(&added) {
+                    over.push(format!(
+                        "{stem} {entry} {depth} {point_guard}: {added} words past {bound}"
+                    ));
+                }
             }
         }
     }
+    assert!(over.is_empty(), "{over:#?}");
 }
 
 /// The depth's compensation needs `shaderClipDistance`, and its two clip distances beyond the
