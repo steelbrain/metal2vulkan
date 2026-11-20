@@ -1409,8 +1409,6 @@ pub enum KernelInputKind {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DrawKind {
-    /// A draw of points (`MTLPrimitiveTypePoint`).
-    Points,
     /// A depth bias clamp other than 0 (`setDepthBias:slopeScale:clamp:`'s `clamp`), which no
     /// replay stream sets.
     DepthBiasClamp,

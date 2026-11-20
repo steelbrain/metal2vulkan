@@ -2214,6 +2214,9 @@ field	metal2vulkan-runtime::Metrics.external_releases	pub external_releases: u64
 field	metal2vulkan-runtime::Metrics.first_use_line_wait_max_nanos	pub first_use_line_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_line_wait_nanos	pub first_use_line_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_line_waits	pub first_use_line_waits: u64
+field	metal2vulkan-runtime::Metrics.first_use_point_wait_max_nanos	pub first_use_point_wait_max_nanos: u64
+field	metal2vulkan-runtime::Metrics.first_use_point_wait_nanos	pub first_use_point_wait_nanos: u64
+field	metal2vulkan-runtime::Metrics.first_use_point_waits	pub first_use_point_waits: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_wait_max_nanos	pub first_use_variant_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_wait_nanos	pub first_use_variant_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_waits	pub first_use_variant_waits: u64
@@ -10422,7 +10425,6 @@ variant	metal2vulkan-runtime::DrawKind::FetchedAttachment	FetchedAttachment
 variant	metal2vulkan-runtime::DrawKind::FillMode	FillMode
 variant	metal2vulkan-runtime::DrawKind::LineWidth	LineWidth
 variant	metal2vulkan-runtime::DrawKind::PatchIndexBuffer	PatchIndexBuffer
-variant	metal2vulkan-runtime::DrawKind::Points	Points
 variant	metal2vulkan-runtime::DrawKind::Viewport	Viewport
 variant	metal2vulkan-runtime::DrawKind::Viewports	Viewports
 variant	metal2vulkan-runtime::DrawKind::VisibilityResults	VisibilityResults

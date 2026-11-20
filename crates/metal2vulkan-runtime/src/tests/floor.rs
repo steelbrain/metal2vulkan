@@ -65,6 +65,7 @@ fn at_the_floor() -> Queried {
     features.core.full_draw_index_uint32 = vk::TRUE;
     features.core.shader_clip_distance = vk::TRUE;
     features.core.shader_tessellation_and_geometry_point_size = vk::TRUE;
+    features.core.large_points = vk::TRUE;
     features.core.shader_int16 = vk::TRUE;
     features.vulkan12.shader_int8 = vk::TRUE;
     features.vulkan11.storage_buffer16_bit_access = vk::TRUE;
@@ -359,7 +360,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 50] = [
+    let cases: [(Clear, Missing); 51] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -562,6 +563,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.shader_tessellation_and_geometry_point_size = vk::FALSE,
             feature(CORE, "shaderTessellationAndGeometryPointSize"),
+        ),
+        (
+            |f| f.core.large_points = vk::FALSE,
+            feature(CORE, "largePoints"),
         ),
     ];
     assert_eq!(

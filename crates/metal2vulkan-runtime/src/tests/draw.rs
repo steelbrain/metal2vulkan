@@ -21,6 +21,12 @@
 //!     first draw of lines makes nothing and waits for nothing.
 //!   - lines draw at width 1 alone: at width 2 a draw of lines or a line strip is
 //!     `DrawKind::LineWidth` and a triangle draws; at 1 again, and in a later encoder, lines draw.
+//!   - points (the owned fixture `engine/rt6_render_state.ll`'s `rt6_point`, of
+//!     `[[point_size]]` 4) cover the pixels whose centres their square holds, the content's
+//!     point `VkPipeline` made at its first draw of points, a first-use wait; a state whose
+//!     descriptor names the point class makes that pipeline with the state, and its points of a
+//!     function without `[[point_size]]` are 1 pixel each; under another class such points
+//!     rasterize nothing, and a triangle drawn after them draws through the encoder's scissor.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
 //!     keeps a later draw to those pixels.
 //!   - a pass clears, loads and stores a shader-read `Depth32Float` depth attachment that its
@@ -59,9 +65,8 @@
 //!   - 32-bit indices 2 bytes past a multiple of 256 in their block are refused before anything
 //!     is recorded, and 16-bit indices there draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
-//!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
-//!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
-//!     mirrored one.
+//!     a pipeline state of other formats than the pass's, a depth test, a stencil test without a
+//!     stencil attachment, a misaligned index offset, a non-finite viewport and a mirrored one.
 //!   - a pass with a visibility result buffer draws, its command buffer keeps the buffer until it
 //!     retires, and its bytes stay as they were; `Disabled` at any offset records nothing, the
 //!     pass takes the submission, barrier and pass one without the buffer takes, and `Boolean`
@@ -762,6 +767,154 @@ pub(crate) mod on_device {
         });
     }
 
+    /// The clip-space position (Metal's y up) of pixel `(x, y)`'s centre in a target `SIDE` a
+    /// side.
+    fn centre(x: u32, y: u32) -> [f32; 2] {
+        let half = SIDE as f32 / 2.0;
+        [(x as f32 + 0.5) / half - 1.0, 1.0 - (y as f32 + 0.5) / half]
+    }
+
+    /// Points of `[[point_size]]` 4 (`rt6_point`, one at the target's centre) cover the 4 by 4
+    /// pixels whose centres their square holds; the first draw of points makes the content's
+    /// point pipeline, a first-use wait, and a second makes nothing. A state whose descriptor
+    /// names the point class makes its point pipeline with the state, and draws a point of a
+    /// function without `[[point_size]]` (`colored_vertex`) 1 pixel wide, its first draw making
+    /// and waiting for nothing. Under no class such points rasterize nothing, as Metal's, and a
+    /// triangle drawn after them in the encoder draws through its scissor again.
+    #[test]
+    fn every_device_draws_points_at_their_size_and_a_point_class_s_at_1() {
+        use metal2vulkan::metal::PrimitiveTopologyClass;
+
+        let (Some(library), Some(engine)) = (
+            examples(),
+            library(&engine_dir().join("rt6_render_state.ll")),
+        ) else {
+            return;
+        };
+        let function = |library: &Library, name: &str| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut sized = RenderPipelineDescriptor::new(function(&engine, "rt6_point"));
+        sized.fragment = Some(function(&engine, "rt6_white"));
+        sized.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut classed = plain.clone();
+        classed.input_primitive_topology = PrimitiveTopologyClass::Point;
+        let marks = [(1, 1), (6, 2), (3, 6)];
+        each_device("draw_points", |name, _, device| {
+            let counters = device.counters();
+            let sized = state(name, &device, &sized);
+            let plain = state(name, &device, &plain);
+            let made = counters.metrics();
+            let classed = state(name, &device, &classed);
+            let created = counters.metrics();
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                2,
+                "{name}: the point class's state: the triangle and the point pipelines"
+            );
+            let mut buffers = Buffers::new(&device);
+            // The three marks as points, then a triangle over rows 4 to 7.
+            let mut positions: Vec<f32> = marks.iter().flat_map(|&(x, y)| centre(x, y)).collect();
+            positions.extend([-1.0, 0.0, 3.0, 0.0, -1.0, -4.0]);
+            let positions = buffers.of(&device, &floats(&positions));
+            let colors = [GREEN, GREEN, GREEN, WHITE, WHITE, WHITE].concat();
+            let colors = buffers.of(&device, &floats(&colors));
+            let depth = floats(&[0.0, 0.0]);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            // Each case's target, read after its command buffer completes.
+            let pixels = |case: &str, encode: &dyn Fn(&mut crate::RenderCommandEncoder)| {
+                let color = target(
+                    &device,
+                    PixelFormat::RGBA8Unorm,
+                    TextureUsage::RENDER_TARGET,
+                );
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                encode(&mut encoder);
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let texels = read(&color, 4);
+                move |x: u32, y: u32| {
+                    let i = ((y * SIDE + x) * 4) as usize;
+                    [texels[i], texels[i + 1], texels[i + 2], texels[i + 3]]
+                }
+            };
+            for round in 0..2 {
+                let before = counters.metrics();
+                let at = pixels("sized", &|encoder: &mut crate::RenderCommandEncoder| {
+                    draw(encoder.set_render_pipeline_state(&sized));
+                    draw(encoder.set_vertex_bytes(&depth, 0));
+                    draw(encoder.draw_primitives(PrimitiveType::Point, 0, 1, 1, 0));
+                });
+                let after = counters.metrics();
+                let made = u64::from(round == 0);
+                assert_eq!(
+                    (
+                        after.pipelines_created - before.pipelines_created,
+                        after.first_use_point_waits - before.first_use_point_waits,
+                    ),
+                    (made, made),
+                    "{name}: round {round}: pipelines made, first-use point waits"
+                );
+                for y in 0..SIDE {
+                    for x in 0..SIDE {
+                        let inside = (2..6).contains(&x) && (2..6).contains(&y);
+                        let want = if inside { WHITE } else { BLACK };
+                        assert_eq!(at(x, y), rgba8(want), "{name}: size 4: ({x}, {y})");
+                    }
+                }
+            }
+            let before = counters.metrics();
+            let at = pixels(
+                "point class",
+                &|encoder: &mut crate::RenderCommandEncoder| {
+                    draw(encoder.set_render_pipeline_state(&classed));
+                    draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                    draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                    draw(encoder.draw_primitives(PrimitiveType::Point, 0, 3, 1, 0));
+                },
+            );
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.pipelines_created - before.pipelines_created,
+                    after.first_use_waits - before.first_use_waits,
+                ),
+                (0, 0),
+                "{name}: the point class's first draw of points: pipelines made, first-use waits"
+            );
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let want = if marks.contains(&(x, y)) {
+                        GREEN
+                    } else {
+                        BLACK
+                    };
+                    assert_eq!(at(x, y), rgba8(want), "{name}: size 1: ({x}, {y})");
+                }
+            }
+            let at = pixels("no class", &|encoder: &mut crate::RenderCommandEncoder| {
+                draw(encoder.set_render_pipeline_state(&plain));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Point, 0, 3, 1, 0));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            });
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let want = if y >= 4 { WHITE } else { BLACK };
+                    assert_eq!(at(x, y), rgba8(want), "{name}: no class: ({x}, {y})");
+                }
+            }
+            println!("{name}: points at size 4, at 1 under the point class, none under no class");
+        });
+    }
+
     /// A stencil state that replaces marks the top half; one that tests keeps a later draw there.
     #[test]
     fn every_device_marks_and_tests_the_stencil() {
@@ -1340,8 +1493,10 @@ pub(crate) mod on_device {
     /// A vertex function stores to device memory (the owned fixture `engine/rvc_draw_bases.ll`'s
     /// `draw_bases_in_a_vertex_function`, its state's rasterization disabled): vertex `vid` of
     /// instance `iid` writes `vid`, `iid` and the draw's base vertex and base instance to the
-    /// four words of slot `(iid % 4) * 8 + vid % 8`, and no other slot is written. A device
-    /// without `vertexPipelineStoresAndAtomics` is below the floor, so every device makes the state.
+    /// four words of slot `(iid % 4) * 8 + vid % 8`, and no other slot is written, in a draw of
+    /// triangles and in a draw of points, which Metal does not rasterize for a function without
+    /// `[[point_size]]` under no class and runs all the same. A device without
+    /// `vertexPipelineStoresAndAtomics` is below the floor, so every device makes the state.
     #[test]
     fn every_device_runs_a_vertex_function_that_stores() {
         let Some(engine) = library(&engine_dir().join("rvc_draw_bases.ll")) else {
@@ -1357,36 +1512,39 @@ pub(crate) mod on_device {
         each_device("draw_vertex_stores", |name, _, device| {
             let state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
-            let out = buffers.of(&device, &[0u8; 32 * 16]);
             let color = target(
                 &device,
                 PixelFormat::RGBA8Unorm,
                 TextureUsage::RENDER_TARGET,
             );
             let queue = device.new_command_queue(4).expect("a queue");
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            draw(encoder.set_render_pipeline_state(&state));
-            draw(encoder.set_vertex_buffer(Some(&out), 0, 0));
-            draw(encoder.draw_primitives(PrimitiveType::Triangle, start, count, instances, base));
-            encoder.end_encoding();
-            run(name, &command_buffer);
-            let contents = out.contents().expect("a Shared buffer");
-            // SAFETY: the buffer holds 32 slots of four words, which the finished draw wrote and
-            // whose writes reach the host.
-            let words =
-                unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 32 * 4) };
-            let mut want = [0u32; 32 * 4];
-            for iid in base..base + instances {
-                for vid in start..start + count {
-                    let slot = ((iid % 4) * 8 + vid % 8) as usize;
-                    want[slot * 4..slot * 4 + 4].copy_from_slice(&[vid, iid, start, base]);
+            for primitive in [PrimitiveType::Triangle, PrimitiveType::Point] {
+                let out = buffers.of(&device, &[0u8; 32 * 16]);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&out), 0, 0));
+                draw(encoder.draw_primitives(primitive, start, count, instances, base));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let contents = out.contents().expect("a Shared buffer");
+                // SAFETY: the buffer holds 32 slots of four words, which the finished draw wrote
+                // and whose writes reach the host.
+                let words =
+                    unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 32 * 4) };
+                let mut want = [0u32; 32 * 4];
+                for iid in base..base + instances {
+                    for vid in start..start + count {
+                        let slot = ((iid % 4) * 8 + vid % 8) as usize;
+                        want[slot * 4..slot * 4 + 4].copy_from_slice(&[vid, iid, start, base]);
+                    }
                 }
+                assert_eq!(words, want, "{name}: {primitive:?}: the slots");
             }
-            assert_eq!(words, want, "{name}: the slots");
-            println!("{name}: a vertex function's stores reached its buffer");
+            println!("{name}: a vertex function's stores reached its buffer, triangles and points");
         });
     }
 
@@ -2483,11 +2641,6 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 "another format",
             );
             encoder.set_render_pipeline_state(&state).expect("a state");
-            same(
-                encoder.draw_primitives(PrimitiveType::Point, 0, 3, 1, 0),
-                gap(DrawKind::Points),
-                "points",
-            );
             let viewport = Viewport {
                 origin_x: 0.0,
                 origin_y: 0.0,
@@ -2792,7 +2945,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         ) else {
             return;
         };
-        let function = |library: &Library, name| {
+        let function = |library: &Library, name: &str| {
             StageSource::Function(FunctionDescriptor::new(
                 library.function(name).expect("the function"),
             ))

@@ -2248,8 +2248,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   wait. Each such wait is counted in `Metrics::first_use_waits`, with its time in
   `first_use_wait_nanos` and the longest in `first_use_wait_max_nanos`, and again by where it
   waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
-  for a new workgroup size, threadgroup memory lengths or tiles) and `first_use_line_waits` (a
-  render content's line-class pipeline). No dispatch lowers a function.
+  for a new workgroup size, threadgroup memory lengths or tiles), `first_use_line_waits` (a
+  render content's line-class pipeline) and `first_use_point_waits` (its point-class pipeline).
+  No dispatch lowers a function.
 - `ComputePipelineState::prepare_dispatch(Dispatch, threads_per_threadgroup,
   threadgroup_memory_lengths)` has no Metal counterpart: it is a hook for a consumer's pre-pass.
   Metal compiles a compute state whole when the state is made, and so does the state's creation
@@ -2702,11 +2703,20 @@ or does not check is rebuilt from the generations' names, with young counted ful
   - the per-patch and per-patch-control-point steps for a vertex function that is not
     post-tessellation (`Tessellation`).
 - The triangle class's `VkPipeline` is made with the state, through the device's pipeline
-  cache, and so is the line class's where the descriptor's `inputPrimitiveTopology` names
-  `MTLPrimitiveTopologyClassLine`; otherwise the line class's is made by the content's first
-  draw of lines, which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
+  cache, and so is the line or the point class's where the descriptor's `inputPrimitiveTopology`
+  names `MTLPrimitiveTopologyClassLine` or `MTLPrimitiveTopologyClassPoint`; otherwise each is
+  made by the content's first draw of lines or of points, which waits for it
+  (`Metrics::first_use_waits`, `first_use_line_waits`, `first_use_point_waits`). Of the two replay streams' 537 render contents
   drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
   them) makes a triangle `VkPipeline` it never uses.
+- A point is as wide as the `PointSize` the vertex module writes: the function's
+  `[[point_size]]`, stored as Metal's largest point, 511 pixels, where it is past it, which the
+  device draws through `largePoints` (Floor) and clamps to its `pointSizeRange`
+  (`PrecisionNote::DevicePointSize` where the range ends below 511), or 1.0 for a function
+  without one. Metal draws a point of a function without `[[point_size]]` only under a state whose
+  descriptor names the point class, 1 pixel wide; under any other class it rasterizes nothing and
+  runs the vertex function all the same (Metal probes, an M4), so such a draw records its points
+  behind an empty scissor: the vertex function runs, its stores land, and no fragment runs.
 - A post-tessellation vertex function's state draws its patches through the device's tessellator
   (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
   the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
@@ -3009,7 +3019,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render encoders
 
-- Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth bias clamp other
+- Refused by `Gap::Draw`, naming its `DrawKind`: a depth bias clamp other
   than 0 (`DepthBiasClamp`, set by `set_depth_bias`), a triangle fill mode but `Fill`
   (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
   `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
@@ -3356,6 +3366,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |
+| `largePoints` | `VkPhysicalDeviceFeatures` | a draw of points at the `[[point_size]]` its vertex function writes, up to the device's `pointSizeRange`; without it a device draws only points of size 1.0; Vulkan 1.4 and Roadmap 2022 require it |
 | `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `sampleRateShading` | `VkPhysicalDeviceFeatures` | a fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, run once per covered sample as Metal runs it; Vulkan 1.4 requires it |
 | `vertexPipelineStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's writes and atomics on device memory |

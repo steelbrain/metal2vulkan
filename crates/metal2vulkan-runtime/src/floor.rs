@@ -394,6 +394,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // takes. Without it the device draws every such point at size 1. Every floor driver reports
     // it.
     feature!(core.shader_tessellation_and_geometry_point_size => ShaderTessellationAndGeometryPointSize),
+    // A point drawn at the size its vertex function writes, up to the device's `pointSizeRange`:
+    // without it a device draws only points of size 1.0. Vulkan 1.4 and Roadmap 2022 require it
+    // of every device.
+    feature!(core.large_points),
     // A fragment function's second output for a colour attachment (`[[color(0), index(1)]]`)
     // blends with its first, as Metal's dual-source blending does. A device without it is below
     // the floor.

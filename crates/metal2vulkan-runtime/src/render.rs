@@ -34,12 +34,18 @@
 //! A descriptor names no topology class unless it sets `inputPrimitiveTopology`, and the replay
 //! streams' never do, while nearly every content draws only triangles (527 of the 537 contents
 //! gb and b2 draw). So the triangle class's `VkPipeline` is made with the state, where Metal
-//! compiles, and so is the line class's where the descriptor names that class; otherwise the line
-//! class's comes with the draws, made by the first draw of lines, as only a draw gives the class
-//! (one `VkPipeline` for both classes would need a dynamic topology across classes, which Vulkan
-//! 1.3 does not give). The cost: a content drawn only as lines or points makes a triangle
-//! `VkPipeline` it never uses (8 contents of the 537). The replay streams draw no points: a draw
-//! of points is refused.
+//! compiles, and so is the line or the point class's where the descriptor names that class;
+//! otherwise each comes with the draws, made by the first draw of lines or of points, as only a
+//! draw gives the class (one `VkPipeline` for several classes would need a dynamic topology across
+//! classes, which Vulkan 1.3 does not give). The cost: a content drawn only as lines or points
+//! makes a triangle `VkPipeline` it never uses (8 contents of the 537).
+//!
+//! A point's size is the `PointSize` the vertex module writes: the function's `[[point_size]]`,
+//! at most Metal's 511 pixels, or 1.0 for a function without one, which the device draws with
+//! `largePoints` (Floor), clamped to its `pointSizeRange` (`PrecisionNote::DevicePointSize` where
+//! the range ends below 511). Metal draws a point of a function without a size only under the point
+//! class; under any other class it rasterizes nothing and runs the vertex function all the same,
+//! so the encoder draws such points behind an empty scissor.
 //!
 //! A content whose vertex function is post-tessellation draws patches alone, so its one
 //! `VkPipeline` is the patch class's, made with the state: the translator's synthesized vertex and
@@ -51,7 +57,7 @@
 //! the replay streams' states never use, are refused ([`RenderPipelineKind::Tessellation`]).
 
 use crate::cache::{self, Lowerings};
-use crate::counters::{Gauge, Metric};
+use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, RenderPipelineKind};
 use crate::hazard::Access;
@@ -186,6 +192,15 @@ pub(crate) struct RenderCompiled {
     /// The line class's: made with the content where its descriptor names that class, else by the
     /// first draw of lines; null until then.
     lines: Mutex<vk::Pipeline>,
+    /// The point class's, as the line class's: made with the content where its descriptor names
+    /// that class, else by the first draw of points; null until then.
+    points: Mutex<vk::Pipeline>,
+    /// Whether a draw of points rasterizes them: the vertex function writes `[[point_size]]`, or
+    /// the descriptor names the point class, under which Metal draws a point of a function that
+    /// writes no size 1 pixel wide (the module writes `PointSize` 1.0). Under any other class
+    /// Metal rasterizes no point of such a function and runs its vertex function all the same
+    /// (`metal2vulkan::pipeline::GraphicsState::writes_point_size`).
+    rasterizes_points: bool,
     /// The translator's notes of where the pipeline's answers may differ from Metal's, and its
     /// functions' constexpr samplers' (`constexpr_notes`).
     notes: Vec<PrecisionNote>,
@@ -905,6 +920,9 @@ impl RenderCompiled {
             fixed,
             primary: vk::Pipeline::null(),
             lines: Mutex::new(vk::Pipeline::null()),
+            points: Mutex::new(vk::Pipeline::null()),
+            rasterizes_points: pipeline.graphics.writes_point_size
+                || lowered.input_primitive_topology == PrimitiveTopologyClass::Point,
             notes,
             draws,
             numbered,
@@ -918,15 +936,40 @@ impl RenderCompiled {
             false => vk::PrimitiveTopology::TRIANGLE_LIST,
         };
         compiled.primary = compiled.make(class)?;
-        // A descriptor that names the line class (`inputPrimitiveTopology`) gives the line
-        // class's key: its `VkPipeline` is made here too, and its draws wait for none.
-        if !compiled.draws.patches
-            && lowered.input_primitive_topology == PrimitiveTopologyClass::Line
-        {
-            let lines = compiled.make(vk::PrimitiveTopology::LINE_LIST)?;
-            *lock(&compiled.lines) = lines;
+        // A descriptor that names the line or the point class (`inputPrimitiveTopology`) gives
+        // that class's key: its `VkPipeline` is made here too, and its draws wait for none.
+        let named = match lowered.input_primitive_topology {
+            PrimitiveTopologyClass::Line => compiled.later(vk::PrimitiveTopology::LINE_LIST),
+            PrimitiveTopologyClass::Point => compiled.later(vk::PrimitiveTopology::POINT_LIST),
+            _ => None,
+        };
+        if let (false, Some((later, list, _))) = (compiled.draws.patches, named) {
+            let made = compiled.make(list)?;
+            *lock(later) = made;
         }
         Ok(compiled)
+    }
+
+    /// Where the content keeps the `VkPipeline` of `topology`'s class when that is the line or
+    /// the point class, which it makes after its triangle class's: the pipeline's place, the
+    /// class's list topology it is made with, and the first-use site that counts its make at a
+    /// draw. `None` for a triangle or patch topology.
+    fn later(
+        &self,
+        topology: vk::PrimitiveTopology,
+    ) -> Option<(&Mutex<vk::Pipeline>, vk::PrimitiveTopology, FirstUse)> {
+        use vk::PrimitiveTopology as T;
+        match topology {
+            T::LINE_LIST | T::LINE_STRIP => Some((&self.lines, T::LINE_LIST, FirstUse::Lines)),
+            T::POINT_LIST => Some((&self.points, T::POINT_LIST, FirstUse::Points)),
+            _ => None,
+        }
+    }
+
+    /// Whether a draw of points rasterizes them (`rasterizes_points`): else the encoder draws them
+    /// behind an empty scissor, its vertex function run.
+    pub(crate) fn rasterizes_points(&self) -> bool {
+        self.rasterizes_points
     }
 
     /// Whether the content's `VkPipeline`s discard every primitive (Metal's rasterization
@@ -935,30 +978,28 @@ impl RenderCompiled {
         self.fixed.discard
     }
 
-    /// The `VkPipeline` of the content for draws of `topology`'s class, a line or triangle one, or
-    /// for a post-tessellation vertex function's content the patch one, which the encoder draws
-    /// alone with it: the line class's, where the content was not made with it, made by its first
-    /// draw, which waits for it, a first-use wait
+    /// The `VkPipeline` of the content for draws of `topology`'s class, a point, line or triangle
+    /// one, or for a post-tessellation vertex function's content the patch one, which the encoder
+    /// draws alone with it: the point or line class's, where the content was not made with it,
+    /// made by its first draw, which waits for it, a first-use wait
     /// ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
     ///
     /// Err: [`Error::Vulkan`] where the pipeline cannot be made.
     pub(crate) fn pipeline(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {
-        if self.draws.patches
-            || (topology != vk::PrimitiveTopology::LINE_LIST
-                && topology != vk::PrimitiveTopology::LINE_STRIP)
-        {
+        let later = match self.draws.patches {
+            true => None,
+            false => self.later(topology),
+        };
+        let Some((later, list, site)) = later else {
             return Ok(self.primary);
-        }
-        let mut lines = lock(&self.lines);
-        if *lines == vk::Pipeline::null() {
+        };
+        let mut made = lock(later);
+        if *made == vk::Pipeline::null() {
             let began = host_time();
-            *lines = self.make(vk::PrimitiveTopology::LINE_LIST)?;
-            (self.core.counters).first_use_wait(
-                crate::counters::FirstUse::Lines,
-                host_time().saturating_sub(began),
-            );
+            *made = self.make(list)?;
+            (self.core.counters).first_use_wait(site, host_time().saturating_sub(began));
         }
-        Ok(*lines)
+        Ok(*made)
     }
 
     /// Whether the content's `VkPipeline`s render into `pass`'s attachments: its colour formats are
@@ -1177,7 +1218,8 @@ impl Drop for RenderCompiled {
         // it retired.
         self.core.counters.fall(Gauge::RenderContents);
         let lines = *self.lines.get_mut().unwrap_or_else(|e| e.into_inner());
-        for pipeline in [self.primary, lines] {
+        let points = *self.points.get_mut().unwrap_or_else(|e| e.into_inner());
+        for pipeline in [self.primary, lines, points] {
             if pipeline != vk::Pipeline::null() {
                 (self.core.reaper).give(Job::Free(Free::Pipeline(pipeline)));
             }

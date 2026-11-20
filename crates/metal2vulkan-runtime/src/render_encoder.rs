@@ -476,8 +476,8 @@ enum Call<'a> {
 /// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
 /// stencil references, the blend color, the line width (lines drawn at 1 alone: a draw of lines
 /// at another width is [`DrawKind::LineWidth`]), the store actions an encoder sets for an
-/// attachment whose pass left them unknown, memory barriers, fences, direct draws of lines and triangles,
-/// indexed or not, direct draws of patches with a tessellation factor buffer, and the `Disabled`
+/// attachment whose pass left them unknown, memory barriers, fences, direct draws of points, lines
+/// and triangles, indexed or not, direct draws of patches with a tessellation factor buffer, and the `Disabled`
 /// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
 /// built, and so not methods: indirect draws, several viewports or scissor rectangles, the
 /// triangle fill mode, the depth clip mode, `useResource:`, the store action options
@@ -530,6 +530,9 @@ pub struct RenderCommandEncoder {
     depth_bias: [f32; 2],
     /// Whether the last draw recorded the depth bias enabled.
     biased: bool,
+    /// Whether the last draw recorded an empty scissor, for points it does not rasterize
+    /// ([`RenderCommandEncoder::draw_primitives`]).
+    hidden: bool,
     /// The dynamic state to record before the next draw.
     dirty: u32,
     /// The topology and primitive restart the last draw set.
@@ -615,6 +618,7 @@ impl CommandBuffer {
                     line_width: 1.0,
                     depth_bias: [0.0; 2],
                     biased: false,
+                    hidden: false,
                     recorded: None,
                     dirty: ALL,
                     topology: None,
@@ -1588,8 +1592,14 @@ impl RenderCommandEncoder {
     /// The draw pushes its functions' fields (the addresses of their buffer slots plus their
     /// offsets, the resource IDs of their textures and sampler states, and the indices of the
     /// state's constexpr samplers), binds the vertex buffers the pipeline state's vertex
-    /// descriptor reads, and sets the dynamic state that changed. A draw of lines first makes
-    /// its content's line `VkPipeline`, where no draw made it before.
+    /// descriptor reads, and sets the dynamic state that changed. A draw of lines or of points
+    /// first makes its content's line or point `VkPipeline`, where no draw made it before.
+    ///
+    /// A point is the `[[point_size]]` the vertex function writes wide, at most Metal's 511
+    /// pixels, or 1 pixel for a function that writes none under a state whose descriptor names the
+    /// point class (`inputPrimitiveTopology`). Under any other class Metal rasterizes no point of
+    /// such a function and runs it all the same, and so does this: its points are drawn behind an
+    /// empty scissor.
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the vertex
     /// descriptor reads that is not bound; [`Refusal::VertexBufferOffset`];
@@ -1611,7 +1621,7 @@ impl RenderCommandEncoder {
             vertex_count,
         };
         self.draw(
-            primitives(primitive_type)?,
+            primitives(primitive_type),
             call,
             instance_count,
             base_instance,
@@ -1643,7 +1653,7 @@ impl RenderCommandEncoder {
             base_vertex,
         };
         self.draw(
-            primitives(primitive_type)?,
+            primitives(primitive_type),
             call,
             instance_count,
             base_instance,
@@ -1856,6 +1866,8 @@ impl RenderCommandEncoder {
         if lines && self.line_width != 1.0 {
             return gap(DrawKind::LineWidth);
         }
+        // Points Metal does not rasterize: the vertex function runs, behind an empty scissor.
+        let hidden = topology == vk::PrimitiveTopology::POINT_LIST && !compiled.rasterizes_points();
         let pipeline = compiled.pipeline(topology)?;
         let discards = compiled.discards();
         let writes_memory = draws.writes_memory;
@@ -1948,7 +1960,7 @@ impl RenderCommandEncoder {
                     core.device.cmd_set_rasterizer_discard_enable(command, true);
                 }
             }
-            self.record_state(topology, restart);
+            self.record_state(topology, restart, hidden);
         }
         let core = &*self.core;
         let device = &core.device;
@@ -2283,12 +2295,18 @@ impl RenderCommandEncoder {
     }
 
     /// Records the dynamic state that changed since the last draw, and the draw's topology and
-    /// primitive restart where they changed.
+    /// primitive restart where they changed; the scissor empty where the draw is `hidden`, and
+    /// the encoder's again at the next draw that is not.
     ///
     /// # Safety
     ///
     /// The encoder's command buffer is inside its pass's rendering.
-    unsafe fn record_state(&mut self, topology: vk::PrimitiveTopology, restart: bool) {
+    unsafe fn record_state(
+        &mut self,
+        topology: vk::PrimitiveTopology,
+        restart: bool,
+        hidden: bool,
+    ) {
         let device = &self.core.device;
         let feedback = self.core.feedback.as_ref();
         let command = self.command;
@@ -2299,7 +2317,14 @@ impl RenderCommandEncoder {
         unsafe {
             if dirty & VIEWPORT != 0 {
                 device.cmd_set_viewport(command, 0, &[vk_viewport(&self.viewport)]);
-                device.cmd_set_scissor(command, 0, &[self.vk_scissor()]);
+            }
+            if dirty & VIEWPORT != 0 || hidden != self.hidden {
+                let scissor = match hidden {
+                    true => vk::Rect2D::default(),
+                    false => self.vk_scissor(),
+                };
+                device.cmd_set_scissor(command, 0, &[scissor]);
+                self.hidden = hidden;
             }
             if dirty & CULL != 0 {
                 let mode = match self.cull_mode {
@@ -2369,11 +2394,13 @@ impl RenderCommandEncoder {
             }
             // Metal biases triangles alone, where the bias or the slope scale is not zero.
             let [constant, slope] = self.depth_bias;
-            let lines = matches!(
+            let triangles = !matches!(
                 topology,
-                vk::PrimitiveTopology::LINE_LIST | vk::PrimitiveTopology::LINE_STRIP
+                vk::PrimitiveTopology::LINE_LIST
+                    | vk::PrimitiveTopology::LINE_STRIP
+                    | vk::PrimitiveTopology::POINT_LIST
             );
-            let biased = !lines && (constant != 0.0 || slope != 0.0);
+            let biased = triangles && (constant != 0.0 || slope != 0.0);
             if dirty & BIAS != 0 {
                 device.cmd_set_depth_bias(command, constant, 0.0, slope);
             }
@@ -2513,17 +2540,9 @@ impl Drop for RenderCommandEncoder {
 }
 
 /// The topology of a draw of `primitive_type`, and whether it restarts strips.
-///
-/// Err: [`Gap::Draw`] of [`DrawKind::Points`].
-fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, bool), Error> {
+fn primitives(primitive_type: PrimitiveType) -> (vk::PrimitiveTopology, bool) {
     let (topology, restart) = input_assembly(primitive_type);
-    let topology = vk::PrimitiveTopology::from_raw(topology.as_raw());
-    if topology == vk::PrimitiveTopology::POINT_LIST {
-        return Err(Error::Unsupported(Gap::Draw {
-            kind: DrawKind::Points,
-        }));
-    }
-    Ok((topology, restart))
+    (vk::PrimitiveTopology::from_raw(topology.as_raw()), restart)
 }
 
 /// Fills `push`, the push bytes of a draw of `state`, and `blocks`, each function's parameter

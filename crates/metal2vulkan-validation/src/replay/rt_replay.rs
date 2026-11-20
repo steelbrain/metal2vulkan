@@ -5,10 +5,10 @@
 //! - A draw of a render pipeline state, its vertices in buffers bound to the vertex stage, covers
 //!   a pass's target that its setter records clear to red: a blit copies the target to a buffer,
 //!   which the stream checks green, and nothing is skipped.
-//! - A draw of points after it, which the runtime does not build, is skipped and counted, and the
-//!   report says the play is no verdict past it: its gap, frame and call.
+//! - A draw of points after it plays, nothing skipped.
 //! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
-//!   triangles plays and one of lines is the runtime's gap, skipped and counted.
+//!   triangles plays and one of lines is the runtime's gap, skipped and counted, and the report
+//!   says the play is no verdict past it: its gap, frame and call.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
@@ -442,24 +442,24 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     assert_eq!(report.first_skip, None);
 }
 
+/// A draw of points after the triangle (call 19) plays, nothing skipped, the target still green.
 #[test]
-fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
+fn a_draw_of_points_plays_on_the_new_runtime() {
     let dir = ScratchDir::new("rt-replay-points").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
     let path = draw_into_a_pass(&dir, &green, Then::Points);
-    let (report, lines) = play("points", &path);
+    let (report, _) = play("points", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
-    assert_eq!(executed["skipped_render_commands"], 1, "{executed:?}");
-    assert_eq!(report.first_skip, Some((0, 19)));
-    let note = report.verdict_note();
-    assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
-    let line = "skipped render commands Draw { kind: Points } 1, the first at frame 0, call 19";
-    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+    for skipped in ["skipped_render_commands", "skipped_draws", "skipped_calls"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert_eq!(report.first_skip, None);
 }
 
 /// `setLineWidth:` plays: at width 1 the triangle and the line after it play, nothing skipped; at
-/// width 2 the triangle draws and the line is the runtime's gap, skipped and counted.
+/// width 2 the triangle draws and the line is the runtime's gap, skipped and counted, and the
+/// report says the play is no verdict past it.
 #[test]
 fn a_line_width_plays_and_a_line_drawn_at_another_width_is_skipped() {
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
@@ -483,6 +483,8 @@ fn a_line_width_plays_and_a_line_drawn_at_another_width_is_skipped() {
     let executed = &report.total.executed;
     assert_eq!(executed["skipped_render_commands"], 1, "{executed:?}");
     assert_eq!(report.first_skip, Some((0, 21)));
+    let note = report.verdict_note();
+    assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 21"));
     let line = "skipped render commands Draw { kind: LineWidth } 1, the first at frame 0, call 21";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }

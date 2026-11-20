@@ -10,6 +10,7 @@ fn each_first_use_wait_adds_to_its_site_and_the_total() {
     counters.first_use_wait(FirstUse::Variant, 3_000);
     counters.first_use_wait(FirstUse::Variant, 7_000);
     counters.first_use_wait(FirstUse::Lines, 11_000);
+    counters.first_use_wait(FirstUse::Points, 5_000);
     let m = counters.metrics();
     assert_eq!(
         (
@@ -29,10 +30,18 @@ fn each_first_use_wait_adds_to_its_site_and_the_total() {
     );
     assert_eq!(
         (
+            m.first_use_point_waits,
+            m.first_use_point_wait_nanos,
+            m.first_use_point_wait_max_nanos
+        ),
+        (1, 5_000, 5_000)
+    );
+    assert_eq!(
+        (
             m.first_use_waits,
             m.first_use_wait_nanos,
             m.first_use_wait_max_nanos
         ),
-        (3, 21_000, 11_000)
+        (4, 26_000, 11_000)
     );
 }
