@@ -377,7 +377,7 @@ BUFFER_META"#;
     fn every_device_draws_patches_whose_fields_spill_into_their_block() {
         use crate::pipeline::FieldValue;
         use crate::render::{DrawPlace, VERTEX};
-        let Some((_, fragment)) = libraries() else {
+        let Some(libraries) = libraries() else {
             return;
         };
         let wide = match llvm_assemble_text(&wide_vertex()) {
@@ -388,9 +388,10 @@ BUFFER_META"#;
             }
             Err(error) => panic!("the wide function: {error:?}"),
         };
-        let function = wide.function("tess_wide_points").expect("the function");
-        let mut d = patches(&(wide, fragment));
-        d.vertex = StageSource::Function(FunctionDescriptor::new(function));
+        let mut d = patches(&libraries);
+        d.vertex = StageSource::Function(FunctionDescriptor::new(
+            wide.function("tess_wide_points").expect("the function"),
+        ));
         each_device("draw_patches_spilled", |name, _, device| {
             let state = state(name, &device, &d);
             let draws = &state.inner.compiled.draws;
