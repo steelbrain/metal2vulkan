@@ -653,14 +653,12 @@ fn binding_of(sym: &Symbol) -> Option<u32> {
         Symbol::Binding(s) if *s == SPLIT_DESTINATION => {
             Some(StencilSplitModule::DESTINATION_BINDING)
         }
-        // The resolve draws' symbols (`depth_stencil_resolve.rs`), numbered as theirs.
-        Symbol::Binding(s) => super::depth_stencil_resolve::binding_of(s),
         _ => None,
     }
 }
 
 /// `m` verified against `device`'s profile (requirements included), serialized, and numbered
-/// with the fixed bindings (the resolve draws' too); `what` names it in an internal error.
+/// with the fixed bindings; `what` names it in an internal error.
 /// Refused, `Unsupported` naming `feature` and the first capability, where the device lacks what
 /// `m` needs.
 pub(super) fn finish(

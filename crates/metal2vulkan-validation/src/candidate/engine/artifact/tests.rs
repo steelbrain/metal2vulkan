@@ -129,7 +129,7 @@ fn the_runtime_sources_are_the_committed_ones() {
 
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
-    let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests, the indirect clamp, which the executor refuses to run, and the visibility resolve, which the executor never runs";
+    let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests, and the indirect clamp, which the executor refuses to run";
     let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's mipmap kernel takes that file's sRGB transfers (srgb_decode, srgb_encode), which reach none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),
@@ -146,7 +146,6 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/lower/access/mod.rs", "compile-time translation, reached only from lower/dispatch.rs's kernel plan, which asks `identity` whether the profile takes the identity domains; what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests; the tile staging format reaches a run through the plan"),
         ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
-        ("metal2vulkan/src/lower/arith/extended_range.rs", "the extended-range arithmetic, compile-time translation: the runtime reaches it only through the extended-range color resolve (bind/color_resolve.rs), which emits its decode, encode and pack, the ones a pipeline reading or writing such an attachment compiles, so a change to it is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
         // The block decode (`bind/block_decode.rs`) and its exact division
         // (`lower/arith/exact_division.rs`) reach the numeric forms and the constant emission at
         // run time.

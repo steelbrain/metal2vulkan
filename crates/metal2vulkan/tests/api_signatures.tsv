@@ -66,17 +66,12 @@ assoc-const	metal2vulkan::bind::ChromaSampleModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::ChromaSampleModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
-assoc-const	metal2vulkan::bind::ColorResolveModules::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
-assoc-const	metal2vulkan::bind::DepthStencilResolveModules::DEPTH_BINDING	pub const DEPTH_BINDING: u32
-assoc-const	metal2vulkan::bind::DepthStencilResolveModules::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::DepthStencilResolveModules::STENCIL_BINDING	pub const STENCIL_BINDING: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	pub const HEADER_PUSH: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::PUSH_BYTES	pub const PUSH_BYTES: u32
@@ -198,34 +193,6 @@ assoc-const	metal2vulkan::bind::ReplayPreprocessModule::STATUS_PUSH	pub const ST
 assoc-const	metal2vulkan::bind::RewritePhase::ALL	pub const ALL: [RewritePhase; 3]
 assoc-const	metal2vulkan::bind::RewriteProgram::ALL	pub const ALL: [RewriteProgram; 8]
 assoc-const	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	pub const SINK_HOST_OFFSET: u32
-assoc-const	metal2vulkan::bind::ShadowCopyBackModule::BYTES_BINDING	pub const BYTES_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowCopyBackModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowCopyBackModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ShadowCopyBackModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::ShadowCopyBackModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::BYTES_BINDING	pub const BYTES_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::KEPT_BINDING	pub const KEPT_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::ShadowCopyInModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::CURRENT_BINDING	pub const CURRENT_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::KEPT_BINDING	pub const KEPT_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ShadowMergeImageModule::WORDS	pub const WORDS: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::BLOCK_BYTES	pub const BLOCK_BYTES: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::CHANGED_BINDING	pub const CHANGED_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::CURRENT_BINDING	pub const CURRENT_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::KEPT_BINDING	pub const KEPT_BINDING: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ShadowMergeModule::WORDS	pub const WORDS: u32
-assoc-const	metal2vulkan::bind::ShadowMergeRead::ALL	pub const ALL: [ShadowMergeRead; 8]
-assoc-const	metal2vulkan::bind::ShadowTexelView::ALL	pub const ALL: [ShadowTexelView; 6]
 assoc-const	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	pub const ABSENT_ARGUMENT_READ: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	pub const CUBIC_ARGUMENT_SAMPLER: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	pub const INDEX_POOL_OVERFLOW: StatusBits
@@ -256,12 +223,6 @@ assoc-const	metal2vulkan::bind::TexelRows::HEIGHT	pub const HEIGHT: usize
 assoc-const	metal2vulkan::bind::TexelRows::ROW	pub const ROW: usize
 assoc-const	metal2vulkan::bind::TexelRows::WIDTH	pub const WIDTH: usize
 assoc-const	metal2vulkan::bind::TexelRows::WORDS	pub const WORDS: usize
-assoc-const	metal2vulkan::bind::VisibilityCombine::ENTRY_WORDS	pub const ENTRY_WORDS: usize
-assoc-const	metal2vulkan::bind::VisibilityCombineModule::DEST_BINDING	pub const DEST_BINDING: u32
-assoc-const	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::VisibilityCombineModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::VisibilityCombineModule::SOURCES_BINDING	pub const SOURCES_BINDING: u32
-assoc-const	metal2vulkan::bind::VisibilityCombineModule::TABLE_BINDING	pub const TABLE_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -428,17 +389,12 @@ assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SET	0
 assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SHAPE_BINDING	1
 assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	5
 assoc-const-value	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	2
-assoc-const-value	metal2vulkan::bind::ColorResolveModules::SET	0
-assoc-const-value	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SET	0
 assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	0
-assoc-const-value	metal2vulkan::bind::DepthStencilResolveModules::DEPTH_BINDING	0
-assoc-const-value	metal2vulkan::bind::DepthStencilResolveModules::SET	0
-assoc-const-value	metal2vulkan::bind::DepthStencilResolveModules::STENCIL_BINDING	1
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	0
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::PUSH_BYTES	16
@@ -560,34 +516,6 @@ assoc-const-value	metal2vulkan::bind::ReplayPreprocessModule::STATUS_PUSH	8
 assoc-const-value	metal2vulkan::bind::RewritePhase::ALL	[RewritePhase::Count, RewritePhase::Place, RewritePhase::Write]
 assoc-const-value	metal2vulkan::bind::RewriteProgram::ALL	[RewriteProgram::LineStrip, RewriteProgram::TriangleStrip, RewriteProgram::LineLoop, RewriteProgram::TriangleFan, RewriteProgram::Quads, RewriteProgram::QuadStrip, RewriteProgram::LineList, RewriteProgram::TriangleList]
 assoc-const-value	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	(SINK_ROOT * ENTRY_BYTES + HOST) as u32
-assoc-const-value	metal2vulkan::bind::ShadowCopyBackModule::BYTES_BINDING	1
-assoc-const-value	metal2vulkan::bind::ShadowCopyBackModule::IMAGE_BINDING	0
-assoc-const-value	metal2vulkan::bind::ShadowCopyBackModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ShadowCopyBackModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::ShadowCopyBackModule::SET	0
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::BYTES_BINDING	1
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::IMAGE_BINDING	0
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::KEPT_BINDING	2
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::ShadowCopyInModule::SET	0
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::CURRENT_BINDING	2
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::IMAGE_BINDING	0
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::KEPT_BINDING	1
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::SET	0
-assoc-const-value	metal2vulkan::bind::ShadowMergeImageModule::WORDS	4
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::BLOCK_BYTES	4 * Self::LOCAL_SIZE
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CHANGED_BINDING	1
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CURRENT_BINDING	2
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::KEPT_BINDING	0
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::PUSH_BYTES	24
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::SET	0
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::WORDS	4
-assoc-const-value	metal2vulkan::bind::ShadowMergeRead::ALL	[ShadowMergeRead::Words(ShadowTexelView::R32Uint), ShadowMergeRead::Words(ShadowTexelView::R8G8B8A8Uint), ShadowMergeRead::Words(ShadowTexelView::R32G32Uint), ShadowMergeRead::Words(ShadowTexelView::R32G32B32A32Uint), ShadowMergeRead::Words(ShadowTexelView::R8Uint), ShadowMergeRead::Words(ShadowTexelView::R16Uint), ShadowMergeRead::B8G8R8A8Unorm, ShadowMergeRead::R8G8B8A8Unorm]
-assoc-const-value	metal2vulkan::bind::ShadowTexelView::ALL	[ShadowTexelView::R32Uint, ShadowTexelView::R8G8B8A8Uint, ShadowTexelView::R32G32Uint, ShadowTexelView::R32G32B32A32Uint, ShadowTexelView::R8Uint, ShadowTexelView::R16Uint]
 assoc-const-value	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	StatusBits(1 <<4)
 assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<6)
 assoc-const-value	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	StatusBits(1 <<3)
@@ -618,12 +546,6 @@ assoc-const-value	metal2vulkan::bind::TexelRows::HEIGHT	1
 assoc-const-value	metal2vulkan::bind::TexelRows::ROW	2
 assoc-const-value	metal2vulkan::bind::TexelRows::WIDTH	0
 assoc-const-value	metal2vulkan::bind::TexelRows::WORDS	4
-assoc-const-value	metal2vulkan::bind::VisibilityCombine::ENTRY_WORDS	4
-assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::DEST_BINDING	1
-assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::SET	0
-assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::SOURCES_BINDING	2
-assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::TABLE_BINDING	0
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::BYTES_BINDING	2
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::IMAGE_BINDING	0
 assoc-const-value	metal2vulkan::bind::YCbCrConvertModule::LOCAL_SIZE	8
@@ -793,8 +715,6 @@ const	metal2vulkan::bind::METAL_MESH_GRID_AXIS	pub const METAL_MESH_GRID_AXIS: u
 const	metal2vulkan::bind::METAL_MESH_GRID_TOTAL	pub const METAL_MESH_GRID_TOTAL: u32
 const	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	pub const METAL_OBJECT_GRID_TOTAL: u32
 const	metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT	pub const NEUTRAL_HEAP_ELEMENT: u32
-const	metal2vulkan::bind::SRGB_RESOLVE_LINEAR	pub const SRGB_RESOLVE_LINEAR: [u16; 256]
-const	metal2vulkan::bind::SRGB_RESOLVE_THRESHOLDS	pub const SRGB_RESOLVE_THRESHOLDS: [u16; 255]
 const	metal2vulkan::bind::fan_out::BLOCK_SET	pub const BLOCK_SET: u32
 const	metal2vulkan::bind::fan_out::BLOCK_TRIANGLES	pub const BLOCK_TRIANGLES: u32
 const	metal2vulkan::bind::fan_out::BOUND_BUCKETS	pub const BOUND_BUCKETS: u32
@@ -892,8 +812,6 @@ const-value	metal2vulkan::bind::METAL_MESH_GRID_AXIS	65_535
 const-value	metal2vulkan::bind::METAL_MESH_GRID_TOTAL	1_048_575
 const-value	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	1 <<29
 const-value	metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT	NEUTRAL_ELEMENT
-const-value	metal2vulkan::bind::SRGB_RESOLVE_LINEAR	[0, 1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 18, 20, 21, 23, 25, 27, 29, 31, 33, 35, 37, 40, 42, 45, 48, 50, 53, 56, 59, 62, 66, 69, 72, 76, 79, 83, 87, 91, 95, 99, 103, 107, 112, 116, 121, 126, 131, 136, 141, 146, 151, 156, 162, 168, 173, 179, 185, 191, 197, 204, 210, 216, 223, 230, 237, 244, 251, 258, 265, 273, 280, 288, 296, 304, 312, 320, 329, 337, 346, 354, 363, 372, 381, 390, 400, 409, 419, 428, 438, 448, 458, 469, 479, 490, 500, 511, 522, 533, 544, 555, 567, 578, 590, 602, 614, 626, 639, 651, 664, 676, 689, 702, 715, 728, 742, 755, 769, 783, 797, 811, 825, 840, 854, 869, 884, 899, 914, 929, 945, 960, 976, 992, 1008, 1024, 1041, 1057, 1074, 1091, 1108, 1125, 1142, 1159, 1177, 1195, 1213, 1231, 1249, 1267, 1286, 1304, 1323, 1342, 1361, 1381, 1400, 1420, 1440, 1459, 1480, 1500, 1520, 1541, 1562, 1582, 1603, 1625, 1646, 1668, 1689, 1711, 1733, 1755, 1778, 1800, 1823, 1846, 1869, 1892, 1916, 1939, 1963, 1987, 2011, 2035, 2059, 2084, 2109, 2133, 2159, 2184, 2209, 2235, 2260, 2286, 2312, 2339, 2365, 2392, 2419, 2446, 2473, 2500, 2527, 2555, 2583, 2611, 2639, 2668, 2696, 2725, 2754, 2783, 2812, 2841, 2871, 2901, 2931, 2961, 2991, 3022, 3052, 3083, 3114, 3146, 3177, 3209, 3240, 3272, 3304, 3337, 3369, 3402, 3435, 3468, 3501, 3535, 3568, 3602, 3636, 3670, 3705, 3739, 3774, 3809, 3844, 3879, 3915, 3950, 3986, 4022, 4059, 4095]
-const-value	metal2vulkan::bind::SRGB_RESOLVE_THRESHOLDS	[1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 18, 19, 21, 23, 24, 26, 28, 30, 32, 34, 37, 39, 42, 44, 47, 49, 52, 55, 58, 61, 64, 68, 71, 74, 78, 82, 85, 89, 93, 97, 102, 106, 110, 115, 119, 124, 129, 134, 139, 144, 149, 154, 160, 165, 171, 177, 183, 189, 195, 201, 207, 214, 220, 227, 234, 241, 248, 255, 262, 270, 277, 285, 293, 300, 308, 317, 325, 333, 342, 350, 359, 368, 377, 386, 395, 405, 414, 424, 434, 444, 454, 464, 474, 485, 495, 506, 517, 528, 539, 550, 562, 573, 585, 597, 609, 621, 633, 645, 658, 670, 683, 696, 709, 722, 736, 749, 763, 777, 790, 804, 819, 833, 848, 862, 877, 892, 907, 922, 938, 953, 969, 985, 1001, 1017, 1033, 1049, 1066, 1083, 1100, 1117, 1134, 1151, 1169, 1186, 1204, 1222, 1240, 1259, 1277, 1296, 1314, 1333, 1352, 1371, 1391, 1410, 1430, 1450, 1470, 1490, 1510, 1531, 1552, 1572, 1593, 1615, 1636, 1657, 1679, 1701, 1723, 1745, 1767, 1790, 1812, 1835, 1858, 1881, 1904, 1928, 1951, 1975, 1999, 2023, 2048, 2072, 2097, 2121, 2146, 2172, 2197, 2222, 2248, 2274, 2300, 2326, 2352, 2379, 2406, 2433, 2460, 2487, 2514, 2542, 2569, 2597, 2626, 2654, 2682, 2711, 2740, 2769, 2798, 2827, 2857, 2886, 2916, 2946, 2977, 3007, 3038, 3068, 3099, 3130, 3162, 3193, 3225, 3257, 3289, 3321, 3354, 3386, 3419, 3452, 3485, 3518, 3552, 3586, 3620, 3654, 3688, 3722, 3757, 3792, 3827, 3862, 3897, 3933, 3969, 4005, 4041, 4077]
 const-value	metal2vulkan::bind::fan_out::BLOCK_SET	5
 const-value	metal2vulkan::bind::fan_out::BLOCK_TRIANGLES	64
 const-value	metal2vulkan::bind::fan_out::BOUND_BUCKETS	16
@@ -1108,7 +1026,6 @@ enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
 enum	metal2vulkan::bind::ChromaDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ChromaDecode
 enum	metal2vulkan::bind::CopySource	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum CopySource
-enum	metal2vulkan::bind::DepthPick	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthPick
 enum	metal2vulkan::bind::DepthStandInForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum DepthStandInForm
 enum	metal2vulkan::bind::DepthStencilCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthStencilCopy
 enum	metal2vulkan::bind::Dispatch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Dispatch
@@ -1137,9 +1054,6 @@ enum	metal2vulkan::bind::PushHole	#[cfg_attr(feature = "serde", derive(serde::Se
 enum	metal2vulkan::bind::RateMapError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RateMapError
 enum	metal2vulkan::bind::RegionError	#[derive(Clone, Debug, PartialEq)] #[non_exhaustive] pub enum RegionError
 enum	metal2vulkan::bind::ReplayRefusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ReplayRefusal
-enum	metal2vulkan::bind::ResolveRule	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveRule
-enum	metal2vulkan::bind::ResolveSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveSource
-enum	metal2vulkan::bind::ResolveWrite	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveWrite
 enum	metal2vulkan::bind::ResourceClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ResourceClass
 enum	metal2vulkan::bind::RewriteOrder	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RewriteOrder
 enum	metal2vulkan::bind::RewriteOutput	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RewriteOutput
@@ -1147,9 +1061,6 @@ enum	metal2vulkan::bind::RewritePhase	#[cfg_attr(feature = "serde", derive(serde
 enum	metal2vulkan::bind::RewriteProgram	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RewriteProgram
 enum	metal2vulkan::bind::RewriteSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RewriteSource
 enum	metal2vulkan::bind::SamplerSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum SamplerSource
-enum	metal2vulkan::bind::ShadowMergeRead	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub enum ShadowMergeRead
-enum	metal2vulkan::bind::ShadowMergeStores	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ShadowMergeStores
-enum	metal2vulkan::bind::ShadowTexelView	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub enum ShadowTexelView
 enum	metal2vulkan::bind::StatusWord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StatusWord
 enum	metal2vulkan::bind::TessellationRecords	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TessellationRecords
 enum	metal2vulkan::bind::TextureShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum TextureShape
@@ -2383,25 +2294,11 @@ field	metal2vulkan::bind::ChromaConvertModule.requirements	pub requirements: Req
 field	metal2vulkan::bind::ChromaConvertModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ChromaSampleModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::ChromaSampleModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::ColorResolveModules.fragment	pub fragment: Arc<[u32]>
-field	metal2vulkan::bind::ColorResolveModules.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ColorResolveModules.vertex	pub vertex: Arc<[u32]>
-field	metal2vulkan::bind::ContinuedResult.count	pub count: u32
-field	metal2vulkan::bind::ContinuedResult.first	pub first: u32
-field	metal2vulkan::bind::ContinuedResult.low_half	pub low_half: bool
-field	metal2vulkan::bind::ContinuedResult.offset	pub offset: u64
-field	metal2vulkan::bind::ContinuedResult.sum	pub sum: bool
 field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthSplitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthStencilCopyModules.vertex	pub vertex: Arc<[u32]>
-field	metal2vulkan::bind::DepthStencilResolveDraw.pick	pub pick: DepthPick
-field	metal2vulkan::bind::DepthStencilResolveDraw.samples	pub samples: u32
-field	metal2vulkan::bind::DepthStencilResolveDraw.write	pub write: ResolveWrite
-field	metal2vulkan::bind::DepthStencilResolveModules.fragment	pub fragment: Arc<[u32]>
-field	metal2vulkan::bind::DepthStencilResolveModules.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::DepthStencilResolveModules.vertex	pub vertex: Arc<[u32]>
 field	metal2vulkan::bind::DescriptorBytes.binding	pub binding: u32
 field	metal2vulkan::bind::DescriptorBytes.bytes	pub bytes: Vec<u8>
 field	metal2vulkan::bind::DescriptorBytes.set	pub set: u32
@@ -2670,8 +2567,6 @@ field	metal2vulkan::bind::ReplayVariant.threads_per_threadgroup	pub threads_per_
 field	metal2vulkan::bind::ResidentRange.guest	pub guest: u64
 field	metal2vulkan::bind::ResidentRange.host	pub host: u64
 field	metal2vulkan::bind::ResidentRange.length	pub length: u64
-field	metal2vulkan::bind::ResolveChannel.offset	pub offset: u8
-field	metal2vulkan::bind::ResolveChannel.rule	pub rule: ResolveRule
 field	metal2vulkan::bind::ResourceUse.access	pub access: AccessSet
 field	metal2vulkan::bind::ResourceUse.class	pub class: AccessClass
 field	metal2vulkan::bind::ResourceUse.range	pub range: Option<ByteRange>
@@ -2708,14 +2603,6 @@ field	metal2vulkan::bind::SamplerShape.mirror_clamp_to_edge	pub mirror_clamp_to_
 field	metal2vulkan::bind::SamplerShape.opaque_black_border	pub opaque_black_border: bool
 field	metal2vulkan::bind::SamplerShape.reduction	pub reduction: metal::SamplerReductionMode
 field	metal2vulkan::bind::SamplerShape.valid_lod_clamps	pub valid_lod_clamps: bool
-field	metal2vulkan::bind::ShadowCopyBackModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ShadowCopyBackModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::ShadowCopyInModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ShadowCopyInModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::ShadowMergeImageModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ShadowMergeImageModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::ShadowMergeModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ShadowMergeModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::StageInRegion.origin	pub origin: [u32; 3]
 field	metal2vulkan::bind::StageInRegion.size	pub size: [u32; 3]
 field	metal2vulkan::bind::StageShape.buffers	pub buffers: BTreeMap<u32, BufferShape>
@@ -2801,11 +2688,6 @@ field	metal2vulkan::bind::ViewMapping.render_target_array_index_offset	pub rende
 field	metal2vulkan::bind::ViewMapping.viewport_array_index_offset	pub viewport_array_index_offset: u32
 field	metal2vulkan::bind::ViewSetup.base_layer	pub base_layer: u32
 field	metal2vulkan::bind::ViewSetup.view_mask	pub view_mask: u32
-field	metal2vulkan::bind::VisibilityCombine.dest_range	pub dest_range: BufferRange
-field	metal2vulkan::bind::VisibilityCombine.group_count	pub group_count: u32
-field	metal2vulkan::bind::VisibilityCombine.table	pub table: Vec<u32>
-field	metal2vulkan::bind::VisibilityCombineModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::VisibilityCombineModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::YCbCrCodes.bits	pub bits: u32
 field	metal2vulkan::bind::YCbCrCodes.bytes	pub bytes: u32
 field	metal2vulkan::bind::YCbCrCodes.output	pub output: YCbCrOutput
@@ -3862,10 +3744,8 @@ fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) ->
 fn	metal2vulkan::bind::chroma_convert_module	pub fn chroma_convert_module(device: &Device, decode: ChromaDecode) -> Result<ChromaConvertModule, Error>
 fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
-fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
-fn	metal2vulkan::bind::depth_stencil_resolve_modules	pub fn depth_stencil_resolve_modules(device: &Device, draw: DepthStencilResolveDraw, feature: Feature) -> Result<DepthStencilResolveModules, Error>
 fn	metal2vulkan::bind::draw_merge_module	pub fn draw_merge_module(device: &Device, phase: MergePhase) -> Result<DrawMergeModule, Error>
 fn	metal2vulkan::bind::draw_replay_draw	pub fn draw_replay_draw(commands: &DrawCommands, (plan, key): (&BindingPlan, &VariantKey), merged: bool) -> Result<(), DrawReplayRule>
 fn	metal2vulkan::bind::draw_replay_indexed	pub fn draw_replay_indexed(written: CommandWrites) -> bool
@@ -3916,15 +3796,9 @@ fn	metal2vulkan::bind::replay_preprocess	pub fn replay_preprocess(device: &Devic
 fn	metal2vulkan::bind::replay_preprocess_generated	pub fn replay_preprocess_generated(device: &Device, state: &BindState, execution: &ReplayExecution, variants: &[ReplayVariant], generated: &[GeneratedVariant<'_>]) -> Result<ReplayPreprocess, BindError>
 fn	metal2vulkan::bind::replay_preprocess_module	pub fn replay_preprocess_module(device: &Device) -> Result<ReplayPreprocessModule, Error>
 fn	metal2vulkan::bind::sampler_desc	pub fn sampler_desc(device: &crate::device::Device, desc: &crate::bind::state::SamplerDescriptor, use_: SamplerUse, opaque_black: OpaqueBlackBorder, image_format: Option<vk::Format>) -> Result<vk::SamplerDesc, BindError>
-fn	metal2vulkan::bind::shadow_copy_back_module	pub fn shadow_copy_back_module(device: &Device, view: ShadowTexelView) -> Result<ShadowCopyBackModule, Error>
-fn	metal2vulkan::bind::shadow_copy_in_module	pub fn shadow_copy_in_module(device: &Device, view: ShadowTexelView) -> Result<ShadowCopyInModule, Error>
-fn	metal2vulkan::bind::shadow_merge_image_module	pub fn shadow_merge_image_module(device: &Device, read: ShadowMergeRead, stores: ShadowMergeStores) -> Result<ShadowMergeImageModule, Error>
-fn	metal2vulkan::bind::shadow_merge_kept_image_module	pub fn shadow_merge_kept_image_module(device: &Device, view: ShadowTexelView, stores: ShadowMergeStores) -> Result<ShadowMergeImageModule, Error>
-fn	metal2vulkan::bind::shadow_merge_module	pub fn shadow_merge_module(device: &Device, stores: ShadowMergeStores) -> Result<ShadowMergeModule, Error>
 fn	metal2vulkan::bind::stencil_split_module	pub fn stencil_split_module(device: &Device, feature: Feature) -> Result<StencilSplitModule, Error>
 fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(device: &Device, kernel: &TessellationScanKernel) -> Result<TessellationScanModule, Error>
 fn	metal2vulkan::bind::texel_buffer_parts	pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32
-fn	metal2vulkan::bind::visibility_combine_module	pub fn visibility_combine_module(device: &Device) -> Result<VisibilityCombineModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_floats_module	pub fn ycbcr_convert_floats_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_module	pub fn ycbcr_convert_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_read	pub fn ycbcr_read(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [y, cb, cr]: [u16; 3]) -> [u16; 3]
@@ -7307,18 +7181,6 @@ method	metal2vulkan::bind::ChromaDecode::format	pub fn format(self) -> Format
 method	metal2vulkan::bind::ChromaDecode::of	pub fn of(pf: PixelFormat) -> Option<ChromaDecode>
 method	metal2vulkan::bind::ChromaDecode::texel_format	pub fn texel_format(self) -> Format
 method	metal2vulkan::bind::ChromaSampleModule::shape	pub fn shape(size: [u32; 2], first: u32, extent: [u32; 2]) -> [u8; Self::SHAPE_WORDS as usize * 4]
-method	metal2vulkan::bind::ColorResolveFormat::channels	pub fn channels(self) -> [Option<ResolveChannel>; 4]
-method	metal2vulkan::bind::ColorResolveFormat::device_srgb	pub fn device_srgb(self) -> ColorResolveFormat
-method	metal2vulkan::bind::ColorResolveFormat::exact	pub fn exact(self) -> bool
-method	metal2vulkan::bind::ColorResolveFormat::extended	pub fn extended(self) -> Option<ExtendedRange>
-method	metal2vulkan::bind::ColorResolveFormat::extended_range	pub fn extended_range(form: ExtendedRange) -> Option<ColorResolveFormat>
-method	metal2vulkan::bind::ColorResolveFormat::format	pub fn format(self) -> Format
-method	metal2vulkan::bind::ColorResolveFormat::of	pub fn of(format: Format) -> Option<ColorResolveFormat>
-method	metal2vulkan::bind::ColorResolveFormat::raw_format	pub fn raw_format(self) -> Format
-method	metal2vulkan::bind::ColorResolveFormat::word	pub fn word(word: WordAttachment) -> Option<ColorResolveFormat>
-method	metal2vulkan::bind::ColorResolveFormat::written_raw	pub fn written_raw(self) -> ColorResolveFormat
-method	metal2vulkan::bind::ContinuedResult::new	pub fn new(offset: u64, first: u32, count: u32, sum: bool) -> ContinuedResult
-method	metal2vulkan::bind::DepthStencilResolveDraw::new	pub fn new(pick: DepthPick, samples: u32, write: ResolveWrite) -> DepthStencilResolveDraw
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
 method	metal2vulkan::bind::DrawMergeModule::push_constants	pub fn push_constants(header: u64, status: u64) -> Vec<u8>
 method	metal2vulkan::bind::DrawReplay::new	pub fn new(capacity: u32, first: u32, count: u32, primitive_types: Vec<u32>) -> DrawReplay
@@ -7467,7 +7329,6 @@ method	metal2vulkan::bind::ResidentSet::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan::bind::ResidentSet::len	pub fn len(&self) -> u64
 method	metal2vulkan::bind::ResidentSet::new	pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
 method	metal2vulkan::bind::ResidentSet::with	pub fn with(&self, ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
-method	metal2vulkan::bind::ResolveWrite::reads_stencil	pub fn reads_stencil(self) -> bool
 method	metal2vulkan::bind::RewriteOrder::arrange	pub fn arrange<T: Copy>(self, first: &[T], last: &[T]) -> Vec<T>
 method	metal2vulkan::bind::RewriteOrder::word	pub const fn word(self) -> u32
 method	metal2vulkan::bind::RewritePhase::workgroups	pub fn workgroups(self, pass: &IndexRewritePass) -> u32
@@ -7481,17 +7342,6 @@ method	metal2vulkan::bind::RewriteProgram::vertices	pub fn vertices(self) -> u32
 method	metal2vulkan::bind::RootTable::resident_ranges	pub fn resident_ranges(&self) -> Vec<ResidentRange>
 method	metal2vulkan::bind::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
 method	metal2vulkan::bind::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
-method	metal2vulkan::bind::ShadowCopyBackModule::groups	pub fn groups([width, height]: [u32; 2]) -> [u32; 2]
-method	metal2vulkan::bind::ShadowCopyBackModule::shape	pub fn shape([x0, y0]: [u32; 2], width: u32, row_words: u32, first_word: u32) -> [u8; 16]
-method	metal2vulkan::bind::ShadowCopyInModule::groups	pub fn groups([width, height]: [u32; 2]) -> [u32; 2]
-method	metal2vulkan::bind::ShadowCopyInModule::shape	pub fn shape([x0, y0]: [u32; 2], width: u32, row_words: u32, first_word: u32) -> [u8; 16]
-method	metal2vulkan::bind::ShadowMergeImageModule::groups	pub fn groups(read: ShadowMergeRead, [width, height]: [u32; 2]) -> [u32; 2]
-method	metal2vulkan::bind::ShadowMergeImageModule::shape	pub fn shape([x0, y0]: [u32; 2], width: u32, row_words: u32, first_word: u32) -> [u8; 16]
-method	metal2vulkan::bind::ShadowMergeModule::groups	pub fn groups(count: u32) -> u32
-method	metal2vulkan::bind::ShadowMergeModule::shape	pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 24]
-method	metal2vulkan::bind::ShadowMergeModule::shape_within	pub fn shape_within(width: u32, count: u32, row_words: u32, first_word: u32, columns: Range<u32>) -> [u8; 24]
-method	metal2vulkan::bind::ShadowMergeRead::words	pub fn words(self) -> u32
-method	metal2vulkan::bind::ShadowTexelView::words	pub fn words(self) -> u32
 method	metal2vulkan::bind::SparseTileMap::byte_len	pub fn byte_len(&self) -> u64
 method	metal2vulkan::bind::SparseTileMap::is_mapped	pub fn is_mapped(&self, level: u32, slice: u32, texel: [u32; 3]) -> bool
 method	metal2vulkan::bind::SparseTileMap::new	pub fn new(texture_type: TextureType, extent: [u32; 3], levels: u32, slices: u32, tile: [u32; 3], first_level_in_tail: u32) -> Result<SparseTileMap, TileMapError>
@@ -7526,8 +7376,6 @@ method	metal2vulkan::bind::VertexAmplification::layer	pub fn layer(&self, a: u32
 method	metal2vulkan::bind::VertexAmplification::mapping	pub fn mapping(&self, a: u32, max: u32) -> ViewMapping
 method	metal2vulkan::bind::VertexAmplification::new	pub fn new(count: u32, view_mappings: Vec<ViewMapping>) -> VertexAmplification
 method	metal2vulkan::bind::ViewMapping::new	pub fn new(viewport_array_index_offset: u32, render_target_array_index_offset: u32) -> Self
-method	metal2vulkan::bind::VisibilityCombine::plan	pub fn plan(results: &[ContinuedResult], alignment: u64, max_range: u32, max_groups: u32) -> Option<Vec<VisibilityCombine>>
-method	metal2vulkan::bind::VisibilityCombine::table_bytes	pub fn table_bytes(&self) -> Vec<u8>
 method	metal2vulkan::bind::YCbCrCodes::of	pub fn of(format: crate::metal::format::YCbCrFormat) -> Option<YCbCrCodes>
 method	metal2vulkan::bind::YCbCrCodes::units	pub fn units(&self, n: u64) -> u64
 method	metal2vulkan::bind::YCbCrConversion::of	pub fn of(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix)) -> YCbCrConversion
@@ -8275,14 +8123,9 @@ struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
 struct	metal2vulkan::bind::ChromaConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaConvertModule
 struct	metal2vulkan::bind::ChromaSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaSampleModule
-struct	metal2vulkan::bind::ColorResolveFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ColorResolveFormat
-struct	metal2vulkan::bind::ColorResolveModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ColorResolveModules
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
-struct	metal2vulkan::bind::ContinuedResult	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ContinuedResult
 struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
 struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
-struct	metal2vulkan::bind::DepthStencilResolveDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct DepthStencilResolveDraw
-struct	metal2vulkan::bind::DepthStencilResolveModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilResolveModules
 struct	metal2vulkan::bind::DescriptorBytes	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorBytes
 struct	metal2vulkan::bind::DescriptorRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorRange
 struct	metal2vulkan::bind::DescriptorWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorWrite
@@ -8357,16 +8200,11 @@ struct	metal2vulkan::bind::ReplayPreprocessModule	#[derive(Clone, Debug, Partial
 struct	metal2vulkan::bind::ReplayVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ReplayVariant
 struct	metal2vulkan::bind::ResidentRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResidentRange
 struct	metal2vulkan::bind::ResidentSet	#[derive(Clone, Debug, PartialEq, Eq)] pub struct ResidentSet
-struct	metal2vulkan::bind::ResolveChannel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ResolveChannel
 struct	metal2vulkan::bind::ResourceUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResourceUse
 struct	metal2vulkan::bind::RewriteRunDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct RewriteRunDraw
 struct	metal2vulkan::bind::RootTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RootTable
 struct	metal2vulkan::bind::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
 struct	metal2vulkan::bind::SamplerShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct SamplerShape
-struct	metal2vulkan::bind::ShadowCopyBackModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowCopyBackModule
-struct	metal2vulkan::bind::ShadowCopyInModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowCopyInModule
-struct	metal2vulkan::bind::ShadowMergeImageModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowMergeImageModule
-struct	metal2vulkan::bind::ShadowMergeModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowMergeModule
 struct	metal2vulkan::bind::SparseTileMap	#[derive(Clone, Debug, PartialEq, Eq)] pub struct SparseTileMap
 struct	metal2vulkan::bind::StageInRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInRegion
 struct	metal2vulkan::bind::StageShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageShape
@@ -8391,8 +8229,6 @@ struct	metal2vulkan::bind::VertexAmplification	#[cfg_attr(feature = "serde", der
 struct	metal2vulkan::bind::VertexBufferBind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexBufferBind
 struct	metal2vulkan::bind::ViewMapping	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ViewMapping
 struct	metal2vulkan::bind::ViewSetup	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ViewSetup
-struct	metal2vulkan::bind::VisibilityCombine	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VisibilityCombine
-struct	metal2vulkan::bind::VisibilityCombineModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VisibilityCombineModule
 struct	metal2vulkan::bind::YCbCrCodes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrCodes
 struct	metal2vulkan::bind::YCbCrConversion	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrConversion
 struct	metal2vulkan::bind::YCbCrConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrConvertModule
@@ -10215,8 +10051,6 @@ variant	metal2vulkan::bind::ChromaDecode::Bgrg	Bgrg
 variant	metal2vulkan::bind::ChromaDecode::Gbgr	Gbgr
 variant	metal2vulkan::bind::CopySource::Aspect	Aspect
 variant	metal2vulkan::bind::CopySource::Shadow	Shadow
-variant	metal2vulkan::bind::DepthPick::Max	Max
-variant	metal2vulkan::bind::DepthPick::Min	Min
 variant	metal2vulkan::bind::DepthStandInForm::Multisampled	Multisampled
 variant	metal2vulkan::bind::DepthStandInForm::SamplePlanes	SamplePlanes
 variant	metal2vulkan::bind::DepthStencilCopy::Depth	Depth
@@ -10368,14 +10202,6 @@ variant	metal2vulkan::bind::ReplayRefusal::RegionCount	RegionCount { count: u32 
 variant	metal2vulkan::bind::ReplayRefusal::TooManyCommands	TooManyCommands { count: u32 }
 variant	metal2vulkan::bind::ReplayRefusal::TooManyDispatches	TooManyDispatches { dispatches: u64 }
 variant	metal2vulkan::bind::ReplayRefusal::VariantCount	VariantCount { count: usize }
-variant	metal2vulkan::bind::ResolveRule::Srgb	Srgb
-variant	metal2vulkan::bind::ResolveRule::Unorm	Unorm
-variant	metal2vulkan::bind::ResolveSource::InputAttachment	InputAttachment
-variant	metal2vulkan::bind::ResolveSource::Planes	Planes(PlanesCopy)
-variant	metal2vulkan::bind::ResolveSource::RawInputAttachment	RawInputAttachment
-variant	metal2vulkan::bind::ResolveWrite::Depth	Depth
-variant	metal2vulkan::bind::ResolveWrite::StencilExport	StencilExport
-variant	metal2vulkan::bind::ResolveWrite::StencilPlane	StencilPlane(StencilBit)
 variant	metal2vulkan::bind::ResourceClass::Buffer	Buffer
 variant	metal2vulkan::bind::ResourceClass::Heap	Heap
 variant	metal2vulkan::bind::ResourceClass::Texture	Texture(TextureFacts)
@@ -10401,17 +10227,6 @@ variant	metal2vulkan::bind::RewriteSource::IndirectVertices	IndirectVertices { a
 variant	metal2vulkan::bind::SamplerSource::Immutable	Immutable
 variant	metal2vulkan::bind::SamplerSource::Neutral	Neutral(NeutralResource)
 variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
-variant	metal2vulkan::bind::ShadowMergeRead::B8G8R8A8Unorm	B8G8R8A8Unorm
-variant	metal2vulkan::bind::ShadowMergeRead::R8G8B8A8Unorm	R8G8B8A8Unorm
-variant	metal2vulkan::bind::ShadowMergeRead::Words	Words(ShadowTexelView)
-variant	metal2vulkan::bind::ShadowMergeStores::Blocks	Blocks
-variant	metal2vulkan::bind::ShadowMergeStores::Words	Words
-variant	metal2vulkan::bind::ShadowTexelView::R16Uint	R16Uint
-variant	metal2vulkan::bind::ShadowTexelView::R32G32B32A32Uint	R32G32B32A32Uint
-variant	metal2vulkan::bind::ShadowTexelView::R32G32Uint	R32G32Uint
-variant	metal2vulkan::bind::ShadowTexelView::R32Uint	R32Uint
-variant	metal2vulkan::bind::ShadowTexelView::R8G8B8A8Uint	R8G8B8A8Uint
-variant	metal2vulkan::bind::ShadowTexelView::R8Uint	R8Uint
 variant	metal2vulkan::bind::StatusWord::MeshFaultDraw	MeshFaultDraw
 variant	metal2vulkan::bind::StatusWord::MeshFaultGroups	MeshFaultGroups
 variant	metal2vulkan::bind::StatusWord::MeshFaultObjects	MeshFaultObjects

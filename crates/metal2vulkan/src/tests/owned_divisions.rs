@@ -27,12 +27,6 @@ type Build = (
     Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>,
 );
 
-/// Both forms of a shadow merge's stores.
-const STORES: [bind::ShadowMergeStores; 2] = [
-    bind::ShadowMergeStores::Words,
-    bind::ShadowMergeStores::Blocks,
-];
-
 fn modules() -> Vec<Build> {
     let mut out: Vec<Build> = Vec::new();
     macro_rules! plain {
@@ -48,48 +42,17 @@ fn modules() -> Vec<Build> {
         mesh_object_arguments_module,
         mesh_scan_module,
         replay_preprocess_module,
-        visibility_combine_module,
         ycbcr_write_module,
     );
     let mut push =
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {
             out.push((name, build));
         };
-    for stores in STORES {
-        push(
-            format!("shadow_merge_module({stores:?})"),
-            Box::new(move |d| Ok(bind::shadow_merge_module(d, stores)?.spirv)),
-        );
-    }
     for program in RewriteProgram::ALL {
         for phase in RewritePhase::ALL {
             push(
                 format!("index_rewrite_module({program:?}, {phase:?})"),
                 Box::new(move |d| Ok(bind::index_rewrite_module(d, program, phase)?.spirv)),
-            );
-        }
-    }
-    for view in bind::ShadowTexelView::ALL {
-        push(
-            format!("shadow_copy_back_module({view:?})"),
-            Box::new(move |d| Ok(bind::shadow_copy_back_module(d, view)?.spirv)),
-        );
-        push(
-            format!("shadow_copy_in_module({view:?})"),
-            Box::new(move |d| Ok(bind::shadow_copy_in_module(d, view)?.spirv)),
-        );
-        for stores in STORES {
-            push(
-                format!("shadow_merge_kept_image_module({view:?}, {stores:?})"),
-                Box::new(move |d| Ok(bind::shadow_merge_kept_image_module(d, view, stores)?.spirv)),
-            );
-        }
-    }
-    for read in bind::ShadowMergeRead::ALL {
-        for stores in STORES {
-            push(
-                format!("shadow_merge_image_module({read:?}, {stores:?})"),
-                Box::new(move |d| Ok(bind::shadow_merge_image_module(d, read, stores)?.spirv)),
             );
         }
     }

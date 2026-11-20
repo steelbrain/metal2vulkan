@@ -59,10 +59,7 @@
 //! and of an `RGB9E5Float` one is `NotImplemented(Format)`.
 //!
 //! A multisampled texture of such a format is held in the word's format where the device renders
-//! that at the texture's count (the runtime's image plan), so every sample holds Metal's word. A
-//! pass's resolve of it reads the stored words (`bind::ColorResolveFormat::word`): Metal's rule
-//! for `RGB9E5Float` and an 8-bit sRGB word, a near-equivalent from the codes for a packed 16-bit
-//! one.
+//! that at the texture's count (the runtime's image plan), so every sample holds Metal's word.
 
 use crate::device::requirements::FormatUsage;
 use crate::device::DeviceProfile;

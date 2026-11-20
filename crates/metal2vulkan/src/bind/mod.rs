@@ -48,18 +48,13 @@
 //! render pass instance, and one indirect draw (a run of direct draws of one walk group each,
 //! over one index buffer, one [`IndexRewriteRun`] dispatch of [`index_rewrite_run_module`] for
 //! all of them instead). A pass's visibility results are its queries' results copied to their
-//! offsets, a `Boolean` one the device's own nonzero value where a sample passed; where a split
-//! pass continues a result's query in a later render pass instance, a [`VisibilityCombine`]
-//! dispatch of [`visibility_combine_module`] sums the continuations' counts into a `Counting`
-//! result and ORs them into a `Boolean` one, and where the results accumulate it takes every query
-//! into the word the buffer holds, a count into its low half alone. A pass whose fetching draws
+//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. A pass whose
+//! fetching draws
 //! read a multisampled attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits
 //! the attachment into them with [`planes_split_module`] and merges them back with
 //! [`planes_merge_modules`], through the [`PlanesCopy`] view of its texel size. A multisampled
 //! depth or stencil aspect moves between images without colour copies through the draws of
-//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`], and resolves where
-//! the device's resolve modes do not state Metal's filter through the draws of
-//! [`depth_stencil_resolve_modules`]. The mipmaps of a format the device's blits cannot filter
+//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`]. The mipmaps of a format the device's blits cannot filter
 //! are
 //! a bilinear filter in `float` through the
 //! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
@@ -72,14 +67,7 @@
 //! [`replay_preprocess_generated`] over each variant's [`GeneratedVariant`] writes a token stream
 //! for one execution per segment instead ([`GeneratedLayout`]). An indirect dispatch of a kernel
 //! that does not observe its threadgroup partition runs on a flat variant through
-//! [`flat_dispatch_module`], which reads its arguments on the device ([`FlatIndirect`]). Where one
-//! command writes a buffer's bytes through a texture copied in and out of them and also another
-//! way, [`shadow_merge_module`] merges the bytes the texture changed into the buffer's in place of
-//! the copy back ([`shadow_merge_image_module`] reading the shadow's texels through its
-//! unsigned-integer view, where it has one, or its own 8-bit unsigned normalized view
-//! ([`ShadowMergeRead`]), and [`shadow_merge_kept_image_module`] reading the kept texels from an
-//! image copy of the shadow too), and where a device copies a shadow back faster by a dispatch, [`shadow_copy_back_module`] stores its texels' words at their rows, and
-//! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
+//! [`flat_dispatch_module`], which reads its arguments on the device ([`FlatIndirect`]).
 //! [`clamped_depth`] is a 32-bit float depth clamped into `[0, 1]`, as a copy into a depth image
 //! of a device without `VK_EXT_depth_range_unrestricted` needs it. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
@@ -113,10 +101,8 @@ pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
 pub(crate) mod chroma_decode;
-pub(crate) mod color_resolve;
 pub(crate) mod depth_clamp;
 pub(crate) mod depth_stencil_copy;
-pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
 pub(crate) mod etc_decode;
 pub mod fan_out;
@@ -138,10 +124,6 @@ pub(crate) mod replay;
 pub(crate) mod resident;
 pub(crate) mod sample_interleave;
 pub(crate) mod sample_planes;
-pub(crate) mod shadow_copy_back;
-pub(crate) mod shadow_copy_in;
-pub(crate) mod shadow_merge;
-pub(crate) mod shadow_merge_image;
 pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod table;
@@ -149,7 +131,6 @@ pub(crate) mod tessellation_scan;
 pub(crate) mod texel_parts;
 pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
-pub(crate) mod visibility_combine;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
 pub(crate) mod ycbcr_write;
@@ -167,19 +148,11 @@ pub use chroma_decode::{
     chroma_convert_module, chroma_sample_module, ChromaConvertModule, ChromaDecode,
     ChromaSampleModule,
 };
-pub use color_resolve::{
-    color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
-    ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
-};
 pub use depth_clamp::clamped_depth;
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
     StencilSplitModule,
-};
-pub use depth_stencil_resolve::{
-    depth_stencil_resolve_modules, DepthPick, DepthStencilResolveDraw, DepthStencilResolveModules,
-    ResolveWrite,
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
@@ -267,13 +240,6 @@ pub use sample_interleave::{
 pub use sample_planes::{
     planes_merge_modules, planes_split_module, PlanesCopy, PlanesMergeModules, PlanesSplitModule,
 };
-pub use shadow_copy_back::{shadow_copy_back_module, ShadowCopyBackModule, ShadowTexelView};
-pub use shadow_copy_in::{shadow_copy_in_module, ShadowCopyInModule};
-pub use shadow_merge::{shadow_merge_module, ShadowMergeModule, ShadowMergeStores};
-pub use shadow_merge_image::{
-    shadow_merge_image_module, shadow_merge_kept_image_module, ShadowMergeImageModule,
-    ShadowMergeRead,
-};
 pub use status::{
     ExecutionStatus, MeshRecordsFault, ReplayFaults, StatusBits, StatusReport, StatusWord,
     TessellationRecordsFault,
@@ -285,9 +251,6 @@ pub use tessellation_scan::{
 pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
-pub use visibility_combine::{
-    visibility_combine_module, ContinuedResult, VisibilityCombine, VisibilityCombineModule,
-};
 pub use ycbcr_convert::{
     ycbcr_convert_floats_module, ycbcr_convert_module, ycbcr_read, ycbcr_texel, YCbCrCodes,
     YCbCrConversion, YCbCrConvertModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,

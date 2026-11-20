@@ -65,9 +65,7 @@
 //     word resolves to it.
 //   * `BLEND`: Metal makes the source-over blend of every format, `RGB9E5Float`'s included.
 //
-// So the word's format holds Metal's samples exactly, and the crate-owned resolve
-// (`bind::ColorResolveFormat::word`) is Metal's for `RGB9E5Float` and an 8-bit sRGB format, and a
-// near-equivalent for the packed formats (`Degradation::WordResolve`).
+// So the word's format holds Metal's samples exactly.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
