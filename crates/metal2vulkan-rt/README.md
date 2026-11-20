@@ -2899,8 +2899,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   renders: its home is general where it has a storage view (made for shader writes, or of an
   unknown usage, where the device stores its format), shader-read-only where shaders read it,
   else the attachment layout, and its image takes the sampled and feedback usages where the
-  device's image format query offers them beside the rest, the storage usage included; where it
-  refuses them, the image is made without them and a draw that reads it is `Gap::Draw`. A pass
+  device's image format query offers them beside the rest, the storage usage included, at the
+  texture's sample count; where it refuses them, or offers fewer sample counts with them (the
+  sampled usage's can be fewer than the attachment's), the image is made without them and a
+  draw that reads it is `Gap::Draw`. A pass
   that reads no attachment through it records no move of it. Vulkan's feedback layout asks the attachment and sampled usages beside it and
   bars none (VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006); in it the image is only
   rendered and sampled. Through the feedback loop, at the pass's first such draw the rendering

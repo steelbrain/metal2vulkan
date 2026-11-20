@@ -2232,19 +2232,24 @@ fn plan(
         info = info.flags(plan.flags(shape));
         properties = core.image_format_properties(&info);
     }
-    // A format the device makes without the usages the attachment reads add alone is made so,
-    // and its draws read no attachment of their own pass through it.
-    if properties.is_none() && attachment_reads {
+    // Whether the query makes the image at the texture's sample count. The query intersects the
+    // counts of each usage, and the sampled usage's can be fewer than the attachment's (a
+    // sampled integer format's need be one alone, any other format's one and four).
+    let samples = plan.samples;
+    let takes = |properties: &Option<vk::ImageFormatProperties>| {
+        properties.is_some_and(|p| p.sample_counts.contains(samples))
+    };
+    // A format the device makes, at its sample count, without the usages the attachment reads
+    // add alone is made so, and its draws read no attachment of their own pass through it.
+    if attachment_reads && !takes(&properties) {
         attachment_reads = false;
         image_usage = plan.usage;
         properties = core.image_format_properties(&info.usage(image_usage));
     }
-    // Likewise a format the device makes no shadow of: a target shaders do not read is then made
-    // without the sampled usage.
+    // Likewise a format the device makes no shadow of at its sample count: a target shaders do
+    // not read is then made without the sampled usage.
     if properties.is_some() && attachment_reads && !looped {
-        attachment_reads = core
-            .image_format_properties(&info.usage(SHADOW_USAGE))
-            .is_some();
+        attachment_reads = takes(&core.image_format_properties(&info.usage(SHADOW_USAGE)));
         if !attachment_reads && image_usage != plan.usage {
             image_usage = plan.usage;
             properties = core.image_format_properties(&info.usage(image_usage));
