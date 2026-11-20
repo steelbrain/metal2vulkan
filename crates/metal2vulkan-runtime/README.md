@@ -2765,6 +2765,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   Metal's creation refuses it. A point near the viewport's edge or the clip volume is clipped or
   culled by the device's own rule (its `pointClippingBehavior` and the driver's handling of the
   viewport), as Metal states no rule for it (docs/API.md, section 10).
+- A line is drawn by Bresenham's rule, which is Metal's: the pixels whose diamond the line exits
+  (`bresenhamLines`, Floor). The line class's `VkPipeline` chains
+  `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, except for a state that enables alpha to coverage or
+  alpha to one, which Vulkan's Bresenham mode does not take: its lines are drawn by the device's
+  default rule, the rectangle of the line's width on a device whose `strictLines` is set, and the
+  state carries `PrecisionNote::DeviceLineRasterization`. Where a line only touches a pixel's
+  diamond at its vertex, which pixel it covers is the device's own (docs/API.md, section 10).
 - A post-tessellation vertex function's state draws its patches through the device's tessellator
   (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
   the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
@@ -3368,6 +3375,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_swapchain` | device | presenting |
 | `VK_EXT_robustness2` | device | null descriptors, and image reads out of range answered by the device |
 | `VK_EXT_calibrated_timestamps` | device | GPU times on the host clock: the device calibrates its own clock (`VK_TIME_DOMAIN_DEVICE_EXT`) with the host's (`floor::TIME_DOMAINS`) |
+| `VK_EXT_line_rasterization` | device | lines drawn by Bresenham's rule, through `bresenhamLines` below; every venue's driver lists this name (RADV, ANV, lavapipe, NVIDIA's, KosmicKrisp, and the UHD 630's Windows driver, a Vulkan 1.3 device) |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
@@ -3423,6 +3431,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
 | `alphaToOne` | `VkPhysicalDeviceFeatures` | a render pipeline's `alphaToOneEnabled` |
 | `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which needs fragment interlock or raster-order attachment access |
+| `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |

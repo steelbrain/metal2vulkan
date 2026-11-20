@@ -24,12 +24,14 @@ pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::portability_enumeration::NAME];
 
 /// The device extensions the runtime requires and device creation enables: presenting, null
-/// descriptors and image reads out of range answered by the device, and the GPU's clock read with
-/// the host's, for GPU times on the host clock ([`host_time`](crate::host_time)).
+/// descriptors and image reads out of range answered by the device, the GPU's clock read with
+/// the host's, for GPU times on the host clock ([`host_time`](crate::host_time)), and lines drawn
+/// by Bresenham's rule, Metal's (`VK_EXT_line_rasterization`'s `bresenhamLines`).
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
     ash::ext::robustness2::NAME,
     ash::ext::calibrated_timestamps::NAME,
+    ash::ext::line_rasterization::NAME,
 ];
 
 /// The time domains the floor requires the device to calibrate together: its own clock, and the
@@ -245,6 +247,9 @@ pub struct Features {
     /// `VkPhysicalDeviceLinearColorAttachmentFeaturesNV`, of `VK_NV_linear_color_attachment`:
     /// read and enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`]).
     pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>,
+    /// `VkPhysicalDeviceLineRasterizationFeaturesEXT`, of `VK_EXT_line_rasterization`:
+    /// `bresenhamLines` is enabled, and none of the other line modes beside it.
+    pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -295,6 +300,9 @@ macro_rules! feature {
     };
     (@structure linear_attachment) => {
         "VkPhysicalDeviceLinearColorAttachmentFeaturesNV"
+    };
+    (@structure line_rasterization) => {
+        "VkPhysicalDeviceLineRasterizationFeaturesEXT"
     };
     (@translator) => {
         None
@@ -375,6 +383,11 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // A render pipeline's `alphaToOneEnabled`, the device's own: each sample's alpha 1 after the
     // coverage is taken. Every floor driver reports it.
     feature!(core.alpha_to_one => AlphaToOne),
+    // A line drawn by Bresenham's rule, which is Metal's: the pixels whose diamond the line exits.
+    // Vulkan's default rule is the device's own, the rectangle of the line's width on a device
+    // whose `strictLines` is set (lavapipe, NVIDIA's driver). Vulkan 1.4 requires it of every
+    // device.
+    feature!(line_rasterization.bresenham_lines),
     // A render pipeline's logic operation (private render state), the device's own `logicOp`. A
     // device without it would compute the operation in the fragment function, which needs
     // fragment interlock or raster-order attachment access, neither in the floor. Every floor
@@ -787,6 +800,7 @@ unsafe fn query(
             || listed(ash::ext::vertex_attribute_divisor::NAME);
         let border_swizzle_listed = listed(ash::ext::border_color_swizzle::NAME);
         let linear_attachment_listed = listed(ash::nv::linear_color_attachment::NAME);
+        let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
 
         let Features {
             core,
@@ -802,6 +816,7 @@ unsafe fn query(
             divisor,
             border_swizzle,
             linear_attachment,
+            line_rasterization,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -834,6 +849,9 @@ unsafe fn query(
         if linear_attachment_listed {
             features = features.push_next(&mut *linear_attachment);
         }
+        if line_rasterization_listed {
+            features = features.push_next(&mut *line_rasterization);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -848,6 +866,7 @@ unsafe fn query(
         divisor.p_next = std::ptr::null_mut();
         border_swizzle.p_next = std::ptr::null_mut();
         linear_attachment.p_next = std::ptr::null_mut();
+        line_rasterization.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);

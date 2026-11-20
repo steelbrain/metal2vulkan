@@ -507,6 +507,7 @@ impl Device {
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
+            mut line_rasterization,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -529,7 +530,8 @@ impl Device {
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut robustness2);
+            .push_next(&mut robustness2)
+            .push_next(&mut line_rasterization);
         // An optional extension's structure goes in only where the extension is enabled.
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
         if enabled(ash::khr::shader_maximal_reconvergence::NAME) {

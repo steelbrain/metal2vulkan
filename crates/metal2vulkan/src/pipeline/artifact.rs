@@ -2375,6 +2375,20 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     SwizzledOpaqueBlackBorder,
+    /// A render pipeline state that enables alpha to coverage or alpha to one draws its lines by
+    /// the device's default rule, not Bresenham's: Vulkan's Bresenham mode takes neither
+    /// (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`). Metal covers the pixels
+    /// whose diamond a line exits, which Bresenham's mode is; a device whose `strictLines` is set
+    /// (lavapipe, NVIDIA's driver) covers the rectangle of the line's width instead, so the pixels
+    /// at a line's two ends, and on either side of a pixel boundary the line runs along, may
+    /// differ from Metal's. Every other state draws its lines by Bresenham's rule and records no
+    /// note. Static, decided by the descriptor alone: no translated stage records it; on
+    /// `metal2vulkan-runtime` such a state carries it among its notes (`precision_notes`),
+    /// whether or not it draws lines.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceLineRasterization,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

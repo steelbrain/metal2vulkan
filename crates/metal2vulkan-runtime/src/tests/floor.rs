@@ -95,6 +95,7 @@ fn at_the_floor() -> Queried {
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
     features.robustness2.null_descriptor = vk::TRUE;
+    features.line_rasterization.bresenham_lines = vk::TRUE;
 
     Queried {
         version: vk::make_api_version(0, 1, 3, 0),
@@ -360,7 +361,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 51] = [
+    let cases: [(Clear, Missing); 52] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -567,6 +568,13 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.large_points = vk::FALSE,
             feature(CORE, "largePoints"),
+        ),
+        (
+            |f| f.line_rasterization.bresenham_lines = vk::FALSE,
+            feature(
+                "VkPhysicalDeviceLineRasterizationFeaturesEXT",
+                "bresenhamLines",
+            ),
         ),
     ];
     assert_eq!(
@@ -923,6 +931,7 @@ fn every_missing_item_is_named_at_once() {
             Missing::Extension(ash::khr::swapchain::NAME),
             Missing::Extension(ash::ext::robustness2::NAME),
             Missing::Extension(ash::ext::calibrated_timestamps::NAME),
+            Missing::Extension(ash::ext::line_rasterization::NAME),
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
             feature("VkPhysicalDeviceVulkan13Features", "dynamicRendering"),
             Missing::Limit {
@@ -939,7 +948,7 @@ fn every_missing_item_is_named_at_once() {
     assert_eq!(
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
-         VK_EXT_robustness2; VK_EXT_calibrated_timestamps; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
+         VK_EXT_robustness2; VK_EXT_calibrated_timestamps; VK_EXT_line_rasterization; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"

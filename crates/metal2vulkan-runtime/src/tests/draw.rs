@@ -616,6 +616,63 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A state that enables alpha to coverage or alpha to one carries
+    /// `PrecisionNote::DeviceLineRasterization`, its lines drawn by the device's default rule,
+    /// which Vulkan's Bresenham mode leaves for such a state; a plain state carries none, its lines
+    /// drawn by Bresenham's rule. Each draws its line across row 2.
+    #[test]
+    fn every_device_notes_the_device_line_rule_under_alpha_to_coverage_or_one() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut coverage = plain.clone();
+        coverage.alpha_to_coverage = true;
+        let mut one = plain.clone();
+        one.alpha_to_one = true;
+        let note = crate::PrecisionNote::DeviceLineRasterization;
+        each_device("draw_line_rule", |name, _, device| {
+            let y = 1.0 - 2.5 / 4.0;
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&[-1.0, y, 1.0, y]));
+            let colors = buffers.of(&device, &floats(&[GREEN, GREEN].concat()));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            for (what, d, noted) in [
+                ("plain", &plain, false),
+                ("alpha to coverage", &coverage, true),
+                ("alpha to one", &one, true),
+            ] {
+                let state = state(name, &device, d);
+                assert_eq!(
+                    state.precision_notes().contains(&note),
+                    noted,
+                    "{name}: {what}: the device line rule's note"
+                );
+                let color = target(
+                    &device,
+                    PixelFormat::RGBA8Unorm,
+                    TextureUsage::RENDER_TARGET,
+                );
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Line, 0, 2, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let texels = read(&color, 4);
+                for x in 1..SIDE - 1 {
+                    let i = ((2 * SIDE + x) * 4) as usize;
+                    assert_eq!(texels[i..i + 4], rgba8(GREEN), "{name}: {what}: ({x}, 2)");
+                }
+            }
+            println!("{name}: the device line rule noted under alpha to coverage and alpha to one");
+        });
+    }
+
     /// A state whose descriptor names the line class (`inputPrimitiveTopology`) makes its line
     /// pipeline with the state, beside the triangle one: its first draw of lines makes nothing and
     /// waits for nothing, and draws its row.

@@ -1107,7 +1107,7 @@ const-value	metal2vulkan-runtime::MAX_COLOR_ATTACHMENTS	8
 const-value	metal2vulkan-runtime::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attachment_feedback_loop_layout::NAME, ash::ext::attachment_feedback_loop_dynamic_state::NAME]
 const-value	metal2vulkan-runtime::floor::BORDER_SWIZZLE_EXTENSIONS	&[ash::ext::custom_border_color::NAME, ash::ext::border_color_swizzle::NAME]
 const-value	metal2vulkan-runtime::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
-const-value	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
+const-value	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME, ash::ext::line_rasterization::NAME]
 const-value	metal2vulkan-runtime::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
 const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME]
 const-value	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
@@ -2482,6 +2482,7 @@ field	metal2vulkan-runtime::floor::Features.core	pub core: vk::PhysicalDeviceFea
 field	metal2vulkan-runtime::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
+field	metal2vulkan-runtime::floor::Features.line_rasterization	pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.linear_attachment	pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>
 field	metal2vulkan-runtime::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
@@ -10391,6 +10392,7 @@ variant	metal2vulkan-runtime::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan-runtime::PrecisionNote::DeviceFilteredMipmaps	DeviceFilteredMipmaps
 variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
+variant	metal2vulkan-runtime::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization
 variant	metal2vulkan-runtime::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
 variant	metal2vulkan-runtime::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan-runtime::PrecisionNote::DevicePointSize	DevicePointSize
@@ -12101,6 +12103,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceFilteredMipmaps	DeviceFilteredMipmaps
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize

@@ -346,7 +346,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceRoundedResolve
         | N::CompressedTexelDecode
         | N::SharedExponentKept
-        | N::SwizzledOpaqueBlackBorder => Allowance::Unbounded,
+        | N::SwizzledOpaqueBlackBorder
+        | N::DeviceLineRasterization => Allowance::Unbounded,
     }
 }
 
