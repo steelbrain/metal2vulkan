@@ -300,9 +300,20 @@ fn feature_dependent_entries_name_their_capability() {
         Feature::SampleRateShading,
         F::SampleRateShading,
     );
-    // Without either enabling capability of a fragment `PrimitiveId`, the ID is the flat varying
+    // Without either enabling capability of a fragment `PrimitiveId` (`runtime-floor` states
+    // `tessellationShader`; without it and the features that need it), the ID is the flat varying
     // the pipeline's vertex function writes (`engine_primitive_ids`).
-    let a = compile(&bc, "stage_io_fragment_primitive", &floor).expect("primitive");
+    let untessellated = profile_without(
+        "runtime-floor",
+        &[
+            F::TessellationShader,
+            F::ShaderTessellationAndGeometryPointSize,
+            F::MultiviewTessellationShader,
+        ],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor");
+    let a = compile(&bc, "stage_io_fragment_primitive", &untessellated).expect("primitive");
     assert!(a
         .interface
         .io

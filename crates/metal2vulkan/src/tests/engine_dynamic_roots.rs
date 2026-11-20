@@ -685,10 +685,9 @@ fn profile_f_refuses_a_loaded_pointer_dereference() {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);
             assert_eq!(
                 u.needs,
-                Needs::AnyOf(vec![vec![
-                    Capability::Feature(VkFeature::BufferDeviceAddress),
-                    Capability::Feature(VkFeature::ShaderInt64),
-                ]])
+                Needs::AnyOf(vec![vec![Capability::Feature(
+                    VkFeature::BufferDeviceAddress
+                )]])
             );
         }
         other => panic!("expected a refusal, got {other:?}"),
