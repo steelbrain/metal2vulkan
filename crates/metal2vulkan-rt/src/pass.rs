@@ -648,7 +648,7 @@ impl Pass {
             }
         }
         let mut colors = Vec::new();
-        let mut resolving = false;
+        let mut any_resolve = false;
         for (index, c) in d.color_attachments.iter().enumerate() {
             let Some(texture) = &c.texture else {
                 continue;
@@ -702,7 +702,7 @@ impl Pass {
                 },
                 LoadAction::Load | LoadAction::DontCare => vk::ClearValue::default(),
             };
-            resolving |= resolve.is_some();
+            any_resolve |= resolve.is_some();
             colors.resize_with(index + 1, || None);
             colors[index] = Some(target(
                 texture,
@@ -757,7 +757,7 @@ impl Pass {
                     LoadAction::Clear => z.clear_depth as f32,
                     LoadAction::Load | LoadAction::DontCare => 0.0,
                 };
-                resolving |= resolve.is_some();
+                any_resolve |= resolve.is_some();
                 let clear = vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
                         depth: clear,
@@ -819,7 +819,7 @@ impl Pass {
                         stencil: s.clear_stencil & 0xff,
                     },
                 };
-                resolving |= resolve.is_some();
+                any_resolve |= resolve.is_some();
                 Some(target(
                     texture,
                     attachment,
@@ -839,7 +839,7 @@ impl Pass {
             // (VUID-VkRenderingInfo-pDepthAttachment-06086, -06104 and -06105).
             let modes = &core.resolve_modes;
             match (&depth.resolve, &stencil.resolve) {
-                _ if !resolving => {}
+                _ if !any_resolve => {}
                 (Some(d), Some(s)) if d.attachment.view != s.attachment.view => {
                     return Err(gap(RenderPassKind::Resolve))
                 }
@@ -859,10 +859,10 @@ impl Pass {
             area: [u32::MAX; 2],
             reach: [u32::MAX; 2],
             samples: vk::SampleCountFlags::empty(),
-            resolving,
+            resolving: any_resolve,
         };
         let colors = pass.colors.iter().flatten();
-        let resolves = (resolving.then(|| colors.clone()).into_iter().flatten())
+        let resolves = (any_resolve.then(|| colors.clone()).into_iter().flatten())
             .filter_map(|t| t.resolve.as_ref().map(|r| r.attachment.linear));
         let shape = linear_shape(
             colors.map(|t| t.attachment.linear),
