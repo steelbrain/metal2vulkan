@@ -1548,13 +1548,15 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
+            mut line_rasterization,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut robustness2);
+            .push_next(&mut robustness2)
+            .push_next(&mut line_rasterization);
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
         if enabled(ash::khr::shader_maximal_reconvergence::NAME) {
             features = features.push_next(&mut maximal_reconvergence);
