@@ -10,6 +10,15 @@
 //! render, compared, where it is not. Every device test runs under the validation layer, which
 //! fails it on any message. `llvm-as` assembles the draw's fixture (`examples/runtime_examples.ll`);
 //! without it the test skips visibly.
+//!
+//! The census: a one-plane surface of each of 16 plane formats at four usages (shader read, with
+//! render target, with shader write, with both), in each handle the device exports, lies in place
+//! with the render target usage only where its tiling renders it through a feature Vulkan defines
+//! for that image: the colour
+//! attachment feature in the tiling's own features (`LINEAR`'s for an opaque handle, the
+//! `DRM_FORMAT_MOD_LINEAR` modifier's for a dma-buf, each read by the test itself), or
+//! `LINEAR_COLOR_ATTACHMENT_NV` in an opaque handle's `LINEAR` tiling on a device that enabled
+//! `linearColorAttachment`. Each format's two bits and each handle's count of forms are printed.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -120,6 +129,162 @@ mod on_device {
             Err(Error::Unsupported(Gap::LinearPlanePass { kind })) => Err(kind),
             Err(error) => panic!("{name}: {error}"),
         }
+    }
+
+    /// The census's plane formats.
+    const FORMATS: [PixelFormat; 16] = [
+        PixelFormat::R8Unorm,
+        PixelFormat::RG8Unorm,
+        PixelFormat::R16Unorm,
+        PixelFormat::RG16Unorm,
+        PixelFormat::R16Float,
+        PixelFormat::RG16Float,
+        PixelFormat::R32Float,
+        PixelFormat::BGRA8Unorm,
+        PixelFormat::BGRA8UnormSRGB,
+        PixelFormat::RGBA8Unorm,
+        PixelFormat::RGBA8UnormSRGB,
+        PixelFormat::RGB10A2Unorm,
+        PixelFormat::BGR10A2Unorm,
+        PixelFormat::RGBA16Float,
+        PixelFormat::RGBA16Unorm,
+        PixelFormat::RGBA32Float,
+    ];
+
+    /// The census's plane usages.
+    const USAGES: [(&str, TextureUsage); 4] = [
+        ("read", TextureUsage::SHADER_READ),
+        (
+            "read+rt",
+            TextureUsage::SHADER_READ.union(TextureUsage::RENDER_TARGET),
+        ),
+        (
+            "read+write",
+            TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE),
+        ),
+        (
+            "read+write+rt",
+            TextureUsage::SHADER_READ
+                .union(TextureUsage::SHADER_WRITE)
+                .union(TextureUsage::RENDER_TARGET),
+        ),
+    ];
+
+    /// The format features of `format` in the tiling of `handle`'s planes: `LINEAR`'s for an
+    /// opaque handle, the `DRM_FORMAT_MOD_LINEAR` modifier's for a dma-buf; `None` where the device
+    /// lists no such modifier for the format, or enabled no modifier extension.
+    fn own_features(
+        device: &Device,
+        handle: ExportHandle,
+        format: vk::Format,
+    ) -> Option<vk::FormatFeatureFlags2> {
+        let core = device.core();
+        if handle != ExportHandle::DmaBuf {
+            return Some(core.format_features(format).0);
+        }
+        if !core.exports.modifiers {
+            return None;
+        }
+        let (instance, physical) = (core.instance.vk(), core.physical);
+        let mut count = vk::DrmFormatModifierPropertiesList2EXT::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut count);
+        // SAFETY: the physical device is the instance's, of Vulkan 1.3, and lists the modifier
+        // extension, which the device enabled.
+        unsafe {
+            instance.get_physical_device_format_properties2(physical, format, &mut properties)
+        };
+        let mut entries = vec![
+            vk::DrmFormatModifierProperties2EXT::default();
+            count.drm_format_modifier_count as usize
+        ];
+        let written = {
+            let mut list = vk::DrmFormatModifierPropertiesList2EXT::default()
+                .drm_format_modifier_properties(&mut entries);
+            let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+            // SAFETY: as above; `entries` holds the count the device answered.
+            unsafe {
+                instance.get_physical_device_format_properties2(physical, format, &mut properties)
+            };
+            list.drm_format_modifier_count as usize
+        };
+        (entries.iter().take(written))
+            .find(|entry| entry.drm_format_modifier == 0)
+            .map(|entry| entry.drm_format_modifier_tiling_features)
+    }
+
+    #[test]
+    fn every_plane_in_place_renders_through_a_feature_its_tiling_defines() {
+        type F = vk::FormatFeatureFlags2;
+        each_device("plane_census", |name, _, device| {
+            let core = device.core();
+            let enabled = core.linear_attachments;
+            println!("plane census: {name}: linearColorAttachment enabled {enabled}");
+            for handle in [OPAQUE, ExportHandle::DmaBuf] {
+                if !core.exports.offers(handle) || (handle.foreign() && !core.exports.foreign) {
+                    println!("plane census: {name}: {handle:?} not exported");
+                    continue;
+                }
+                let (pitch_multiple, start_multiple) = match handle {
+                    ExportHandle::DmaBuf => (256, 256),
+                    _ => (4, 1),
+                };
+                let mut forms = std::collections::BTreeMap::<String, u32>::new();
+                for format in FORMATS {
+                    let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+                    let plan = match device.plane_plan(&d) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            println!("plane census: {name}: {handle:?} {format:?}: {error}");
+                            continue;
+                        }
+                    };
+                    let own = own_features(&device, handle, plan.format);
+                    let plain = own.is_some_and(|f| f.contains(F::COLOR_ATTACHMENT));
+                    let nv = own.is_some_and(|f| f.contains(F::LINEAR_COLOR_ATTACHMENT_NV));
+                    let linear = handle != ExportHandle::DmaBuf && enabled && nv;
+                    let mut line = format!(
+                        "plane census: {name}: {handle:?} {format:?}: own features {}: colour \
+                         attachment {plain}, linear colour attachment {nv};",
+                        own.map_or("none".to_owned(), |f| format!("{:#x}", f.as_raw()))
+                    );
+                    for (label, usage) in USAGES {
+                        d.usage = usage;
+                        let planes = [PlaneSpec {
+                            descriptor: d,
+                            index: None,
+                            rows_below: 0,
+                        }];
+                        let spec = SurfaceSpec {
+                            handle,
+                            pitch_multiple,
+                            start_multiple,
+                            planes: &planes,
+                        };
+                        let form = match device.new_exported_surface(&spec) {
+                            Ok((surface, export)) => {
+                                (surface.wait_until_ready())
+                                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                                let renders = usage.contains(TextureUsage::RENDER_TARGET);
+                                assert!(
+                                    export.form != SurfaceForm::InPlace
+                                        || !renders
+                                        || plain
+                                        || linear,
+                                    "{name}: {handle:?} {format:?} {label} in place, its tiling's \
+                                     features {own:?}, linearColorAttachment {enabled}"
+                                );
+                                format!("{:?}", export.form)
+                            }
+                            Err(error) => format!("refused ({error})"),
+                        };
+                        line += &format!(" {label} {form};");
+                        *forms.entry(form).or_default() += 1;
+                    }
+                    println!("{line}");
+                }
+                println!("plane census: {name}: {handle:?}: {forms:?}");
+            }
+        });
     }
 
     #[test]
