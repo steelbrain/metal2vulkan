@@ -460,8 +460,8 @@ pub(crate) struct Info<'a> {
 }
 
 /// The submit infos of a submission's segments, in order: a segment that waits on nothing joins
-/// the info before it where that one signals nothing, so only an event wait or signal starts a new
-/// one. The GPU runs the command buffers of one info in order, as it runs those of consecutive
+/// the info before it where that one signals nothing, so only a signal, or the wait for a sparse
+/// bind, starts a new one. The GPU runs the command buffers of one info in order, as it runs those of consecutive
 /// infos, and a driver may pay for each info: the UHD 630's paid about 160 us apiece (probe
 /// 06860a3848, job m3-max-43935).
 pub(crate) fn infos(segments: &[Staged]) -> Vec<Info<'_>> {
@@ -1501,12 +1501,6 @@ impl WorkState {
             return Step::Staged;
         }
         let segment = &pending.gpu.segments[pending.next];
-        // A segment that waits on a semaphore leads its group: a driver that merges a submission's
-        // entries gathers their waits ahead of the first one's commands.
-        let waits = (segment.waits.iter()).any(|(event, value)| lock(&event.state).floor < *value);
-        if waits && fifo.group.is_some() {
-            return Step::Goes(index);
-        }
         // A segment that leans on the leading copy for a buffer an earlier segment of the group
         // wrote leads its group, so its copy follows the write (`crate::over`).
         if (fifo.group.as_ref()).is_some_and(|group| group.leans.conflicts(&segment.overs)) {
@@ -1758,7 +1752,10 @@ fn ready(segment: &Segment) -> bool {
     })
 }
 
-/// A ready segment's submit info. A wait the host's value meets submits no semaphore wait; a
+/// A ready segment's submit info. Its waits for events' values submit nothing: a ready segment's
+/// every wait is met by the host's value or by a signal already submitted on the device's one
+/// `VkQueue`, earlier in its submission order, and the barrier ending each segment with commands
+/// (`record::end`) orders every later command after the signaller's, as a semaphore wait would. A
 /// signal not above the highest value submitted or set is left out, so the semaphore only rises.
 /// The consumer's binary semaphores of a presenting command buffer's last segment are signalled
 /// with it.
@@ -1769,17 +1766,6 @@ fn stage(segment: &Segment, watch: &mut Vec<Arc<EventInner>>) -> Staged {
             .map(|command| vk::CommandBufferSubmitInfo::default().command_buffer(command)),
         ..Staged::default()
     };
-    for (event, value) in &segment.waits {
-        if lock(&event.state).floor >= *value {
-            continue;
-        }
-        staged.waits.push(
-            vk::SemaphoreSubmitInfo::default()
-                .semaphore(event.semaphore)
-                .value(*value)
-                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
-        );
-    }
     for (event, value) in &segment.signals {
         let mut state = lock(&event.state);
         if *value <= state.submitted.max(state.floor) {
@@ -2199,7 +2185,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             }
             let began = times::host_time();
             // SAFETY: every command buffer is executable and in no other pending submission;
-            // every wait is on a signal submitted earlier, and every signal raises its semaphore;
+            // the one wait, a sparse bind's, is on a signal submitted earlier, and every signal
+            // raises its semaphore;
             // the queue is held.
             ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
             let nanos = times::host_time().saturating_sub(began);

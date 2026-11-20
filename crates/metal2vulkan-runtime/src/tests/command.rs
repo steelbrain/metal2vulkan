@@ -960,8 +960,8 @@ pub(crate) mod on_device {
     }
 
     /// A command buffer whose wait for an event's value is met only by a submitted signal not yet
-    /// run (one the test makes as if submitted, then gives from the host) is `Scheduled` as it is
-    /// submitted, its scheduled handler run, while the GPU still waits for the value, and so is the
+    /// run (another queue's, held with every later command behind busy work) is `Scheduled` as it
+    /// is submitted, its scheduled handler run, while the signal has not run, and so is the
     /// queue's next command buffer, which waits for nothing: for a plain event's value and for a
     /// shared event's alike. MTLCommandBuffer.h describes `Scheduled` as "All dependencies have
     /// been resolved and the command buffer has been scheduled for execution", and
@@ -978,14 +978,12 @@ pub(crate) mod on_device {
                 arena.buffer(),
                 arena.buffer(),
             );
-            let queue = queue(&device);
+            let (queue, signaller_queue) = (queue(&device), self::queue(&device));
             let log = Log::default();
-            let signal = |semaphore: vk::Semaphore| {
-                let signal = vk::SemaphoreSignalInfo::default()
-                    .semaphore(semaphore)
-                    .value(1);
-                // SAFETY: the semaphore is the device's, and 1 is above its value.
-                unsafe { device.raw().device.signal_semaphore(&signal) }.expect("a host signal");
+            let submitted = |command_buffer: &CommandBuffer| {
+                let before = device.counters().metrics().submissions;
+                command_buffer.commit().expect("a commit");
+                within(name, || device.counters().metrics().submissions > before);
             };
             // Commits a command buffer that waits for `event` at 1, where there is one, and fills
             // `buffer`, and returns it once its submission is counted.
@@ -996,9 +994,7 @@ pub(crate) mod on_device {
                 }
                 fill(&command_buffer, buffer, word);
                 log.handlers(label, &command_buffer);
-                let before = device.counters().metrics().submissions;
-                command_buffer.commit().expect("a commit");
-                within(name, || device.counters().metrics().submissions > before);
+                submitted(&command_buffer);
                 command_buffer
             };
             let plain = device.new_event().expect("an event");
@@ -1007,7 +1003,10 @@ pub(crate) mod on_device {
                 ("plain", &plain, (&a, &b), 1),
                 ("shared", shared.as_event(), (&c, &d), 3),
             ] {
-                event.pretend_submitted_for_test(1);
+                let busy = Busy::new(&device);
+                let signaller = signaller_queue.command_buffer().expect("a command buffer");
+                (signaller.encode_signal_event(event, 1)).expect("a signal");
+                submitted(&signaller);
                 let waiter = waiting(label, Some(event), buffer, word);
                 let next_label = format!("{label} next");
                 let next = waiting(&next_label, None, next_buffer, word + 1);
@@ -1017,7 +1016,7 @@ pub(crate) mod on_device {
                         CommandBufferStatus::Scheduled,
                         CommandBufferStatus::Scheduled
                     ),
-                    "{name}: {label}: scheduled as submitted, the GPU wait still holding them"
+                    "{name}: {label}: scheduled as submitted, the signal not yet run"
                 );
                 // A scheduled handler runs after its command buffer's status reads `Scheduled`.
                 within(name, || log.lines().len() == 2);
@@ -1029,28 +1028,44 @@ pub(crate) mod on_device {
                     ],
                     "{name}: {label}"
                 );
-                signal(event.inner().semaphore);
-                finished(name, &waiter);
-                finished(name, &next);
+                busy.open();
+                for command_buffer in [&signaller, &waiter, &next] {
+                    finished(name, command_buffer);
+                }
                 within(name, || log.lines().len() == 4);
                 lock(&log.0).clear();
+                drop(busy);
             }
             assert_eq!(
                 [&a, &b, &c, &d].map(word),
                 [1, 2, 3, 4],
                 "{name}: every fill ran"
             );
-            drop((a, b, c, d, arena, plain, shared, queue, device));
+            drop((
+                a,
+                b,
+                c,
+                d,
+                arena,
+                plain,
+                shared,
+                queue,
+                signaller_queue,
+                device,
+            ));
         });
     }
 
-    /// Links of a chain on two queues, each waiting for the shared event's value the link before
-    /// it signals and signalling the next, the first behind a value the test gives from the host
-    /// last: every link goes to the driver and reads `Scheduled`, its scheduled handler run, while
-    /// the first has not run, so the queues' later work is submitted before the earlier completes,
-    /// and the submit thread holds none of them for a value. Once the first is let go, the links
-    /// complete in order. A link waiting for a value no submitted signal promises is held, at
-    /// `Committed`, until the host sets it, and counted in `Metrics::event_holds` as it goes.
+    /// Links of a chain on two queues, each but the first waiting for the shared event's value the
+    /// link before it signals, then copying the words of every link before it from that link's
+    /// buffer, writing its own after them, and signalling the next, all behind busy work: every
+    /// link goes to the driver and reads `Scheduled`, its scheduled handler run, before the first
+    /// has run, and the submit thread holds none of them for a value. No semaphore wait is
+    /// submitted for a link: once the busy work ends, the links complete in order, and each holds
+    /// the words of every link before it and its own, as the barrier ending each link's commands
+    /// orders the next link's after them on the device's one queue. A link waiting for a value no
+    /// submitted signal promises is held, at `Committed`, until the host sets it, and counted in
+    /// `Metrics::event_holds` as it goes.
     #[test]
     fn every_device_submits_a_shared_event_chain_across_two_queues_before_its_first_link_runs() {
         const LINKS: u32 = 5;
@@ -1059,21 +1074,53 @@ pub(crate) mod on_device {
             let buffers: Vec<Buffer> = (0..=LINKS).map(|_| arena.buffer()).collect();
             let queues = [queue(&device), queue(&device)];
             let log = Log::default();
-            let gate = device.new_event().expect("an event");
-            gate.pretend_submitted_for_test(1);
             let chain = shared_event(&device);
             let holds = || device.counters().metrics().event_holds;
             let before = holds();
+            // Link `link`'s commands: the words of every link before it, from the buffer of the
+            // one before it, then its own word, `link + 1`, after them.
+            let record = |command_buffer: &CommandBuffer, link: u32| {
+                let at = link as usize;
+                let (own, own_offset) = buffers[at].device_range();
+                let earlier = at.checked_sub(1).map(|before| &buffers[before]);
+                let kept: Vec<&Buffer> = earlier.into_iter().chain([&buffers[at]]).collect();
+                let bytes = 4 * u64::from(link);
+                command_buffer
+                    .record_for_test(&kept, |device, command| {
+                        if let Some(earlier) = earlier {
+                            let (source, source_offset) = earlier.device_range();
+                            let region = vk::BufferCopy::default()
+                                .src_offset(source_offset)
+                                .dst_offset(own_offset)
+                                .size(bytes);
+                            // SAFETY: the command buffer is recording outside any render pass;
+                            // the regions are the buffers' own and do not overlap.
+                            unsafe { device.cmd_copy_buffer(command, source, own, &[region]) };
+                        }
+                        // SAFETY: as above; the word is the buffer's, past the copy's words.
+                        unsafe {
+                            device.cmd_fill_buffer(command, own, own_offset + bytes, 4, link + 1)
+                        };
+                    })
+                    .expect("a link's commands");
+            };
+            let words = |buffer: &Buffer, count: usize| -> Vec<u32> {
+                let contents = buffer.contents().expect("a Shared buffer");
+                // SAFETY: the buffer is alive and 256 bytes long, past `count` words.
+                (0..count)
+                    .map(|at| unsafe { contents.cast::<u32>().as_ptr().add(at).read_volatile() })
+                    .collect()
+            };
+            let busy = Busy::new(&device);
             let links: Vec<CommandBuffer> = (0..LINKS)
                 .map(|link| {
                     let queue = &queues[link as usize % 2];
                     let command_buffer = queue.command_buffer().expect("a command buffer");
-                    let (event, value) = match link {
-                        0 => (&gate, 1),
-                        _ => (chain.as_event(), u64::from(link)),
-                    };
-                    (command_buffer.encode_wait_for_event(event, value)).expect("a wait");
-                    fill(&command_buffer, &buffers[link as usize], link + 1);
+                    if link > 0 {
+                        (command_buffer.encode_wait_for_event(chain.as_event(), u64::from(link)))
+                            .expect("a wait");
+                    }
+                    record(&command_buffer, link);
                     (command_buffer.encode_signal_event(chain.as_event(), u64::from(link) + 1))
                         .expect("a signal");
                     log.handlers(&format!("link {link}"), &command_buffer);
@@ -1091,7 +1138,7 @@ pub(crate) mod on_device {
             assert_eq!(
                 chain.signaled_value(),
                 0,
-                "{name}: no link has run, the first waiting on the GPU"
+                "{name}: no link has run, the busy work holding the device"
             );
             assert_eq!(holds(), before, "{name}: no link held for a value");
             // A link waiting for a value no submitted signal promises: held until the host sets
@@ -1099,14 +1146,10 @@ pub(crate) mod on_device {
             let last = queues[0].command_buffer().expect("a command buffer");
             let value = u64::from(LINKS) + 2;
             (last.encode_wait_for_event(chain.as_event(), value)).expect("a wait");
-            fill(&last, &buffers[LINKS as usize], LINKS + 1);
+            record(&last, LINKS);
             last.commit().expect("a commit");
             // The first link, then the rest in order.
-            let signal = vk::SemaphoreSignalInfo::default()
-                .semaphore(gate.inner().semaphore)
-                .value(1);
-            // SAFETY: the semaphore is the device's, and 1 is above its value.
-            unsafe { device.raw().device.signal_semaphore(&signal) }.expect("a host signal");
+            busy.open();
             for command_buffer in &links {
                 finished(name, command_buffer);
             }
@@ -1137,12 +1180,14 @@ pub(crate) mod on_device {
                 .map(|link| format!("link {link} completed Completed None"))
                 .collect();
             assert_eq!(completed, expected, "{name}: the links completed in order");
-            assert_eq!(
-                buffers.iter().map(word).collect::<Vec<u32>>(),
-                (1..=LINKS + 1).collect::<Vec<u32>>(),
-                "{name}: every fill ran"
-            );
-            drop((last, links, buffers, arena, gate, chain, queues, device));
+            for (at, buffer) in buffers.iter().enumerate() {
+                assert_eq!(
+                    words(buffer, at + 1),
+                    (1..=at as u32 + 1).collect::<Vec<u32>>(),
+                    "{name}: link {at}'s words: every link's before it, then its own"
+                );
+            }
+            drop((last, links, busy, buffers, arena, chain, queues, device));
         });
     }
 
@@ -3476,20 +3521,12 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_ends_its_work_at_a_loss_and_a_new_device_opens() {
         each_device("device_loss", |name, instance, device| {
-            let (e, f, g) = (
-                shared_event(&device),
-                shared_event(&device),
-                shared_event(&device),
-            );
+            let (f, g) = (shared_event(&device), shared_event(&device));
             let queue = queue(&device);
             let other = self::queue(&device);
-            // In flight: its wait is on a signal the test makes as if submitted, then gives from
-            // the host.
-            e.pretend_submitted_for_test(1);
+            // In flight: held with every later command behind busy work.
+            let busy = Busy::new(&device);
             let in_flight = queue.command_buffer().expect("a command buffer");
-            in_flight
-                .encode_wait_for_event(e.as_event(), 1)
-                .expect("a wait");
             in_flight
                 .encode_signal_event(g.as_event(), 1)
                 .expect("a signal");
@@ -3516,12 +3553,7 @@ pub(crate) mod on_device {
                 "{name}: a wait for a pending signal ends at the loss"
             );
 
-            let raw = device.raw();
-            let signal = vk::SemaphoreSignalInfo::default()
-                .semaphore(e.as_event().inner().semaphore)
-                .value(1);
-            // SAFETY: the semaphore is the device's, and 1 is above its value.
-            unsafe { raw.device.signal_semaphore(&signal) }.expect("a host signal");
+            busy.open();
             finished(name, &in_flight);
             finished(name, &held);
             let late = queue.command_buffer().expect("a command buffer");
@@ -3536,7 +3568,7 @@ pub(crate) mod on_device {
                 );
             }
             let physical = physical_of(instance, &device);
-            drop((e, f, g, queue, other, device));
+            drop((busy, f, g, queue, other, device));
 
             let device = Device::new(&physical, DeviceOptions::default()).expect("a new device");
             let counters = device.counters();

@@ -88,8 +88,9 @@ impl Device {
 
     /// `newSharedEvent`.
     ///
-    /// A command buffer that waits for a value of it is `Scheduled` as it is submitted, while the
-    /// GPU still waits for the value, as one that waits for an [`Event`]'s value is: Apple's
+    /// A command buffer that waits for a value of it is `Scheduled` as it is submitted, while its
+    /// commands wait on the GPU for the signaller's, as one that waits for an [`Event`]'s value
+    /// is: Apple's
     /// MTLCommandBuffer.h describes `MTLCommandBufferStatusScheduled` as "All dependencies have
     /// been resolved and the command buffer has been scheduled for execution", and
     /// `encodeWaitForEvent:value:` as a command that "pauses execution of this command buffer
@@ -238,22 +239,6 @@ impl SharedEvent {
     /// `MTLSharedEvent` as an `MTLEvent`, for the encode calls.
     pub fn as_event(&self) -> &Event {
         &self.event
-    }
-
-    /// For the device tests: records a GPU signal of `value` as submitted, so a wait for it waits
-    /// on the semaphore, which the test then signals from the host.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn pretend_submitted_for_test(&self, value: u64) {
-        self.event.pretend_submitted_for_test(value);
-    }
-}
-
-impl Event {
-    /// As [`SharedEvent::pretend_submitted_for_test`].
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn pretend_submitted_for_test(&self, value: u64) {
-        let mut state = lock(&self.inner.state);
-        state.submitted = state.submitted.max(value);
     }
 }
 

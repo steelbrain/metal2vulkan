@@ -1549,7 +1549,7 @@ made, with no lock, and never rewritten for layouts.
   A commit only takes its number; the first call after it begins the next upload, and the
   submission ends the last upload it carries with the one barrier that makes their writes visible
   and records the moves home of every texture they keep in one barrier. Consecutive command
-  buffers that no event wait or signal separates share one submit info, the uploads with the
+  buffers that no event signal separates share one submit info, the uploads with the
   first: the GPU runs them in order either way, and a driver may pay for each info (the UHD 630's
   paid about 160 us apiece). `Metrics::submit_infos` counts them. The uploads not yet submitted
   record at most 4,096 calls and keep at most 64 MiB on their own account: the staging buffers of
@@ -1602,8 +1602,10 @@ made, with no lock, and never rewritten for layouts.
   a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
   "Presenting"). One that waits for an event's value whose signal is submitted, of an `Event` or
-  a `SharedEvent`, is scheduled so too, while the GPU still waits for the value: the wait goes to
-  the driver with the submission, and the queue's later command buffers go behind it. Apple's
+  a `SharedEvent`, is scheduled so too, while its commands wait on the GPU for the signaller's:
+  every queue submits on the device's one `VkQueue`, so the signal's submission is earlier in its
+  submission order, and the barrier ending each segment orders every later command after the
+  signaller's, so no semaphore wait is submitted for an event's value. Apple's
   MTLCommandBuffer.h describes `Scheduled` as "All dependencies have been resolved and the command
   buffer has been scheduled for execution" (lines 47-48), and `encodeWaitForEvent:value:` as a
   command that "pauses execution of this command buffer until the specified event reaches a given
@@ -1689,9 +1691,11 @@ made, with no lock, and never rewritten for layouts.
   commands, or whose last segment has none, records a `VkCommandBuffer` for its timestamps. One
   that ends with an error has GPU times of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
-  (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
-  floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
-  submitted or set is left out, so the semaphore only rises and never races a host set.
+  (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore. A wait
+  submits no semaphore wait: it is held until the floor meets it or a signal of its value is
+  submitted, earlier on the one `VkQueue`, whose segment's end barrier orders the waiter's commands
+  after the signaller's. A GPU signal not above the highest value submitted or set is left out, so
+  the semaphore only rises and never races a host set.
   `signaled_value` is the higher of the semaphore and the floor. `notify_listener` runs its
   listener on the completion thread when the value is reached, at a signal in the middle of a
   command buffer as well as at its end; `wait_until_signaled_value` wakes then too.

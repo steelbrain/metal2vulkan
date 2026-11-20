@@ -62,8 +62,8 @@ pub enum CommandBufferStatus {
     /// goes with no other call. A command buffer that presents a drawable
     /// ([`CommandBuffer::present_drawable`]) is never held: it is scheduled once its submission
     /// has passed `vkQueueSubmit2`. One that waits for an event's value, an [`Event`]'s or a
-    /// [`SharedEvent`](crate::SharedEvent)'s, is scheduled so too, while the GPU still waits for
-    /// the value: MTLCommandBuffer.h describes the status as "All dependencies have been resolved
+    /// [`SharedEvent`](crate::SharedEvent)'s, is scheduled so too, while its commands wait on the
+    /// GPU for the signaller's: MTLCommandBuffer.h describes the status as "All dependencies have been resolved
     /// and the command buffer has been scheduled for execution", and `encodeWaitForEvent:value:`
     /// as a command that "pauses execution of this command buffer until the specified event
     /// reaches a given value", so execution pauses after scheduling. What differs: the M3 Max
@@ -416,8 +416,10 @@ impl CommandBuffer {
     /// `encodeWaitForEvent:value:`: the commands after it run once the event reaches `value`.
     ///
     /// The submit thread holds this segment, and its queue behind it, until the host's value
-    /// reaches `value` (then no semaphore wait is submitted) or a signal of at least `value` is
-    /// submitted (then the segment waits on the semaphore). Other queues go on.
+    /// reaches `value` or a signal of at least `value` is submitted. No semaphore wait is
+    /// submitted: every queue's command buffers go to the device's one `VkQueue`, so the signal's
+    /// submission is earlier in its submission order, and the barrier ending each segment orders
+    /// every later command after the signaller's. Other queues go on.
     ///
     /// Err: [`Refusal::Committed`]; [`Refusal::OtherDevice`] for another device's event;
     /// [`Error::Vulkan`] where ending the segment's commands fails.
