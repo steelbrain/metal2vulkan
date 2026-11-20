@@ -242,9 +242,13 @@ const MEASURED_RUNS: u32 = 1;
 /// announces a kind not here fails the case until the kind is added.
 const PASS_NOTICES: &[Degradation] = &[
     // A `Shared` buffer the device keeps in system memory, which the triangle's vertices are.
-    // (The fixture's vertex function writes `[[point_size]]`, which sizes no triangle: its
-    // `device-point-size` is announced at a draw of points alone, which this family makes none of.)
     Degradation::SharedInSystemMemory,
+    // The fixture's vertex function writes `[[point_size]]`, which sizes no triangle. Where the
+    // device's `pointSizeRange` ends below Metal's largest point, its translation records the
+    // static note `PrecisionNote::DevicePointSize`, which the new runtime's side announces as the
+    // pipeline state is made (the Iris Xe and lavapipe); the old runtime announces it at a draw of
+    // points alone, which this family makes none of. Naming it loosens no byte.
+    Degradation::DevicePointSize,
     // A device that resolves the multisampled attachment through a pass of its own rather than in
     // the store. Announced on lavapipe, where the whole resolve is emulated; MoltenVK resolves in
     // the store and announces nothing.
