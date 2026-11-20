@@ -494,7 +494,7 @@ pub(super) struct MessageSink {
 /// refuses. The executor makes its own heap sets so there, and its sink passes the validation
 /// layer's report of such a layout ([`MessageSink::unsupported_sets`]).
 fn makes_layouts_past_support(description: &DeviceDescription) -> bool {
-    description.driver_id == Some(vk::DriverId::MOLTENVK)
+    description.driver_id == Some(metal2vulkan::vk::DriverId::MOLTENVK)
 }
 
 /// One message the sink kept: its id name and text, which tell the loader's reports apart
