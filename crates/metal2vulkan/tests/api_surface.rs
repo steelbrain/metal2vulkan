@@ -1011,6 +1011,8 @@ surface! {
         fn x_channel;
         fn bound_texel_format;
         fn integer_channels_word;
+        fn bicubic_texels_word;
+        const BICUBIC_TEXELS_UNBOUND;
         struct YCbCrFormat N;
         enum ChromaSubsampling N;
         enum YCbCrReads N;
