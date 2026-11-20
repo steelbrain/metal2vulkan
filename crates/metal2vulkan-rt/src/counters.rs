@@ -343,6 +343,41 @@ impl Site {
 /// The number of [`Site`]s.
 const SITES: usize = Site::PrivateTake as usize + 1;
 
+/// Why a texture over a buffer lives in an image of its own that the device copies its bytes into
+/// and back (`crate::over`), as the texture's making decides it (`crate::texture::check_over`,
+/// then the in-place image's make): the [`Metrics`] pair its copies count in. No Metal
+/// counterpart: Metal makes no such copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverCause {
+    /// The buffer's bytes are in host memory's import ([`Metrics::over_copies_host_memory`]).
+    HostMemory,
+    /// A dma-buf's one import that takes no image here ([`Metrics::over_copies_dma_buf`]).
+    DmaBuf,
+    /// An import over several dma-bufs ([`Metrics::over_copies_dma_bufs`]).
+    DmaBufs,
+    /// Memory dedicated to one object ([`Metrics::over_copies_dedicated`]).
+    Dedicated,
+    /// An exported surface's buffer ([`Metrics::over_copies_surface`]).
+    Surface,
+    /// A block whose memory spilled ([`Metrics::over_copies_spilled`]).
+    Spilled,
+    /// No linear image of the format, usage and size ([`Metrics::over_copies_linear`]).
+    Linear,
+    /// A format feature the linear tiling lacks ([`Metrics::over_copies_linear_features`]).
+    LinearFeatures,
+    /// The linear image's rows at another pitch ([`Metrics::over_copies_pitch`]).
+    Pitch,
+    /// A render target's subresource past its reach ([`Metrics::over_copies_render_reach`]).
+    RenderReach,
+    /// A place off the image's alignment ([`Metrics::over_copies_alignment`]).
+    Alignment,
+    /// The linear image's other memory requirements ([`Metrics::over_copies_image_memory`]).
+    ImageMemory,
+}
+
+/// The number of [`OverCause`]s.
+const OVER_CAUSES: usize = OverCause::ImageMemory as usize + 1;
+
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
 ///
 /// A cheap handle that stays readable after the device is torn down, so a test can read the
@@ -430,6 +465,8 @@ struct Atomics {
     over_copy_bytes: AtomicU64,
     over_copies_imported: AtomicU64,
     over_copy_bytes_imported: AtomicU64,
+    /// Each [`OverCause`]'s over-copies, at its index: their count and bytes.
+    over_by_cause: [[AtomicU64; 2]; OVER_CAUSES],
     attachment_read_copies: AtomicU64,
     attachment_read_copy_bytes: AtomicU64,
     attachment_loop_reads: AtomicU64,
@@ -842,8 +879,8 @@ impl Counters {
     /// ([`Metrics::over_copies`], [`Metrics::over_copy_bytes`]), which count in
     /// [`Metrics::bytes_copied`] too, and where the bytes shaders reach of the buffer are in an
     /// imported block (`imported`), in [`Metrics::over_copies_imported`] and
-    /// [`Metrics::over_copy_bytes_imported`].
-    pub(crate) fn over_copied(&self, bytes: u64, imported: bool) {
+    /// [`Metrics::over_copy_bytes_imported`]; and in the pair of the texture's `cause`.
+    pub(crate) fn over_copied(&self, bytes: u64, imported: bool, cause: OverCause) {
         let a = &self.atomics;
         a.over_copies.fetch_add(1, Relaxed);
         a.over_copy_bytes.fetch_add(bytes, Relaxed);
@@ -852,6 +889,9 @@ impl Counters {
             a.over_copies_imported.fetch_add(1, Relaxed);
             a.over_copy_bytes_imported.fetch_add(bytes, Relaxed);
         }
+        let [copies, copy_bytes] = &a.over_by_cause[cause as usize];
+        copies.fetch_add(1, Relaxed);
+        copy_bytes.fetch_add(bytes, Relaxed);
     }
 
     /// `copies` more copies of attachments' images into their shadows, of `bytes`
@@ -1103,6 +1143,9 @@ impl Counters {
                 over_20_ms: over_20.load(Relaxed),
             }
         };
+        let over = |cause: OverCause| {
+            (a.over_by_cause[cause as usize].each_ref()).map(|n| n.load(Relaxed))
+        };
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -1186,6 +1229,30 @@ impl Counters {
             over_copy_bytes: a.over_copy_bytes.load(Relaxed),
             over_copies_imported: a.over_copies_imported.load(Relaxed),
             over_copy_bytes_imported: a.over_copy_bytes_imported.load(Relaxed),
+            over_copies_host_memory: over(OverCause::HostMemory)[0],
+            over_copy_bytes_host_memory: over(OverCause::HostMemory)[1],
+            over_copies_dma_buf: over(OverCause::DmaBuf)[0],
+            over_copy_bytes_dma_buf: over(OverCause::DmaBuf)[1],
+            over_copies_dma_bufs: over(OverCause::DmaBufs)[0],
+            over_copy_bytes_dma_bufs: over(OverCause::DmaBufs)[1],
+            over_copies_dedicated: over(OverCause::Dedicated)[0],
+            over_copy_bytes_dedicated: over(OverCause::Dedicated)[1],
+            over_copies_surface: over(OverCause::Surface)[0],
+            over_copy_bytes_surface: over(OverCause::Surface)[1],
+            over_copies_spilled: over(OverCause::Spilled)[0],
+            over_copy_bytes_spilled: over(OverCause::Spilled)[1],
+            over_copies_linear: over(OverCause::Linear)[0],
+            over_copy_bytes_linear: over(OverCause::Linear)[1],
+            over_copies_linear_features: over(OverCause::LinearFeatures)[0],
+            over_copy_bytes_linear_features: over(OverCause::LinearFeatures)[1],
+            over_copies_pitch: over(OverCause::Pitch)[0],
+            over_copy_bytes_pitch: over(OverCause::Pitch)[1],
+            over_copies_render_reach: over(OverCause::RenderReach)[0],
+            over_copy_bytes_render_reach: over(OverCause::RenderReach)[1],
+            over_copies_alignment: over(OverCause::Alignment)[0],
+            over_copy_bytes_alignment: over(OverCause::Alignment)[1],
+            over_copies_image_memory: over(OverCause::ImageMemory)[0],
+            over_copy_bytes_image_memory: over(OverCause::ImageMemory)[1],
             attachment_read_copies: a.attachment_read_copies.load(Relaxed),
             attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
             attachment_loop_reads: a.attachment_loop_reads.load(Relaxed),
@@ -1651,6 +1718,77 @@ pub struct Metrics {
     pub over_copies_imported: u64,
     /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
     pub over_copy_bytes_imported: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in host memory's import
+    /// ([`Device::import_host_memory`](crate::Device::import_host_memory)): Vulkan shares that memory's
+    /// ownership with the host, and an image made for it starts undefined, a layout whose move
+    /// keeps no bytes.
+    pub over_copies_host_memory: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_host_memory: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in a dma-buf's one import (`Device::import_dma_buf`, on
+    /// Unix) on a device without `VK_EXT_queue_family_foreign`, or whose external image query
+    /// (`VkPhysicalDeviceExternalImageFormatInfo`) takes no linear image of the texture's format,
+    /// usage and size for the handle, or only one dedicated to its memory.
+    pub over_copies_dma_buf: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_dma_buf: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in an import over several dma-bufs
+    /// (`Device::import_dma_bufs`, on Unix), whose buffer is sparse.
+    pub over_copies_dma_bufs: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_dma_bufs: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in memory dedicated to one object, which no image of the
+    /// runtime's is bound in (`VUID-vkBindImageMemory-memory-10926`): an exported block's
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)), dedicated to its
+    /// buffer; a surface's planes in its copy form lie in one.
+    pub over_copies_dedicated: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_dedicated: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over an exported surface's buffer
+    /// ([`Surface::buffer`](crate::Surface::buffer)).
+    pub over_copies_surface: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_surface: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in a Private block that spilled: its allocation went to
+    /// another memory type than the Private one, the device-local type being out of memory
+    /// ([`Gauges::spilled_bytes`](crate::Gauges::spilled_bytes)).
+    pub over_copies_spilled: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_spilled: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer the device makes no linear image of, for its format, usage and
+    /// size (`vkGetPhysicalDeviceImageFormatProperties2` with linear tiling).
+    pub over_copies_linear: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_linear: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer whose format's linear tiling lacks a feature its usage uses
+    /// that the format's optimal tiling has (copies, sampling and its linear filter, a shader's
+    /// reads, writes and atomics without a format, rendering and blending).
+    pub over_copies_linear_features: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_linear_features: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer whose linear image the device lays at another row pitch than
+    /// the texture's `bytes_per_row`, or with its subresource past its memory's start
+    /// (`vkGetImageSubresourceLayout`).
+    pub over_copies_pitch: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_pitch: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a render target over a buffer whose linear image's subresource, as the device
+    /// advertises it, ends past the texture's own rows (its height times its pitch) or past the
+    /// buffer's end: a store, a clear or a resolve may write back any byte of it.
+    pub over_copies_render_reach: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_render_reach: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer whose place in its memory is not a multiple of its linear
+    /// image's memory alignment (`VkMemoryRequirements::alignment`).
+    pub over_copies_alignment: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_alignment: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer whose linear image's other memory requirements its memory does
+    /// not meet: the device requires an allocation of its own for it, its memory types exclude
+    /// the memory's, or it ends past the memory's end.
+    pub over_copies_image_memory: u64,
+    /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
+    pub over_copy_bytes_image_memory: u64,
     /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
     /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,

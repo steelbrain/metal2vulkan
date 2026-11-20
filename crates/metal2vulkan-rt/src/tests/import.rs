@@ -87,7 +87,7 @@ pub(crate) mod on_device {
 
     /// `len` bytes of host memory of the test's own at a multiple of `alignment`, each byte its
     /// offset times 7, and the allocation to free.
-    fn host_memory(len: u64, alignment: u64) -> (NonNull<u8>, (NonNull<u8>, Layout)) {
+    pub(crate) fn host_memory(len: u64, alignment: u64) -> (NonNull<u8>, (NonNull<u8>, Layout)) {
         let layout = Layout::from_size_align(len as usize, alignment as usize).expect("a layout");
         // SAFETY: the layout's size is not zero.
         let pointer = NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
@@ -98,7 +98,7 @@ pub(crate) mod on_device {
         (pointer, (pointer, layout))
     }
 
-    fn free((pointer, layout): (NonNull<u8>, Layout)) {
+    pub(crate) fn free((pointer, layout): (NonNull<u8>, Layout)) {
         // SAFETY: an allocation of `layout` the test made, which nothing uses any more.
         unsafe { std::alloc::dealloc(pointer.as_ptr(), layout) };
     }

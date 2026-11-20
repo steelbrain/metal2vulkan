@@ -41,7 +41,7 @@
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
-use crate::counters::{Counters, Gauge, Metric, Site};
+use crate::counters::{Counters, Gauge, Metric, OverCause, Site};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
@@ -326,8 +326,9 @@ enum Form {
     /// A texture over a buffer in place ([`Buffer::new_texture`]): the image lies in them.
     InPlace,
     /// A texture over a buffer the device's linear image does not hold: an image of its own,
-    /// which the submissions copy them into and back (`crate::over`).
-    Copied,
+    /// which the submissions copy them into and back (`crate::over`), for the cause its copies
+    /// count under.
+    Copied(OverCause),
 }
 
 /// A texture view's parent, its place in the image, and its own image views.
@@ -735,7 +736,8 @@ impl Image {
         let (d, shape, plan) = &shadowing.made;
         // SAFETY: the device is live, and the texture's plan checked the shadow's usage against
         // its image format query for the shape (`plan`).
-        let (image, backing, bytes, _, _) = unsafe { make(core, d, shape, plan, Bind::Pooled) }?;
+        let (image, backing, bytes, _, _) = unsafe { make(core, d, shape, plan, Bind::Pooled) }
+            .map_err(|unmade| unmade.error(d))?;
         core.counters.rise(Gauge::Shadows);
         core.counters.rise_by(Gauge::ShadowBytes, bytes);
         let made = Arc::new(Image {
@@ -858,7 +860,9 @@ impl Drop for TextureInner {
         }
         // A view's id and image are its parent's, which it keeps.
         if self.view.is_none() {
-            if let Some(named) = (self.named.as_ref()).filter(|named| named.form == Form::Copied) {
+            if let Some(named) =
+                (self.named.as_ref()).filter(|named| matches!(named.form, Form::Copied(_)))
+            {
                 core.counters.fall(Gauge::TexturesCopiedOver);
                 match named.buffer.held().1 {
                     // Its buffer keeps its image where a copy back is owed
@@ -1372,7 +1376,8 @@ impl Device {
                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
             }
             Source::Over(buffer, offset, bytes_per_row) => {
-                laid = check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
+                let checked = check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
+                laid = checked.ok();
                 let named = Named {
                     buffer: Arc::clone(buffer.object()),
                     places: vec![BytesPlace {
@@ -1380,9 +1385,9 @@ impl Device {
                         bytes_per_row: *bytes_per_row,
                         bytes_per_image: 0,
                     }],
-                    form: match laid {
-                        Some(_) => Form::InPlace,
-                        None => Form::Copied,
+                    form: match checked {
+                        Ok(_) => Form::InPlace,
+                        Err(cause) => Form::Copied(cause),
                     },
                 };
                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
@@ -1406,7 +1411,11 @@ impl Device {
                 };
                 (bind, Some(Under::Heap { _block: block }))
             }
-            Source::Over(..) if named.as_ref().is_some_and(|n| n.form == Form::Copied) => {
+            Source::Over(..)
+                if named
+                    .as_ref()
+                    .is_some_and(|n| matches!(n.form, Form::Copied(_))) =>
+            {
                 (Bind::Pooled, None)
             }
             Source::Over(buffer, offset, bytes_per_row) => {
@@ -1452,17 +1461,15 @@ impl Device {
         let mut made = unsafe { make(core, &d, &shape, &plan, bind) };
         // Where the device's linear image does not take the texture's layout, an image of its own
         // that the submissions copy the bytes into and back.
-        if let (Err(Error::Unsupported(Gap::TextureOverBuffer { .. })), Some(named)) =
-            (&made, &mut named)
-        {
-            named.form = Form::Copied;
+        if let (Err(Unmade::Unfit(cause)), Some(named)) = (&made, &mut named) {
+            named.form = Form::Copied(*cause);
             (first, home) = (vk::ImageLayout::UNDEFINED, plan.home);
             block = None;
             acquired = None;
             // SAFETY: as above.
             made = unsafe { make(core, &d, &shape, &plan, Bind::Pooled) };
         }
-        let (image, backing, bytes, sampled, storage) = made?;
+        let (image, backing, bytes, sampled, storage) = made.map_err(|unmade| unmade.error(&d))?;
         // The import's range the image's memory is: its bytes from its place.
         let foreign = acquired.map(|(buffer, offset)| (buffer, offset, bytes));
         core.counters.rise(Gauge::Textures);
@@ -1546,7 +1553,7 @@ impl Device {
         };
         // Over a buffer of no device copy, the commands track what they write while it lives
         // (`crate::over`).
-        let copied = (inner.named.as_ref()).filter(|named| named.form == Form::Copied);
+        let copied = (inner.named.as_ref()).filter(|named| matches!(named.form, Form::Copied(_)));
         if copied.is_some() {
             core.counters.rise(Gauge::TexturesCopiedOver);
         }
@@ -1771,7 +1778,7 @@ fn check_places(
 /// the answer: memory that did not spill, of a block of the runtime's own or a dma-buf's one
 /// import, for a format and usage the device makes linear images of (for that dma-buf, where the
 /// image binds in its memory), with every format feature its optimal image has that the usage
-/// uses. `None` where the texture is the counted copy.
+/// uses. Where the texture is the counted copy, why ([`OverCause`]).
 fn check_over(
     core: &Core,
     d: &TextureDescriptor,
@@ -1780,7 +1787,7 @@ fn check_over(
     buffer: &Buffer,
     offset: u64,
     bytes_per_row: u64,
-) -> Result<Option<Laid>, Error> {
+) -> Result<Result<Laid, OverCause>, Error> {
     let gap = || {
         Error::Unsupported(Gap::TextureOverBuffer {
             pixel_format: d.pixel_format,
@@ -1829,14 +1836,45 @@ fn check_over(
                 memory_type,
             }),
         ) if core.exports.foreign => Laid::DmaBuf { memory_type },
-        (None, Some(_)) => return Ok(None),
+        (None, Some(own)) => return Ok(Err(memory_cause(own))),
     };
     let spilled = copy.is_none() && block.memory.spilled();
     let extent = linear_extent(core, shape, plan, laid.handle())
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
-    Ok((!spilled && extent && features).then_some(laid))
+    Ok(if spilled {
+        Err(OverCause::Spilled)
+    } else if !extent {
+        // A dma-buf's linear image is asked of its external query for the handle.
+        Err(match laid {
+            Laid::DmaBuf { .. } => OverCause::DmaBuf,
+            Laid::Own => OverCause::Linear,
+        })
+    } else if !features {
+        Err(OverCause::LinearFeatures)
+    } else {
+        Ok(laid)
+    })
+}
+
+/// Why a texture over a buffer in `own`'s memory, which no in-place image takes
+/// ([`check_over`]), is the counted copy: the import's or export's kind.
+fn memory_cause(own: Own) -> OverCause {
+    match own {
+        Own::Import { handle, .. } => match handle {
+            ImportHandle::HostMemory => OverCause::HostMemory,
+            // On a device without the foreign queue family.
+            ImportHandle::DmaBuf => OverCause::DmaBuf,
+            ImportHandle::DmaBufs => OverCause::DmaBufs,
+            // A Direct3D 11 texture's import is dedicated to its image.
+            ImportHandle::D3d11Texture => OverCause::Dedicated,
+        },
+        #[cfg(unix)]
+        Own::Sparse { .. } | Own::Chunk => OverCause::DmaBufs,
+        Own::Export(_) => OverCause::Dedicated,
+        Own::Surface { .. } => OverCause::Surface,
+    }
 }
 
 /// The memory a texture over a buffer in place lies in ([`check_over`]).
@@ -2533,6 +2571,33 @@ type Objects = (
     Option<vk::ImageView>,
 );
 
+/// Why [`make`] made no image.
+enum Unmade {
+    /// The device's linear image of a texture over a buffer does not lie in the buffer's memory
+    /// as the texture's bytes do ([`Bind::InPlace`]): the cause its copies count under.
+    Unfit(OverCause),
+    Failed(Error),
+}
+
+impl From<Error> for Unmade {
+    fn from(error: Error) -> Unmade {
+        Unmade::Failed(error)
+    }
+}
+
+impl Unmade {
+    /// The error of a make of `d` that binds no linear image there: an unfit one is the gap of a
+    /// texture over a buffer.
+    fn error(self, d: &TextureDescriptor) -> Error {
+        match self {
+            Unmade::Failed(error) => error,
+            Unmade::Unfit(_) => Error::Unsupported(Gap::TextureOverBuffer {
+                pixel_format: d.pixel_format,
+            }),
+        }
+    }
+}
+
 /// Makes the image, binds it to a place in a texture block or to memory of its own, and makes its
 /// views.
 ///
@@ -2546,7 +2611,7 @@ unsafe fn make(
     shape: &Shape,
     plan: &Plan,
     bind: Bind,
-) -> Result<Objects, Error> {
+) -> Result<Objects, Unmade> {
     let mut made = Made::default();
     // SAFETY: the caller's contract; what was made is destroyed where a later step fails.
     let objects = unsafe { made.make(core, d, shape, plan, bind) };
@@ -2682,7 +2747,7 @@ impl Made {
         shape: &Shape,
         plan: &Plan,
         bind: Bind,
-    ) -> Result<Objects, Error> {
+    ) -> Result<Objects, Unmade> {
         let device = &core.device;
         let mut list = plan.format_list();
         let info = image_info(d, shape, plan, &mut list);
@@ -2726,7 +2791,7 @@ impl Made {
             true => match (core.places).place(core, requirements.size, requirements.alignment) {
                 Ok(found) => Some(found),
                 Err(error) if error.is_out_of_device_memory() => None,
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             },
             false => None,
         };
@@ -2748,19 +2813,24 @@ impl Made {
             };
             // SAFETY: the image is the device's, linear, of one level and layer of a color format.
             let layout = unsafe { device.get_image_subresource_layout(image, color) };
-            let fits = layout.offset == 0
-                && layout.row_pitch == bytes_per_row
-                && in_reach(layout.size, reach)
-                && dedicated.requires_dedicated_allocation == vk::FALSE
+            let memory_fits = dedicated.requires_dedicated_allocation == vk::FALSE
                 && bits & (1 << memory_type) != 0
-                && (base + at).is_multiple_of(requirements.alignment)
                 && at
                     .checked_add(requirements.size)
                     .is_some_and(|end| end <= block_len);
-            if !fits {
-                return Err(Error::Unsupported(Gap::TextureOverBuffer {
-                    pixel_format: d.pixel_format,
-                }));
+            let unfit = if layout.offset != 0 || layout.row_pitch != bytes_per_row {
+                Some(OverCause::Pitch)
+            } else if !in_reach(layout.size, reach) {
+                Some(OverCause::RenderReach)
+            } else if !(base + at).is_multiple_of(requirements.alignment) {
+                Some(OverCause::Alignment)
+            } else if !memory_fits {
+                Some(OverCause::ImageMemory)
+            } else {
+                None
+            };
+            if let Some(cause) = unfit {
+                return Err(Unmade::Unfit(cause));
             }
             (Backing::InBlock, memory, base + at)
         } else if let Bind::Heap {
@@ -2786,7 +2856,7 @@ impl Made {
                 && at.is_some_and(|at| (base + at).is_multiple_of(fit.align));
             match (fits, at) {
                 (true, Some(at)) => (Backing::InBlock, memory, base + at),
-                _ => return Err(refused),
+                _ => return Err(refused.into()),
             }
         } else if let Some((place, block)) = pooled {
             (
@@ -4453,14 +4523,16 @@ pub(crate) trait TextureObject {
     /// submissions copy into and back by the Shared rules (`crate::over`): its form and its
     /// buffer's, read, nothing worked out.
     fn copied_shared(&self) -> bool {
-        (self.object().named.as_ref())
-            .is_some_and(|named| named.form == Form::Copied && named.buffer.held().1.is_none())
+        (self.object().named.as_ref()).is_some_and(|named| {
+            matches!(named.form, Form::Copied(_)) && named.buffer.held().1.is_none()
+        })
     }
 
     /// Of a texture over a Managed buffer's device copy in an image of its own, which Metal's
     /// Managed events owe copies (`crate::over::ManagedOvers`): the buffer.
     fn managed_over(&self) -> Option<&Arc<BufferInner>> {
-        let named = (self.object().named.as_ref()).filter(|named| named.form == Form::Copied)?;
+        let named =
+            (self.object().named.as_ref()).filter(|named| matches!(named.form, Form::Copied(_)))?;
         named.buffer.held().1.map(|_| &named.buffer)
     }
 
@@ -4468,7 +4540,10 @@ pub(crate) trait TextureObject {
     /// copy between the bytes shaders reach of it and the image.
     fn copied_over(&self) -> Option<(&Arc<BufferInner>, OverCopy)> {
         let inner = &self.object();
-        let named = (inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
+        let named = inner.named.as_ref()?;
+        let Form::Copied(cause) = named.form else {
+            return None;
+        };
         let unit = inner.unit?;
         let place = named.places[0];
         let d = &inner.descriptor;
@@ -4501,6 +4576,7 @@ pub(crate) trait TextureObject {
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.imported(),
+            cause,
         };
         Some((&named.buffer, copy))
     }
@@ -4663,6 +4739,9 @@ pub(crate) struct OverCopy {
     pub(crate) shared: bool,
     /// The bytes shaders reach are in an imported block (`Metrics::over_copies_imported`).
     pub(crate) imported: bool,
+    /// Why the texture is not in place: the pair of [`Metrics`](crate::Metrics) its copies count
+    /// in too.
+    pub(crate) cause: OverCause,
 }
 
 impl crate::kept::Handle for Texture {

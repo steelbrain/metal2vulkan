@@ -168,6 +168,8 @@ nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time 
 driver (`submit_call_nanos`, with the calls over 100 ms counted) and the submit thread's wait
 for the queue's lock before a submission's calls (`queue_lock_wait_nanos`), which on a family of
 one queue is also the wait behind the consumer's presents (`Device::with_present_queue`);
+the copies of textures over a buffer that no linear image holds are split by cause
+(`over_copies_pitch` and the rest, in Textures below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.
@@ -1206,7 +1208,14 @@ made, with no lock, and never rewritten for layouts.
   `bytes_per_row` apart, with no CPU copy. Each copy counts in `Metrics::over_copies` and its
   bytes in `Metrics::over_copy_bytes` and `Metrics::bytes_copied`; one over a buffer in an
   imported block counts in `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported`
-  too. When is decided by the buffer's storage:
+  too. Each copy also counts in the pair of the cause the texture's making found, the first that
+  holds: the buffer's memory (`over_copies_host_memory`, `_dma_buf`, `_dma_bufs`, `_dedicated`
+  for an exported block's, `_surface` for an exported surface's buffer), a spilled block
+  (`_spilled`), no linear image of the format, usage and size (`_linear`), a format feature the
+  linear tiling lacks (`_linear_features`), then the linear image as made: its row pitch or
+  start (`_pitch`), a render target's reach (`_render_reach`), the place off its memory
+  alignment (`_alignment`) and its other memory requirements (`_image_memory`), each with its
+  `over_copy_bytes_` field. When is decided by the buffer's storage:
   - Over a Shared buffer (or a Managed one without a device copy), once a submission: the upload
     that leads it copies the bytes into every such texture a segment of it uses before any command
     of the segment wrote the buffer, between one pair of barriers. Inside a segment a command that
