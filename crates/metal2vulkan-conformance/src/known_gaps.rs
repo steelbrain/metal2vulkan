@@ -208,7 +208,8 @@ pub enum ConsumerObject {
     TextureDescriptorFields,
     /// A pipeline state's reflection and the `MTLPipelineOption` bits a creation takes, each named:
     /// the runtime builds no reflection and acts on no option, and its consumer builds reflection
-    /// from the library's AIR. An option outside the named ones is not this object.
+    /// from the library's AIR. A word with a bit Metal defines no option for is this object too:
+    /// Metal reflects under it as under `MTLPipelineOptionBindingInfo`.
     PipelineReflection,
     /// `MTLTexture`'s `parentTexture`, `parentRelativeLevel`, `parentRelativeSlice` and
     /// `shareable`: the runtime's view keeps the texture whose image it reads and no getter, and

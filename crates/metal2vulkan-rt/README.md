@@ -27,8 +27,9 @@ them over this crate's items:
   and the options a creation takes: `MTLPipelineOptionFailOnBinaryArchiveMiss`,
   `MTLPipelineOptionArgumentInfo`, `MTLPipelineOptionBufferTypeInfo` and
   `MTLPipelineOptionBindingInfo`. rt builds no pipeline reflection and acts on no
-  `MTLPipelineOption`; its consumer builds reflection from the library's AIR. An option not
-  named here is not the consumer's by this line.
+  `MTLPipelineOption`; its consumer builds reflection from the library's AIR. A word with a bit
+  Metal defines no option for is the consumer's too: Metal reflects under it as under
+  `MTLPipelineOptionBindingInfo`.
 - `MTLTexture`'s `parentTexture`, `parentRelativeLevel`, `parentRelativeSlice` and `shareable`.
   `Texture::new_texture_view` keeps the texture whose image the view reads and no getter, and no
   texture here is shareable; the consumer keeps the texture it made a view of and what it shared.

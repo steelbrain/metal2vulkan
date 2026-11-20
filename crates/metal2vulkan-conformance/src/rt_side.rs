@@ -328,21 +328,14 @@ fn heap_is_the_consumers() -> Failure {
     )
 }
 
-/// The `MTLPipelineOption` bits the consumer's own reason names
+/// The consumer's own, for a pipeline creation that asks for reflection or takes options, under
+/// any option word
 /// ([`ConsumerObject::PipelineReflection`](crate::known_gaps::ConsumerObject::PipelineReflection)):
-/// `MTLPipelineOptionBindingInfo` (`MTLPipelineOptionArgumentInfo`'s bit),
-/// `MTLPipelineOptionBufferTypeInfo` and `MTLPipelineOptionFailOnBinaryArchiveMiss`.
-const NAMED_OPTIONS: u64 = (1 << 0) | (1 << 1) | (1 << 2);
-
-/// The consumer's own, for a pipeline creation under `options` that asks for reflection or takes
-/// options: the runtime builds no pipeline reflection and acts on no `MTLPipelineOption`, and its
-/// consumer builds reflection from the library's AIR, as the runtime's README says. A word with a
-/// bit outside the named options is `call`'s, unavailable, so an option the reason does not name is
-/// never taken for the consumer's.
-pub(crate) fn reflection_is_the_consumers(call: &str, options: u64) -> Failure {
-    if options & !NAMED_OPTIONS != 0 {
-        return Failure::unavailable(call);
-    }
+/// the runtime builds no pipeline reflection and acts on no `MTLPipelineOption`, and its consumer
+/// builds reflection from the library's AIR, as the runtime's README says. A word with a bit Metal
+/// defines no option for is the consumer's too: Metal reflects under it as under
+/// `MTLPipelineOptionBindingInfo` (the `pipeline-options-*-undefined-bit-*` recordings).
+pub(crate) fn reflection_is_the_consumers() -> Failure {
     Failure::named(
         "TheConsumers",
         "metal2vulkan-rt builds no pipeline reflection and acts on no MTLPipelineOption \
@@ -971,7 +964,7 @@ impl Side for RtSide<'_> {
         _library: Handle,
         _entry: &str,
     ) -> Answer<Vec<crate::function_bindings::BindingFacts>> {
-        Err(reflection_is_the_consumers("compute_pipeline_bindings", 0))
+        Err(reflection_is_the_consumers())
     }
 
     /// The consumer's own (`reflection_is_the_consumers`).
@@ -979,12 +972,9 @@ impl Side for RtSide<'_> {
         &mut self,
         _library: Handle,
         _entry: &str,
-        options: u64,
+        _options: u64,
     ) -> Answer<crate::pipeline_options::OptionOutcome> {
-        Err(reflection_is_the_consumers(
-            "compute_pipeline_under_options",
-            options,
-        ))
+        Err(reflection_is_the_consumers())
     }
 
     /// The consumer's own (`reflection_is_the_consumers`).
@@ -994,12 +984,9 @@ impl Side for RtSide<'_> {
         _vertex: &str,
         _fragment: &str,
         _attachment: PixelFormat,
-        options: u64,
+        _options: u64,
     ) -> Answer<crate::pipeline_options::OptionOutcome> {
-        Err(reflection_is_the_consumers(
-            "render_pipeline_under_options",
-            options,
-        ))
+        Err(reflection_is_the_consumers())
     }
 
     /// The consumer's own (`reflection_is_the_consumers`).
@@ -1007,12 +994,9 @@ impl Side for RtSide<'_> {
         &mut self,
         _library: Handle,
         _entry: &str,
-        options: u64,
+        _options: u64,
     ) -> Answer<crate::pipeline_option_reflection::UnderOptions> {
-        Err(reflection_is_the_consumers(
-            "compute_pipeline_reflection_under",
-            options,
-        ))
+        Err(reflection_is_the_consumers())
     }
 
     /// The consumer's own for a compute pipeline's two creation paths, which compare the
@@ -1024,14 +1008,12 @@ impl Side for RtSide<'_> {
         form: &crate::pipeline_handlers::Form<'_>,
     ) -> Answer<crate::pipeline_handlers::BothPaths> {
         use crate::pipeline_handlers::Form;
-        const CALL: &str = "pipeline_both_paths";
         Err(match *form {
-            Form::ComputeFunction { options, .. } => {
-                reflection_is_the_consumers(CALL, options.unwrap_or(0))
+            Form::ComputeFunction { .. } | Form::ComputeDescriptor { .. } => {
+                reflection_is_the_consumers()
             }
-            Form::ComputeDescriptor { options, .. } => reflection_is_the_consumers(CALL, options),
             Form::Render { .. } | Form::Tile { .. } | Form::Mesh { .. } => {
-                Failure::unavailable(CALL)
+                Failure::unavailable("pipeline_both_paths")
             }
         })
     }
