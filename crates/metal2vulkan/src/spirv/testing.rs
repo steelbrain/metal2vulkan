@@ -327,39 +327,6 @@ pub fn is_moltenvk_capture(stem: &str) -> bool {
     MOLTENVK_CAPTURES.contains(&stem)
 }
 
-/// One long check as several tests, so nextest runs them side by side: a suite's wall-clock is
-/// at least its longest test's, and an exhaustive table run as one test was the longest.
-///
-/// `sharded_tests!(group = run(shard_0 => 0, shard_1 => 1, ...))` declares module `group` with
-/// test `shard_k` calling `run(k, n)` (`run` in the module that invokes this), `n` the number of
-/// shards listed; `run` checks the cases whose index is `k` modulo `n`. The shards must be
-/// numbered `0, 1, ..., n - 1` in order, or the module does not compile: every case runs in
-/// exactly one shard.
-macro_rules! sharded_tests {
-    ($group:ident = $run:ident($($test:ident => $k:literal),+ $(,)?)) => {
-        mod $group {
-            /// The number of shards.
-            const SHARDS: usize = [$($k),+].len();
-            // The shards are numbered 0, 1, ..., SHARDS - 1, in order.
-            const _: () = {
-                let shards: [usize; SHARDS] = [$($k),+];
-                let mut i = 0;
-                while i < SHARDS {
-                    assert!(shards[i] == i, "shards are numbered 0, 1, ... in order");
-                    i += 1;
-                }
-            };
-            $(
-                #[test]
-                fn $test() {
-                    super::$run($k, SHARDS);
-                }
-            )+
-        }
-    };
-}
-pub(crate) use sharded_tests;
-
 /// The constants of SPIR-V `words` by id: `(width, value)` of each 32- or 64-bit integer
 /// `OpConstant`.
 pub fn int_constants(words: &[u32]) -> std::collections::BTreeMap<u32, (u32, u64)> {
