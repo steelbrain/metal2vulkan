@@ -1222,7 +1222,7 @@ impl<'a> AddrFacts<'a> {
     /// Address `ptr` at each place of a thread ([`Lanes`]), where its walk down bitcasts, GEPs and
     /// phis of one value (at most [`MAX_CHAIN`] steps) ends at a base uniform in the simdgroup and
     /// every non-constant index is computed from a thread's place and constants alone
-    /// ([`AddrFacts::place_value`]), [`MAX_LANE_OPS`] operations in all. A GEP index is
+    /// ([`AddrFacts::lane_program`]), [`MAX_LANE_OPS`] operations in all. A GEP index is
     /// sign-extended or truncated to the index width and scaled by its stride, a struct index
     /// adds its field's offset, and the sum wraps at the index width, as the address does.
     fn lanes(&self, ptr: Value, m: &mut Meter) -> Result<Option<Lanes>, Error> {

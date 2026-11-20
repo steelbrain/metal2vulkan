@@ -334,8 +334,7 @@ fn konst(mb: &mut ModuleBuilder, v: u64) -> BResult<ConstId> {
 }
 
 /// The `class` variable of type `ty`, with a null initializer where it is `zeroed`: a
-/// threadgroup arena on a profile whose threadgroup memory reads zero until the program writes it
-/// (`ThreadgroupStart::Zero`).
+/// threadgroup arena, whose memory reads zero until the program writes it.
 fn variable(
     mb: &mut ModuleBuilder,
     class: StorageClass,
@@ -398,8 +397,7 @@ fn static_words(bytes: u64) -> u64 {
 /// / 4, MIN_ARENA_BYTES / 4)`, all `OpSpecConstantOp`s. An arena of `float` words
 /// ([`TgWords::Floats`]) is a `float` array of its whole words, at least [`FLOAT_LEAST`]
 /// ([`float_len`]). A `zeroed` arena's array has a null initializer: the program's threadgroup
-/// memory, its tile's memory and its imageblock among it, reads zero until it is written
-/// (`ThreadgroupStart::Zero`).
+/// memory, its tile's memory and its imageblock among it, reads zero until it is written.
 pub fn declare_threadgroup(
     mb: &mut ModuleBuilder,
     shape: &TgShape,

@@ -12,8 +12,7 @@
 //! [`DispatchPlan::keys`]): link gives a key one id over the pipeline, and a mesh render pipeline's
 //! object and mesh threadgroups take separate sizes.
 //!
-//! **Deep threadgroups.** On `Device::from_queries`' profile (`DeepThreadgroups::OneRow`) a
-//! kernel of the `Spec` form declares `SpecKey::DeepThreadgroup` ([`DispatchPlan::deep`]), under
+//! **Deep threadgroups.** A kernel of the `Spec` form declares `SpecKey::DeepThreadgroup` ([`DispatchPlan::deep`]), under
 //! which its `WorkgroupSize` is `(sn, 1, 1)`, `sn = sx·sy·sz` (each part an `OpSpecConstantOp`
 //! select of the constants) and its position in the threadgroup `LocalInvocationIndex`
 //! unflattened over `(sx, sy, sz)`: Metal allows 1024 threads along `z`, where a device's
@@ -126,8 +125,7 @@
 //! **Grid tiles** ([`DispatchPlan::grid_edge`], `RuntimeFact::GridTiles`). A kernel that does not
 //! observe its threadgroup partition reads only `thread_position_in_grid` and `threads_per_grid`,
 //! so neither Metal's threadgroups nor their partial edges reach it: only the set of positions
-//! does. On `Device::from_queries`' profile under the identity domains (`ObliviousEdge::Grid`)
-//! its partial-threadgroups variant runs its grid in tiles. Under `MultiRegion` 1 its workgroup of
+//! does. Under the identity domains its partial-threadgroups variant runs its grid in tiles. Under `MultiRegion` 1 its workgroup of
 //! [`GRID_TILE_THREADS`] is one tile, whose power-of-two sides the region's nominal size gives
 //! ([`grid_tile`] picks them from the grid's extents): the invocation's position is the tile's
 //! origin `(base + WorkgroupId) << s` plus `LocalInvocationIndex` masked and shifted by the sides,
@@ -525,8 +523,8 @@ pub struct DispatchPlan {
     /// threadgroup runs only the threads Metal's partial threadgroup has (the module docs). It
     /// declares `MultiRegion` and reads the region whatever builtins it reads.
     pub partial_groups: bool,
-    /// Of `partial_groups`, a kernel that does not observe its threadgroup partition, on a profile
-    /// whose [`ObliviousEdge`] is `Grid` under the identity domains: under `MultiRegion` 1 its
+    /// Of `partial_groups`, a kernel that does not observe its threadgroup partition, under the
+    /// identity domains: under `MultiRegion` 1 its
     /// workgroup is one tile of the grid whose power-of-two sides the region's nominal size gives
     /// ([`grid_tile`]), and an invocation past the region's grid returns before the body, whatever
     /// the region's flags; under `MultiRegion` 0 it runs at its pipeline's size (the module docs'
@@ -540,8 +538,7 @@ pub struct DispatchPlan {
     /// never reads `SubgroupSize`. `None` outside the flattened tiers and where the stage pins no
     /// size, where `lin` reads the builtin.
     pub pinned_subgroup_size: Option<u32>,
-    /// A kernel of the [`LocalSizeForm::Spec`] form on a profile whose `DeepThreadgroups` is
-    /// `OneRow`, without compute derivatives (whose quads are two-dimensional): it declares
+    /// A kernel of the [`LocalSizeForm::Spec`] form without compute derivatives (whose quads are two-dimensional): it declares
     /// `SpecKey::DeepThreadgroup`, under which its threadgroup runs as one row (the module docs).
     pub deep: bool,
 }

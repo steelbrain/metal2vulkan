@@ -12,14 +12,8 @@
 //! - User interface variables (vertex attributes, varyings, color outputs) carry a relocatable
 //!   `Location` keyed by a [`VaryingKey`] whose role the artifact states
 //!   ([`crate::pipeline::stage_io::StageIo`]); link numbers them. Every one is 32-bit: integers are
-//!   declared `uint` (held zero-extended), narrow floats `float` (held widened), but a `half` color
-//!   output on a profile that enables `storageInputOutput16` and `shaderFloat16`
-//!   under `HalfOutputs::Sixteen` (`Device::new`'s profile; `Device::from_queries`' widens it),
-//!   declared with
-//!   16-bit `float` lanes (`StageIo::half_outputs`) and stored by the exact conversion of the
-//!   `half` it holds, so the device receives the `half` the function returns, as Metal's attachment
-//!   does, and blends and converts it as its own `half` output. Only that output needs
-//!   `storageInputOutput16`. A 32-bit integer color output to a signed-integer attachment
+//!   declared `uint` (held zero-extended), narrow floats `float` (held widened), a `half` color
+//!   output among them. A 32-bit integer color output to a signed-integer attachment
 //!   (`LoweringInputs::signed_color_attachments`) is declared `int` and stored by `OpBitcast`; a
 //!   narrower one to such an attachment is `NotImplemented`.
 //! - Builtins map one to one (`vertex_id` → `VertexIndex`, `[[position]]` → `Position` /

@@ -5,18 +5,10 @@
 //! [`FunctionConstant::AbsentRead`] (`air::canon::interface`). Metal gives such a read no value:
 //! its compiler dropped a store of one, made a fragment color computed from one all-zero, and,
 //! beside a removed texture table, dropped a kernel's whole body, so no one translation is Metal's.
-//! Where the read runs, the function sets `StatusBits::ABSENT_ARGUMENT_READ` in the command
-//! buffer's `ExecutionStatus` word (a relaxed device-scope `OR`, as the resident-set miss counter
-//! writes it) and takes zero for the read's result; a consumer that reads the bit reports the
-//! command buffer's execution as failed, so that zero reaches no result reported as good. The write
-//! is on the read's path only: a run that never reaches the read is Metal's exactly, and a module
-//! without one is unchanged.
-//!
-//! On `Device::from_queries`' profile (`AbsentReads::Nil`) the read writes no status: it takes the
-//! same zero of its result's type (a read's zeros and a query's size of 0, which the nil
-//! texture, set 1's element 0, answers too) and fetches nothing, a write of a removed texture is
-//! dropped, and the stage takes no `ExecutionStatus` buffer, push field or fact for it.
-//! `Device::new`'s profile marks the status as above.
+//! The read writes no status: it takes the zero of its result's type (a read's zeros and a
+//! query's size of 0, which the nil texture, set 1's element 0, answers too) and fetches nothing,
+//! a write of a removed texture is dropped, and the stage takes no `ExecutionStatus` buffer, push
+//! field or fact for it.
 //!
 //! A load or atomic of threadgroup memory the constants removed is the same read
 //! ([`FunctionConstant::AbsentMemory`]), and so is a texture operation on a removed texture or
@@ -56,7 +48,7 @@ use crate::spirv::ir::{AtomicOp, BinOp, Constant, Scope, Semantics, Type as STyp
 pub struct AbsentRead {
     /// The lowered representation of the read's result; `None` for a read of no result.
     pub result: Option<DemoteTy>,
-    /// Whether it sets the status bit (`AbsentReads::Marked`, [`require`]).
+    /// Whether it sets the status bit ([`require`]).
     pub marks: bool,
 }
 
