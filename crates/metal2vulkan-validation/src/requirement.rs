@@ -142,6 +142,16 @@ pub enum ToolingRequirement {
     /// rasterization-disabled vertex function binding buffers only. A case's templates raise it,
     /// never a source's structure, so no census row carries it.
     ReplayedTemplateResources,
+    /// A sequentially consistent fence its entry's pipeline compiles
+    /// (`executor_contract::seq_cst_fence`): an `atomic_thread_fence` of `memory_order_seq_cst`
+    /// that orders a memory beyond its thread, or a `seq_cst` barrier of the MSL 4.1 form whose
+    /// memory scope is the device. The translator orders such a fence with the command buffer's
+    /// other ones through an atomic on its execution status word, which the runtime's identity
+    /// domains do not reach: the runtime refuses the pipeline (`Unsupported{IdentityDomains}`,
+    /// naming the `ExecutionStatusAddress` encoder value), so the engine's candidate does not run
+    /// the case. The Metal oracle runs it, so a case of it stays Metal-qualified
+    /// ([`Self::qualifies_on_metal`]).
+    SeqCstFence,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -149,7 +159,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -175,6 +185,7 @@ impl ToolingRequirement {
         Self::DepthOutsideUnitRange,
         Self::MeshRenderPipeline,
         Self::ReplayedTemplateResources,
+        Self::SeqCstFence,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -206,6 +217,7 @@ impl ToolingRequirement {
             Self::DepthOutsideUnitRange => "depth_outside_unit_range",
             Self::MeshRenderPipeline => "mesh_render_pipeline",
             Self::ReplayedTemplateResources => "replayed_template_resources",
+            Self::SeqCstFence => "seq_cst_fence",
         }
     }
 
@@ -227,7 +239,9 @@ impl ToolingRequirement {
     ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline or a replayed
     ///   template it does not draw or replay ([`ToolingRequirement::MeshRenderPipeline`],
     ///   [`ToolingRequirement::ReplayedTemplateResources`]), and a texture buffer an argument
-    ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]).
+    ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]),
+    ///   and a sequentially consistent fence, which the runtime refuses
+    ///   ([`ToolingRequirement::SeqCstFence`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -256,17 +270,22 @@ impl ToolingRequirement {
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
             | Self::TextureBufferMember
-            | Self::ReplayedTemplateResources => ENGINE,
+            | Self::ReplayedTemplateResources
+            | Self::SeqCstFence => ENGINE,
         }
     }
 
     /// Whether a case carrying this requirement is still a case to keep: the Metal oracle runs it
     /// and its observation is evidence for a candidate that runs the family again, so the checker
     /// accepts it with no candidate (`executor_contract::evidence_gap`), and the engine's candidate
-    /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`] and
-    /// [`ToolingRequirement::TextureBufferMember`]: their cases are qualified on Metal.
+    /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`],
+    /// [`ToolingRequirement::TextureBufferMember`] and [`ToolingRequirement::SeqCstFence`]: their
+    /// cases are qualified on Metal.
     pub const fn qualifies_on_metal(self) -> bool {
-        matches!(self, Self::MeshRenderPipeline | Self::TextureBufferMember)
+        matches!(
+            self,
+            Self::MeshRenderPipeline | Self::TextureBufferMember | Self::SeqCstFence
+        )
     }
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except

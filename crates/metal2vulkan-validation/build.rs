@@ -88,6 +88,7 @@ fn main() {
         "src/executor_contract/rate_map/layout.rs",
         "src/executor_contract/rate_map/value.rs",
         "src/executor_contract/sample_rate.rs",
+        "src/executor_contract/seq_cst_fence.rs",
         "src/requirement.rs",
         "src/check/cfg_fact.rs",
         "src/observation_contract.rs",

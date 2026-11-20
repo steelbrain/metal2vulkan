@@ -110,7 +110,7 @@ pub fn samples_with_min_lod_clamp(source_ll: &str, entry: &str) -> bool {
 }
 
 /// The instruction texts of each function `source_ll` defines, by name.
-fn function_bodies(source_ll: &str) -> BTreeMap<&str, Vec<&str>> {
+pub(super) fn function_bodies(source_ll: &str) -> BTreeMap<&str, Vec<&str>> {
     let mut bodies = BTreeMap::new();
     let mut current = None::<(&str, Vec<&str>)>;
     for line in source_ll.lines() {
@@ -135,7 +135,7 @@ fn function_bodies(source_ll: &str) -> BTreeMap<&str, Vec<&str>> {
 /// The function a call instruction's text names directly (`call ... @f(...)`); `None` for any
 /// other instruction and for a call through a pointer (`call ... %f(...)`). The callee is the
 /// first named value directly followed by the operand list: a type's name (`%struct.t`) is not.
-fn direct_callee(text: &str) -> Option<&str> {
+pub(super) fn direct_callee(text: &str) -> Option<&str> {
     let mut rest = &text[text.find("call ")? + "call ".len()..];
     loop {
         let at = rest.find(['@', '%'])?;

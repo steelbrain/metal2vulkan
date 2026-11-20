@@ -605,3 +605,30 @@ fn a_kernel_runs_through_the_runtime_with_its_linked_visible_functions() {
         .collect::<Vec<_>>();
     assert_eq!(floats, expected);
 }
+
+/// A sequentially consistent fence is refused through the runtime, typed, as
+/// `ToolingRequirement::SeqCstFence` says of the case (`executor_contract::seq_cst_fence`): the
+/// owned fixture `a4_device_fence` stores, fences at the device's scope in `seq_cst` order, and
+/// stores again. The day the runtime runs it, this fails, and the requirement goes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says() {
+    let bitcode = llvm_assemble(&engine_dir().join("a4_device_fence.ll")).unwrap();
+    let threads = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    let mut fence = case("a4_device_fence", vec![0; 64], threads);
+    fence.buffers.insert(1, vec![0; 64]);
+    fence.output = ComputeOutput::Buffer {
+        binding: 1,
+        offset: 0,
+        length: 64,
+    };
+    let error = run_on_runtime(&fence, &bitcode, &[]).unwrap_err();
+    assert!(matches!(error, ExecutorError::NotSupported(_)), "{error}");
+    assert!(
+        error.to_string().contains("ExecutionStatusAddress"),
+        "{error}"
+    );
+}

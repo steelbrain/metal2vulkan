@@ -8,6 +8,7 @@ pub mod out_of_bounds;
 pub mod rate_map;
 pub mod render_target_array;
 pub mod sample_rate;
+pub mod seq_cst_fence;
 pub mod sparse;
 pub mod stage_inputs;
 pub mod tessellation;
@@ -681,6 +682,9 @@ pub fn unsupported_reflection_requirements(
 ///
 /// The Metal oracle: a compute kernel that samples with a `min_lod_clamp`, whose pipeline Apple's
 /// compiler cannot build ([`min_lod_clamp::kernel_min_lod_clamp_requirement`]).
+///
+/// The engine's candidate again: a sequentially consistent fence, which the runtime refuses
+/// ([`seq_cst_fence::seq_cst_fence_requirement`]).
 pub fn unsupported_source_requirements(
     source_ll: &str,
     reflection: &ShaderInterface,
@@ -692,6 +696,9 @@ pub fn unsupported_source_requirements(
         source_ll, reflection,
     ));
     requirements.extend(min_lod_clamp::kernel_min_lod_clamp_requirement(
+        source_ll, reflection,
+    ));
+    requirements.extend(seq_cst_fence::seq_cst_fence_requirement(
         source_ll, reflection,
     ));
     let calls = air_call_counts(source_ll);
