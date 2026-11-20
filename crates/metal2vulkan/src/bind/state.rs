@@ -6,13 +6,12 @@
 //! offsets, addresses, and lengths only change per-draw bytes ([`BindState::shape`]).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use crate::bind::ResidentRange;
 use crate::device::profile::Limits;
 use crate::metal;
 use crate::pipeline::sym::Stage;
-use crate::spirv::ir::intern::FxHasher;
 
 /// Everything bound for one draw or dispatch.
 #[non_exhaustive]

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::device::{DeviceDescription, DevicePolicy};
-use crate::spirv::testing::is_moltenvk_capture;
 
 /// A device for every committed profile (`validation/profiles/`, read-only), sorted by stem.
 fn committed_devices() -> Vec<(String, Device)> {

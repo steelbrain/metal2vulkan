@@ -312,9 +312,9 @@ use std::collections::BTreeMap;
 
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
-    bind_buffers, descriptor_range, guest_word, put, slot_field, slot_guest_base, BufferExtent,
-    BufferRange, DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef,
-    PushConstantWrite, PushHole, RangeError, RootTable,
+    bind_buffers, descriptor_range, put, slot_field, BufferExtent, BufferRange, DescriptorBytes,
+    DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite, PushHole,
+    RangeError, RootTable,
 };
 use crate::bind::mesh_arguments::{
     fold_object_grid, metal_mesh_grid_draws_nothing, metal_object_grid, MeshArguments,

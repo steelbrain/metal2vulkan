@@ -25,9 +25,6 @@ use sha2::{Digest, Sha256};
 
 use crate::cache::Hash256;
 use crate::device::{DeviceDescription, DevicePolicy};
-use crate::library::{FunctionConstantValues, Library};
-use crate::metal::PixelFormat;
-use crate::pipeline::FunctionDescriptor;
 
 /// The device a runtime bundle's command compiles for, as `device.json` holds it and the command
 /// line's `--device` reads it: the description and policy the runtime's compile device was built

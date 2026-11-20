@@ -29,11 +29,10 @@ use std::sync::Arc;
 
 use crate::air::abi::{AbiInt, ArgTypeInfo, MemberKind, ParamBinding, ParamRole, StructInfo};
 use crate::air::abi::{Slot, StructRef};
-use crate::air::error::{AbiError, DiagName, InputError, InputErrorKind, Location};
+use crate::air::error::{AbiError, InputError, InputErrorKind, Location};
 use crate::budget::Meter;
-use crate::error::{Error, Feature, Limit, Unsupported};
+use crate::error::{Error, Limit};
 use crate::metal::{BindingAccess, DataType, TextureType};
-use crate::reflection::{PointerType, StructType};
 
 /// Bytes of every argument that is no constant: an address or a resource ID.
 pub const ARGUMENT_HANDLE_BYTES: u64 = 8;
