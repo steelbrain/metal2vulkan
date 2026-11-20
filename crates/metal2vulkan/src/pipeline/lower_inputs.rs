@@ -956,9 +956,10 @@ pub struct LoweringInputs {
     /// function it compiled; a fragment compiled on its own for such a pipeline compiles under the
     /// same offset, and link refuses a fragment whose fields start below the vertex function's push
     /// end. A fragment function whose fields do not fit in `[push_base, 256)` pushes its parameter
-    /// block's address at `push_base` and spills the rest into the block, as a kernel spills past
-    /// its window; the vertex function's window ends at 248, so the address always fits. On any
-    /// other profile, and for any other function, it is 0.
+    /// block's address at `push_base` rounded up to 8 (the address's alignment) and spills the
+    /// rest into the block, as a kernel spills past its window; the vertex function's window ends
+    /// at 248, so the address always fits. On any other profile, and for any other function, it is
+    /// 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub push_base: u32,
 }
