@@ -1,6 +1,8 @@
 //! Exports, under a device cfg, on every device of the cfg's kind: each handle the device exports
 //! gives a Private block of its own, counted live in `Gauges::exports` until its memory is freed,
-//! which rt writes and releases (`BlitCommandEncoder::release_to_external`) twice, with no acquire
+//! its make timed whole and by step (`Metrics::export_makes`, `export_allocations`,
+//! `export_handles`, `export_claims`: one call each, of the allocation's bytes, the steps within
+//! the whole), which rt writes and releases (`BlitCommandEncoder::release_to_external`) twice, with no acquire
 //! between, and whose handle a second device of the same physical device imports, reading rt's
 //! second bytes through it and writing the whole block, which rt acquires
 //! (`Block::external_writes_done`) and reads; an acquire or a release of a block that is not
@@ -21,8 +23,8 @@ mod on_device {
     use crate::texture::TextureObject;
     use crate::{
         BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, IndexClass, Limit,
-        MemoryClass, PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        MemoryClass, Metrics, PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType,
+        TextureUsage, Timed,
     };
     use ash::vk;
 
@@ -215,8 +217,48 @@ mod on_device {
                     continue;
                 }
                 let before = counters.gauges();
+                // The make whole, its allocation, its handle's export and its claim.
+                let timed = |m: &Metrics| {
+                    [
+                        m.export_makes,
+                        m.export_allocations,
+                        m.export_handles,
+                        m.export_claims,
+                    ]
+                };
+                let made = timed(&counters.metrics());
                 let (block, export) = (device.new_exported_block(handle, LEN))
                     .unwrap_or_else(|error| panic!("{name}: {handle:?}: {error}"));
+                let steps: Vec<Timed> = (timed(&counters.metrics()).iter().zip(made))
+                    .map(|(after, before)| {
+                        assert_eq!(
+                            (after.count - before.count, after.bytes - before.bytes),
+                            (1, export.size),
+                            "{name}: {handle:?}: one timed call of the allocation's bytes"
+                        );
+                        assert!(after.longest_nanos >= after.total_nanos - before.total_nanos);
+                        Timed {
+                            total_nanos: after.total_nanos - before.total_nanos,
+                            ..*after
+                        }
+                    })
+                    .collect();
+                let nanos = |at: usize| steps[at].total_nanos;
+                assert!(
+                    nanos(1) + nanos(2) + nanos(3) <= nanos(0),
+                    "{name}: {handle:?}: the steps within the make: {steps:?}"
+                );
+                println!(
+                    "export: {name}: {handle:?}: make {} ns of {} bytes: allocation {} ns, handle {} ns, claim {} ns; longest make {} ns of {} bytes, made {}",
+                    nanos(0),
+                    export.size,
+                    nanos(1),
+                    nanos(2),
+                    nanos(3),
+                    steps[0].longest_nanos,
+                    steps[0].longest_bytes,
+                    steps[0].longest_made,
+                );
                 assert_eq!(
                     (block.class, block.len, block.offset, block.contents),
                     (MemoryClass::Private, LEN, 0, None),

@@ -10,7 +10,7 @@
 //! buffers export it (`vkGetPhysicalDeviceExternalBufferProperties`), and refused elsewhere.
 
 use crate::block::Block;
-use crate::counters::Metric;
+use crate::counters::{Metric, Part};
 use crate::device::Device;
 use crate::error::{Error, Limit, Refusal};
 use crate::floor;
@@ -216,6 +216,7 @@ impl Device {
         handle: ExportHandle,
         len: u64,
     ) -> Result<(Block, Export), Error> {
+        let started = crate::host_time();
         let core = self.core();
         if core.closed() {
             return Err(Error::Quiesced);
@@ -233,14 +234,20 @@ impl Device {
         let (memory, size) = unsafe { memory::export(core, len, handle) }?;
         let info = memory.info();
         let raw = memory.device_memory();
+        let claiming = crate::host_time();
         let block = Block::claim(core, info, memory::Block::new(memory, Arc::clone(core)));
+        let exporting = crate::host_time();
+        (core.counters).timed(Part::ExportClaim, size, exporting - claiming, false);
         // A failure here gives the block back with its memory as `block` drops.
         let handle = core.exports.handle(raw, handle)?;
+        let exported = crate::host_time();
+        (core.counters).timed(Part::ExportHandle, size, exported - exporting, false);
         let export = Export {
             handle,
             size,
             memory_type: core.memory_type(crate::MemoryClass::Private),
         };
+        (core.counters).timed(Part::ExportMake, size, exported - started, true);
         Ok((block, export))
     }
 }

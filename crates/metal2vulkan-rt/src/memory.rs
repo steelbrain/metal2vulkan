@@ -1941,6 +1941,7 @@ pub(crate) unsafe fn export(
         .push_next(&mut export)
         .push_next(&mut dedicated)
         .push_next(&mut flags);
+    let started = crate::host_time();
     // SAFETY: a dedicated allocation of the buffer's size in a type it lists, exportable as a
     // handle its buffers export.
     let memory =
@@ -1951,6 +1952,8 @@ pub(crate) unsafe fn export(
                 return Err(error);
             }
         };
+    let nanos = crate::host_time() - started;
+    (core.counters).timed(Part::ExportAllocation, needs.size, nanos, true);
     let undo = |error: Error| {
         // SAFETY: nothing uses the buffer or the memory.
         unsafe {

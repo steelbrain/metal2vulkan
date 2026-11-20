@@ -26,8 +26,8 @@ fn bucket(bounds: &[u64], nanos: u64) -> usize {
 /// The bounds of each [`Timed`]'s buckets, in nanoseconds: 1, 5 and 20 ms.
 const OVER_NANOS: [u64; 3] = [1_000_000, 5_000_000, 20_000_000];
 
-/// A part of the consumer's takes and buffer makes the runtime times, counted on its own in
-/// [`Metrics`].
+/// A part of the consumer's takes, buffer makes and exported block makes the runtime times,
+/// counted on its own in [`Metrics`].
 #[derive(Clone, Copy)]
 pub(crate) enum Part {
     /// [`Metrics::takes`].
@@ -44,10 +44,18 @@ pub(crate) enum Part {
     ZeroWrite,
     /// [`Metrics::long_take_zero_writes`].
     LongTakeZeroWrite,
+    /// [`Metrics::export_makes`].
+    ExportMake,
+    /// [`Metrics::export_allocations`].
+    ExportAllocation,
+    /// [`Metrics::export_handles`].
+    ExportHandle,
+    /// [`Metrics::export_claims`].
+    ExportClaim,
 }
 
 /// The number of [`Part`]s.
-const PARTS: usize = Part::LongTakeZeroWrite as usize + 1;
+const PARTS: usize = Part::ExportClaim as usize + 1;
 
 /// Where a first-use wait made the `VkPipeline` it waited for ([`Metrics::first_use_waits`]).
 #[derive(Clone, Copy)]
@@ -1071,6 +1079,10 @@ impl Counters {
             maker_makes: part(Part::MakerMake),
             zero_writes: part(Part::ZeroWrite),
             long_take_zero_writes: part(Part::LongTakeZeroWrite),
+            export_makes: part(Part::ExportMake),
+            export_allocations: part(Part::ExportAllocation),
+            export_handles: part(Part::ExportHandle),
+            export_claims: part(Part::ExportClaim),
         }
     }
 
@@ -1554,10 +1566,26 @@ pub struct Metrics {
     /// which made its allocation on the consumer's thread
     /// ([`take_makes`](Self::take_makes)), zeroed through its mapping; their bytes the zeros.
     pub long_take_zero_writes: Timed,
+    /// [`Device::new_exported_block`](crate::Device::new_exported_block) calls that made their
+    /// block, each whole, on the consumer's thread; their bytes the allocations'. Its steps are
+    /// timed apart: [`export_allocations`](Self::export_allocations),
+    /// [`export_handles`](Self::export_handles) and [`export_claims`](Self::export_claims); the
+    /// rest of a make is its buffer's creation, its memory's binding and its address.
+    pub export_makes: Timed,
+    /// Of those makes, each `vkAllocateMemory` of the block's allocation, dedicated to its buffer
+    /// and exportable as its handle (`VkExportMemoryAllocateInfo`); their bytes the allocations'.
+    pub export_allocations: Timed,
+    /// Of those makes, each export of the allocation's handle (`vkGetMemoryFdKHR`,
+    /// `vkGetMemoryWin32HandleKHR`); their bytes the allocations'.
+    pub export_handles: Timed,
+    /// Of those makes, each claim of the made block, which enters it in the device's map of
+    /// claims; their bytes the allocations'.
+    pub export_claims: Timed,
 }
 
-/// No Metal counterpart: the calls of one part of the consumer's takes and buffer makes
-/// ([`Metrics::takes`] and the others'), each timed alone with [`host_time`](crate::host_time).
+/// No Metal counterpart: the calls of one part of the consumer's takes, buffer makes and exported
+/// block makes ([`Metrics::takes`] and the others'), each timed alone with
+/// [`host_time`](crate::host_time).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Timed {
@@ -1574,9 +1602,10 @@ pub struct Timed {
     /// [`longest_nanos`](Self::longest_nanos), from the same call.
     pub longest_bytes: u64,
     /// Whether the longest call made an allocation of its own: for
-    /// [`Metrics::takes`], a take no free range fit; every take make and maker make is one
-    /// ([`Metrics::take_makes`], [`Metrics::maker_makes`]); false for the other parts. From the
-    /// same call as [`longest_nanos`](Self::longest_nanos).
+    /// [`Metrics::takes`], a take no free range fit; every take make, maker make, export make and
+    /// export allocation is one ([`Metrics::take_makes`], [`Metrics::maker_makes`],
+    /// [`Metrics::export_makes`], [`Metrics::export_allocations`]); false for the other parts.
+    /// From the same call as [`longest_nanos`](Self::longest_nanos).
     pub longest_made: bool,
     /// Those longer than 1 ms.
     pub over_1_ms: u64,

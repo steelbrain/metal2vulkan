@@ -217,7 +217,12 @@ in its memory.
   bind, the address and a Shared one's map), `take_maps` (the consumer's `BlockMappings::map` of
   it) and `maker_makes` (the allocations made ahead of need, off every take); `zero_writes` times
   `Device::new_buffer`'s host writes of zeros (`memset` through the block's mapping), and
-  `long_take_zero_writes` those of them into a take past the 16 MiB unit.
+  `long_take_zero_writes` those of them into a take past the 16 MiB unit. An exported block's make
+  is timed the same way, whole and by step: `export_makes` (each `Device::new_exported_block` that
+  made its block), `export_allocations` (its `vkAllocateMemory`, exportable and dedicated to its
+  buffer), `export_handles` (the handle's export, `vkGetMemoryFdKHR` or
+  `vkGetMemoryWin32HandleKHR`) and `export_claims` (the block's claim, which enters the device's
+  map of claims); the rest of a make is the buffer's creation, the binding and the address.
 - The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
   thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
   source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The
