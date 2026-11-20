@@ -10,8 +10,8 @@ numbers from Metal indices, and never classify errors by message text.
 This guide walks the flow on the repository's own fixtures. Every `rust` block is quoted from
 [`examples/api_preview.rs`](../crates/metal2vulkan/examples/api_preview.rs), which the test suite
 runs (`tests/api_preview_example.rs` fails when a block here stops matching it). Sections 9 and 10
-also cover the runtime crate (`metal2vulkan-runtime`): its degrade notices and its deliberate
-differences from Metal. The runtime's own guide is [its README](../crates/metal2vulkan-runtime/README.md).
+also cover the runtime crate (`metal2vulkan-rt`): the precision notes it carries and its deliberate
+differences from Metal. The runtime's own guide is [its README](../crates/metal2vulkan-rt/README.md).
 
 ## Stability
 
@@ -2381,690 +2381,40 @@ that holds only under some bound values is in `specialized_notes`;
 `stage.precision_notes_bound(&plan.specialization, &|key| plan.specialized_value(key))` gives the
 notes a plan reaches. Section 9 lists every note.
 
-**The runtime's errors** are its own type, `metal2vulkan_runtime::Error`, which tells apart what
-plain Metal itself refuses (`Invalid`), what plain Metal answers nil for (`Nil`, `MetalError`), what
-the device lacks (`Unsupported`), what the runtime has not built (`NotImplemented`) and the
-translator's errors (`Compile`). Its [README](../crates/metal2vulkan-runtime/README.md#errors)
-lists them.
+**The runtime's errors** are its own type, `metal2vulkan_rt::Error`;
+[REFUSALS.md](REFUSALS.md) lists its refusals with their basis, and its
+[README](../crates/metal2vulkan-rt/README.md) states each known gap.
 
 ## 9. Degrade notices
 
-Where the runtime gives Metal's answer only at a cost Metal does not pay, or gives a recorded
-near-equivalent, it still answers, and says so. Each kind of degradation is a
-`metal2vulkan_runtime::Degradation`:
+Where an answer may differ from Metal's, the operation carries a precision note
+(`metal2vulkan::pipeline::PrecisionNote`), fixed per operation and never decided at run time: by
+the translated module, the pixel format, the descriptor or the state, on every device.
+`metal2vulkan-rt` gives them through these items:
 
-- **performance**: Metal's answer, at an extra cost (a copy, a staging or scratch resource, an
-  extra pass, a slower variant);
-- **precision**: a recorded near-equivalent of Metal's answer, including every `PrecisionNote` a
-  pipeline stage records and the one a sampler state carries (`capped-lod-bias`);
-- **validity**: Metal's answer exactly, through a use of the device its driver does not advertise
-  but was measured to run as Metal does, so Vulkan's validation layer reports the use.
+- `ComputePipelineState::precision_notes` and `RenderPipelineState::precision_notes`: the
+  translator's notes of the state's modules, with `SwizzledOpaqueBlackBorder` where a function
+  samples through a constexpr sampler whose address mode reads an opaque-black border;
+- `Texture::precision_note`: `CompressedTexelDecode` where the texture's own pixel format is
+  block-compressed;
+- `SamplerState::precision_note`: `SwizzledOpaqueBlackBorder` where an address mode reads an
+  opaque-black border;
+- `DepthStencilState::precision_note`: `DepthDenormals` where the state tests or writes depth;
+- `RenderPassDescriptor::precision_note`: `DeviceRoundedResolve` where a color attachment
+  resolves;
+- `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE` (`DeviceFilteredMipmaps`, of `generate_mipmaps`) and
+  `RenderCommandEncoder::DEPTH_BIAS_NOTE` (`DeviceDepthBias`, of a draw of triangles under a depth
+  bias).
 
-How a notice reaches you:
+A note is never fatal: the work runs on every device. The runtime prints and sends no note; a
+consumer reads them through these items. The translator's own API gives a stage's notes
+(section 8).
 
-- Each kind is announced **once per device**, the first time the device takes it;
-  `copied-host-pages` once per device and cause, and `host-replayed-indirect-commands` once per
-  device and the rule its notice names (their entries below). A kind listed in
-  `DeviceOptions::announce_each` (`RawDevice::announce_each` for an adopted device) is announced at
-  every occurrence instead. The notes a pipeline's making records are announced at the first
-  dispatch or draw that binds it.
-- Through the device's message sink (`DeviceOptions::messages`) as a `DebugMessage` of `Warning`
-  severity whose `id_name` is the kind's code and whose `degradation` holds a `DegradeNotice`: the
-  `Degradation`, the object degraded, and the reason. Without a sink, one line on stderr:
-  `metal2vulkan: <object>: <reason>; <cost> [<code>]`.
-- A notice is never fatal: the work runs. The one exception is opt-in.
-  `DeviceOptions::lowering_refuses` (`RawDevice::lowering_refuses`; empty by default) lists kinds
-  that, when a render encoder lowers a call it logged (`RenderLoweringPolicy::Worker`, section 1),
-  are not announced. Instead they refuse that call: `CommandBufferError::CallRefused` names it,
-  and `CommandBuffer::refusal` returns `Error::Degraded` with the notice. A call lowered inside
-  the call announces them as any kind.
-- A notice announced while a render encoder lowers a call it logged names that call
-  (`DegradeNotice::call`: its Metal selector and its index among the encoder's calls); `None`
-  elsewhere.
-- A notice announced while the runtime does one command buffer's work names that command buffer
-  (`DegradeNotice::command_buffer`, its `CommandBuffer::object_id`), so a program can fail that
-  command buffer rather than end the process: its encoders' calls and their lowering on the
-  lowering thread, an encoder's opening, its commit (at the call, or once a render encoder's end
-  it waited for was lowered), the submission of its batches, its host steps on the scheduler's
-  steps thread (an indirect command buffer's execution recorded there among them), its encoders
-  encoded again at a rebind, and a read of its GPU times. `None` for the rest: the device's, a
-  library's, a pipeline state's, a resource's or a queue's notices outside a command buffer's
-  work, one about several command buffers' batches together (`grouped-completion`), and a
-  recovery of the device's (`device-recovered`).
-- Decode a notice by its `Degradation` or its code, never its text. The codes are a contract: none
-  is renamed.
-- `Degradation::exactness()` says whether the program still gets Metal's answer: `Exact` (most
-  performance and validity kinds), `ExactWithinPool` (Metal's answer while a command buffer's pool
-  holds it, else the command buffer fails), `OneOfMetals` (Metal's own answer is not one value, and
-  the runtime gives one of them), `FailsInstead(error)` (the command buffer fails rather than
-  differ), or `NearEquivalent` (the precision notes and other near-equivalents).
-- `Device::degraded_objects(kind)` counts the textures a device met as a kind that is announced
-  once per object.
-
-A placement heap's `newTextureWithDescriptor:offset:` that makes no texture
-(`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
-`metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,
-options and memory, the size and alignment the size query answers the descriptor, what the making
-planned (the size and alignment it places the texture by, its image's route, tiling and memory
-requirements) and the refusal; for the device's first such refusal alone, each later one counted
-(`WorkCounts::heap_texture_refused_withheld`). A device's self-check that the driver does not make (the one
-pipeline it creates to ask whether a set-0 buffer binding of several variables may be a dynamic
-descriptor, `FAST-PATHS.md`) hands the sink one line saying so, with the driver's result and the
-messages it reported inside that creation (id name `metal2vulkan-self-check-refused`, `Info`
-severity), in place of those messages: they answer the runtime's own question and name none of the
-program's work (MoltenVK 1.4.2 reports two errors there). A device's own checks of its
-submissions (whether `VkSubmitInfo`s that signal nothing merge into one, and whether a held
-host-pointer import adds to every submission's cost) that wait 10 s for one of their submissions of
-an empty command buffer stop there and say so (id name `metal2vulkan-submit-check-stalled`, `Info`
-severity): nothing is submitted again, each check that had not answered takes the form a device
-without its answer takes for the device's life, and nothing is recorded. Where that submission
-still has not completed after 10 s more of the device's teardown, the teardown leaves the device
-and its instance to the process's end rather than wait for its idle. Every `vkQueueSubmit` the
-runtime makes that fails (a command buffer's batch, a group of batches, a failed group's signals, a
-command buffer's rerun or its fence after its queue's work, the device's internal submissions, the
-staging and fill queues') logs one line as it fails (id name `metal2vulkan-submit-failed`,
-`Warning` severity): the result and the queue; each `VkSubmitInfo`'s waits, command buffers and
-signals, each semaphore binary or a timeline (the queue's, the device's own or an event's) with the
-value it waits for or signals and the timeline's counter read then, a signal value not above that
-counter or more than 2^31 - 1 from it flagged with the valid-usage rule it breaks; the command
-buffers it carries, by label, object ID and encoder; and the resources they name, each with its
-kind, object ID, bytes, storage mode, memory and memory type, how it was imported, how many
-submissions the device made since the resource was registered, and whether it is gone, released or
-detached now. It names at most 8 infos, 8 waits and 8 signals of each, 32 `VkCommandBuffer`s, 8
-command buffers and 32 resources, and counts the rest; state another thread holds at that moment
-reads as busy, and a submission that succeeds does none of it. A command buffer whose recording
-fails with a Vulkan result or the runtime's own error (`CommandBufferError::Internal` for both) logs
-that error (id name `metal2vulkan-recording-failed`, `Warning` severity). Each of the two lines ends
-in its id name in brackets, as a degrade notice does, so a consumer that writes the text alone still
-leaves it findable by id. That text is for people, not a contract.
-
-Each entry below gives the code, its category, the `Degradation` kind (or the `PrecisionNote`) and
-what triggers it; a runtime kind's cost follows. The kind's rustdoc states the trigger, cost and
-how to avoid it in full. [FAST-PATHS.md](FAST-PATHS.md) lists which notes the device's native
-forms and the default policy's fast forms record, and each `PrecisionNote`'s rustdoc states its
+Each entry below is named by a code, `metal2vulkan-degrade-` and the note's name in kebab case
+(`PrecisionNote::NativeFma` is `metal2vulkan-degrade-native-fma`), with its category, and says what
+makes an operation carry the note and what may differ. Each `PrecisionNote`'s rustdoc states its
 bound.
 
-- `metal2vulkan-degrade-shadowed-texture` (performance). `ShadowedTexture`: A 2D texture over a
-  buffer is a shadow image: the buffer is over host pages (a no-copy buffer's, imported by their
-  pointer or as dma-bufs, or the fresh pages a host-visible buffer of the runtime's own longer than
-  32 MiB lies in), where an image bound to them would start `UNDEFINED` and Vulkan lets its layout
-  transitions (its first move among them) read and write any byte bound to it, where Metal keeps
-  every CPU write, and the device takes no image in place there: the policy keeps the exact form
-  (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of a width the
-  device's check stores none of (none of 1, 2, 4, 8 and 16 bytes), the device's check that the
-  operations of an access of the
-  texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
-  byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
-  padding: section 10, **Kernels**) over that kind of pages, for texels that share a line of the
-  device's memory
-  (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
-  found a byte changed or made no image, or no
-  image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
-  the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or
-  no dma-buf of the texture's own pages serves); the notice names which, and
-  `WorkCounts::host_texture_shadows_*` counts each; or its rows (or an array's slices) lie with the buffer's bytes between them,
-  which an image over them would hold in its subresource, where Vulkan lets the image's layout
-  transitions read and write any byte of its subresources, and a render pass's load and store
-  operations read and write back any byte of an attachment's image subresource, and Metal leaves
-  them as the program writes them, unless the buffer, of the runtime's own memory, declares them
-  unobserved (`BufferDescriptor::padding_unobserved`, a runtime extension: they may then change,
-  and no other byte does), or only the device's commands, in the runtime's order, write the
-  buffer's bytes (a `Private` buffer, and a `Managed` buffer's own on a device without unified
-  memory, whose host copy the program's `didModifyRange:` copies in; not one whose `VkBuffer` was
-  handed out or whose memory is exportable) and the texture renders nothing, or renders on a
-  device whose policy takes images in place and whose check of renders over its pooled memory
-  passed for texels that lie in its lines as these do (that a render pass's load and store, and
-  the image's moves, left every byte beside the texels, the rows' padding among them): then the
-  device's linear image, made `PREINITIALIZED`, holds them where its rows lie at the buffer's
-  pitch (`WorkCounts::kept_padding_aliases`). Its one layout transition is out of the layout it is in,
-  of which Vulkan says "If the old layout matches the current layout of the image subresource
-  range, the transition preserves the contents of that range" (7.1.1, Image Layout Transitions),
-  ordered with every write of those bytes; in `GENERAL` the buffer and the image are both
-  host-accessible subresources, which "interpret the contents of the memory in consistent ways,
-  and data written to one alias can be read by the other alias" (12.11, Memory Aliasing). A
-  kernel's writes of such a texture may change those bytes as on the x86 Macs (section 10,
-  **Kernels**). Where that linear image's rows lie at another pitch, a `DRM_FORMAT_MOD_LINEAR`
-  image at the buffer's pitch holds them, where the driver makes one whose own report lays its rows
-  at that pitch from the texels' first byte within the buffer: it is made `UNDEFINED`
-  (`PREINITIALIZED` is for linear tiling alone, `VUID-VkImageCreateInfo-initialLayout-12478`), of
-  which Vulkan says "the contents of that range may be discarded" (7.1.1), so its first move copies
-  the bytes it is bound to into a scratch buffer before its transition and back through the buffer
-  after it, after every earlier access to them on every `VkQueue` and before every later one
-  (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`); a `DRM_FORMAT_MOD_LINEAR` image is a
-  linear resource (the Glossary), so in `GENERAL` the two alias as above (12.11). A buffer in a
-  block the runtime allocated exportable for its own buffers and never exports (where the device
-  lays them there: the 780M under RADV) holds them the same way: the device's linear image there
-  names the block's handle type and so is made `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`),
-  and its first move keeps the bytes it is bound to by the same copies. No image over memory the
-  runtime exported (`MemoryExport`) holds them, as one there names its handle type and is made
-  `UNDEFINED`, whose first move may discard them; or no linear image of the device lays its texels out as Metal
-  does in the buffer's memory, holding no byte past them (among them a texture whose offset in the
-  buffer misses the device's linear-image alignment, as one 32 bytes in does on RADV, whose
-  images start on a multiple of 256: a buffer made with `BufferDescriptor::aligned_byte` at that
-  byte, a runtime extension, takes it), and no `DRM_FORMAT_MOD_LINEAR` image at
-  Metal's pitch serves (the device makes none, its policy is `HostPageTexturePolicy::Shadow`, or
-  its check of such images over its pooled memory has not passed for the texture's accesses:
-  pending, failed or unchecked, as over host pages, a pending one moving to the image once the
-  verdict passes, at a quiet commit, with no copy (`WorkCounts::pooled_textures_moved_in_place`);
-  over memory the runtime exports (`MemoryExport`, a runtime extension), where either image names
-  the memory's handle type as Vulkan requires and so starts `UNDEFINED`, its check of that exported
-  memory has not passed for the texture's accesses (a pending one moving the same way), or the
-  device takes the handle type for no such image in the memory itself (its image format query
-  takes it only in a dedicated allocation, or the image made requires one, or the memory is the
-  buffer's dedicated allocation, to which no image may be bound) and, over memory exported as a
-  dma-buf, makes no `DRM_FORMAT_MOD_LINEAR` image at the texels bound to a dedicated import of that
-  memory's own dma-buf either (the route it takes there, as on RADV's 780M, the texture in place
-  through a second `VkDeviceMemory` of the same payload, `WorkCounts::exported_dma_buf_images`;
-  the RX 550 makes no such image);
-  for one that renders, whose rows each to its
-  pitch share no line with bytes past them, the check of renders that lets the rows' padding
-  change, as the declaration does, and no byte past the last row's pitch); a texture's size never
-  makes it a shadow there;
-  or the buffer is over the caller's
-  `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
-  one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
-  levels past the first, so one image of its own holds every level, a copy of the bytes taken at
-  its first use and after each `did_modify_data` (the notice names the levels). Also a heap's texture over host
-  pages imported as dma-bufs where the device makes no image over a dma-buf of the texture's own
-  pages (the notice names why; `WorkCounts::dma_buf_image_fallbacks` counts it). A heap's texture
-  is a shadow of the heap's bytes in its range in three more shapes, each announced with its own
-  reason.
-  A single-sample depth or stencil texture whose texels fit its image's bytes, on a device whose
-  driver lays such images apart from the memory they are bound to
-  (`DriverFact::DepthStencilImagesLieApart`): one no such shadow serves, a multisampled one among
-  them, is `heap-depth-stencil-apart` instead. A texture the device binds no image
-  of to the heap's memory where the heap places it: its optimal image takes no memory type of the
-  heap's and no linear image of the device serves (a `Shared` heap's depth texture on MoltenVK), or
-  the heap lies over host pages that no linear image over them serves, or its images ask more than
-  Metal's answer for the texture (every 4:2:2 texture among them, and every one-plane YCbCr one but
-  a mipmapped or 3D one) and a shadow of its rows serves.
-  And a heap's `RGB10A8_2P_XR10` texture, or its sRGB twin, of a 1D, 2D, 1D array, 2D array or 3D
-  type, of any level count, of one sample, whose moves fit the device: its image holds each texel's
-  colour word and alpha byte side by side where Metal keeps two planes in the heap's bytes, so the
-  image is a shadow of those planes (a mipmapped one's levels past the first, and a 1D array's
-  texels, lie in the image alone: `heap-two-plane-layout`). Where Metal's layout of the texture in
-  the heap's bytes is measured and the moves fit the device, the first two shadow Metal's tiles
-  there (the texture's elements, a multisample texture's samples) rather than its rows, and so do
-  two textures that would otherwise need no shadow: one whose image the driver keeps GPU-optimized
-  where Metal's texture is not (`DriverFact::DepthStencilImagesStayGpuOptimized`), and a
-  multisample texture whose image lies in memory of its own. Cost: its texels are copied into an
-  image before each use and back after each write (over a buffer's bytes but a tracked private
-  buffer's, kept before a write and merged back after it; over a tracked private buffer of the
-  runtime's own, copied in again only once another command buffer wrote it; a tiled texture of
-  more than one level, copied in only at its first use and the first after each did_modify_data,
-  and never back). That buffer is a tracked `Private` or `Memoryless` one the runtime made, of no heap and over none of the caller's
-  memory, whose `VkBuffer` was never handed out; a command buffer whose commands may reach memory
-  no use names (a function that reaches buffers through their addresses, work resolved from
-  records) also lets go of every such image, and `WorkCounts::shadow_copies_in_skipped_by_standing`
-  counts each copy in a standing image saved. A render pass that loads it as an attachment, takes
-  it in no other way and draws under scissors copies in only the texels inside them
-  (`WorkCounts::shadow_texels_copied_in`), but at a command buffer's first use of such a standing
-  image, whose copy in takes every texel and moves none where the image stands. Over a
-  buffer's bytes that another writer may
-  write while a command buffer runs, the image is kept in a scratch buffer before the first command
-  that writes through it (a one-sample colour texture in Metal's tiles, right after its copy in, by
-  a copy of the bytes that copy took: `WorkCounts::shadow_keeps_from_staging`), and each copy back
-  is a dispatch that merges only the words the commands
-  changed, so that writer's writes to the texels they left stay, as on Metal: the CPU's, over a
-  `Shared` or `Managed` buffer's bytes, host pages or the caller's `VkBuffer`, and another queue's
-  commands', over an untracked buffer's. After a render pass that loads and stores it as a color
-  attachment inside its draws' scissors, or a command that replaces every texel over host pages
-  that log their writes, the dispatch stores each 256-byte block of the rows it merges that holds
-  a changed word whole (`WorkCounts::shadow_merge_dispatches_in_blocks`): Metal's own store of
-  such a pass writes back every texel of each tile its draws reach, so a write to a texel the
-  pass left inside its render area while it runs is not kept on Metal either. A tracked `Private` buffer's bytes have no such writer (the
-  runtime orders another queue's commands that touch them before or after the command buffer, as
-  Metal does), and are copied back (`shadow_texels_copied_back`), as a command that replaces every
-  texel is. The scratch keeps the rectangle the commands write in, where they bound it and the
-  copies are cut so (`WorkCounts::shadow_texels_kept`). A copy back into a no-copy buffer's host
-  pages whose rows share a line of memory (`nonCoherentAtomSize`) with bytes beside them, on a
-  device whose check of those pages finds its copies or shader writes writing such a line back
-  whole, or has not answered, is spliced: the GPU copies the texels that fill whole lines, and a
-  host step after the copies writes the rest, so a CPU write beside them stays
-  (`WorkCounts::shadow_copies_back_spliced`); and a merge in place there splits the same way: its
-  keep and the copy of the texels the commands left go into a `Shared` scratch, its kernel stores
-  the changed words in the lines that hold the texture's texels alone, and a host step after them
-  stores each byte that differs of each row's bytes in the lines that also hold bytes beside them
-  (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`, `shadow_host_steps`; a
-  merge none of whose rows' lines holds such a byte goes by its kernel alone, and one whose rows
-  hold at most 1 MiB, or whose rows' pieces in those lines lie at different places in them, goes
-  on the host whole; docs/FAST-PATHS.md, **Known gaps**, the Iris Xe's
-  line write-back, which may still put back a CPU write to a texel the commands left in a line
-  whose other bytes they changed, where the kernel stores). Where the device is measured to run it
-  faster so (`DriverFact::ShadowCopyBackDispatchFaster`), a copy back of a one-slice texture of 4-,
-  8- or 16-byte texels is a compute dispatch that stores the same bytes
-  (`WorkCounts::shadow_copies_back_dispatched`), and so is a merge's copy of such a texture's image
-  into its scratch buffer before the commands (`WorkCounts::shadow_merge_copies_dispatched`), which
-  on a device measured faster so (`DriverFact::ShadowCopyInDispatchFaster`) also takes the copy in
-  of the same texels before it, storing them in the image through that view
-  (`WorkCounts::shadow_copies_in_dispatched`); after them, a cut merge reads the texels the commands
-  left from the image itself, through an unsigned-integer view of it, with no copy of them
-  (`WorkCounts::shadow_merges_fetched`). On a device with the first fact alone, such a merge keeps
-  the texels in an image of the texture's size in place of its scratch buffer, copied from the
-  texture's image at the same coordinates, and reads them from there
-  (`WorkCounts::shadow_merges_kept_in_images`). Its command queue keeps that image for its later
-  merges of the same size and format, whatever their texture, each taking it once the encoder that
-  took it last ended (`WorkCounts::shadow_merge_kept_images_made`,
-  `shadow_merge_kept_images_followed`, `shadow_merge_kept_images_live`). Where the image has no
-  unsigned-integer view (any device without that fact), a cut merge of a one-slice `BGRA8Unorm` or
-  `RGBA8Unorm` texture reads the texels the commands left from the image through a view of its own
-  format, rebuilding each byte from its normalized value (Vulkan defines that value as the byte over
-  255), with no copy of them (`WorkCounts::shadow_merges_fetched`); every other format, the sRGB and
-  16-bit float ones among them, copies them.
-  A texture whose rows are in place (section 1) gives this notice as its shadow is made, at the
-  first reach of its image, and one only ever bound through its rows gives none.
-- `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
-  buffer is viewed through a staging buffer: its texels start where the device views none
-  (`minTexelBufferOffsetAlignment`), or run past the bytes its buffer's memory holds for them (a
-  no-copy buffer's or a buffer's under 16 KiB length), where its staging buffer is its tail.
-  Cost: its texels are copied into a staging buffer before each use and back after each
-  write.
-- `metal2vulkan-degrade-shadow-merge` (performance). `ShadowMerge`: One command writes a buffer's
-  bytes through a shadowed texture or a staged texture buffer and also another way. Cost: the
-  shadow's texels are kept in a scratch buffer of one to three times the texture's bytes (or an
-  image of the texture's size) before the command, and after it a dispatch merges the bytes it changed through the texture into the
-  buffer's, in place where the texture's bytes start and end in whole words of the buffer: one to
-  three copies and a dispatch in place of one copy back. The merge's dispatches are counted as the
-  runtime plans them, in windows of at most the device's storage-buffer range and workgroup count
-  (`WorkCounts::shadow_merge_dispatches_planned`), together with the words they examine
-  (`shadow_merge_words_examined`): a dispatch reads each word of the region before the commands and
-  after them and stores only where the two differ, so the words it stores are at most the words it
-  examined and only the GPU knows them.
-- `metal2vulkan-degrade-copied-draw-bytes` (performance). `CopiedDrawBytes`: A draw's index buffer
-  or indirect arguments start where Vulkan reads neither. Cost: they are copied into a buffer of the
-  command buffer before the pass, and the draw reads the copy.
-- `metal2vulkan-degrade-isolated-index-bytes` (performance). `IsolatedIndexBytes`: An indexed draw
-  reads index positions past where Metal's fetch stops reading its index buffer (its length rounded
-  up to 4 bytes), for which Vulkan states no index: a direct draw whose positions run past there, on
-  every device; or an indirect draw that stays one draw (a driver measured to read zero past the
-  bound range, `DriverFact::RobustIndexFetchReadsZero`) on a device that enables
-  `robustBufferAccess2` but not `maintenance5`, whose bound range runs to the end of the index
-  buffer's `VkBuffer`, on past the bytes into its padding or into a heap's bytes after a placed
-  buffer. Cost: its whole indices inside the buffer are copied into a buffer of the command buffer
-  before the pass, between two barriers, and the draw reads the copy: a direct draw's at its start,
-  every position past them zero.
-- `metal2vulkan-degrade-unordered-draw-bytes` (performance). `UnorderedDrawBytes`: An indexed
-  indirect draw reads arguments or indices a draw of its encoder wrote, with no memory barrier in
-  the encoder before it, a race Metal does not order; or a draw's vertex stage reads a buffer of its
-  vertex table a fragment stage of its render pass wrote. Cost: they are copied into a buffer of the
-  command buffer before the pass, between two barriers, and the draw reads the bytes from before the
-  write, which Metal's draw read in every run measured.
-- `metal2vulkan-degrade-unorm-depth-bias` (precision). `UnormDepthBias`: A draw biases a
-  `Depth16Unorm` depth by a constant, or by a slope alone, which brings Metal's constant unit, on a
-  device whose driver is not measured to store Metal's codes so
-  (`DriverDeviation::MetalDepth16BiasedStores`): the device biases by Metal's constant in its own
-  unit and converts the depth. Cost: a biased depth can store another code than Metal's: the
-  device biases by the constant c in its own unit, up to twice 2^-16, where Metal biases by c + 1
-  units of 1/65535 (c - 1 below 0, one unit for a slope alone), and rounds the biased sum its own
-  way.
-- `metal2vulkan-degrade-unorm-depth-rounding` (precision). `UnormDepthRounding`: A draw tests or
-  writes a `Depth16Unorm` depth on a device whose driver is not measured to convert a depth to
-  Metal's code (`DriverDeviation::MetalDepth16Stores`), or a pass clears one to a depth that a
-  device rounding to nearest takes above Metal's truncation: the device converts the depth. Cost:
-  a depth near a code's midpoint can store the code next to Metal's: the device converts the depth
-  to the 16-bit code its own way, where Metal's draw rounds to nearest, a tie up, and its clear
-  truncates.
-- `metal2vulkan-degrade-point-guard-band` (precision). `PointGuardBand`: A draw of points keeps
-  Vulkan's clipping of points, where Metal's guard band cannot be emulated: in a rate-mapped pass,
-  on a device without `shaderClipDistance` or with too few clip distances beside the vertex
-  function's own, or through a viewport whose widened Vulkan viewport would leave the device's
-  limits or not be a `float` exactly. Cost: a point whose center lies past its viewport, within
-  Metal's guard band of 1.5 times the viewport's half-size, is culled where Metal draws it, and a
-  wide point can lose pixels at a fractional viewport edge by the device's own clipping.
-- `metal2vulkan-degrade-nan-depth` (precision). `NanDepth`: A draw whose fragment function writes
-  its depth, in depth clamp mode through a range above 0, keeps the device's clamp of that depth,
-  where the function cannot clamp it itself under a Vulkan clamp that holds 0: on a device without
-  `VK_EXT_depth_clamp_control` whose vertex stage cannot compensate the depth exactly, a mesh
-  pipeline there, through viewports of different clamps or depth ranges, under a depth bias that
-  saturates or offsets the range, or past the device's clip distances. Cost: a NaN depth the
-  fragment function writes: a negative one in depth clamp mode stores the depth clamp range's low
-  end, where Metal stores 0; a positive one runs no stencil operation, where Metal runs the
-  depth-failure one.
-- `metal2vulkan-degrade-biased-depth-past-unit-range` (precision). `BiasedDepthPastUnitRange`: A
-  draw of triangles in depth clip mode under a depth bias of a constant or slope factor other than
-  0, on a device that enabled `VK_EXT_depth_range_unrestricted` but lacks `depthClamp`,
-  `VK_EXT_depth_clip_enable` or `VK_EXT_depth_clamp_control`: such a device stores a depth the bias
-  takes past `[0, 1]` unclamped, where Metal clamps it. Cost: a depth a bias takes past [0, 1] in
-  depth clip mode is stored unclamped, where Metal stores 0 or 1.
-- `metal2vulkan-degrade-clipped-depth-pieces` (precision). `ClippedDepthPieces`: A draw of lines or
-  triangles whose vertex stage clamps each vertex's depth as Metal does, through a viewport depth
-  range with a negative depth in depth clip mode or past `[0, 1]` in depth clamp mode: Metal clips a
-  primitive at its near and far planes and at its guard band first, and clamps the depths of the
-  pieces' vertices. Cost: a primitive that crosses Metal's near or far plane, or its guard band of
-  1.5 times the viewport's half-size, stores the interpolation of its own vertices' clamped depths,
-  where Metal clamps the depths of the pieces it clips the primitive into.
-- `metal2vulkan-degrade-sample-depth-clamp` (precision). `SampleDepthClamp`: A draw of lines or
-  triangles through such a range whose vertex stage cannot clamp each vertex's depth: its fragment
-  function reads its position's depth, a mesh pipeline, on a device without `shaderClipDistance` or
-  past its clip distances, or through viewports whose depths need different compensations on a
-  device that takes the ranges natively; and a draw of triangles in depth clamp mode under a depth
-  bias that moves the depth through a range inside `[0, 1]`, where Metal adds the bias to each
-  vertex's depth clamped to `[0, 1]`, which a primitive past its near or far plane shows. Cost: a
-  sloped primitive's depth is clamped at each sample, where Metal clamps each vertex's depth before
-  the interpolation, at 0 in depth clip mode and to [0, 1] in depth clamp mode.
-- `metal2vulkan-degrade-depth-bias-past-one` (precision). `DepthBiasPastOne`: A draw of triangles in
-  depth clamp mode through a viewport depth range whose larger depth lies past 1, under a depth bias
-  of factors, whose Vulkan clamp holds at most 1. Cost: a depth the bias moves past 1 stores 1,
-  where Metal clamps it to the range's larger depth.
-- `metal2vulkan-degrade-in-place-vertex-reads` (precision). `InPlaceVertexReads`: A draw's vertex
-  stage reads in place bytes a fragment stage of its render pass wrote, through an argument buffer
-  or a resident resource, of a buffer another stage of the pass or the vertex function writes, or in
-  an execution of render commands. Cost: the device may order the fragments' write before the read,
-  where Metal's vertex stages read the bytes from before the pass's fragments in every run measured.
-- `metal2vulkan-degrade-fragments-before-geometry` (precision). `FragmentsBeforeGeometry`: A draw's
-  object or mesh stage reads in place bytes a fragment stage of its render pass wrote (through an
-  argument buffer or a resident resource, or of a buffer another stage of the pass or the stage's
-  function writes; an emulated stage's where its work records after the pass's earlier render pass
-  instances), or a draw's vertex, object or mesh stage writes bytes a fragment stage of its render
-  pass read or wrote: Metal's GPUs run every draw's vertex, object and mesh functions before any
-  draw's fragments of the pass. Cost: the device may run the pass's earlier fragments before the
-  draw's stage, and does across a split of the pass (a command's barrier, a memory barrier): the
-  read sees their write, their read misses the write, or the write outlasts theirs, where Metal's
-  fragments run after every draw's vertex, object and mesh functions in every run measured.
-- `metal2vulkan-degrade-indirect-index-bounds-pass` (performance). `IndirectIndexBoundsPass`: An
-  indexed indirect draw whose index fetch nothing bounds (the device lacks `robustBufferAccess2`,
-  its driver is not measured to read zero past the bound range,
-  `DriverFact::RobustIndexFetchReadsZero`, or the index offset lies at or past the buffer's length)
-  is bounded on the GPU before the pass. Cost: two dispatches before the pass write two draws'
-  arguments and the indices past the buffer into the command buffer's index pool (a sixty-fourth of
-  the device's largest device-local heap), between barriers, two for a run of such draws over one
-  arguments and one index buffer, and the draw is two indirect draws; a draw the pool cannot hold
-  fails the command buffer.
-- `metal2vulkan-degrade-emulated-mesh-draws` (performance). `EmulatedMeshDraws`: A mesh render
-  pipeline's draws on a device without `VK_EXT_mesh_shader`. Cost: the object and mesh functions run
-  as compute dispatches before the pass, between barriers, writing records a synthesized vertex
-  stage draws; a draw whose mesh threadgroups the GPU decides is scanned first and reserves its
-  records in the command buffer's records pool (a sixty-fourth of the device's largest device-local
-  heap), and a draw the pool cannot hold fails the command buffer.
-- `metal2vulkan-degrade-emulated-tessellation-draws` (performance). `EmulatedTessellationDraws`: A
-  tessellation pipeline's patch draws on a device without `tessellationShader`. Cost: each patch
-  draw runs a scan dispatch before the pass, between barriers: one workgroup that processes the
-  draw's patches, instance by instance, into records in order, so its GPU time grows with the draw's
-  patches times its instances, apart from its draw; the draw then draws the tessellator's triangles
-  with the post-tessellation vertex function as a plain vertex function, up to 2^30 triangles per
-  indirect draw; an indirect draw reserves its records in the command buffer's records pool (a
-  sixty-fourth of the device's largest device-local heap), and a draw the pool cannot hold fails the
-  command buffer.
-- `metal2vulkan-degrade-synthesized-geometry-stage` (performance). `SynthesizedGeometryStage`: A
-  render pipeline state whose draws run a synthesized geometry stage
-  (`RuntimeFact::SynthesizedGeometry`): its fragment function reads `[[barycentric_coord]]` on a
-  device without `fragmentShaderBarycentric`, or its vertex function selects its primitive's render
-  target slice or viewport on a device that cannot store `Layer` or `ViewportIndex` from a vertex
-  function. Announced at the state's making, naming which. Cost: each draw runs a geometry stage of
-  its topology class between the vertex and fragment stages, which emits each primitive's vertices
-  with the barycentric weights or the first vertex's slice and viewport.
-- `metal2vulkan-degrade-landed-visibility-results` (performance). `LandedVisibilityResults`:
-  Visibility results start where Vulkan writes no query result. Cost: they land in an upload region,
-  into which the buffer's words are copied first where they accumulate, and are copied on into the
-  buffer after the pass.
-- `metal2vulkan-degrade-overlapping-buffer-copy` (performance). `OverlappingBufferCopy`: A blit
-  copies between overlapping ranges of one buffer, which Vulkan's copy forbids. Cost: the range goes
-  through a scratch buffer of its size, which its creation clears by a fill it waits for: two copies
-  instead of one.
-- `metal2vulkan-degrade-split-buffer-fill` (performance). `SplitBufferFill`: A blit fills bytes that
-  are not whole 4-byte words at multiples of 4. Cost: the words are filled and the up to 3 bytes at
-  each end copied from a 1-KiB pattern buffer the encoder makes once.
-- `metal2vulkan-degrade-staged-texture-copy` (performance). `StagedTextureCopy`: A blit copies
-  between a buffer and a texture in a layout Vulkan cannot state. Cost: the rows go through a
-  tightly packed scratch buffer: two copies instead of one, and for a single-sample texture the
-  scratch's creation clears it by a fill it waits for.
-- `metal2vulkan-degrade-overlapping-texel-copy` (performance). `OverlappingTexelCopy`: A blit copies
-  texel rows of a texture over a buffer to or from bytes of the same buffer that they share, which
-  Vulkan's copy forbids. Cost: the rows go through a tightly packed scratch buffer, which its
-  creation clears by a fill it waits for: two copies instead of one.
-- `metal2vulkan-degrade-split-dispatch` (performance). `SplitDispatch`: A dispatch is more than one
-  Vulkan dispatch: a group count is past the device's `maxComputeWorkGroupCount`, or its grid is not
-  a whole number of threadgroups and the kernel observes its threadgroup partition in a way its
-  partial-threadgroups variant cannot run (a tile function, a stage-input region, compute
-  derivatives, simdgroups emulated in workgroup memory, or threadgroups that are not whole
-  subgroups of its pinned size). A kernel that does not observe its partition runs any such grid as
-  one dispatch of its own threadgroup size, every invocation taking the grid thread it counts to;
-  one that observes it only through its simdgroups does so for a one-row grid in threadgroups of
-  one row, its workgroups and simdgroups Metal's, where its module emulates no simdgroup and holds
-  no workgroup barrier; any other runs it on its partial-threadgroups variant, the threadgroups its
-  threads fill at the call's threadgroup size, the last along an axis Metal's partial threadgroup,
-  one dispatch per chunk of group counts on one `VkPipeline`. Cost: one Vulkan dispatch per region (the interior and each partial
-  edge, per chunk of group counts), each on its own specialized pipeline, a barrier between each
-  two.
-- `metal2vulkan-degrade-emulated-simdgroups` (performance). `EmulatedSimdgroups`: A dispatch whose
-  threadgroups are not whole subgroups of the kernel's pinned subgroup size runs on the kernel's
-  emulated-simdgroups variant. A threadgroup of one row of a kernel whose only simdgroup semantics
-  are the barriers its lockstep order took, ordering pairs that meet only where a simdgroup spans
-  two rows, runs on the kernel's one-row variant instead, which has none of those barriers and pins
-  no subgroup size. Cost: a second compile of the kernel whose simdgroup operations go
-  through threadgroup memory between barriers.
-- `metal2vulkan-degrade-separate-depth-stencil` (performance). `SeparateDepthStencil`: A pass of
-  separate depth and stencil textures, or of a stencil-only texture alone at custom sample
-  positions, renders into a scratch image of a combined format. Cost: each loaded aspect is copied
-  into the scratch image before the pass and each stored one back after it, through a staging
-  buffer, or a multisampled colour image for multisampled textures, or sample-rate draws where the
-  device's copies of those are missing or wrong.
-- `metal2vulkan-degrade-one-aspect-resolve` (performance). `OneAspectResolve`: A pass resolves a
-  combined depth/stencil attachment one aspect at a time, on a device that resolves the two aspects
-  only together or only in one mode, or where its aspects resolve into different textures. Cost: a
-  scratch image per aspect, the second aspect resolved after the pass in a render pass of its own
-  from the stored samples, and each resolved aspect copied into the resolve texture after the pass
-  through a staging buffer.
-- `metal2vulkan-degrade-resolve-scratch` (performance). `ResolveScratch`: A pass resolves into a
-  texture that cannot be an attachment (its usage lacks `RenderTarget`), or a layered pass into a
-  texture whose slices from the resolve slice hold fewer layers than the pass's, or a pass resolves
-  color into a 3D texture's planes past its first, or into more than one, on a device whose resolve
-  into a 2D view of a 3D image is written where the view begins only at its first plane (RADV,
-  NVIDIA's). Cost: the pass resolves into a scratch image, whose render area is copied into the
-  texture after the pass.
-- `metal2vulkan-degrade-shader-resolve` (performance). `ShaderResolve`: A multisample color resolve
-  drawn after the pass by the crate-owned resolve: of an extended-range attachment, whose codes no
-  device's resolve averages, or into the attachment's format's sRGB twin, whose encoding no
-  device's resolve writes; or a stencil resolved by `DepthResolvedSample` after `Min` or `Max`, which no
-  Vulkan resolve mode states, or a `Min` or `Max` depth on a device without the mode, drawn after
-  the pass. Cost: one more render pass instance after the pass reads the stored samples (or the
-  sample planes) and writes the resolve texture, where the device would resolve in the pass; where
-  the attachment's image takes no input attachment usage, a copy of its samples over the render
-  area into a scratch image first.
-- `metal2vulkan-degrade-shader-color-conversion` (performance). `ShaderColorConversion`: A fragment
-  function writes a float to a half-float color attachment of a pipeline under
-  `TextureWriteRoundingMode::NearestEven`, whose rounding no device's conversion gives
-  (`StageModule::rounded_colors`). Cost: the fragment function rounds each such channel to nearest
-  even before it writes it: about 35 more instructions per channel.
-- `metal2vulkan-degrade-render-pass-split` (performance). `RenderPassSplit`: A Metal render pass
-  runs as several Vulkan render pass instances: a framebuffer fetch through the pixel interlock
-  keeps its attachment out of its draws' subpass, and the pass's draws leave different attachments
-  out, or its last draws leave out an attachment that resolves, which resolves in one more instance;
-  or a fetch through input attachments reads an attachment whose image takes no input attachment
-  usage (a caller's) after other draws recorded, and the stand-in that has it makes it an input
-  attachment of the later draws' subpass alone; or a tile dispatch runs between two instances; or
-  some of its draws render some of its layers, each run of them in an instance over those layers; or
-  a memory barrier over buffers or textures orders its draws after it behind those before it, which
-  a barrier between instances does; or a draw reads a color attachment's texture after a memory
-  barrier, and reads what the pass's load actions and earlier draws stored where the barrier orders
-  them, but for a read of the clear alone before any draw of the pass, whose copy is cleared to it
-  instead where it can be (`WorkCounts::attachment_read_clears`); or a draw reads and writes a
-  color through the pixel interlock after an earlier draw of its instance wrote it, on a driver
-  whose such draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), and records
-  into an instance after the one that wrote it. Not where the pixel interlock
-  alone splits the pass on a device whose driver ran such a pass
-  no slower split than whole (`DriverFact::InterlockedPassSplitNoSlower`): the split is then its
-  faster form. Cost: each instance after the first loads the attachments and each before the last
-  stores them, with a barrier from everything before to everything after between them: on a tiler,
-  a tile flush per split.
-- `metal2vulkan-degrade-amplification-draws` (performance). `AmplificationDraws`: A draw under
-  vertex amplification that Vulkan multiview cannot express (view mappings that offset the viewport
-  or name layers out of order, more amplifications than the device's views, or a pipeline that
-  chooses or reads its render target slice) draws one amplification at a time
-  (`bind::DrawCommands::amplifications`). Cost: one Vulkan draw per amplification, each after the
-  amplification's push data, on the pipeline state's variant that reads it, where multiview would
-  draw them all at once.
-- `metal2vulkan-degrade-memoryless-backed` (performance). `MemorylessBacked`: A memoryless
-  attachment renders into a backing image of the device's own memory, because a framebuffer fetch
-  through the pixel interlock reads it or the pass splits; not for a split `render-pass-split`
-  leaves unannounced. A color's backing is one its command queue keeps for its passes of the
-  attachment's format, samples and size. Cost: a scratch image, a color's kept by its command queue
-  for its passes of that shape and a depth or stencil one's per pass: memory, and the bandwidth to
-  write and read it, that Metal does not spend on a memoryless texture.
-- `metal2vulkan-degrade-memoryless-texture-buffer` (performance). `MemorylessTextureBuffer`: A
-  memoryless texture buffer (`newTextureWithDescriptor:` of a `TextureBuffer` descriptor of
-  `MTLStorageModeMemoryless`, which plain Metal makes), whose texels are a buffer's bytes: the
-  buffer is a `Private` one of the device's, since no Vulkan buffer takes memory lazily. The
-  texture answers the descriptor's memoryless mode, as Metal's does, and a command that uses it
-  fails its command buffer, as plain Metal's. Cost: a Private buffer of the texture's row of
-  texels: memory Metal spends none of on a memoryless texture. Nothing reaches those bytes.
-- `metal2vulkan-degrade-fetch-through-scratch` (performance). `FetchThroughScratch`: A color render
-  target that a framebuffer fetch reads lacks the usage the fetch's form needs, so its pass renders
-  into a scratch image that has it: `STORAGE` in the pixel interlock, or for its sample planes
-  sampled usage with a view of its texel size's unsigned-integer format, either of which the runtime
-  gives a texture only where it leaves the image's layout (its compression) alone; or input
-  attachment usage, which a caller's image may lack. Cost: a scratch image per pass, the texture
-  copied into it before the pass on a `Load` and back after it on a `Store`.
-- `metal2vulkan-degrade-fetched-target-storage` (performance). `FetchedTargetStorage`: A runtime
-  texture that a pass rendered into a scratch image for want of `STORAGE` (`fetch-through-scratch`
-  through the pixel interlock), or whose draw that read it at its own pixels after a memory barrier
-  split its pass for want of it, took its storage form: its image made again with `STORAGE` and its
-  texels copied in once, at the commit of the device's only uncommitted command buffer; with a
-  submission check, once that command buffer's checks ran at its submission and every encoder of it
-  ran. Announced once per device, whatever `DeviceOptions::announce_each` says, before that command
-  buffer is scheduled: on the scheduler's thread once it submitted it, outside any program call or
-  host step, or in the call that makes a command buffer meanwhile. Cost: the texture's image laid
-  out as one with `STORAGE` usage from then on (on MoltenVK `ShaderWrite`, without lossless
-  compression), and one copy of its texels, where Metal's texture keeps its usage.
-- `metal2vulkan-degrade-positions-through-scratch` (performance). `PositionsThroughScratch`: A
-  depth/stencil render target whose image was not made for the pass's custom sample positions (a
-  caller's image without `VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT`, which Vulkan
-  needs to rasterize a depth/stencil attachment at them), or was on a driver that keeps a depth
-  rendered at them per sample only through a copy
-  (`metal2vulkan::device::DriverFact::PositionedDepthReadAtStandardPositions`: NVIDIA's, measured),
-  renders into a scratch image made for them. Cost: a scratch image per pass, each aspect copied
-  into it before the pass on a `Load` and back after it on a `Store`.
-- `metal2vulkan-degrade-sample-planes` (performance). `SamplePlanes`: A framebuffer fetch through
-  the pixel interlock in a multisampled pass, on a device without multisampled storage images, reads
-  and writes the attachment as its sample planes: a single-sampled array image of one layer per
-  sample. Cost: a planes image per fetched attachment and pass; a compute dispatch copies the
-  samples into it before the draws that fetch (on a `Load`, or after other draws rendered it) and a
-  sample-rate pass copies them back after those draws (before other draws render it, and where the
-  pass keeps or resolves it).
-- `metal2vulkan-degrade-shader-side-stencil` (performance). `ShaderSideStencil`: A render pass's
-  draws test and write the stencil in the fragment shader, on a device without
-  `VK_EXT_shader_stencil_export`: the function's `[[stencil]]` output is Metal's stencil reference,
-  which only that extension hands the fixed-function test. Cost: an 8-bit shadow image of the
-  stencil per pass, which the stencil is copied into before each run of such draws and back from
-  after it (through a staging buffer at one sample), each run in a render pass instance of its own,
-  its fragment shader testing and writing the shadow in the pixel interlock.
-- `metal2vulkan-degrade-tile-dispatch-scratch` (performance). `TileDispatchScratch`: A tile dispatch
-  stages its pass's attachments through storage views in their staging formats, which it takes of a
-  scratch image of each attachment's format: each is copied into its scratch before the dispatch and
-  back after it. Cost: a scratch image per staged attachment and pass, over the pixels the dispatch
-  covers, which each dispatch copies the attachment into before it and back from after it, between
-  barriers from everything before to everything after: memory and bandwidth that Metal's tile memory
-  does not spend.
-- `metal2vulkan-degrade-fragment-imageblock-storage` (performance). `FragmentImageblockStorage`: A
-  render pass's draws' fragment functions declare an explicit imageblock, which they read and write
-  in a storage image of the render area. Cost: an R32Uint array image per pass over the render area,
-  a layer per 4 bytes of a pixel's imageblock and per sample, cleared before the pass, which the
-  draws read and write in the pixel interlock: memory and bandwidth that Metal's tile memory does
-  not spend.
-- `metal2vulkan-degrade-wrapped-image-layout-transitions` (performance).
-  `WrappedImageLayoutTransitions`: A command buffer uses a texture over the caller's image whose
-  home layout is not `GENERAL`: every image the runtime uses rests in `GENERAL`. Cost: two
-  whole-image barriers per batch that uses it: into GENERAL before its first encoder, and back to
-  its home layout at its end.
-- `metal2vulkan-degrade-host-replayed-indirect-commands` (performance).
-  `HostReplayedIndirectCommands`: An execution of an indirect command buffer
-  (`executeCommandsInBuffer:withRange:`) whose commands are known only once the work before it
-  completed: a route that may write its records met the buffer (its command buffer made it
-  resident for writing and set a pipeline state whose functions may call an indirect-command
-  operation, or executed commands whose records may name one; or a blit copied or reset commands
-  into it), so the GPU may write them, and the notice names that route; it reads its range from a
-  buffer; or it lies inside a block of command predication. The runtime
-  records such an execution on the CPU then where the GPU cannot run it alone. A render execution:
-  where its records may hold, at the commit or as its batch is ready, more than draws of one
-  primitive type under the encoder's state, or what its check looks for, and, with its range read
-  from a buffer or indexed draws among its records, where its commands do not merge into one draw (a
-  strip type, a `[[primitive_id]]` its fragment function reads, or another rule of the merged form),
-  or, for a range read from a buffer, the CPU alone writes its records; its notice names the first
-  rule that kept it from the GPU alone and then every rule past it the pass breaks too, each judged
-  as though the rules before it were kept (a rasterization rate map's as though the pass had none;
-  the rules past the commands' one primitive type, the encoder's pipeline state and kind, the
-  buffer's size or a refusal stay unjudged), and is announced once per first rule (a compute
-  execution's once), so a walk of a program sees why each of its GPU-driven passes steps, not
-  only the first one met. A compute execution: with a caller's check
-  (`execute_commands_in_buffer_checked`) that may see what it looks for
-  (`IndirectCommandCheckNeeds`: a state that may encode indirect commands, the encoder's where the
-  buffer inherits it, else one its records may name), at the commit or as its batch is ready; with
-  its range read from a buffer; of a buffer that inherits the encoder's buffers where the encoder
-  binds a visible-function table; where its records
-  may name a pipeline state whose kernel observes its threadgroup partition or fetches
-  `[[stage_in]]` attributes, or a state the CPU set that the program released since; and, on a
-  device without `VK_EXT_device_generated_commands`, where the host step is faster: where its
-  commands run with no barrier between them and its commands times the pipeline states its records
-  may name past four pass 256 (the states: every live one made with `supportIndirectCommandBuffers`,
-  or the encoder's where the buffer inherits it), where they run with one and its commands times the
-  states past twelve pass 512, and where its commands times its states pass 32,768. Every other
-  execution runs on the GPU alone and announces nothing. Cost: a GPU-to-CPU round trip: the
-  batches that last wrote its records and its range complete before the CPU records its commands
-  from their records, on a thread of the runtime's, and submits the rest, so a command buffer's
-  executions behind one writer wait for it once (where Metal tracks neither, or the step reads
-  more, as inside a block of command predication: its command buffer's work before it, and every
-  batch submitted before that on any queue); meanwhile the device's other batches go, but for a
-  later one that shares a resource the execution may reach (one made resident, the records; where
-  what it may reach is not known, through an inherited visible-function table, tile memory, a
-  visibility query or a shadowed texture, a later commit of another queue goes ahead of it but
-  where it writes the records or the range or shares a fence with it), and the first command of a threadgroup size or threadgroup lengths its pipeline state has not dispatched makes
-  that VkPipeline then, as does a render command's draw of a state the CPU set on none of the
-  commands. In a rate-mapped pass whose host step fans its triangles out, a render execution kept
-  from the GPU alone by the rate map alone has its records decoded on the GPU at the step, which
-  reads back each command's draw arguments and index buffer and none of its records, and each
-  command is drawn in its replay variant, indexed where it is (`WorkCounts::rate_map_gpu_routes`):
-  a second round trip, for the decode, comes before the probe's. Other commands run in the large-buffer form (their range-limited buffer slots at device
-  addresses, with in-shader bounds checks), whose variants the commit compiles for every pipeline
-  state a record may name (for a render execution, every state the CPU set on its commands; or,
-  for an execution committed before a route that may write the records met the buffer, the call
-  that met it: a later commit, a blit's, or a CPU setter's); without device addresses, a command's
-  first buffer shape compiles its variant then.
-- `metal2vulkan-degrade-staged-indirect-records` (performance). `StagedIndirectRecords`: A host
-  access of an indirect command buffer's records (a setter, a getter, a CPU reset, a commit or host
-  step that reads them) on a device without unified memory that reserves a staging queue, where the
-  records lie in device-local memory and must stay there: a `Private` buffer's, which the first
-  use places there for good, or a `Shared` one's that the GPU used first while a command buffer that
-  used them is not complete or dropped. An access that only reads records the GPU never wrote
-  (a getter, or a commit that records an execution from them) is not one: it reads host memory in
-  place, which holds what device-local memory does. A `Shared` buffer's records lie where their
-  first use places them: in device-local memory where the GPU's use (an execution, `useResource`,
-  a blit's copy, reset or optimize) comes first, where kernels write and executions read them
-  without crossing the link, and otherwise in host memory. They move into host memory for good at
-  the first host access no command buffer holds them for, copying them there where the GPU may
-  have written them. To avoid it, touch a `Shared` buffer from the CPU before the GPU uses it.
-  Cost: a round trip through the device's staging queue for each such access: the records it
-  reads are copied into host memory first where the GPU may have written them, and those it
-  writes copied back after, each copy waited for, where Metal's CPU reads and writes the records
-  in place.
-- `metal2vulkan-degrade-uncalibrated-gpu-times` (precision). `UncalibratedGpuTimes`: A command
-  buffer's GPU times on a device that calibrates its timestamps against no host clock the runtime
-  reads (no `VK_KHR_calibrated_timestamps` or `VK_EXT_calibrated_timestamps` with the device's time
-  domain and a monotonic host one), whose calibration failed as it completed, or whose calibration
-  placed them outside the command buffer's life (before its first submission, after its completion)
-  by more than its stated deviation and the clocks' drift allow. Cost: the end is the host time the
-  runtime saw the command buffer complete, late by that latency, and the start the GPU's exact
-  duration before it.
-- `metal2vulkan-degrade-loosely-calibrated-gpu-times` (precision). `LooselyCalibratedGpuTimes`: A
-  command buffer's GPU times on a device whose calibration, taken as the command buffer completed,
-  stated a deviation above 20 us though the runtime read it again (four readings at most), and
-  placed them inside the command buffer's life by the reading of the least deviation, which the
-  notice's reason states. A reading's deviation holds the time its thread spent off the CPU, so a
-  loaded host states more. Cost: each GPU time may stand from the moment the GPU wrote it by up to
-  the deviation its reason states, more than the 20 us a settled calibration reading keeps to; the
-  duration between them stays exact.
-- `metal2vulkan-degrade-untimed-command-buffer` (precision). `UntimedCommandBuffer`: A command
-  buffer's GPU times on a device whose timestamp pools had no slot free at the command buffer's
-  commit, and which could make no pool more: every slot was held by a command buffer in flight.
-  Cost: its GPU start and end times are refused (`Unsupported`, `GpuTimes`), where Metal gives them;
-  its kernel times stay.
-- `metal2vulkan-degrade-gpu-times-from-host` (precision). `GpuTimesFromHost`: A command buffer's GPU
-  times on a device told to answer them from the host (`DeviceOptions::gpu_times_from_host`,
-  `RawDevice::gpu_times_from_host`), or whose driver's timestamps wait for every queue's
-  (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's GPUs, 1.4.2 on the M3
-  Max), which writes no GPU timestamps of its own. Cost: its GPU start is the call of the first submission that
-  carried its work (its kernel end time where one carried it all; or its queue's latest GPU end
-  before it) and its GPU end the host time the runtime saw it complete: a window its work ran in,
-  which holds the submission's and the completion's latencies, not the GPU's own start and end.
 - `metal2vulkan-degrade-device-rounded-resolve` (precision). `DeviceRoundedResolve`: A multisample
   color resolve averages through Vulkan's `AVERAGE` mode, which leaves the rounding of the average
   (and the sRGB encoding) to the device, on a device not measured to round as Metal does: any
@@ -3097,368 +2447,22 @@ bound.
   `AVERAGE` in the pass's own rendering, on every device: an extended-range, bfloat or YCbCr
   attachment's resolve is `Gap::RenderPass` of `RenderPassKind::Resolve`, and an integer one is
   `Refusal::ResolveFormat`.
-- `metal2vulkan-degrade-unmeasured-resolve` (precision). `UnmeasuredResolve`: A multisample color
-  resolve of more than 4 samples, of which Apple's GPUs make no texture: no Metal answer is measured
-  there; likewise a stencil resolved by `DepthResolvedSample` after `Min` or `Max`, whose pick among
-  equal depths is measured at 2 and 4 samples. Cost: the resolve is the device's average, or after
-  the pass the rules Metal's resolve follows at 2 and 4 samples, which no Metal answer confirms at
-  this count.
-- `metal2vulkan-degrade-extended-range-resolve` (precision). `ExtendedRangeResolve`: A multisample
-  resolve of an extended-range color attachment whose resolve Metal averages from values finer than
-  the codes the attachment holds (`BGRA10_XR`'s alpha, an `_sRGB` twin's color,
-  `RGB10A2Unorm_sRGB`'s channels): the crate-owned resolve writes a near-equivalent from the codes
-  where a pixel's samples differ, and Metal's code where they hold one. Measured against Metal's
-  resolve on the M3 Max under macOS 27.0.1 (4096 texels per format at 2 and 4 samples, each sample
-  its own value): `BGRA10_XR`'s alpha Metal's in 84% and 88% of texels and within a code in every
-  one; an `_sRGB` twin's color in 81% and 85% of channels and within a code in 99.5%, at most 7
-  codes off where the samples' values nearly cancel; `RGB10A2Unorm_sRGB`'s colors in 83% and 87%,
-  within 2, and its alpha in 94% and 97%, within one. A linear form's color is Metal's rule, every
-  texel. Cost: where a pixel's samples differ, a resolved alpha, or an sRGB color, can differ from
-  Metal's by a code (an sRGB color by a few where the samples' values nearly cancel): Metal averages
-  values finer than the codes the attachment holds.
-- `metal2vulkan-degrade-word-resolve` (precision). `WordResolve`: A multisample resolve of a
-  packed 16-bit color attachment (`A1BGR5Unorm`, `ABGR4Unorm`, the other packed 16-bit formats) the
-  device renders only through the view of its word, held in the word's format: the crate-owned
-  resolve averages each field's codes, a tie rounded down (a one-bit field's up), where Metal
-  averages its tile's values, the outputs as `half`s, finer than the codes, from the pass that drew
-  them. A pixel whose samples hold one word resolves to it. Measured against Metal's resolve on the
-  M3 Max under macOS 27.0.1 (256 pixels at 2 and 4 samples per format): Metal's code in 74% to 88%
-  of the channels resolved in the pass that drew them, 90% to 99% (every one-bit alpha) of those a
-  pass only loaded, and within one code in every channel. `RGB9E5Float`'s and an 8-bit sRGB
-  format's word resolve is Metal's, every pixel. Cost: where a pixel's samples differ, a resolved
-  channel can differ from Metal's by a code: Metal averages its tile's values, finer than the codes
-  the attachment's words hold.
-- `metal2vulkan-degrade-dont-care-store` (precision). `DontCareStore`: An attachment stored with
-  `DontCare` (or the multisampled attachment of `MultisampleResolve`) is Vulkan's `DONT_CARE`, where
-  Apple's GPU keeps the earlier texels unless its tiler overflows. Only on a driver measured to keep
-  either the earlier texel or the stored one at each texel
-  (`DriverFact::DontCareStoreIsOneOfMetals`); every other device stores the attachment, Metal's
-  answer where its tiler overflows. Not a texture over a buffer: Metal leaves the buffer's bytes in
-  it (on an M3 Max, every texel of 926 such passes alike, and of 36 with a memory barrier between
-  two draws, 20 times each, but that the first pass in a process to
-  overflow Apple's tiler leaves the rendered texels, which no call can predict or detect), and the
-  runtime gives the buffer's bytes, exactly, through an image the pass copies nothing back from
-  (`dont-care-stand-in` below, or the texture's shadow), or by handing the attachment to Metal's
-  own `DontCare` where the driver stores it so. A texture's own image stored `DontCare`, of which
-  Metal leaves the earlier texels (an M3 Max, the pass's clear and draws both gone, under every
-  load action), is stored as the driver stores it under the default policy and announced so, but
-  where the pass hands it to Metal's own `DontCare` (MoltenVK). Under
-  `DevicePolicy::dont_care_colors = DontCareColorPolicy::Kept` (`DevicePolicy::exact_answers()`)
-  the runtime gives the earlier texels, exactly, through a backing of the attachment's shape its
-  queue keeps, into which a `Load` copies the texels over the render area first and from which
-  nothing is copied back; such a pass is counted (`WorkCounts::kept_texels_passes`) and not
-  announced (docs/FAST-PATHS.md). Only where the pass cannot (a draw took a view of the texture's
-  own image before its store action was known, the pass executes render commands, the attachment
-  is resolved, or the device copies or makes no image of the format) does the pass render in
-  place, announced so. Where such a pass also loads the attachment `DontCare` and the runtime
-  clears it (`UnstoredDontCarePolicy`), a tile no draw touches holds zero or the clear value after
-  the pass, where Metal's holds its earlier texels. Cost:
-  the attachment's texels after the pass are each its earlier texel or the one the pass rendered,
-  both Metal's answers, but not always the one Metal's tiler keeps; where the pass loads it
-  `DontCare` and clears it, a tile no draw touches holds zero or the clear value. Within Metal's contract:
-  `MTLStoreAction.dontCare` lets the GPU leave arbitrary data ("You need to assume that GPU
-  discarded the texture's contents").
-- `metal2vulkan-degrade-dont-care-load-tiles` (precision). `DontCareLoadTiles`: An attachment loaded
-  with `DontCare` and stored, in a pass that draws, is cleared before the draws to zero (a color) or
-  its clear value (depth, stencil) over the render area and the tiles past it a clear reaches, where
-  Metal clears only the tiles a draw's primitives touch and keeps the texels of the others. Cost:
-  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. Also an
-  aspect of separate depth and stencil textures that cannot be copied into the scratch image the
-  pass renders them through (a multisampled aspect copied by draws), cleared over the render area
-  in a pass whose draws do not reach every tile, one without a draw included. Not an attachment
-  the pass does not store (`dont-care-unstored-load`).
-- `metal2vulkan-degrade-dont-care-unstored-load` (precision). `DontCareUnstoredLoad`: An attachment
-  loaded with `DontCare` and not stored (not memoryless; an aspect of separate depth and stencil
-  textures in the scratch image the pass renders them through), in a pass whose draws reach a
-  tile, is left to the driver's `DONT_CARE` load under `UnstoredDontCarePolicy::Driver`, the
-  default, on a driver not measured to clear it no slower (`DriverFact::UnstoredClearNoSlower`),
-  where Metal's draws read zero (a color) or the clear value (depth, stencil) wherever they read it. Cleared, and not announced, on a driver with the fact and
-  under `UnstoredDontCarePolicy::Cleared` (`exact_answers()`). Cost: the pass's draws read what the
-  driver's `DONT_CARE` load leaves in the attachment (on lavapipe its earlier texels) where Metal's
-  read zero or the clear value.
-- `metal2vulkan-degrade-fresh-pattern-zeroed` (precision). `FreshPatternZeroed`: On a device that
-  presents an Apple silicon Mac's compression (`DeviceProperties::lossless_compression`,
-  `MacClass::AppleSilicon`; never on one that presents a Mac with an Intel or AMD GPU, whose new
-  `Private` texture holds what its memory held or reads zero: section 10), a
-  new `Private` texture Metal keeps losslessly compressed reads a fixed pattern in Metal, which the
-  device cannot
-  write exactly into its image: a NaN depth where a copy into a depth image may store it clamped or
-  the image is multisampled, a NaN texel of a multisampled image (whose bits a clear leaves to the
-  device), or an image holding other bytes than Metal's texel. Announced at the commit of the
-  command buffer whose command first reads a texel of that content no clear, resolve or blit
-  covered, in commit order, whatever order or thread the command buffers were encoded in. Cost:
-  the new texture reads zero where Metal reads its fixed pattern until a write.
-- `metal2vulkan-degrade-zeroed-index-fetch` (precision). `ZeroedIndexFetch`: An indexed draw from an
-  index offset at or past its index buffer's length draws index 0 plus the base vertex at each
-  position, a direct draw from a zero-padded copy and an indirect one through the index bounds pass,
-  where Metal reads the memory past the buffer. Cost: each index position draws index 0 plus the
-  base vertex, where Metal reads whatever memory follows the buffer.
-- `metal2vulkan-degrade-implementation-defined-reconvergence` (precision).
-  `ImplementationDefinedReconvergence`: A pipeline stage's reconvergence after divergence is
-  implementation-defined on the device, where Metal's is maximal
-  (`Reconvergence::ImplementationDefined`). Cost: simdgroup operations after divergent control flow
-  can see other lanes active than Metal's.
-- `metal2vulkan-degrade-unlisted-argument-sampler` (precision). `UnlistedArgumentSampler`: A live
-  sampler state the device's sampler tables do not map to it for some commands, which reach every
-  other live state by its ID as they run, whenever it was made: one whose element no set-1 sampler
-  array can hold, as more states live than it holds (the device's, as the state is made, or a
-  pipeline's, as a command is encoded or the state made), each such command buffer counted once
-  (`WorkCounts::unlisted_argument_sampler_buffers`); one at an ID neither window of the tables
-  reaches (IDs 0 to 32767, and 32768 from the first ID past them, a reservation's); one whose
-  Vulkan sampler for an array's use the device cannot make or the use refuses, that array holding
-  the neutral at its element; a cubic state, for a command whose stage does not test the states it
-  reaches for a cubic filter (a fragment stage never does); and one whose elements could not be
-  written. Cost: a function reading the state through its ID in an argument buffer reads the
-  neutral sampler, where Metal's reads the state.
-- `metal2vulkan-degrade-restricted-depth-upload` (precision). `RestrictedDepthUpload`: An upload
-  (`replace_region`, a blit from a buffer, a copy from a colour texture, a fill of a multisampled
-  texture) into the 32-bit float depth of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled (ANV
-  on the Iris Xe, MoltenVK on the M3 Max), where Vulkan takes no copied value outside `[0, 1]`: the
-  upload clamps each value into `[0, 1]`, a NaN to 1.0, as the device stores it. And a render
-  pass's NaN clear depth on such
-  a device, which Metal stores as `0x7fc00000`, cleared to 1.0. And a heap's texture of such a depth
-  whose shadow's copies in move the heap's bytes into its image, announced as it is made: the
-  copies in clamp each value into `[0, 1]`, a NaN to 1.0, as the device stores it, and its copies
-  back write each value as the image stored it, one no command wrote too. Cost: a value
-  outside [0, 1] may be stored clamped to [0, 1], where Metal's keeps it, so reads, samples,
-  comparisons and depth tests of it can differ.
-- `metal2vulkan-degrade-host-read-dispatch-arguments` (performance). `HostReadDispatchArguments`: An
-  indirect dispatch, or a dispatch after `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`:
-  its arguments or its stage-in region are GPU memory the work before it may write, so they are
-  known only once that work completed. Cost: one GPU-to-CPU round trip per dispatch: a copy of its
-  arguments where it is encoded, then its command buffer's work before it, and every batch submitted
-  before that on any queue, completes before the CPU reads them and records the dispatch they state;
-  the device's scheduler submits nothing else meanwhile, and a threadgroup size its pipeline state
-  has not dispatched makes that VkPipeline then.
-- `metal2vulkan-degrade-non-strict-residency` (precision). `NonStrictResidency`: A sparse texture on
-  a device whose sparse residency is not `residencyNonResidentStrict`. Cost: a read of a texel no
-  mapped tile holds, by a function or a copy, answers the device's value where Metal's reads zero,
-  and a write to one may be kept where Metal's drops it.
-- `metal2vulkan-degrade-host-read-mapping-arguments` (performance). `HostReadMappingArguments`: An
-  indirect mapping update of a sparse texture, whose regions the host reads. Cost: one GPU-to-CPU
-  round trip per batch of such updates: the command buffer's work before it, and every batch
-  submitted before that on any queue, completes before the CPU reads the regions (through a copy for
-  a Private buffer) and binds them; the device's scheduler submits nothing else meanwhile.
-- `metal2vulkan-degrade-emulated-sparse-texture` (performance). `EmulatedSparseTexture`: A sparse
-  texture the device makes no sparse image of (MoltenVK binds no sparse memory), where no function
-  reads an image's own residency (the device does not enable `shaderResourceResidency`): an ordinary
-  image whose unmapped tiles the runtime keeps at zero, which gives Metal's answers. Cost: the
-  texture holds its whole image's memory from when it is made, where Metal's backs only its mapped
-  tiles; each batch that changes its mappings zeroes the tiles it unmaps and rewrites its tile map
-  before its work, and each blit that writes it zeroes the unmapped tiles it wrote.
-- `metal2vulkan-degrade-shared-in-system-memory` (performance). `SharedInSystemMemory`: A `Shared`
-  buffer or heap the program makes with the default CPU cache mode, on a device without unified
-  memory (`DeviceProperties::has_unified_memory`), lies in host-cached system memory, which the host
-  reads quickly, as a shared resource's on a Mac with a discrete GPU. Cost: the GPU reads and writes
-  it across the bus, as a discrete Mac's GPU does a shared resource: coalesced accesses at the bus's
-  speed, and scattered writes far slower (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090,
-  where device-local memory takes them at 850 GB/s).
-- `metal2vulkan-degrade-device-memory-overflow` (performance). `DeviceMemoryOverflow`: A buffer or
-  heap of `Private` storage the program makes, a `Managed` buffer's own bytes on a device without
-  unified memory, or a texture's image, of any storage mode, lies in system memory: no
-  device-local memory type the resource takes had room for it, so it takes one that is not
-  device-local, as Metal makes such a resource past a discrete GPU's memory rather than refuse it.
-  `WorkCounts::device_memory_overflows` counts each such placement. A `Managed` no-copy buffer
-  there whose GPU copy found no room lies in the caller's pages, as a `Shared` one does
-  (`WorkCounts::managed_device_copies_in_place`). A driver that pages
-  device-local memory (`VK_EXT_pageable_device_local_memory`, which the runtime enables where
-  listed with its feature) may page memory out to make room instead, and then nothing overflows.
-  Cost: the GPU reads and writes it across the bus, at the bus's speed, for as long as it lives;
-  resources made once device-local memory has room again lie there.
 - `metal2vulkan-degrade-device-filtered-mipmaps` (precision). `DeviceFilteredMipmaps`:
   `generate_mipmaps` of a filtered format (an integer format's texels are picked as plain Metal
-  picks them): each level is the device's linear filter of the one above at the scaled texel
-  centres, its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`) where its blits filter the
-  image's format, else the runtime's bilinear (trilinear in 3D) compute filter in `float`: an
-  extended-range format, an 8-bit sRGB texture held as its UNORM twin, or a format without blits or
-  linear filtering. The compute filter's arithmetic is the device's: its products and sums as it
-  contracts them, an 8-bit or extended-range sRGB code decoded and encoded through the MSL transfer
-  by its `Pow` (as a shader's read of the UNORM twin decodes it, `srgb-texel-decode`), a half by
-  its widening and narrowing, and a NaN its own; `bind::MipmapFilterChain::outside_bound` states
-  the bound its levels keep to the filter in IEEE `f32`. Neither is Apple's datapath, whose answers
-  also differ between Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place).
-  Announced once per device; no bound against Metal's answer is measured. Cost: each level is the device's linear filter of the one
-  above (its blit, or a bilinear filter in float where its blits cannot filter the format), not
-  Apple's: a channel can differ from Metal's where the filtered value lies near a rounding boundary,
-  and wholly where a box averages infinities, NaNs or a float format's extremes.
-  On `metal2vulkan-rt` it is the static note `PrecisionNote::DeviceFilteredMipmaps` of
-  `generate_mipmaps` (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`), its blit chain alone, on every
-  device: a format the device's blits cannot filter is `Gap::MipmapFilter`.
-- `metal2vulkan-degrade-heap-depth-stencil-apart` (precision). `HeapDepthStencilApart`: A depth or
-  stencil texture made in a heap on a device whose driver lays depth and stencil images apart from
-  the memory they are bound to (`DriverFact::DepthStencilImagesLieApart`) that no shadow of the
-  heap's bytes serves: a multisampled texture, which Vulkan copies to and from no buffer, or one
-  whose texels do not fit its bytes. Cost: the texture's texels lie apart from
-  the heap's bytes: a write through a buffer
-  or texture over its bytes changes none of them, and its writes change none of those resources'
-  bytes, where Metal's texture aliases them.
-- `metal2vulkan-degrade-heap-texture-host-transfer` (performance). `HeapTextureHostTransfer`: A
-  colour texture made in a heap on a device whose driver's compressed images hide writes through an
-  alias (`DriverFact::CompressedImagesHideAliasedWrites`), whose image takes host-transfer usage,
-  which the driver keeps uncompressed in the heap's bytes
-  (`metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes`). Also, on any device, a
-  single-sample colour texture Metal keeps compressed, or whose layout Metal's model does not state,
-  whose first image takes more bytes or a coarser alignment of the heap than Metal's answer, where
-  this one fits the answer: it lies in the heap's bytes in place of a shadow of them. Cost: the
-  texture's image
-  is kept uncompressed, so writes through the heap's buffers and textures over its bytes show
-  in it as Metal's do: a clear of it loses the driver's fast clear (334.5 us where a compressed
-  2048x2048 RGBA8Unorm image's took 4.1 us on an RPL-S), while its copies, sampling and blending
-  measured no slower.
-- `metal2vulkan-degrade-heap-texture-linear` (performance). `HeapTextureLinear`: A colour texture
-  made in a heap on such a device whose image takes no host-transfer usage (the device did not
-  enable `hostImageCopy`, or an adopted device's consumer did not say so, or the format or shape
-  takes none there): a linear image, which the driver does not compress, where one does all the
-  optimal image does for the texture. Also, on any device, a single-sample colour texture whose
-  first image takes more bytes or a coarser alignment of the heap than Metal's answer, where no
-  image of host-transfer usage fits the answer and a linear one does: it lies in the heap's bytes
-  in place of a shadow of them. Of a texture Metal keeps uncompressed, whose bytes are Metal's
-  tiles, only a linear image whose every element lies where those tiles place it (a level of one
-  element or one row), and no image of host-transfer usage. Cost: the texture's image is linear, so writes through the
-  heap's buffers and textures over its bytes show in it as Metal's do: its reads and writes go
-  without the optimal tiling's locality and compression (3.9 to 9.6 times the host-transfer image's
-  time for copies, clears and draws of a 2048x2048 RGBA8Unorm texture on an RPL-S).
-- `metal2vulkan-degrade-heap-texture-hides-aliased-writes` (precision).
-  `HeapTextureHidesAliasedWrites`: A colour texture made in a heap on such a device whose image
-  takes neither host-transfer usage nor linear tiling: an optimal image the driver may compress, a
-  near-equivalent recorded open. Cost: the driver may compress the texture's image: a write through
-  a buffer or texture over its bytes may leave texels as they were, and its writes may show in those
-  resources' bytes compressed, where Metal's texture aliases them byte for byte.
-- `metal2vulkan-degrade-heap-texture-compressed` (precision). `HeapTextureCompressed`: A colour
-  texture made in a heap on such a device that Metal keeps losslessly compressed too
-  (`allowGPUOptimizedContents`, no `ShaderWrite`, `PixelFormatView` or `ShaderAtomic` usage, 16
-  texels or more a side), under `HeapCompressionPolicy::Compressed`, the default: the driver's
-  compressed optimal image, its fast clears kept. Cost: the driver may compress the texture's image,
-  as Metal compresses the texture: a write through a buffer or texture over its bytes may leave
-  texels as they were, where Metal's texture reads opaque magenta (0xffff00ff) in every texel of
-  drawn content the write covered and the written bytes where it held only a clear (an M3 Max), and
-  its writes may show in those bytes compressed otherwise than Metal's;
-  HeapCompressionPolicy::Uncompressed keeps the image uncompressed in the heap's bytes, whose clears
-  then lose the driver's fast clear.
-- `metal2vulkan-degrade-combined-archive-stages` (precision). `CombinedArchiveStages`: A render
-  creation that fails on a binary-archive miss, made from one add's vertex stage and another add's
-  fragment stage: Metal's vertex key holds the vertex outputs its compiler finds the fragment
-  reading, which the runtime's lookup does not decode (`binary_archive::metal_key`). Cost: the
-  pipeline is made where Metal may refuse it with a binary-archive miss: Metal misses when the two
-  adds' fragment functions read different vertex outputs.
-- `metal2vulkan-degrade-shadowed-texture-view` (performance). `ShadowedTextureView`: A texture view
-  is an image of its own, a shadow of the viewed image's texels, where that image takes no Vulkan
-  view of its format: a view of another component layout on a device whose Vulkan views reinterpret
-  no image's components (a portability subset without `imageViewFormatReinterpretation`, or an
-  adopted device whose consumer did not say it enabled it), or a view of a texture made without
-  `PixelFormatView` usage in another format than the texture's own, its sRGB twin's and, where the
-  texture renders and is `RGBA8Unorm`, `BGRA8Unorm` or a twin of one, its channel-order sibling's
-  and that sibling's twin's. A view in
-  other channels of its image's bits (an `A8Unorm` view of an `R8Unorm` texture) is the image
-  itself to its bindings, through a swizzle, and takes a shadow only for a pass that renders into
-  it: Vulkan views the image in no format of the view's. Cost: its texels are copied from its
-  texture's image before each use and back after each write.
-- `metal2vulkan-degrade-repeated-execution-start` (precision). `RepeatedExecutionStart`: A render
-  encoder executes an indirect command buffer's commands from a command it executed them from before
-  with another length, each range given (`executeCommandsInBuffer:withRange:`) or read from a
-  buffer: Metal's executions then do not each run their own range, and not the same way from run to
-  run, on an Apple M3 Max and an Apple M4 alike, so no stable answer exists. Cost: each execution
-  runs its own range, as Metal documents, where Metal's GPU may run one execution with the other's
-  length, so commands run more or fewer times than the ranges name, differently from run to run.
-- `metal2vulkan-degrade-predication-word-past-buffer` (precision). `PredicationWordPastBuffer`: A
-  command predication record (`encode_start_if`, a loop's start, a live DoWhile's end) whose
-  condition word lies past its buffer's end, past the 256 bytes Metal rounds a lone buffer up to,
-  or past the end of the heap the buffer lies in: Metal reads whatever its own address space holds
-  there, a neighbouring buffer's bytes or zero, which depends on where Metal placed memory
-  unrelated to the buffer. Cost: the record reads its word as zero, where Metal reads what lies at
-  that address in its own address space: zero where nothing is there, another buffer's bytes where
-  Metal placed one.
-- `metal2vulkan-degrade-private-resource-option` (precision). `PrivateResourceOption`: A heap of
-  the runtime's memory or an indirect command buffer made with `MTLResourceOptions` bit 24
-  (`ResourceOptions::PRIVATE_BIT`), which Metal makes and keeps the GPU's writes from the memory
-  of, is made as without it, and reports its options without it, as Metal's does. A no-copy
-  buffer or heap with the bit drops the GPU's writes as Metal's does: on macOS its pages are
-  imported through a read-only view of them, announcing nothing; elsewhere it is made over a copy
-  of them that drops the GPU's writes (`copied-host-pages`), a no-copy buffer's blit copies out of
-  it reading the pages in place where they import in place (`copied-host-pages` says how). A buffer of the runtime's memory or a texture descriptor with the bit is
-  refused, as Metal ends the process there; a buffer placed in a heap without the bit is made as
-  without it, announcing nothing. Cost: the GPU's writes reach the resource's memory, the CPU and
-  later command buffers, where Metal's never reach them.
-- `metal2vulkan-degrade-optimized-depth-stencil-texture` (precision).
-  `OptimizedDepthStencilTexture`: A depth or stencil texture with `allowGPUOptimizedContents` off
-  sized or made in a heap (never a device's own texture, whose layout nothing shows), on a device
-  whose driver keeps depth and stencil images GPU-optimized whatever their create info
-  (`DriverFact::DepthStencilImagesStayGpuOptimized`), that no shadow of Metal's tiles in the heap's
-  bytes serves (a multisample texture, a format whose layout is not measured): Metal
-  lays the texture out without its compression metadata, and the runtime's image keeps it. Cost: the
-  texture's image keeps the GPU-optimized layout Metal
-  drops with the property off, so its bytes in the heap are not Metal's layout of its texels (where
-  they lie instead, and what moving them costs, heap-texture-untiled-layout and shadowed-texture
-  name for the shapes they cover); heap_texture_size_and_align answers Metal's own size and
-  alignment for the descriptor wherever the runtime models them, and the larger of the images' and
-  Metal's for a texture whose images need more bytes or a coarser alignment that no shadow of the
-  heap's bytes holds it to, where a heap sized by Metal's answers holds fewer such textures.
-- `metal2vulkan-degrade-narrow-surface-rows` (precision). `NarrowSurfaceRows`: A texture of an
-  IOSurface plane of more than one row under 16 bytes a row: Metal's GPU writes its rows 16 bytes
-  apart and reads every row past the first as memory-dependent bytes (zeros in a fresh process;
-  after a write, bytes neither the surface's nor written). Cost: a GPU read of a row past the first
-  reads the bytes the GPU's writes put there, 16 bytes a row apart, where Metal's GPU reads
-  memory-dependent bytes; CPU access and the GPU's writes and first row are Metal's.
-- `metal2vulkan-degrade-colliding-surface-row-writes` (precision). `CollidingSurfaceRowWrites`: A
-  texture of an IOSurface plane whose rows share bytes on Metal's GPU: more than one row of over 16
-  bytes whose `bytesPerRow` rounded down to 16 is below the row, so consecutive rows share 1 to 15
-  bytes, a whole number of texels; or, over a plane whose offset and `bytesPerRow` are multiples of
-  16, rows wider than `bytesPerRow`, which share bytes on the CPU too, any whole number of texels, a
-  byte shared by as many rows as reach it. Metal's reads see the sharing and so do the runtime's,
-  through a shadow whose copy regions hold it; but where rows' writes meet the shared bytes take
-  whichever row Metal's command wrote last, and that order is no one order: it follows the command,
-  the GPU pitch and the row count, a kernel's winner moving with the threadgroup shape. A kernel is
-  the only GPU writer such a plane takes, every blit into one being refused. The CPU's writes of
-  rows wider than the pitch leave the latest row's, as Metal's `replaceRegion` does. Cost: where the
-  plane's rows write the bytes they share the earliest row's stand, one of the rows a kernel of
-  Metal's leaves there, whose winner moves with the threadgroup shape; reads, CPU access and every
-  other byte are Metal's.
-- `metal2vulkan-degrade-surface-texels-apart` (precision). `SurfaceTexelsApart`: A texture over a
-  plane of an IOSurface with planes whose texels Metal lays out in no one place, its first level's
-  and slice's among them: a 2D texture of more than one level, a 3D texture and a 2D multisample
-  one. Metal makes it, and on an Apple M3 Max under macOS 27.0.1 its GPU reads those texels from
-  other bytes than its writes and its CPU put them; the x86 Macs under macOS 26.7.1 keep its first
-  level and slice over the plane. Cost: its texels lie in memory of its own, zero when made, which
-  every path reads and writes alike, and no byte of the surface's; Metal's GPU and CPU reach the
-  surface's bytes in no one place.
-- `metal2vulkan-degrade-surface-texels-tail` (precision). `SurfaceTexelsTail`: A texture of a
-  plane of an IOSurface with planes, which Metal makes, some of whose texels it lays out in no one
-  place (an Apple M3 Max under macOS 27.0.1): its texels past the buffer standing for its surface,
-  where its blits read zeros, its kernels zeros and, 32 KiB past the plane, the plane's rows
-  again, its `getBytes` zeros and other memory, and its writes change no byte of the surface; and
-  a 2D array's slices past its first, which its blits and `getBytes` read at the plane's offset,
-  over the first slice, its kernels one image on, and its writes put at the plane's offset. Cost:
-  those texels lie in a tail of the texture's own, zero when made, which every path reads and
-  writes alike and which reaches no byte of the surface; its texels in place are Metal's.
-- `metal2vulkan-degrade-absent-argument-read` (precision). `AbsentArgumentRead`: A pipeline state's
-  function may read an argument its function constants removed (a texture's read, sample, gather,
-  query or atomic, or a sample through a removed sampler; `RuntimeFact::AbsentArgumentRead`), which
-  Metal gives no value: its compiler drops or folds such a read, and with its debug layer every such
-  read is zero. Cost: such a read takes zero, Metal's answer under its debug layer, and the command
-  buffer completes, its execution report stating the read (absent_argument_read); without the layer
-  Metal's compiler drops or folds the read instead. On `Device::from_queries`' profile the read
-  takes the same zero, a read's zeros and a query's size of 0 as the nil texture answers, but
-  writes no status and states no fact, so nothing reports it.
-- `metal2vulkan-degrade-mixed-depth-stencil-resolve` (precision). `MixedDepthStencilResolve`: A
-  render pass whose one depth/stencil texture stores and resolves its depth
-  (`StoreAndMultisampleResolve`) while it resolves its stencil alone (`MultisampleResolve`), which
-  Metal's validation stops (`resolve::layout_patterned`). Cost: both aspects resolve and the depth's
-  samples are kept, as the store actions document, and the stencil's samples are kept too, where
-  Metal's GPU overwrites the depth's samples and its resolve texture with a layout pattern of the
-  resolved depth and leaves the stencil's texels (measured on an Apple M4).
-- `metal2vulkan-degrade-capped-anisotropy` (precision). `CappedAnisotropy`: A sampler state whose
-  `maxAnisotropy`, which Metal's validation stops past 16, plain Metal samples with an anisotropy
-  past the device's largest (`maxSamplerAnisotropy`): 17 to 31 in its low five bits, which Metal
-  samples with 32. Cost: it filters with the device's largest anisotropy (16 on every venue
-  measured), where Metal filters with 32: a footprint more than 16 times as long as it is wide reads
-  a coarser level than Metal's (one level coarser at 32 to 1 and beyond).
+  picks them), the static note `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE` on every device: each
+  level is the device's linear filter of the one above at the scaled texel centres, its blit chain
+  (`vkCmdBlitImage` with `VK_FILTER_LINEAR`); a format the device's blits cannot filter is
+  `Gap::MipmapFilter`. The device's filter is not Apple's datapath, whose answers also differ
+  between Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place). No bound
+  against Metal's answer is measured. Cost: a channel can differ from Metal's where the filtered
+  value lies near a rounding boundary, and wholly where a box averages infinities, NaNs or a float
+  format's extremes.
 - `metal2vulkan-degrade-capped-lod-bias` (precision). `CappedLodBias`: A sampler state whose
   `lodBias` the GPU of the Mac the device presents adds to every sample's level
   (`MacClass::IntelOrAmd`), where the device's samplers cannot add it as it is
   (`metal::sampler::DeviceLodBias`): past the device's `maxSamplerLodBias` (an infinity included),
   a NaN, or a bias other than 0 where the device's portability subset withholds
-  `samplerMipLodBias` (MoltenVK). Announced once, where the device makes the state; the payload
-  names the bias and what the device's samplers add for it. Cost: its samples add the device's
+  `samplerMipLodBias` (MoltenVK). Cost: its samples add the device's
   limit of the bias's sign where the bias is past it, and no bias where the device withholds it or
   the bias is NaN: a sample whose level with what the device adds has not reached the last level
   the sampler reads (a positive bias) or level 0 (a negative one) reads another level than Metal's,
@@ -3466,169 +2470,6 @@ bound.
   for a NaN bias is not measured. The translator states the same difference as the sampler state's
   static note, `PrecisionNote::CappedLodBias` (`DeviceLodBias::note`), which no pipeline stage
   records.
-- `metal2vulkan-degrade-not-mipmapped-anisotropic-sampler` (precision).
-  `NotMipmappedAnisotropicSampler`: A sampler state with anisotropy, no mip filter (`NotMipmapped`)
-  and different minification and magnification filters, on a device that samples through Metal's
-  own sampler (MoltenVK on Apple's GPU): Vulkan has no sampler without mipmapping, so the device's
-  sampler takes a nearest mip filter with the level clamp `[0, 0.25]`, which keeps Metal's choice
-  of filter, and Metal's anisotropic filter reads no such clamp as Metal's `NotMipmapped`.
-  Announced once, as the device makes the state. Cost: a sample at an implicit level or with
-  gradients through it filters another anisotropic footprint than Metal's at `maxAnisotropy` 2 to
-  16. A constexpr sampler of that shape records `PrecisionNote::NotMipmappedAnisotropicFilter`.
-- `metal2vulkan-degrade-attachment-read-in-place` (precision). `AttachmentReadInPlace`: A draw whose
-  functions read or write, other than as an attachment, memory an attachment of its render pass
-  instance renders, where no copy or snapshot serves the access: a texture reached through a handle
-  or an argument buffer, a storage binding of a color attachment's texture, the depth or stencil
-  attachment's texture, a texture buffer or a buffer over its bytes, a texture whose copy is not
-  served, or an execution's or a capture's command. Announced where the draw records. Cost: the
-  access sees the attachment as the device holds it inside its render pass instance, which Vulkan
-  leaves undefined (`VUID-vkCmdDraw-None-10795`), where Metal's read at the draw's own pixel gives
-  the texel from before the pass.
-- `metal2vulkan-degrade-unreadable-handle-texture` (precision). `UnreadableHandleTexture`: A command
-  whose function reads texture handles from memory (an argument buffer, or any memory holding a
-  texture's resource ID) has a texture the runtime holds as raw blocks for copies made resident, or
-  bound in a stage that reads handles: the handle's element is the neutral texture, as the runtime
-  does not know which of the textures it reaches the function reads. Cost: a read or sample of the
-  texture through its handle reads the neutral texture where Metal's decodes its blocks; a function
-  that reads it at a slot is refused (Unsupported(Format)).
-- `metal2vulkan-degrade-unnamed-texture-unviewable` (precision). `UnnamedTextureUnviewable`: A
-  texture that a heap array's class fits, but whose format the array cannot view (one the device
-  cannot sample, or store without a format, or one whose raw texels need its function's decode): the
-  device's heap set holds the class's neutral at its ID, which a command that names the texture
-  refuses instead. A texture buffer that a texel-buffer class fits but no texel view of its bytes in
-  place reaches (one viewed through a staging buffer or its tail, at an offset off
-  `minTexelBufferOffsetAlignment`, or of more texels than `maxTexelBufferElements`), or whose
-  swizzle or format a texel view cannot present, is the class's neutral there too, named or not.
-  Cost: a function reading the texture through its ID, in a command that does not name it (bind
-  it, or make it resident), reads the neutral texture where Metal's reads the texture.
-- `metal2vulkan-degrade-unnamed-shadowed-texture` (precision). `UnnamedShadowedTexture`: A shadowed
-  texture in the device's heap set. Cost: a function reading the texture through its ID, in a
-  command that does not name it, reads the texels an encoder that named it last copied in (undefined
-  before any did), where Metal's reads the texels as they stand.
-- `metal2vulkan-degrade-unnamed-textures-past-capacity` (precision). `UnnamedTexturesPastCapacity`:
-  A live texture whose resource ID is past the elements of a pipeline's set-1 heap arrays (their
-  count, the device's update-after-bind limits shared among the pipeline's arrays), so the texture
-  table a command binds misses it. Cost: a function of such a pipeline reading the texture through
-  its ID reads the neutral texture where Metal's reads the texture; a command that names it is
-  refused (Bind(HeapTooLarge)).
-- `metal2vulkan-degrade-heap-set-copied` (precision). `HeapSetCopied`: A heap set on a device
-  without `descriptorBindingUpdateUnusedWhilePending`, which writes no set a pending command buffer
-  binds: each command buffer binds a copy of its own, written as it first binds the set and until it
-  commits. Cost: each command buffer's first command that binds the set writes a copy of it (every
-  element a texture's ID may name, and every sampler array's, per array); a function reading a
-  texture through its ID reads the texture that held the ID as its command buffer committed, and one
-  reading a sampler state the state that held it as the command buffer's first batch was submitted
-  (the neutral where none did, or where it was released before that submission), where Metal's
-  reads the one holding it as the function runs.
-- `metal2vulkan-degrade-uncovered-color-kept` (precision). `UncoveredColorKept`: A draw of a render
-  pipeline state in a pass with a color at no place of the state's per-sample record, under a state
-  color that blends through a destination factor of the fragment's output (`SourceAlpha`,
-  `OneMinusSourceAlpha`, `SourceColor`,...) and reads the destination no other way. Cost: the pass's
-  color keeps its contents where the draw covers it, as Metal keeps them for an output it computes;
-  where Metal's compiler folds the output to a constant that zeroes the factor (an alpha of the
-  literal 1 under `OneMinusSourceAlpha`), Metal stores zero there (measured on an Apple M4).
-- `metal2vulkan-degrade-drawn-depth-copy` (precision). `DrawnDepthCopy`: A blit copy into a
-  multisampled 32-bit float depth texture from a colour one or a buffer, a render pass's separate
-  multisampled 32-bit float depth texture copied to and from its scratch image, or a heap's such
-  texture held as a shadow of its samples in Metal's tiles, which takes the heap's bytes (then a
-  value the draw changes is written back to the heap's bytes changed, announced as the texture is
-  made), by the sample-rate `FragDepth` draw, on a device whose copies go by draws and whose driver's fragment
-  depth is not measured to store every value unchanged: measured to change some values (MoltenVK,
-  NVIDIA's), or not measured at all (any other driver, and lavapipe releases not measured). The
-  reason names the values that driver changes, or, on a driver not measured, those Vulkan leaves to
-  it (outside `[0, 1]`, denormals, -0). Cost: each sample's depth is written by a fragment-depth
-  draw, where Metal copies its bytes: the values the driver's fragment depth changes or may change,
-  which the reason names, can land changed; every other value lands as Metal's copy leaves it.
-- `metal2vulkan-degrade-undeclared-usage-shadow` (performance). `UndeclaredUsageShadow`: A texture
-  bound by a slot as a storage image without `ShaderWrite` usage, or as a sampled one without
-  `ShaderRead`, whose image lacks that usage because adding it would cost the image its size or the
-  driver's compression, or, for a texture in place over host pages, because the device's in-place
-  check failed for what the usage lets reach them: the binding takes an image of its own with both
-  shader usages, a shadow of the texture's texels. Also a texture without `RenderTarget` usage that
-  a render pass renders into, through a scratch image that has it, except a texture in place whose
-  image took that usage where the check passed for renders over its pages. Cost: its texels are copied into an image of its own before each command
-  that binds it beyond its declared usage, and back after each write through it; but a tracked
-  `Private` texture's (or one's over a tracked `Private` buffer the runtime made), whose texels
-  only the runtime's commands write, is copied in again only once a command wrote them since, and
-  then only the texels inside the scissors of a pass that loads it and draws into it alone
-  (`WorkCounts::shadow_texels_skipped_by_standing`, `shadow_texels_unskipped_stale_within`).
-- `metal2vulkan-degrade-heap-two-plane-texture` (precision). `HeapTwoPlaneTexture`: A texture of
-  `RGB10A8_2P_XR10` or its sRGB twin made in a heap whose planes no shadow of the heap's bytes
-  holds: one whose moves pass the device's limits. Its one image holds each texel's colour
-  word and alpha byte side by side, more than Metal's two planes take in the heap, so it lies in
-  memory of its own. Cost: the texture's size and alignment answers are Metal's and its reads,
-  writes and copies as outside a heap, but its texels lie in memory of its own, apart from the
-  heap's bytes: a buffer or texture over its range of the heap neither sees nor changes them, where
-  Metal's texture keeps its two planes there.
-- `metal2vulkan-degrade-heap-two-plane-layout` (precision). `HeapTwoPlaneLayout`: A texture of
-  `RGB10A8_2P_XR10` or its sRGB twin made in a heap whose first level's planes lie in the heap's
-  bytes, of more than one level, or a 1D array: Metal's paths address the texture's levels past the
-  first at bytes that differ by path (its CPU copies at its first level's rows from past that level,
-  its blits and an array's GPU writes over the first level's bytes, a 2D texture's GPU writes
-  nowhere, its GPU reads at other bytes again), and a 1D array's GPU reads every texel at the
-  texture's first word. The runtime keeps the first level's slices in the heap's bytes, as Metal's
-  CPU copies and GPU writes lay them, and the other levels in the texture's image alone. Cost: the
-  first level's texels lie in the heap's bytes as Metal's CPU copies and GPU writes lay them, and
-  read as written; the later levels' texels lie apart from the heap's bytes, and a 1D array's GPU
-  reads read each texel, where Metal's paths address those texels at bytes that differ by path.
-- `metal2vulkan-degrade-heap-one-plane-layout` (precision). `HeapOnePlaneLayout`: A texture of
-  one of Apple's one-plane YCbCr formats (`YCBCR8_422_1P`, `YCBCR10_444_1P` and their twins, held
-  for copies alone) made in a heap whose texels lie otherwise than Metal's blits lay them. Metal
-  lays a one-plane texture's rows one packed row apart where the row is a multiple of 16 bytes, a
-  1D texture's one row, an array's slices at multiples of 128 bytes, and a row of 16 bytes or more
-  that is not a multiple of 16 the row rounded down to 16 bytes apart, and so does the runtime. A
-  2D texture or array of more than one row whose row is under 16 bytes Metal lays 16 bytes apart,
-  past the texture's answer, and its copies out read none of the rows past the first back from
-  there; the runtime lays them one packed row apart, as that answer counts them. A mipmapped or
-  3D texture's texels Metal lays at bytes that differ by path, its first level past its answer;
-  the runtime keeps them in memory of its own, apart from the heap's bytes. Cost: the texture's
-  size and alignment answers are Metal's and its copies read what they wrote, but its texels lie
-  in the heap's bytes one packed row apart, or apart from the heap's bytes, where Metal's blits
-  lay its rows 16 bytes apart or its levels at bytes that differ by path: a buffer over the heap
-  meets them at other bytes than on Metal.
-- `metal2vulkan-degrade-moltenvk-argument-buffers-unread` (precision).
-  `MoltenVkArgumentBuffersUnread`: A MoltenVK device at a release whose `pipelineCacheUUID` layout
-  the runtime has not read: whether MoltenVK binds through Metal argument buffers is unknown, so a
-  device without them is not refused (as at a read release). Cost: whether MoltenVK binds through
-  Metal argument buffers is not read at this release: with MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS
-  off, Metal's compiler can crash on large fragment functions' pipelines, and argument buffers hold
-  fewer resources than Metal's.
-- `metal2vulkan-degrade-two-plane-texture-copy` (precision). `TwoPlaneTextureCopy`: A blit between
-  two textures of `RGB10A8_2P_XR10` or its sRGB twin whose answer is not Metal's measured one: one
-  the runtime copies texel for texel (textures of more than one level or slice, a copy within one
-  texture, a level larger than a storage buffer), or one whose rows overlap in the destination, or
-  of a texture narrower than 4 texels, where Metal's blit writes in an order that varies or reads
-  bytes from outside the planes, or one reading bytes outside the source's texels that an earlier
-  blit wrote there (or a heap's texture's), which Metal's blit keeps and reads back. Cost: where
-  Metal's answer was measured (2D textures of one level and one slice) the copy moves both planes'
-  bytes as Metal's blit does, at its own rows; here it copies both words of each texel, where
-  Metal's blit moves bytes at those rows and so loses or moves texels, or it keeps the later row
-  where the copy's rows overlap (Metal's blit writes them in an order that varies), or it reads as 0
-  the bytes Metal's blit reads from outside the texels: from outside the planes below a width of 4,
-  and those an earlier blit left in a row's padding or past a plane, which Metal keeps.
-- `metal2vulkan-degrade-extended-range-bits-kept` (precision). `ExtendedRangeBitsKept`: A draw in a
-  render pass that loads a color attachment of an extended-range, padded 10-bit or bfloat format
-  (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
-  `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat`) and does not discard it at the
-  store, on every device: the device's pass keeps the bytes its draws do not write, where Metal's
-  pass writes each 32 x 32 tile a draw reaches back through its tile store. Also, once per device
-  under `ExtendedRangeBlitPolicy::Kept` (the default), a GPU blit into, out of or between textures
-  of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed, and a
-  fill of one: Metal's blit moves the texels through the compression, which clears the same bits
-  and clamps the same alpha (its fill clears the bits alone), where the device's copy keeps the
-  bytes. Under `extended_range_blits = ExtendedRangeBlitPolicy::Canonical` the runtime writes
-  Metal's encoding (section 1), and announces only a blit out of one into a buffer whose words the
-  device cannot bind or into a texture over a buffer whose rows share bytes.
-  Cost: the texels the pass's draws do not write keep their bytes; Metal's pass rewrites, in each
-  tile a draw reaches, the bits their codes leave unused (BGR10_XR's bits 30 and 31 to ones,
-  BGRA10_XR's low six bits of each field, the two-plane color word's top two bits and a padded
-  word's low six bits to zeros), clamps BGRA10_XR's alpha code to [384, 894], moves a padded sRGB
-  twin's code through its table and a bfloat code through half (out of half's range to an infinity
-  or zero, a NaN to 0x7fc0): a texel whose bytes no Metal write left (uploaded bytes, an alpha code
-  past 894, a bfloat code off half's grid) keeps bytes Metal's pass would change, and a blit
-  through a BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; an
-  extended-range texel reads the same value either way, a bfloat code off half's grid reads its own
-  value where Metal's reads the half it was moved to.
 - `metal2vulkan-degrade-snorm-minimum-kept` (precision). `SnormMinimumKept`: A draw in a render pass
   that loads a single-sampled color attachment of a signed normalized format (`R8Snorm`, `RG8Snorm`,
   `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) and does not discard it at the store. Cost:
@@ -3642,353 +2483,25 @@ bound.
   whatever its passes load, on its fragment stage (its vertex stage where it has none).
 - `metal2vulkan-degrade-shared-exponent-kept` (precision). `SharedExponentKept`: A draw in a render
   pass that loads a single-sampled `RGB9E5Float` color attachment and does not discard it at the
-  store; and, once per device, a GPU blit into, out of or between textures of which one is an
-  `RGB9E5Float` texture Metal keeps losslessly compressed, whose compression normalizes every such
-  word, where the device's copy keeps the bytes. Cost: the texels the pass's draws do not write keep
-  their words; Metal's pass normalizes a word whose largest mantissa is below 256 (its exponent
-  above 0) in each tile a draw reaches, and Metal's blit through an RGB9E5Float texture it
-  compresses every such word: a texel whose bytes no Metal write left (uploaded or copied words)
-  keeps a word Metal would change, of the same value. Not on a driver whose pass stores the words
-  as Metal's (`DriverFact::TileStoreIsMetals`), nor, for a blit, where the device's copy of the
-  compressed image is Metal's blit (MoltenVK's). On a device `Device::from_queries` made
-  (`metal2vulkan-rt`'s) the draw's part is the static note `PrecisionNote::SharedExponentKept` of
+  store. Cost: the texels the pass's draws do not write keep their words; Metal's pass normalizes a
+  word whose largest mantissa is below 256 (its exponent above 0) in each tile a draw reaches: a
+  texel whose bytes no Metal write left (uploaded or copied words) keeps a word Metal would change,
+  of the same value. Not on a driver whose pass stores the words as Metal's
+  (`DriverFact::TileStoreIsMetals`). On a device `Device::from_queries` made
+  (`metal2vulkan-rt`'s) it is the static note `PrecisionNote::SharedExponentKept` of
   every render pipeline that draws into such an attachment, whatever its passes load, on its
   fragment stage (its vertex stage where it has none).
-- `metal2vulkan-degrade-two-plane-buffer-blit` (precision). `TwoPlaneBufferBlit`: A blit between a
-  buffer and a level of `RGB10A8_2P_XR10` or its sRGB twin whose width is not a multiple of 4,
-  where Metal's blit addresses the level's rows `⌊4 w / 16⌋ · 16` bytes apart, short of where they
-  lie, and so moves texels into and out of other rows and the bytes between them. A 2D texture or
-  array of one level is blitted at Metal's rows, the row whose bytes Metal's GPU leaves where two
-  meet standing, the bytes between its rows that its fills and blits with a buffer write held
-  apart; announced there are a blit into a texture 32 texels wide or wider whose rows meet (narrower,
-  `two-plane-buffer-blit-order`), and a blit out of a texture of the device's memory that reads bytes
-  between its rows after a copy from another texture wrote some there. Any other such texture (more
-  levels, a view, 1D, 3D, a surface's) moves the texels at the rows the texture holds them in. Cost:
-  where rows meet in a blit into a texture 32 texels wide or wider the earlier row's bytes stand,
-  where Metal's GPU writes them in an order that varies from run to run, at some sizes never all the
-  earlier row's; a blit out of a texture of the device's memory reads the bytes
-  between its rows that a copy from another texture wrote as its fills and blits with a buffer
-  left them, where Metal's reads the copy's back; and a texture of more than one
-  level, a view, a 1D or 3D texture or a surface's moves its texels at the rows it holds them in,
-  where Metal's blit addresses its rows floor(4w/16)*16 bytes apart.
-- `metal2vulkan-degrade-two-plane-buffer-blit-order` (precision). `TwoPlaneBufferBlitOrder`: A blit
-  from a buffer into a level of `RGB10A8_2P_XR10` or its sRGB twin narrower than 32 texels, at a
-  width not a multiple of 4, whose rows meet between Metal's groups of 32 rows of the region:
-  Metal's GPU writes the two rows there in an order that varies from run to run (the earlier row's
-  bytes at 556 of 560 such meetings in our probes), and in its fixed order at every other meeting.
-  The runtime keeps the earlier row's bytes there and Metal's order elsewhere: Metal's most frequent
-  whole outcome. Cost: where the rows of two of Metal's groups of 32 meet the earlier row's bytes
-  stand, where Metal's GPU leaves either row's from run to run.
-- `metal2vulkan-degrade-unadvertised-vertex-simdgroups` (validity). `UnadvertisedVertexSimdgroups`:
-  A render pipeline state whose vertex function runs simdgroup functions on a driver measured to run
-  a vertex function's subgroup operations as Metal does though its `subgroupSupportedStages` leaves
-  the vertex stage out (`metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups`): its pipeline
-  requires `VkProperty::MetalVertexSimdgroups` in place of the vertex stage's subgroups. Cost: the
-  device runs them as Metal does, but its driver leaves the vertex stage out of
-  subgroupSupportedStages, so Vulkan's validation layer reports each shader module of the function
-  (VUID-RuntimeSpirv-None-06343).
-- `metal2vulkan-degrade-set-past-layout-support` (validity). `SetPastLayoutSupport`: A descriptor
-  set layout the device's driver refuses through `vkGetDescriptorSetLayoutSupport` though it makes
-  and runs it, a heap's set 1 past `maxPerSetDescriptors`
-  (`metal2vulkan::error::RuntimeDriverDefect::SetLayoutSupportUnderstated`, MoltenVK): the runtime
-  makes it there as the driver runs it. Cost: the device runs the set as Metal runs the argument
-  buffer it is encoded in, but its driver's vkGetDescriptorSetLayoutSupport refuses the layout, so
-  Vulkan's validation layer reports each such layout
-  (VUID-vkCreateDescriptorSetLayout-support-09582).
-- `metal2vulkan-degrade-interlocked-buffer-order` (precision). `InterlockedBufferOrder`: A render
-  pipeline state whose fragment function writes a storage buffer of set 0 inside its interlock (a
-  buffer in a raster order group, or one a function that reads its color attachment writes), on a
-  driver that orders such a buffer between overlapping fragments only where set 0 is pushed
-  (`metal2vulkan::error::RuntimeDriverDefect::InterlockedBoundBuffersUnordered`, MoltenVK), where
-  its set 0 is bound: the device has no push command, its set 0 is no push descriptor set layout's,
-  or a stage reads a buffer's length, which that driver's pushed sets do not hold
-  (`RuntimeDriverDefect::PushedBufferSizesUnset`). Every other such state pushes set 0 there, and
-  its fragments read each other's writes in order. Cost: a fragment may read such a buffer as it was
-  before an earlier overlapping fragment of the draw wrote it, where Metal orders a raster order
-  group's buffer after every earlier fragment of the pixel.
-- `metal2vulkan-degrade-released-command-state` (precision). `ReleasedCommandState`: An indirect
-  command naming the ID of a pipeline state the program released is executed where the runtime
-  cannot run what Metal runs. A command the CPU set a state on runs that state's program while its
-  record names the state's ID, as Metal's command the CPU encoded does; a record whose pipeline a
-  kernel wrote runs the state that held the ID as the GPU last could write the buffer's records,
-  released since or not, as Metal's does. The device keeps the program of each freed pipeline
-  state ID's last holder, until a state takes the ID, while an indirect command buffer of the
-  device lives, and a buffer the GPU may write keeps those and the programs of the states
-  released after it was first written. Cost: a command whose record the GPU wrote naming a state
-  released while no indirect command buffer of the device lived, or past the ID's last four
-  holders, runs nothing, where Metal runs that state's program (an M3 Max and a UHD 630 do; a
-  Radeon Pro 5300M fails the command buffer).
-- `metal2vulkan-degrade-ycbcr-filter-not-exact` (precision). `YCbCrFilterNotExact`: A two-plane
-  YCbCr texture whose planes' format the device converts itself (its sampler Y′CbCr conversion:
-  unpacked 8- or 10-bit codes of a 4:2:0, 4:2:2 or 4:4:4 layout over plane 0, a 4:4:4 one read as
-  codes aside, on a device that reports the format's conversion features, Metal's midpoint chroma
-  through a linear chroma filter among them for a 4:2:0 or 4:2:2 one, and has no defect in it:
-  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's, RADV's and NVIDIA's 10-bit ones aside) reads the device's conversion
-  of its planes, announced at the texture's first conversion (a texture whose planes every
-  function reads in place converts none, and announces nothing, nor does a command whose function
-  only writes a texture of a format whose writes Metal drops through an argument buffer, which
-  uses none of its image); so do the samples of a texture whose planes
-  are read in place through the device's conversion of a linear image of them (where the device's
-  linear tiling of the 4:2:0 format has Metal's reconstruction), the device's filter of the codes
-  too, announced where the image is made; and a pipeline stage's filtered sample of a
-  texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), or of
-  a 4:2:0 texture's planes read in place by Vulkan's Y′CbCr model (`YCbCrInPlacePolicy::Model`,
-  on any device), does not take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
-  `FloatSampleFilter` under the slot's bound format, the one its binding presents (a view in its
-  texture's own format as another type, and a texture over a P3 surface, present the code-reading
-  format of their codes, which Metal's sampler filters as that format's: neither is announced),
-  and through a runtime sampler slot only where the sampler bound there filters (a linear
-  minification, magnification or mip filter, anisotropy, or a cubic filter), read at each draw or
-  dispatch. A filtered sample of a texture an argument buffer holds (a 4:4:4 one: a 4:2:0 or 4:2:2
-  texture a function that samples through handles can reach is refused) is announced at a draw or
-  dispatch where a texture the command makes resident or binds that its handles can name is
-  two-plane YCbCr, through a runtime sampler slot only where the bound sampler filters, and
-  through an argument buffer's sampler only where a live sampler state filters: the runtime does
-  not read which state the buffer's memory names, so one linear state alive announces it for a
-  buffer that holds a nearest one. A texture the command neither names nor makes resident, which
-  its function may still reach through its ID (Metal's read of it is undefined), is not counted.
-  Cost: where the device converts the planes'
-  format, the texels are its own Y′CbCr conversion's, at its precision and unclamped where it does
-  not clamp, not Metal's fixed-point read; elsewhere the texels hold Metal's reads exactly, but the
-  sample filters them as the device does, off the grid Metal sums the format's steps on, so a
-  filtered result can miss Metal's by a step of that grid or more. Measured on lavapipe (Mesa
-  26.0.8; random planes, every texel), which converts the 8-bit 4:4:4 layout here: each channel
-  within 0.04/2048 of Vulkan's conversion past the `half` its image stores, and of Metal's read
-  within 6/2048 where the result lies in `[0, 1]`; outside it by what Metal's clamp takes off. On
-  NVIDIA's 615.71.09 (RTX 5080 Laptop GPU), which converts the 8-bit 4:2:0, 4:2:2 and 4:4:4
-  layouts: within 0.034/2048 of Vulkan's conversion, and of Metal's read within 12.4/2048 in
-  `[0, 1]` (19.1 through an `_sRGB` twin's curve), Metal rounding each reconstructed chroma to a
-  code where the device does not; a code-reading format's codes are Metal's. A
-  device that samples natively answers the device's filter, `metal2vulkan-degrade-device-sampling`;
-  on MoltenVK, Metal's own sampler filters the converted texels as an `RGBA16Float` or `RGBA32Float`
-  texture's, within one step of the grid (a `half` result within one `half` ulp, measured in plain
-  Metal on an Apple M3 Max under macOS 27.0.1 for `YCBCR8_420_2P` and its sRGB twin against such a
-  texture of the same texels), announced at a draw that binds such a texture.
-- `metal2vulkan-degrade-rotated-load-tiles` (precision). `RotatedLoadTiles`: A render pass that
-  draws loads and stores a rotated texture of rotation 4, whose load is the plane transposed and
-  whose store is rotation 1's: every tile of the frame lands mirrored, where Metal loads and stores
-  only the 32x32 tiles a draw's primitives reach and keeps the texels of the others in place. Cost:
-  the tiles no draw reaches land mirrored as the tiles it reaches do, where Metal keeps their texels
-  in place.
-- `metal2vulkan-degrade-ycbcr-load-tiles` (precision). `YCbCrLoadTiles`: A render pass that
-  draws loads and stores a two-plane YCbCr texture (`YCBCR8_420_2P` and its kin over plane 0 of a
-  surface): the pass stores every 32x32 tile of the rectangle bounding its draws' scissors, each
-  texel's codes re-encoded from the texel it loaded (its chroma the filtered pairs), where Metal
-  stores only the tiles a draw's primitives reach and keeps the planes' bytes of the others. Cost:
-  in the tiles no draw reaches the planes' codes are re-encoded from the texels the pass loaded,
-  the chroma from its filtered pairs, where Metal keeps their bytes.
-- `metal2vulkan-degrade-ycbcr-blend-rounding` (precision). `YCbCrBlendRounding`: A draw that
-  blends into a color attachment of a two-plane YCbCr texture: the device blends the pass's floats,
-  where Metal's tile blends halves, an 8-bit format's in half arithmetic (the source and its alpha
-  rounded to `half`, each product, and a fused sum), a 10-bit one's in `float` rounded toward zero
-  to `half`. Cost: a blended texel's codes can miss Metal's by one, where Metal's blend in half
-  arithmetic rounds otherwise than the device's in float, or over a texel an earlier draw of the
-  pass wrote (Metal holds it as a half).
-- `metal2vulkan-degrade-encoded-use-rebound` (precision). `EncodedUseRebound`: A command buffer's
-  command named a buffer over the caller's host pages (a binding, a blit's operand, an attachment, a
-  texture over the pages, an indirect command's resolved buffer) that was rebound
-  (`rebind_bytes_no_copy`) after the command was encoded and before the command buffer was first
-  submitted, or whose encoding a rebind on another thread raced (the call held the buffer while the
-  rebind was making what lies over its bytes again, or after, having begun before; counted by
-  `WorkCounts::encoders_raced_rebind`), in an encoder the runtime could not encode again. A raced one
-  is a blit or logged render encoder whose commit failed it or whose encoding again a call that
-  answers otherwise refused: the calls of compute encoders and of render encoders that keep no log
-  never race a rebind, which waits for them or is refused (`RebindProblem::EncodedUses`). Nor does a
-  rebind after the commit reach an encoder that keeps no log: its command buffer holds the buffer
-  until its last submission, and the rebind is refused meanwhile (`EncodedUses`,
-  `WorkCounts::rebinds_refused_unsubmitted`); what remains is an encoder that kept its log and whose
-  encoding again a call that answers otherwise refused, or that its commit failed. Cost: each
-  of Metal's submissions of the command buffer holding such a command runs nothing and the command
-  buffer fails (EncodedUseRebound), where Metal resolves the use as it submits the command buffer
-  and reaches the pages the buffer lies in then; the rebind encodes compute, blit and render
-  encoders again, but not this one. The reason names where the first such submission found the use
-  (the encoder; its own commands or work it left for later) and why no rebind encoded or recorded it
-  again.
-- `metal2vulkan-degrade-stale-detached-reach` (precision). `StaleDetachedReach`: A command buffer
-  that bound a heap set, whose commands may reach any texture through its resource ID without naming
-  it, was submitted while a texture's bytes (a no-copy buffer's or heap's, the texture over them or
-  in it) were detached (`detach_backing`) after a submitted command buffer made them resident. Cost:
-  a read of the texture that does not name it reads zero bytes (the stand-in its detached bytes
-  present), where Metal's reads the pages the program gave back, which a correct program never
-  relies on.
-- `metal2vulkan-degrade-detached-storage-keeps-writes` (precision). `DetachedStorageKeepsWrites`: A
-  command buffer that bound a heap set, whose commands may reach any texture through its resource ID
-  without naming it, was committed while a texture of storage usage was over detached bytes
-  (`detach_backing`; made before the detach or while detached): its stand-in has a sink its
-  storage-class elements name. Cost: a read of the texture through a storage-class element (read or
-  read_write access) that does not name it reads what an earlier such write left in the stand-in's
-  sink, where Metal drops those writes and reads zero; a sampled read, and a size query, are
-  Metal's.
-- `metal2vulkan-degrade-zero-layer-map-after-release` (precision). `ZeroLayerMapAfterRelease`: A
-  draw in a render pass over a rasterization-rate map of no layers that was made after the device
-  released a map of one or more layers, or reset from one of layers. Cost: the draws write nothing,
-  where Metal draws rows of the pass (a 64-pixel map's rows 0 to 15, at the positions of a pass
-  with no map).
-- `metal2vulkan-degrade-rate-map-reset-unencoded` (precision). `RateMapResetUnencoded`: A render
-  pass over a rasterization-rate map reset (`RasterizationRateMap::reset_using_descriptor`) after
-  the pass took it and before its command buffer was submitted, in an encoder the runtime could not
-  encode again (it kept no log: a render encoder opened while a buffer of the device was detached,
-  or one that left work for a host step). Announced at
-  the commit, or at the reset where the command buffer was committed. Cost: the pass draws by the
-  map as it took it, where Metal's GPU draws by the map as reset.
-- `metal2vulkan-degrade-heap-texture-lossless-layout` (precision). `HeapTextureLosslessLayout`: A
-  texture made in a heap over host pages (`new_heap_with_bytes_no_copy`), or a depth or stencil
-  texture made in any heap as a shadow of Metal's tiles (on a driver that lays such images apart from
-  their memory or keeps them GPU-optimized: MoltenVK), that Metal keeps losslessly compressed: its
-  bytes on Metal are no layout of its texels, so the runtime lays them out as its own, its
-  uncompressed tiles where it tiles them. A multisample texture so (its sample grid's shorter side
-  16 or more) holds its samples in its uncompressed tiles, or, where the device does not move its
-  samples to and from a buffer, lies in memory of its own, the heap's bytes keeping what they held.
-  Also such a texture whose image lies in a heap over the device's memory: the image, of the
-  runtime's usage, need not be compressed as Metal's. Cost: the texture's reads, writes and copies
-  are Metal's, but its bytes in the heap are not Metal's compressed bytes (its texels or samples in
-  the runtime's layout, or a multisample texture's image in memory of its own, the heap's bytes
-  keeping what they held): a buffer or texture over them reads and writes other bytes than Metal's
-  would.
-- `metal2vulkan-degrade-heap-texture-block-compressed-layout` (precision).
-  `HeapTextureBlockCompressedLayout`: A texture of a block-compressed format made in a heap over
-  host pages whose blocks' placement is not measured: Metal places a format family's blocks in each
-  level by a rule that differs by family and by release, measured at the release every device
-  answers as (`MACOS_RELEASE`) for the BC, ETC2, EAC, ASTC and PVRTC families (an Apple M3 Max, and
-  an Apple M4 alike but PVRTC), whose textures lie as Metal lays them out; a format of none of them
-  lies in the runtime's layout. Cost: the texture's
-  reads, writes and copies are Metal's, but its blocks lie in the heap's bytes in the runtime's
-  layout, where Metal tiles them: a buffer or texture over them meets the blocks at other bytes than
-  on Metal.
-- `metal2vulkan-degrade-heap-texture-untiled-layout` (precision). `HeapTextureUntiledLayout`: A
-  texture made in a heap over host pages that Metal lays out tiled where the runtime does not: its
-  linear image bound to the pages, in the driver's rows with no copy, wherever one serves (Apple
-  documents a texture's layout in a heap's bytes as Metal's own, so the runtime keeps no shadow of
-  Metal's tiles there but as a fallback); a
-  layout not measured (a format whose layout in Metal's heaps is not probed), an image that holds
-  other bytes than Metal's elements, moves past the device's limits, or a multisample texture whose
-  samples the device does not move to and from a buffer (a 16-bit depth where its multisampled
-  copies go by draws whose codes the driver is not measured to keep), in memory of its own. Also a
-  texture made in any other heap (over the device's memory) whose bytes there are not Metal's
-  layout: its image bound
-  there in the driver's layout, on a driver whose colour images are not measured to lie as Metal's
-  heap textures (`DriverFact::ColorImagesLieAsMetalHeapTextures`, and
-  `DriverFact::MultisampleColorImagesLieAsMetalHeapTextures` for a multisample one) or of a depth or
-  stencil texture there; its image a shadow of the bytes in rows; or a layout not measured.
-  Cost: the texture's reads, writes and copies are Metal's, but its texels lie in the heap's bytes
-  in the runtime's layout, where Metal tiles them: a buffer or texture over them meets the texels at
-  other bytes than on Metal.
-- `metal2vulkan-degrade-shader-side-depth-test` (performance). `ShaderSideDepthTest`: A render
-  pass's draws test the depth in the fragment shader: a fragment function that stores a color
-  through the pixel interlock before Vulkan's tests, in a draw whose depth test may drop the
-  fragment, tests the fragment's depth itself against a stand-in of the depth, so it stores only
-  what passes, as Metal stores only after the tests. Cost: a 32-bit float stand-in image of the
-  depth per pass, which the depth is copied into before each run of such draws and back from after
-  it (through a staging buffer at one sample, image to image or by a compute split and a
-  fragment-depth draw at more), each run in a render pass instance of its own under depth `ALWAYS`
-  without writes, its fragment shader testing and writing the stand-in in the pixel interlock; where
-  the stencil test acts too, an 8-bit stand-in of the stencil per pass, copied in and back the same
-  way (image to image at more than one sample) under the stencil test off.
-- `metal2vulkan-degrade-overlapping-texture-copy-as-memmove` (precision).
-  `OverlappingTextureCopyAsMemmove`: A blit copy between overlapping regions of one texture's
-  texels, other than a region onto itself: Metal's copy reads as `memmove`'s for regions up to a few
-  hundred texels across, but past that some texels read what another part of the copy already wrote,
-  differently from run to run. Cost: the destination holds the source's texels as they were before
-  the copy, memmove's answer, which is Metal's for small regions, where Metal's copy of a larger
-  region races and differs from run to run; the source goes through a scratch buffer, two copies
-  instead of one.
-- `metal2vulkan-degrade-extended-range-blends-stored-codes` (precision).
-  `ExtendedRangeBlendsStoredCodes`: A draw whose render pipeline state blends into, or reads (a
-  framebuffer fetch, or the interlocked storage form an extended-range blend takes), a color
-  attachment of an extended-range format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB
-  twins) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`, their sRGB twins,
-  `RGB10A2Unorm_sRGB`) that an earlier draw or execution of render commands of the same render pass
-  may have written, or whose clear Metal's tile holds between two codes; an execution of render
-  commands in a pass with such an attachment, whose commands may blend onto each other. Cost: a
-  blend into, or a read of, an extended-range or padded 10-bit color an earlier draw of the pass
-  wrote sees the codes the runtime stored at that draw (each channel rounded to its 10-bit code, the
-  two-plane format's alpha to its byte), where Metal's tile memory holds the color as half through
-  the pass and rounds it once at the store: a blended or read value can differ from Metal's by a
-  code, and the difference can grow over many draws that blend onto each other. A padded color's
-  tile holds a value past `[0, 1]` unclamped. Not announced for a color whose half shadow the
-  runtime holds, never a padded one's: in a pass of one layer on a device that
-  orders framebuffer fetch through the pixel interlock alone (MoltenVK, NVIDIA, ANV, RADV), or
-  through input attachments with the pixel interlock, fragment stores and `Rgba16f` storage images
-  (lavapipe, whose draws read and write the shadow beside the input attachment), at one sample or
-  more, from the pass's clear or, at one sample, its load, each blend and read sees the half Metal's
-  tile holds. In a multisampled pass that loads the color, and after a draw the shadow cannot follow
-  (one that writes the color without reading it at more than one sample, or over input attachments
-  one whose shadow the depth and stencil tests or the coverage could leave apart from its codes),
-  the codes stay and the notice fires. Over input attachments in a pass that holds no shadow it also
-  fires for a draw that writes some of an extended-range word's codes under a mask (`BGR10_XR`'s, or
-  a two-plane format's color word), whose function reads the word only to keep the other codes,
-  which it keeps exactly: the pipeline's state does not tell that read from the function's own
-  fetch.
-- `metal2vulkan-degrade-unmeasured-heap-texture-size` (precision). `UnmeasuredHeapTextureSize`: A
-  heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose size Metal's
-  layout the runtime does not model: a format or a sample count whose layout in Metal's heaps is not
-  measured (8 samples); a mipmapped texture Metal compresses and a `Depth32Float_Stencil8` one are
-  modelled. Cost: heap_texture_size_and_align answers the
-  device's own image's size and alignment, which may be larger or smaller than Metal's, so a heap
-  sized by Metal's answers may hold more or fewer such textures and they lie at other offsets.
-- `metal2vulkan-degrade-plain-state-unique-identifier` (precision). `PlainStateUniqueIdentifier`: A
-  program's call answered the `uniqueIdentifier` of a pipeline state made without
-  `supportIndirectCommandBuffers` (`ComputePipelineState::unique_identifier`,
-  `RenderPipelineState::unique_identifier`, a tile state's too). Cost: the identifier is one value
-  of the runtime's count, unique and fixed for the state's life, where Metal's is an address that
-  differs from run to run.
-- `metal2vulkan-degrade-unmeasured-unique-identifier` (precision). `UnmeasuredUniqueIdentifier`: A
-  program's call answered a `uniqueIdentifier` Metal answers alike in every run of one program
-  started alike, which the runtime's is not measured to be: a pipeline state's made with
-  `supportIndirectCommandBuffers` (`ComputePipelineState::unique_identifier`,
-  `RenderPipelineState::unique_identifier`, an indirect command's state identifier other than 0), or
-  an indirect command buffer's made after a command buffer of its device that encoded a render
-  encoder was scheduled, or after a resource state encoder opened
-  (`IndirectCommandBuffer::unique_identifier`). Cost: the identifier is unique and fixed for its
-  holder's life, and a released one is reused as Metal reuses it, but it is not the number Metal
-  answers there, which follows how the process was started, what it made and Metal's own encoders'
-  allocations.
-- `metal2vulkan-degrade-cross-class-texture-neutral` (precision). `CrossClassTextureNeutral`: A draw
-  or dispatch that binds, at a texture slot, a texture whose format's numeric class (float, signed
-  or unsigned integer) is not the class the function declares there and that its plan has no exact
-  answer for (`PlanDiagnostic::CrossClassNeutral`): a depth, stencil, extended-range or YCbCr
-  texture, a depth slot, an atomic or `ulong` access, a written storage slot over a swizzled
-  texture, or an integer write to an `RGB9E5Float` texture. Cost: the function reads the slot's
-  neutral texture (zero texels; zero size), where plain Metal reads the texture in its format's own
-  class and hands back its words as the declared type.
-- `metal2vulkan-degrade-astc-storage-neutral` (precision). `AstcStorageNeutral`: A draw or dispatch
-  that binds an ASTC texture (LDR, sRGB or HDR, of any footprint, in its own block or in a carrier)
-  at a storage slot its function writes, or reads and writes (`PlanDiagnostic::AstcStorageNeutral`):
-  no Vulkan format of a block is a storage image's, so the slot binds the declared type's neutral,
-  and the writes leave the texture's blocks as they were. Plain Metal completes the writes and
-  stores bytes no format defines into the blocks, the same for the same written value, and reads
-  the blocks' decode through a `read_write` slot (an Apple M3 Max under macOS 27.0.1, our probe
-  `astc_passes_writes_footprints`). A pass rendering into such a texture announces nothing:
-  Metal's leaves its blocks as they were too. Cost: the function's writes to the texture are
-  dropped, leaving its blocks as they were, and its reads and size queries through the slot answer
-  the neutral texture's (zero texels), where plain Metal stores bytes no format defines into the
-  blocks and reads their decode.
-- `metal2vulkan-degrade-indirect-nil-buffer-offset` (precision). `IndirectNilBufferOffset`: An
-  execution of an indirect command buffer replayed on the host ran a command that holds a nil buffer
-  set at an offset whose low 32 bits are not 0. Cost: the function sees no buffer, a null address,
-  where Metal's sees the nil buffer's offset as its address; neither holds a buffer, so only the
-  address's value differs.
-- `metal2vulkan-degrade-compressed-texel-decode` (precision). `CompressedTexelDecode`: A texture of
-  a block-compressed format, where the runtime makes it. On `metal2vulkan-runtime`, a texture of a
-  BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose driver is not measured to
-  decode its texels as Metal does (BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on
-  Apple's GPUs, RADV on the 780M and the RX 7900 XTX; BC4 and BC5
-  `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on Apple's GPUs; BC6H
-  `DriverFact::Bc6hBlockDecodeIsMetals` and BC7 `DriverFact::Bc7BlockDecodeIsMetals`: MoltenVK on
-  Apple's GPUs, NVIDIA's on the RTX 3090 and RTX 5080 Laptop GPU, RADV on the 780M, ANV on the Iris
-  Xe of Raptor Lake-P, and lavapipe's BC6H). On `metal2vulkan-rt` it is the static note
-  `PrecisionNote::CompressedTexelDecode` of every texture or view whose own pixel format is
-  block-compressed (BC1 to BC7, and the ASTC, ETC2 and EAC formats where the device makes them;
-  `Texture::precision_note`), on every device, with no driver fact. The texture's image is its
+- `metal2vulkan-degrade-compressed-texel-decode` (precision). `CompressedTexelDecode`: The static
+  note of every texture or view whose own pixel format is block-compressed (BC1 to BC7, and the
+  ASTC, ETC2 and EAC formats where the device makes them; `Texture::precision_note`), on every
+  device. The texture's image is its
   own image of that format, which the device samples through its own decode: no BC texture keeps a
   decoded twin. The bounds are the
   largest differences from Metal's texels measured on random blocks of every format; a driver not
   named is unmeasured. Validation derives no tolerance from them; the conformance suite's BC1 to
   BC5 decode cases hold each texel to its family's largest bound on any driver (an sRGB form's to
   the sRGB decode's largest step over 4/255), and its ASTC cases each linear (`_LDR`) texel to
-  1/2048, plus both values' rounding to `float`, justified by the notice alone, on
-  `metal2vulkan-rt`'s run; on the old runtime's they loosen nothing, and a texel its device moves
-  is that venue's known-gaps row.
+  1/2048, plus both values' rounding to `float`, justified by the note alone.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
   form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
   to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop
@@ -4003,312 +2516,6 @@ bound.
   Intel's Windows driver (the UHD 630) BC3's alpha 2/255 and a BC4 or BC5 channel 1.4/255 (signed
   0.0134), a BC4 or BC5 texel within 0.0001 of the specification's exact decode there, so what
   moves is Metal's 6-bit weights.
-- `metal2vulkan-degrade-cpu-block-decode` (performance). `CpuBlockDecode`: A CPU copy into a texture
-  with a decoded twin (`replace_region`) whose CPU copies go on the host or the staging queue: its
-  region is decoded on the CPU, on the device's decode thread, and copied into the twin; the first
-  command buffer that may read the texture waits at its submission for that (every command buffer,
-  where the texture is untracked). The call itself waits for no GPU work, as Metal's does not: only
-  for room, while 256 MiB of written blocks wait for the thread. Cost: the written blocks decoded
-  on the CPU, on the device's decode thread split over up to 8 threads, and their texels copied
-  into the decoded twin on the host or the staging queue: the first command buffer that may read
-  the texture waits at its submission for that (every command buffer, where the texture is
-  untracked), and the call waits only for room, while 256 MiB of written blocks wait for the
-  thread.
-- `metal2vulkan-degrade-carried-decoded-twin` (performance). `CarriedDecodedTwin`: A texture of an ASTC
-  LDR format (`ASTC_4x4_LDR` to `ASTC_12x12_LDR`, the sRGB forms too) made on a device without that
-  ASTC format, of an ASTC HDR format (`ASTC_4x4_HDR` to `ASTC_12x12_HDR`) on a device without its
-  `SFLOAT` block (`textureCompressionASTC_HDR`; of the committed device profiles, every one but
-  MoltenVK's), of a PVRTC format on a device without it (every
-  device but MoltenVK's, and there
-  the four RGB formats), or of an ETC2 or EAC format on a device without them (desktop GPUs and
-  lavapipe): its blocks lie in an image of a carrier format whose blocks are also 16 (ASTC,
-  `EAC_RGBA8`, `RG11`) or 8 (PVRTC, the other ETC2 and EAC formats) bytes, which copies and
-  `get_bytes` move unchanged, and its samples read a decoded twin, Metal's decode of the blocks in
-  codes: an ASTC LDR texture's and an EAC 11-bit texture's each nearest Metal's value
-  (`decoded-texel-precision`); a PVRTC texture's, and an 8-bit ETC2 or EAC texture's, 8-bit codes,
-  exact (its sRGB form's slots decode them through Metal's table, and one twin serves the views of
-  the linear and sRGB forms); an ASTC sRGB texture's, its own 8-bit codes, read the same way; an
-  ASTC HDR texture's, Metal's halves, exact (its error blocks' NaN included).
-  It is decoded after each write into it (a PVRTC texture's whole levels, since each texel's
-  colors come from the blocks around it); a heap's such texture whose image is a shadow of the
-  heap's bytes (where its carrier asks more of the heap than Metal's answer it is held to, as
-  under `HeapAnswerPolicy::Metal`), its whole twin after each copy in that moves its blocks
-  (`WorkCounts::shadow_twin_decodes`), and not after a use that copies nothing in. An ASTC texture's first view in its other colour
-  space (its sRGB form as LDR, or the other way) gives it a second twin of that form's decode, kept
-  in step by GPU passes its command buffers' submissions record. Also a texture of a 4:2:2 format
-  (`GBGR422`, `BGRG422`) on every device, whose Vulkan formats are viewed only through a sampler
-  Y′CbCr conversion: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin holds its
-  texels as 8-bit codes (each texel's own green, its red and blue interpolated with the pair beside
-  it), decoded in whole rows: the device's own conversion of its pairs where it converts the format
-  with Metal's reconstruction (`decoded-texel-precision`; every decode then a GPU pass, its CPU
-  copies through submissions), else Metal's texels, exact; a heap's such texture, a shadow of the
-  heap's bytes in Metal's rows, its whole twin after each copy in that moves its rows. A 4:2:2
-  texture over a buffer's bytes
-  (an IOSurface plane's) has no carrier: its samples read an `R8G8B8A8_UNORM` image of its texels
-  alone, which one dispatch writes from the pairs where they lie, copying no byte, before the first
-  command of each command buffer that reads it and after a command wrote its bytes (where the
-  device converts the format, its own conversion of the pairs, copied into an image of their
-  format first). Cost: a carrier image of its
-  blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), and a decoded twin of 4 bytes a texel
-  (R8G8B8A8; an ASTC HDR texture's halves, 8 bytes a texel; an EAC 11-bit texture's 16-bit codes, 2
-  bytes a channel, or its floats, 4 bytes a channel, where the device does not take those codes),
-  two for an ASTC texture viewed in both
-  colour spaces, and a decode after each write into it: a pass on
-  the GPU for a blit, a copy from a texture or a CPU copy through a submission; on the CPU, on the
-  device's decode thread, where its CPU copies go on the host or the staging queue; and a pass on
-  the GPU after each copy in that moves the blocks or rows of a heap's texture whose image shadows
-  the heap's bytes.
-- `metal2vulkan-degrade-decoded-texel-precision` (precision). `DecodedTexelPrecision`: A texture
-  with an ASTC LDR decoded twin of 8-bit codes, or an EAC 11-bit one (`R11`, `RG11`) of 16-bit
-  normalized codes; or a 4:2:2 texture (`GBGR422`, `BGRG422`) whose twin holds the device's own
-  sampler Y′CbCr conversion of its pairs, where the device converts `G8B8G8R8_422_UNORM` or
-  `B8G8R8G8_422_UNORM` with Metal's reconstruction (the chroma at the midpoint through a linear
-  filter: MoltenVK). Cost: a read, sample or gather of its
-  texels answers the nearest 8-bit code to Metal's 12-bit value, at most 1/510 off it; an EAC 11-bit
-  texture's, the nearest 16-bit normalized code to Metal's 11-bit value, at most half a 16-bit step
-  off it; a 4:2:2 texture's, where the device converts its format, the nearest 8-bit code to the
-  device's own Y′CbCr conversion of its pairs, not Metal's decode (Metal reads an EAC 11-bit
-  channel as `c / 2047`, signed `c / 1023`; a 4:2:2 chroma channel as `(3 c + n + 2) >> 2` of its
-  pair's code and the code beside, whose ties the device's nearest code takes to even). An ASTC
-  sRGB texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's sRGB
-  view, the device's decode (`srgb-texel-decode`). Announced where a command may first read such a
-  twin, not where the texture is made: making, filling, copying, blitting and CPU access move the
-  carrier's blocks and read no twin. It comes at a command's sampled binding of the texture or of a
-  view of it (a draw's, a dispatch's, a tile dispatch's), at the first command that binds the
-  device's heap set holding the twin (a function may read it through its resource ID, named or
-  not), or as the twin is placed in a heap set that a command buffer which bound it and has not
-  completed may read through.
-- `metal2vulkan-degrade-shared-present-queue` (performance). `SharedPresentQueue`: A command queue
-  made for presenting (`Device::new_command_queue_for_presenting`) on a device that reserved no
-  `VkQueue` for presenting: its queue family has no queue past the ones the round robin takes
-  (MoltenVK's four families of one queue, RADV's and lavapipe's single graphics queue). Cost: it
-  submits to a `VkQueue` other command queues share, so a present that blocks under its lock (FIFO
-  on a window the compositor does not show, a wait for the queue's idle at a resize) holds their
-  submissions until it returns, where Metal's present holds no other queue.
-- `metal2vulkan-degrade-queue-sharing` (performance). `QueueSharing`: A command queue moved onto
-  a `VkQueue` with another command queue's work in flight, as it made a command buffer while it
-  held no other uncompleted one: `QueueSharingPolicy::Adaptive` (the default), on a device whose
-  own check found its GPU idle when consecutive work comes from another `VkQueue` (NVIDIA's
-  driver on the RTX 5080 Laptop GPU). Announced once per device, on the thread that made that
-  command buffer, in `CommandQueue::command_buffer`. Never on a device that has no two `VkQueue`s
-  of one family (MoltenVK, RADV, lavapipe), nor for a queue made for presenting or with
-  `Device::new_command_queue_unshared`, which never move and which no queue joins. Cost: its
-  command buffers run in one `VkQueue`'s order with those of the command queues that share it,
-  where Metal's queues wait for each other only inside one command: the first command buffer of
-  each such queue whose GPU work, or whose wait on the GPU for another `VkQueue`'s work, runs
-  over 2 ms holds the command buffers the others committed behind it for its whole length, and
-  its later ones while its queue holds work, until that queue moves at its next idle point; a command buffer's GPU start time includes the
-  other queues' work before it; QueueSharingPolicy::PerQueue keeps each command queue on the
-  `VkQueue` it took at its creation.
-- `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A
-  heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose images on the
-  device need more bytes or a coarser alignment than Metal's answer, which the runtime models: under
-  the default `HeapAnswerPolicy::Device`, a texture whose image binds into the heap's memory, which
-  lies in that image; under `HeapAnswerPolicy::Metal`, one that no shadow of its bytes
-  holds to Metal's answer: not a multisample texture, whose image lies in memory of its own, nor one
-  whose planes or Metal's tiles fit its bytes. The answer is then the larger of the two, since no
-  image binds at Metal's offsets. Every other such texture answers Metal's numbers and announces
-  nothing here. Not where `optimized-depth-stencil-texture` says why. Cost:
-  heap_texture_size_and_align answers more bytes or a coarser alignment than Metal's, so a heap
-  sized by Metal's answers holds fewer such textures, and they lie at other offsets; each texture
-  keeps its own bytes.
-- `metal2vulkan-degrade-linear-attachment-copies` (performance). `LinearAttachmentCopies`: A pass
-  renders a color attachment whose texture's image is linear (a texture over a buffer's memory, a
-  no-copy buffer's host pages included) through an image its texture keeps, where the device renders
-  such an image only under `VK_NV_linear_color_attachment`'s rule, that every color attachment of
-  the render pass instance be linear, and the pass breaks it: another of its color attachments is
-  not linear, or it resolves a multisampled attachment into the texture. Cost: its texels are copied
-  into an image the pass renders, and what the pass wrote is merged or copied back after it.
-- `metal2vulkan-degrade-dont-care-stand-in` (performance). `DontCareStandIn`: A pass renders a color
-  attachment that it stores with `DontCare` (or resolves alone, `MultisampleResolve`) and whose
-  texture's image lies over the buffer the texture lies in (a linear image over an ordinary buffer's
-  memory) through an image its texture keeps, so that the buffer
-  keeps its bytes, as Metal's does: rendered in place, the pass would write them. A pass that stores
-  the attachment renders it in place, at no cost; so does one that hands it to a driver that stores
-  `DONT_CARE` as Metal's own `DontCare` (`DriverFact::DontCareStoreIsMetals`: MoltenVK on the M3
-  Max and the M4), as one render pass instance the driver runs unbroken, where Metal keeps the bytes
-  itself. Cost: an image of the
-  attachment's size, which its texture keeps for the queue, renders the pass; a `Load` copies the
-  buffer's texels over the render area into it before the pass, and nothing is copied back.
-- `metal2vulkan-degrade-host-deallocator-delayed` (precision). `HostDeallocatorDelayed`: A no-copy
-  buffer or heap released with a deallocator while a command buffer that may still reach its pages
-  holds them. Metal runs the deallocator at the release, even while a command buffer in flight
-  reaches the buffer unnamed (through a loaded pointer, or an indirect command the GPU encoded with
-  its address), and that command buffer's later accesses reach nothing. Vulkan frees no memory that
-  submitted commands may still use (`VUID-vkFreeMemory-memory-00677`), so the pages stay: with no
-  keep-alive (`KeepAlive`), while a command buffer submitted before a texture over them was released
-  may still read that texture through its resource ID (its image holds the import); with no
-  keep-alive, while a buffer made over part of its bytes, or over the same bytes as memory of
-  another class, while it lived is bound inside its import and holds it (one live import of a page,
-  as `VK_EXT_external_memory_host` leaves a page imported twice into one device undefined;
-  `host_releases_held_inside`, and the detail names it); with no
-  keep-alive, while a command buffer whose commands may reach the buffer unnamed holds a table of
-  the live buffers that lists it (its first submission's and its host steps', until it completes;
-  one a rebind encoded again before its first submission, until then); with no keep-alive on
-  MoltenVK (`RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork`), while the batches submitted
-  before the import's memory went, and the program's own submissions through
-  `CommandQueue::with_vk_queue` before it, are in flight, as MoltenVK fails pending work that reads
-  device addresses where such memory is freed; with no keep-alive, a detached buffer's or heap's
-  rebind or release while the pages its detach let go of are still so held (the deallocator its
-  detach held back, which Metal runs at the replace or the release). With a keep-alive the
-  deallocator runs at the release, as Metal's, and the import keeps the keep-alive, which keeps the
-  pages mapped, until it is freed: not announced (section 10). Cost: the deallocator runs once every
-  command buffer that may still reach the pages (through a texture over them, or a table of the live
-  buffers it holds) lets go of them, every buffer bound inside their import goes, or the batches
-  submitted before the import's memory went complete, where Metal's runs at the release; the pages
-  stay mapped until then.
-- `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
-  no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
-  the device's own, which no import maps (a heap's textures shadows of its bytes):
-  the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the device
-  refused the pointer's import and no dma-buf of the pages served it (no source given, or one that
-  failed or whose dma-bufs the device refused; RADV refuses shared memory, a `memfd` mapping among
-  it, and a device without `VK_EXT_external_memory_host` every pointer,
-  `copied_host_buffers_device_refused`), or the import the device and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of memory, or
-  another Vulkan error, such as a driver out of the mappings the host kernel allows), or the
-  runtime kept pages the kernel cannot pin (a dma-buf's mapping) from NVIDIA's driver, whose failed
-  import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and no dma-buf
-  of them served; or, on Linux, the process maps some of the pages read-only (a VMM's alias of a
-  read-only replace), whose pointer drivers pin for writing and whose dma-bufs would take the
-  GPU's writes (`copied_unwritable_pages`), with or without a dma-buf source, which is never
-  called for them; or a live import of another no-copy buffer's or heap's pages holds some of the
-  pages and not all (across its edge, or around it), or a heap's pages and more, so that importing
-  them would import a page twice, which `VK_EXT_external_memory_host` leaves undefined where
-  either import is of a host pointer (`copied_over_live_imports`, the gate not asked; a buffer
-  whose pages a live import holds all of lies inside that import instead,
-  `ObjectChurn::buffers_bound_in_import`; pages with a source the device imports, beside live
-  imports that are all of dma-bufs, import their own dma-bufs instead, never their pointer, as
-  Vulkan aliases any two imports of external memory, `ObjectChurn::dma_buf_imports_beside_live`,
-  but on a device whose barriers do not order blits through two imports of the same pages,
-  `RuntimeDriverDefect::AliasedImportBlitsUnordered`); or an import of a
-  guest RAM's chunk, made or in flight, holds some of the pages at the RAM's own addresses and no
-  chunk binds them (they cross a chunk's end with the chunks on both sides imported, or no run
-  resolver routed them; `copied_over_live_imports` too). The gate is asked
-  before the pages' write permission, where the pointer would be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
-  them: each batch's completion takes them back out of the copy and writes nothing to the pages
-  (`copied_dropped_bytes`; the detail says so). The detail names which cause it was; for a failed
-  import, the import's error, or that the runtime kept the pages from the driver as the kernel
-  cannot pin them, and whether a dma-buf source of them was asked. Announced once per device for
-  each cause (the gate's refusal, the device's, a failed import, bytes moved in their page, bit-24
-  memory, pages mapped read-only, pages a live import holds some of, and a buffer lying in
-  another's live copy), so a refusal and a
-  later failed import are both heard. The copy reads the pages through the kernel, and
-  where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
-  with plain loads where the process maps every page readable. Pages not mapped, or mapped
-  without read permission, are never copied: the buffer is refused, as their import is. A copy
-  whose own allocation fails refuses the call (`OutOfMemory`). Memory whose GPU writes Metal's
-  private option bit 24 drops is copied off macOS alone, where no import keeps the GPU's writes
-  out of the pages, the gate not asked (`copied_read_only_memory`): the copy drops the GPU's writes
-  as a copy of read-only pages does, though a command buffer committed before the writer's batch
-  completed may still read them. A render pass's store-out into it (an attachment stored, a
-  resolve into it) faults its command buffer as Metal's GPU does
-  (`CommandBufferError::PageFault`). A depth stored and resolved into such memory
-  (`StoreAndMultisampleResolve`), beside a stencil that resolves nothing, does not: on every
-  system the runtime stores the depth and drops its resolve, and the pass completes with the
-  resolve texture's bytes kept, as on the M3 Max. A blit's copy out of a no-copy buffer of such
-  memory, into a buffer
-  or a texture, reads its pages in place instead, through a read twin of the buffer imported over
-  them (`read_twins_made`), where they import in place and the device's policy contains every
-  access (no twin otherwise: `read_twins_unimported`, `read_twins_uncontained`), while no earlier
-  command of its command buffer may have written the buffer (`read_twin_blit_reads`; after one,
-  `read_twin_reads_after_writes`, the copy). So does a texture slot of an encoder's own draw or
-  dispatch that only reads a texture over the buffer's rows, through the texture's read twin over
-  the twin's bytes, made with it where it lies in place (`read_twin_textures_made`,
-  `read_twin_textures_not_in_place`, `read_twin_slot_reads`); where it lies in place over neither
-  the twin's bytes nor the copy (RADV lays no `DRM_FORMAT_MOD_LINEAR` plane whose rows or first
-  byte are off a multiple of 256), through the twin's shadow of the pages, copied in from them at
-  its first use in each command buffer as the texture's own shadow of the copy would be, only the
-  changed rows where the pages carry a log of their writes (`read_twin_texture_shadows`), and a
-  buffer slot of such a draw or
-  dispatch that only reads the buffer, of a command that reaches no memory through a root table
-  (`read_twin_slot_reads`). No command writes a twin, and one that would fails its command buffer
-  (`read_twin_writes_refused`). On macOS the pages are imported through a read-only view of them.
-  A buffer's or heap's rebind is copied the same way, its heap's bound textures and its images in
-  place made again over the copy, and a buffer's rebind to bytes at another offset in their page
-  under a texture planned at the old one is a copy laid out there (the detail says which). A
-  buffer made over exactly the bytes (the same first byte and length) a live copied buffer was
-  made over, of either storage mode, lies in its copy,
-  as one over a live import's bytes lies in that import, and makes no copy of its own
-  (`copied_host_buffers_shared`, the gate not asked; announced, the detail saying it lies in the
-  live copy): one memory, ordered as one resource's
-  accesses; a rebind to them does too where its textures were planned at the copy's offset and no
-  image in place rides on it. A heap's own buffer and memory whose GPU writes are dropped keep
-  their own. Counted: `WorkCounts::copied_host_buffers_made`, of them
-  `copied_host_buffers_refused`, `copied_host_buffers_degraded`, `copied_rebind_pages_moved` and
-  `copied_read_only_memory` (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`); each such
-  buffer, and each buffer placed in such a heap, answers `Buffer::host_backing` with
-  `HostBacking::Copied` until its next rebind or detach. Cost: the GPU
-  uses a copy of
-  the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
-  which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and
-  writes the pages themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU
-  reads before the batch completes, is not seen; each commit compares, of the copies its command
-  buffer uses (every copy where a command may reach memory no use names), every byte of one whose
-  pages carry no log of their writes (only the pages its log reports written where they do), and
-  each completion every copy its batches may have written. Memory: the copy's length, and from the
-  first commit whose command buffer may write it a base of the bytes the pages and the copy agree
-  on: a 128-bit tag of each 1 KiB block in host memory (a 64th of the length), and the bytes in
-  device-local memory the host maps where its heap is 1 GiB or more (a resizable BAR's) and has
-  room, else in host memory (`copied_base_host_bytes`, `copied_base_device_bytes`); a block of a
-  base in device memory that both sides changed is read once across the bus, by the host, or,
-  where a comparison reads 32 or more, through one copy on the device's staging queue
-  (`copied_base_blocks_read_back`), then kept in 1 KiB of host memory for the base's life
-  (`copied_base_host_blocks`); a block whose tag agrees is taken as unchanged, a changed one
-  missed with a chance of at most 2^-64 at each comparison, and a commit that finds no host memory
-  for a base fails with `OutOfMemory` (`copied_bases_refused`). A comparison of 4 MiB or more of a
-  copy, with a base or without, splits its blocks across up to eight threads, the calling one among
-  them (`copied_compare_threads`). An event signal submitted while a copy is live is seen once its
-  batch's writes are back in the pages, as Metal's: its value at the completion turn, and a wait
-  for it held on the host until then (`event_signals_behind_merge`). A
-  copy and another memory over overlapping but not the same bytes agree GPU to GPU only through the
-  pages, so a read committed before the write's completion reads the bytes from before it
-  (docs/FAST-PATHS.md, known gaps).
-- `metal2vulkan-degrade-grouped-completion` (precision). `GroupedCompletion`: Batches of command
-  buffers committed on one queue that the scheduler found ready together, or held while two or more
-  earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last
-  signalling its queue's timeline and their events (`CompletionPolicy::Grouped`, the default, on a
-  driver whose queue merges a submission that signals nothing into the next one: Mesa's drivers;
-  under `CompletionPolicy::Exact`, batches of command buffers marked to join the next,
-  `CommandBuffer::set_completion_joins_next`, and the batch found ready behind them): one kernel
-  submission for up to four batches, where each kernel submission costs CPU time for
-  every `VkDeviceMemory` of the device. Announced once per device, on the scheduler's thread. Cost:
-  each command buffer of the submission but the last is seen complete (its status, completed
-  handlers and waits), and the event values it signals are reached, once the last completed, late by
-  the GPU time of the batches after it, at most three, never early and in commit order, and a
-  submission held while earlier ones of its queue ran late besides by any gap between the last of
-  those and its own start on the GPU, at most a completion turn's reaction and its vkQueueSubmit;
-  and the submission checks of the batches behind a queue's next one run with its own, before the
-  batch before them is submitted; their commands, barriers and GPU times are unchanged;
-  `CompletionPolicy::Exact` submits and checks each batch alone but those of a command buffer
-  marked to join the next (`CommandBuffer::set_completion_joins_next`), which go with the batches
-  found ready behind them in the same pass, the last of those seen complete at its own end.
-- `metal2vulkan-degrade-sync-file-after-host-copies` (performance). `SyncFileAfterHostCopies`: A
-  command buffer's completion sync file (`CommandBuffer::export_completion_sync_file`) whose
-  command buffer's completion writes the caller's pages on the host after its GPU work: the merge
-  back of a copied host buffer its commands may have written (`copied-host-pages`), or the copy out
-  of a two-copy buffer into pages no import maps. A GPU signal would come before those writes, so
-  the export waits on the host for the completion and answers a sync file already signaled
-  (`None`). Announced once per device by the export that meets it. Cost: the export blocks the
-  calling thread until the command buffer completed and its host copies landed, where an export
-  after its GPU work's submission returns at once and the importer waits on its own GPU. Counted:
-  `WorkCounts::sync_files_after_host_copies`.
-- `metal2vulkan-degrade-draw-dropped-unmade` (precision). `DrawDroppedUnmade`: A draw whose
-  `VkPipeline` the driver failed to make after the draw returned (the runtime makes a draw's
-  pipeline while the draw goes on, `render/pending.rs`) ran nothing: its recording records the
-  barriers and the visibility query around it and no draw, and the command buffer runs on without
-  error. Metal makes a render state's pipelines inside `newRenderPipelineState`, which fails there,
-  so none of its draws meets such a failure. The notice names the draw, its state, the variant and
-  the driver's error. Announced where the draw is recorded: in the program's `commit`, or the
-  command buffer's host step. Cost: the draw's commands ran nothing, where Metal's draw renders;
-  the draws after it that need the same pipeline make it again; `CommandBuffer::dropped_draw`
-  names the first such draw with the driver's error, and `WorkCounts::draws_dropped_unmade` counts
-  them.
-- `metal2vulkan-degrade-misplaced-notice` (performance). `MisplacedNotice`: In a build without debug
-  assertions, a notice announced where the runtime's rule announces none (`DegradeNotice::misplaced`
-  names its kind and `NoticePlace`): inside a pipeline pool's piece, or, for a kind announced at
-  every occurrence, outside the program's call and outside a host step. Cost: the notice reached the
-  message sink from the runtime's notice thread after the call that met it, not in the program's
-  order on the thread that met it; Metal's answers are unchanged.
 - `metal2vulkan-degrade-depth-denormals` (precision). `DepthDenormals`: A write that may store a
   denormal in the 32-bit float depth of a depth image (a pass's clear to one, a blit's copy into a
   `Depth32Float` or `Depth32Float_Stencil8` texture's depth, a `replace_region` whose bytes hold
@@ -4321,297 +2528,6 @@ bound.
   On `metal2vulkan-rt` it is the static note `PrecisionNote::DepthDenormals` of every
   depth-stencil state that tests or writes depth (`DepthStencilState::precision_note`), on every
   device, with no driver fact.
-- `metal2vulkan-degrade-signed-depth-test` (precision). `SignedDepthTest`: A depth test that may
-  compare a negative value or a NaN stored in the 32-bit float depth of a render target as it is, or
-  a pass with depth writes that may store such a value with its sign, where Metal's test compares
-  the stored value's magnitude (a NaN above +inf) and its pass with depth writes stores every texel
-  no fragment wrote without its sign. Announced at a write that may give a render target's depth
-  such a value, or at the commit of a pass that loads a new texture's pattern (a NaN with the sign
-  set) before a write covered it in commit order, on a device that keeps such a value in a depth
-  image: `VK_EXT_depth_range_unrestricted` enabled (elsewhere a copy clamps it and
-  `restricted-depth-upload` is announced). Where such a device's test is Metal's own
-  (`DriverFact::DepthTestComparesMagnitudes`, MoltenVK's, were it to enable the extension), it is
-  announced at a pass that loads and stores the depth and sets a state with depth writes but draws
-  under none, whose pass keeps the signs.
-  Also announced for a NaN clear depth the device does not write before the pass, a `DontCare`
-  load's the pass clears among them. Cost: a depth test
-  against the stored value, or the value a pass with depth writes stores, can differ from Metal's in
-  the pass or target named: the device compares a negative value below zero and a NaN by its own
-  rule and keeps the value's sign, where Metal compares the value's magnitude, orders a NaN above
-  every value and stores the value without its sign; or a NaN clear depth is stored and tested as
-  1.0, where Metal stores `0x7fc00000`.
-- `metal2vulkan-degrade-first-sparse-resource-wait` (performance). `FirstSparseResourceWait`: The
-  device's first sparse texture made (`Heap::new_texture` in a sparse heap) on a device whose
-  driver's first sparse resource waits for the work submitted before it on every queue
-  (`DriverFact::FirstSparseResourceWaitsForQueues`: ANV through TR-TT, Mesa 26.2.4 on Intel's GPUs):
-  `vkCreateImage` sets the driver's sparse translation tables up with a batch on each queue and
-  waits for it. Cost: the call returns only once every queue finished the work submitted before it,
-  once per device, where Metal's returns at once; what the texture holds and reads is Metal's.
-- `metal2vulkan-degrade-driver-pipeline-cache-kept` (performance). `DriverPipelineCacheKept`: A
-  device the runtime makes whose driver it cannot make with the driver's internal pipeline cache off
-  (`VkDevicePipelineBinaryInternalCacheControlKHR`): its driver lists no `VK_KHR_pipeline_binary`,
-  reports no `pipelineBinaryInternalCacheControl`, or the device enables no `VK_KHR_maintenance5`,
-  which the extension requires. Cost: the driver keeps its own cache of the device's pipelines
-  beside the shader cache's records, with whatever it writes to disk and holds in memory for it; the
-  pipelines made are the same.
-- `metal2vulkan-degrade-least-queue-plan` (performance). `LeastQueuePlan`: A device the driver
-  refused to make for want of its resources with the `VkQueue`s of its queue plan (`vkCreateDevice`
-  answering `VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`,
-  `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`; on NVIDIA's driver,
-  other devices of the GPU holding what it needs, such as its channels), made with those of its
-  least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the extra,
-  staging and fill queues and as many reserved queues as the plan reserves, no more. Announced
-  once, as the device is made, naming the `VkQueue`s of each plan and the driver's answer; a
-  device the driver refuses with the least plan too is refused, `Error::DeviceRefused`. Cost: its
-  command queues, presenting ones included, share one `VkQueue`,
-  so one queue's command buffers wait behind another's whole command buffer where Metal's run beside
-  each other; what each command buffer does is the same.
-- `metal2vulkan-degrade-device-recovered` (performance). `DeviceRecovered`: A device whose
-  `VkDevice` was lost made a new one behind it, as Metal's device survives its GPU's recovery: its
-  command buffers in flight failed, the oldest incomplete one as the hang (`GpuHang`, counted
-  against its queue, so a queue's second revokes it) and the rest as its victims
-  (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
-  new `VkDevice`; a queue's lent `VkQueue` (`CommandQueue::with_vk_queue`) comes with the
-  `VkDevice` it belongs to, the new one from then on. Announced at each recovery, by the call that made it; the reason names the hang's
-  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) by its
-  label and its queue's, with its first 32 ended encoders' places, kinds and labels
-  (`CommandBuffer::set_label`, each encoder's `set_label`), how
-  long the recovery took, and the objects it carried to the new `VkDevice` and left refused, by
-  kind. Announced too, at most once each per recovery whatever an earlier
-  recovery announced: where a call waited past 10 seconds for the recovery under way, where its
-  command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
-  be made, after which the device answers as a lost one. A `VkDevice` whose work stopped with no
-  loss from the driver (no work of it advanced for 10 seconds with some pending, and a probe on
-  the staging queue did not complete in 2 seconds; or a queue's front batch went 20.2 seconds,
-  the largest of Metal's measured watchdog bounds, without its timeline advancing, whatever the
-  probe answered, its command buffer failing as Metal's timed-out one, `GpuHang`;
-  `command_buffer/stall.rs`) is recovered from the same way, and the reason says it stopped, by
-  which of the two, and was parked: never destroyed, its queues never waited for
-  (`Device::is_parked`). `Device::recover_for_test` runs the
-  same recovery with no GPU fault. Cost: the events, fences, depth/stencil states, libraries,
-  functions, dynamic libraries, binary archives, address pools, rasterization rate maps, argument
-  encoders, uses of guest RAM, no-copy
-  buffers, `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of
-  pages the `Shared` and `Managed` buffers lie in where the device's checks found a held host-page
-  import costs its submissions nothing and textures over such pages take what they take over its
-  own memory), `Private` heaps and heaps over the caller's memory with the buffers and textures
-  placed in them, textures of `new_texture`, textures over the buffers carried and views of them,
-  pipeline and sampler states, indirect command buffers and visible function tables made before it
-  go on, the contents of a `Private` buffer or heap
-  lost (it reads zero) but an exportable buffer's, re-imported over its own memory, which keeps
-  whatever that memory holds, and of a texture of `new_texture` or of a `Private` heap of any
-  storage mode (it reads as a new one) but a texture buffer over its texels' buffer carried, a
-  heap over the caller's memory and what is placed in it reading the same pages, and of an indirect
-  command buffer's records on a device that imports no host pointer, where their import failed,
-  or, under the default `DevicePolicy::indirect_records = IndirectRecordsPolicy::Untaxed`, on a
-  device whose check found a held host-pointer import costs every submission (RADV, ANV on i915),
-  where they lie in pooled memory (every command reset; the notice counts such buffers), where
-  Metal's are kept, as they are in the runtime's own pages everywhere else and under
-  `IndirectRecordsPolicy::Carried`, which `exact_answers()` selects (docs/FAST-PATHS.md); the
-  other objects
-  made before it are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait
-  for it, and a device call the loss met while it ran runs again after it. A no-copy buffer is
-  made again over
-  the same pages on the new `VkDevice`, as its making or last rebind made it, so the caller's
-  import gate, resolver of guest RAM runs and dma-buf source are asked again, on the thread that
-  recovers, before the new device serves; its deallocator runs at its release once no `VkDevice`'s
-  import of its pages is left. A detached no-copy buffer is refused. A `Private` heap is the same
-  heap on the new `VkDevice` (its identity, address and label), its bytes new memory that reads
-  zero, with the buffers and textures placed in it; a heap over the caller's memory
-  (`new_heap_with_bytes_no_copy`) is made again over the same pages, as a no-copy buffer is, with
-  the buffers and textures placed in it, which read the pages there; buffers and textures are made
-  in either again. A texture of `new_texture`, one placed in a heap the recovery carried, one over
-  a buffer it carried and a view of any are the same texture object on the new `VkDevice` (its
-  identity, resource ID, label and purgeable state): the first made again in new memory, which
-  reads as a new texture of its descriptor, a heap's made again at its range of the heap there (a
-  `Private` heap's reading as a new texture, one over the caller's memory reading the pages), one
-  over a buffer made again over the buffer's bytes there, a view of its parent's image there.
-  Their images on the lost `VkDevice` go once none of its command buffers may record, but an
-  image whose `VkImage` was handed out (`Texture::vk_image`), which stays, and keeps it, until its
-  texture goes. A texture of a
-  heap left, one over the caller's `VkImage`, a sparse or shareable texture and one over a buffer
-  left are refused, with their views. A `Shared` heap, whose bytes are pooled host-visible
-  memory the device allocated, is refused with its buffers, as a pooled buffer is. A compute, tile,
-  drawing or mesh pipeline state is the same state on the new `VkDevice` (its identity, ID,
-  `uniqueIdentifier` and label): its base variant made again there from what its creation
-  compiled, with no translation, and the `VkPipeline` its creation predicted queued with no wait;
-  a bind of one whose making there failed is refused (`RemadeAfterRecoveryFailed`). Its objects
-  on the lost `VkDevice` go once none of its command buffers may record.
-- `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
-  private device properties the device has no answer for: no document describes them and nothing the
-  device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is
-  `None`); Metal's measured answers on Apple's GPUs ride beside, never as this device's.
-- `metal2vulkan-degrade-unpacked-fill-color` (precision). `UnpackedFillColor`: A color fill
-  (`BlitCommandEncoder::fill_texture_color`) whose color is packed in a format Metal packs no color
-  in: compressed, 4:2:2, depth, stencil, two-plane, YCbCr, padded 10-bit, `Invalid` or a private
-  format. Metal fills bytes of the calling thread's stack there, which hold the last color fill's
-  packed texel only where no other call used them since. Cost: every unit of the region holds the
-  command buffer's last packed texel over zeros, whatever the color, where Metal's bytes are its
-  stack's.
-- `metal2vulkan-degrade-texture-buffer-fill-leftover` (precision). `TextureBufferFillLeftover`: A
-  fill of a texture buffer (`BlitCommandEncoder::fill_texture`,
-  `BlitCommandEncoder::fill_texture_color`) whose 16-byte chunks read bytes of its block past the
-  pattern's whole copies, or past the block: most patterns whose length is not a power of two, and
-  most regions whose first byte is not at a multiple of 16 of the buffer. Metal reads bytes of the
-  calling thread's stack there: zeros in our probes, an earlier fill's bytes in the consumer's
-  process. The runtime writes zeros there. Cost: those bytes of each chunk are zeros, where Metal's
-  are its stack's.
-- `metal2vulkan-degrade-unsized-points` (precision). `UnsizedPoints`: A draw of points that
-  rasterizes, of some vertices and instances, under a render pipeline state whose vertex function
-  writes no `[[point_size]]` and whose input primitive topology class is not the point class: a
-  direct draw, an indirect one, or an indirect command's in an execution. Cost: the points rasterize
-  nothing, the vertex function run for each, where what Metal draws is undefined: most of its draws
-  draw nothing, and some a few of the points or a box.
-- `metal2vulkan-degrade-triangle-point-size` (precision). `TrianglePointSize`: A draw of triangles
-  in fill mode `TriangleFillMode::Points` (the raw value 2, which Apple's GL renderer sends) under a
-  render pipeline state whose vertex function writes `[[point_size]]`: a direct draw, an indirect
-  one, or an indirect command's in an execution. The device sizes each vertex's point by the size
-  the function writes where its `polygonModePointSize` is set; Metal draws one pixel whatever the
-  function writes (an Apple M3 Max). Cost: each vertex can draw at the point size the vertex
-  function writes, where Metal draws one pixel.
-- `metal2vulkan-degrade-device-wide-lines` (precision). `DeviceWideLines`: A draw of lines at a
-  width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines` or of
-  a mesh draw, drawn by the device's own lines, which no device's are taken to draw as Metal's
-  parallelogram: strict lines (the rectangle the width spans across the segment, square ends), lines
-  Vulkan does not state as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width
-  below 1), a width off the device's `lineWidthGranularity`, which rounds it, and a driver's
-  parallelograms, whose ends and endpoints' snap are the driver's (RADV on the Radeon RX 7900 XTX
-  draws 21 of 48 scattered lines at width 2.5 a row or a column off Metal's at an end). Under
-  `WideLinePolicy::Exact` a draw of lines or of a triangle's edges takes the band variant instead,
-  on a device with `tessellationShader`. Cost: the lines can cover pixels Metal's parallelogram does
-  not, and miss others, at each end and along each edge.
-- `metal2vulkan-degrade-lines-at-nearest-width` (precision). `LinesAtNearestWidth`: A draw of lines
-  at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines`
-  or of a mesh draw, that neither the device's own lines at that width nor the band variant draws,
-  drawn by the device's own lines at the width nearest it they draw: the width clamped into
-  `lineWidthRange` and put on the nearer step of `lineWidthGranularity`'s grid from its bottom
-  (never 0) where the device enables `wideLines`, else 1. That is a mesh draw's lines and
-  edges and a tessellated patch draw's edges where the device's lines do not draw the width (every
-  such draw on MoltenVK), lines and edges on a device without `tessellationShader` whose lines do
-  not draw them or of a pipeline state or a draw whose band variant the translator refuses (and
-  the state's later draws of a draw so refused), a band under
-  vertex amplification above 1, and every line in a rasterization-rate-mapped pass or of an
-  execution's command, whose width Metal's answer is not measured for. The reason names which, and
-  both widths. Cost: the lines are drawn at another width than Metal's: thinner (1 pixel without
-  wideLines) or wider, so they cover fewer or more pixels across each line.
-- `metal2vulkan-degrade-wide-edge-depth-bias` (precision). `WideEdgeDepthBias`: A draw of a
-  triangle's edges in fill mode `Lines` at a width other than 1 (Apple's `setLineWidth:`) drawn as
-  the band variant under a depth bias the device can apply otherwise than Metal: a slope factor, or
-  a constant factor over a float depth. Metal biases the edges by the triangle's depth slope and
-  its largest depth's exponent; the device biases each of the band's triangles by its own slope and
-  its own largest depth's exponent, its native arithmetic. A constant factor over a unorm depth is
-  not announced. Cost: the edges' fragments are biased by another depth than Metal's, along the
-  edges as their slope along them differs from the triangle's, and near a vertex of a smaller depth
-  exponent than the triangle's largest by a smaller unit.
-- `metal2vulkan-degrade-device-line-ties` (precision). `DeviceLineTies`: A draw whose lines, or a
-  triangle's edges in fill mode `Lines`, the device's own lines draw at width 1 (Metal's default
-  width, or the nearest width a device without `wideLines` draws), on a driver without
-  `DriverFact::LineTiesAreMetals` (measured: MoltenVK on the M3 Max). Metal rasterizes a
-  line by the diamond-exit rule and covers the lower of two pixels whose diamonds share a vertex
-  the line runs through; Vulkan's diamond is open, so neither pixel is required there and the
-  driver chooses (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU covers the upper one along a strip's
-  diagonal; lavapipe leaves out a strip's first pixel where it starts on such a vertex). Cost: a line
-  through a vertex two pixels' diamonds share covers the pixel the device chooses, where Metal
-  covers the lower one, so such a pixel, and the rest of a line that runs along such vertices, can
-  lie a row or a column from Metal's.
-- `metal2vulkan-degrade-device-subpixel-snap` (precision). `DeviceSubpixelSnap`: A draw whose
-  lines, or a triangle's edges in fill mode `Lines`, the runtime's band draws (a width other than 1
-  that the device's own lines do not draw as Metal's), on a driver without
-  `DriverFact::SubpixelSnapIsMetals` (measured: MoltenVK on the M3 Max). Metal snaps a line's
-  endpoints to 1/256 pixel, a half step rounded up, then offsets them by half the width; the band
-  offsets them and leaves its corners' snap to the device's rasterizer, whose rounding of a half
-  step Vulkan leaves to the implementation. The two agree but where an endpoint lies half a step off
-  the grid (on NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU and on lavapipe, lines offset from
-  rows of centres by odd multiples of 1/512 pixel draw a row lower, as a half step rounded down
-  gives). Cost: a line's band whose
-  endpoint lies half a 1/256-pixel step off the subpixel grid is snapped the way the device rounds,
-  where Metal rounds the endpoint up, so a pixel whose centre lies within that half step of the
-  band's edge can be drawn, or left out, a row or a column from Metal's.
-- `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
-  lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
-  (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or
-  viewport its vertex function selects), on a device without `VK_EXT_provoking_vertex`'s last vertex
-  (or whose pipelines of one render pass instance share one mode): each line is drawn from its last
-  vertex to its first, so a first-vertex pipeline reads Metal's provoking vertex. Cost: each line's
-  flat inputs are Metal's, but it can cover other pixels and interpolate its smooth inputs otherwise
-  than Metal's line from its first vertex to its last.
-- `metal2vulkan-degrade-provoking-vertex-unmatched` (precision). `ProvokingVertexUnmatched`: A draw
-  under Apple's last provoking vertex (`setProvokingVertexMode:` 1) the runtime draws otherwise than
-  Metal. On a device without `VK_EXT_provoking_vertex`'s last vertex (or whose pipelines of one
-  render pass instance share one mode), what no list the runtime draws holds as Metal draws it: a
-  draw of triangles, or an emulated mesh draw of triangles, whose fragment function reads flat
-  inputs and `[[barycentric_coord]]`, each drawn from its last vertex, its second and third weights
-  taken back to Metal's order from the drawn triangle's, Metal's but for rounding; patches, and mesh
-  draws through `VK_EXT_mesh_shader`, whose pipeline state reads flat inputs: they read the first
-  vertex. On a device with it, a strip whose vertex function computes `[[primitive_id]]` into its
-  varying (a device without `geometryShader` and `tessellationShader`), whose IDs read each
-  primitive's last vertex; and a slice or viewport a vertex function selects where the pipeline
-  selects it in a synthesized geometry stage (a device without `shaderOutputLayer` or
-  `shaderOutputViewportIndex`, an index that differs between a primitive's vertices, or weights the
-  stage writes), from each primitive's first vertex. And on every device, a draw at a mode past 1,
-  which Metal draws a third way and the runtime as mode 1, whose shape and pipeline state Metal draws
-  otherwise than mode 1 (a strip's odd triangles, every line's flat inputs and `[[primitive_id]]` 0,
-  sized points, the middle vertex of a triangle whose pipeline selects its slice or viewport, mesh
-  draws unmeasured): announced at the draw. Cost: flat
-  inputs or a computed primitive ID read another vertex than Metal's, or barycentric weights come in
-  another order than Metal's or round otherwise.
-- `metal2vulkan-degrade-visibility-count-per-color` (precision). `VisibilityCountPerColor`: A
-  draw counted by a `Counting` visibility result whose fragment function writes more than one color
-  attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
-  Metal's count multiplied by the colors the draw writes; a `Boolean` result keeps its contract.
-- `metal2vulkan-degrade-vertex-fetch-may-wrap` (precision). `VertexFetchMayWrap`: A draw that
-  fetches a vertex layout in fixed function where its indices or arguments state how far it
-  fetches (a per-vertex layout of an indexed draw of 32-bit indices, any layout of an indirect
-  draw), on lavapipe, whose fixed-function vertex input takes an element's displacement modulo
-  `2^32` (`RuntimeDriverDefect::VertexFetchWrapsPast4GiB`), under the default
-  `VertexReachPolicy::Bounded`; `VertexReachPolicy::Exact` pulls such a layout instead. Cost: an
-  element past `2^32` bytes of the buffer's bind offset reads the bytes at its displacement's low
-  32 bits, where Metal reads zero past a buffer that ends before them.
-- `metal2vulkan-degrade-visibility-past-early-mask` (precision). `VisibilityPastEarlyMask`: A
-  draw under a `Counting` or `Boolean` visibility result whose fragment function declares
-  `[[early_fragment_tests]]` and writes its sample mask (the pipeline's private sample mask or
-  coverage, which the function applies itself under early tests, or its own `[[sample_mask]]`
-  return), on a device that does not state `earlyFragmentMultisampleCoverageAfterSampleCounting`
-  (`Limits::early_fragment_multisample_coverage_after_sample_counting`; ANV on the Iris Xe of
-  RPL-P), where Vulkan lets the mask come before the query counts. Announced at the draw's call
-  and counted in `WorkCounts::draws_counted_past_early_masks`. Keeping Metal's count would take a
-  second draw of every counted draw. Cost: the result may leave out the samples the fragment
-  function's sample mask drops, which Metal counts under early tests: a `Counting` result counts
-  fewer, and a `Boolean` one may be 0 where Metal's passed.
-- `metal2vulkan-degrade-device-boolean-visibility` (precision). `DeviceBooleanVisibility`: A pass
-  writes a `Boolean` visibility result. Where a sample passed, its word is the device's occlusion
-  query result without `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When
-  any samples are passed, boolean queries will return a non-zero result value, otherwise a result
-  value of zero is returned"), ORed over the pass's render pass instances (and, under `Accumulate`,
-  into the word the buffer held); where none passed, 0 (the word, under `Accumulate`).
-  That is Metal's `Boolean` contract, and Metal's own nonzero value is not one value either: an
-  Apple M3 Max (macOS 27.0.1) writes 1, Metal on the AMD Radeon Pro 5300M and the Intel UHD
-  Graphics 630 (macOS 26.7.1) the samples that passed. No dispatch rewrites the device's value.
-  Announced where the pass's results record. Cost: a `Boolean` visibility result where a sample
-  passed is the device's nonzero value, which can be other than the 1 an Apple M3 Max writes;
-  where none passed it is 0.
-- `metal2vulkan-degrade-float-tininess-after-rounding` (precision). `FloatTininessAfterRounding`: A
-  device whose float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product,
-  fused multiply-add or `ldexp` whose exact value lies below `2^-126` to the zero of its sign,
-  deciding tininess before rounding, and the device rounds before it decides (measured on RADV,
-  ANV, NVIDIA and lavapipe, whether they flush denormals or keep them); a `float` `ldexp`'s result
-  below `2^-126` is the device's product. Announced once, as the device is made. Cost: a `float`
-  product, fused multiply-add or `ldexp` whose exact value lies within half a unit below `2^-126`
-  answers `2^-126` of its sign where Metal answers the zero of its sign.
-- `metal2vulkan-degrade-shader-cache-entry-not-written` (performance).
-  `ShaderCacheEntryNotWritten`: an entry of the device's shader cache directory was not written --
-  the directory, a temporary file in it or the rename over the entry failed, on the device's cache
-  thread or on the thread that handed the entry over past the queue's bound. A full or read-only
-  directory, a cap no entry fits in, or a write another process won. Or the device has no
-  directory: its `ShaderCacheOptions` named none and the platform's default does not exist (the
-  variable it is found by is unset or not absolute) or takes no write, so the device keeps its
-  cache in memory alone (`Device::shader_cache_directory` is `None`); that is announced as the
-  device is made, naming the default directory and why. Nothing is ended by it: the
-  pipeline state, the translation and the compile are made regardless. Announced once per device,
-  naming the directory, its cap and the largest entry it takes; later failures are counted in
-  `ShaderCacheStatistics::write_failures`. Cost: what the entry would hold is made again by the
-  next process that needs it; what this process computes is unchanged. The entry is a translation,
-  a compiled pipeline, a creation's answers or the driver's pipeline cache data.
 - `metal2vulkan-degrade-f16-fma-double-rounding` (precision). `PrecisionNote::F16FmaDoubleRounding`:
   Widened half fma rounds twice.
 - `metal2vulkan-degrade-f16-int-conv-double-rounding` (precision).
@@ -4658,16 +2574,16 @@ bound.
   functions and `saturate` are the device's `NMin`, `NMax` and `NClamp`, their pick of a denormal
   is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add, and `ldexp` on
   `float` by that multiply, round a result whose exact value is below `2^-126` up to `2^-126`, which
-  Metal flushes (`float-tininess-after-rounding`). A nearest pixel-coordinate sample at its texel's
+  Metal flushes. A nearest pixel-coordinate sample at its texel's
   centre `floor(x) + 0.5`, and a pixel fetch at `floor(x) + k` under an offset, records it for that
   `floor`: Metal's sampler reads a negative subnormal `x` as texel -1, where MoltenVK's `floor`
   reads it as the zero of its sign, texel 0 (an Apple M3 Max). An address mode that reads texel -1
   as texel 0 (clamp to edge, mirror clamp to edge, mirrored repeat) answers alike, so the sample
   records it only where its `s` or `t` mode is repeat, clamp to zero or clamp to the border: through
   a constexpr sampler of such a mode; through a runtime sampler slot only under a pipeline made for
-  a nearest pixel state (`SpecKey::NearestPixelSampler`), never under a normalized one, and
-  announced at a draw or dispatch that binds a state of such a mode there
-  (`SpecKey::BoundSamplerWord`); through an argument buffer's sampler
+  a nearest pixel state (`SpecKey::NearestPixelSampler`), never under a normalized one, and there
+  where the bound state is of such a mode (`SpecKey::BoundSamplerWord`); through an argument
+  buffer's sampler
   `argument-pixel-sampler-scaling` records it instead. A pixel fetch under an offset records it
   outright.
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
@@ -4678,8 +2594,8 @@ bound.
   neighbouring pair, block or step, where Metal's sampler reads the coordinate as given. Recorded
   for a linear sample, a gather and a level query through a constexpr pixel sampler of an array, a
   3D texture or a texture whose residency the function observes, and through a runtime sampler
-  slot (announced where the bound state reads pixel coordinates, and for a sample or comparison
-  where it is not a nearest one of one isotropic level). Measured: the device's normalized
+  slot (where the bound state reads pixel coordinates, and for a sample or comparison where it is
+  not a nearest one of one isotropic level). Measured: the device's normalized
   sampler's answer within one `f32` ulp of the quotient on MoltenVK and at the quotient on
   lavapipe; a linear downscale by 8 within 1/255 of Metal's on MoltenVK and 2/255 on lavapipe.
   Under the identity domains it is also recorded for a linear sample and a gather through any
@@ -4751,8 +2667,7 @@ bound.
   tessellator orders each patch's triangles, picks each one's first corner, and joins the patch's
   rings where Vulkan leaves that to the implementation. The domain points are Metal's; a flat
   varying, a value interpolated across another triangulation, and the order a patch's triangles
-  blend in may differ. A device without `tessellationShader` draws Metal's order through the
-  emulation (`emulated-tessellation-draws`) and records none.
+  blend in may differ.
 - `metal2vulkan-degrade-unmeasured-group-speculation` (precision).
   `PrecisionNote::UnmeasuredGroupSpeculation`: A function holds a branch whose arms hold a quad or
   simdgroup operation that answers over every lane of the branch's block when Metal's backend
@@ -4796,7 +2711,7 @@ bound.
   A factor of the second source reads the function's second output, clamped as the source. An 8-bit
   sRGB attachment (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`) under a
   blend of the second source, a one- or two-channel one under a lerp, each in a module compiled with
-  fast math, and one written by an output of fewer than four lanes, announce it too: the shader
+  fast math, and one written by an output of fewer than four lanes, record it too: the shader
   computes Metal's 8-bit unorm blend's rounded forms over the decoded texel, in the output's type (a
   missing lane zero), and stores the result by the device's sRGB encode (`DevicePackConversion`),
   Metal's blend without fast math at four lanes; under fast math Metal regroups the blend,
@@ -4864,13 +2779,12 @@ bound.
   lavapipe, the M3 on KosmicKrisp and on MoltenVK, a Radeon 780M, an RTX 3090 and an Iris Xe:
   `RGBA8Unorm` `2.44e-4`, `R8Unorm` `1.53e-4`, `RGBA8Snorm` `4.88e-4`, `RGBA16Float` `3.74e-4`,
   `RGBA16Unorm` `2.16e-4` on lavapipe, KosmicKrisp and the 3090 and `7.8e-6` elsewhere (lavapipe's
-  `half` results keep their `f32` values), and `1.58e-3` for `RGBA8Unorm_sRGB` on the old runtime,
-  which decodes its taps in the module. Through a runtime
-  sampler slot it is announced at a draw or dispatch only where the bound sampler filters (a linear
-  minification or magnification filter, anisotropy, a cubic filter or a linear mip filter): a
-  nearest sampler's sample is the decoded texel at Metal's position. Through an argument buffer it
-  is announced only at a draw or dispatch whose command can name a texture held by its raw texels in
-  a form the function filters (`BGR10_XR`, `BGRA10_XR`, the padded forms; not a bfloat one).
+  `half` results keep their `f32` values). Through a runtime sampler slot it holds only where the
+  bound sampler filters (a linear minification or magnification filter, anisotropy, a cubic filter
+  or a linear mip filter): a nearest sampler's sample is the decoded texel at Metal's position.
+  Through an argument buffer it holds only where the command can name a texture held by its raw
+  texels in a form the function filters (`BGR10_XR`, `BGRA10_XR`, the padded forms; not a bfloat
+  one).
 - `metal2vulkan-degrade-sparse-residency` (precision). `PrecisionNote::SparseResidency`: A stage
   samples or gathers a texture whose residency it observes (`sparse_color::resident()`) through the
   slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:
@@ -4881,19 +2795,13 @@ bound.
 - `metal2vulkan-degrade-device-nan-encoding` (precision). `PrecisionNote::DeviceNanEncoding`: A
   `float` NaN result's bit pattern follows the device: Metal answers the canonical `0x7fc00000` for
   the NaN results of its float arithmetic and functions, and Vulkan states no encoding, so a device
-  may answer another sign or payload (llvmpipe: `0xffc00000`). Also, once per device, a GPU blit
-  into, out of or between textures of which one is an `RG11B10Float` texture Metal keeps losslessly
-  compressed, whose compression makes a NaN field the quiet NaN (`0x7e0`, `0x3f0`), where the
-  device's copy keeps the bits. The runtime announces it too for a plain color fill
-  (`BlitCommandEncoder::fill_texture_color` without a pixel format) to a NaN of a half or
-  small-float texture the device's clear writes, which converts the NaN as the device likes, where
-  Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones. Also a blend
+  may answer another sign or payload (llvmpipe: `0xffc00000`). Also a blend
   a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
   of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
   stores every NaN of the blend as `0x7e00`. A texture write records it where the stored NaN is the
   device's: a constant texel none of whose lanes is a NaN records nothing, and a `half` or
-  `float` write through an argument buffer is announced only at a draw or dispatch whose command
-  can name a texture of a format family whose stored NaN is the device's (for a `half` write on
+  `float` write through an argument buffer holds only where the command can name a texture of a
+  format family whose stored NaN is the device's (for a `half` write on
   MoltenVK on the Apple M3 Max, a 16-bit float one; a 32-bit float or `RG11B10Float` one stores
   Metal's; for a `float` write, a 16-bit float or `RG11B10Float` one). So does a fragment
   function's color output where the device's conversion stores its NaN, but one every return of
@@ -4913,8 +2821,9 @@ bound.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled (MoltenVK on the M3 Max, ANV on the Iris Xe, RADV), where Vulkan gives a depth image no
-  value outside `[0, 1]`, whatever its driver is measured to keep: an upload clamps one
-  (`restricted-depth-upload`), and a render write is clamped to the viewport's depth range. A
+  value outside `[0, 1]`, whatever its driver is measured to keep: an upload into a 32-bit float
+  depth is refused (`Gap::FloatDepthUpload`), and a render write is clamped to the viewport's
+  depth range. A
   comparison of a texel Metal holds outside `[0, 1]` can differ; one within it is exact.
 - `metal2vulkan-degrade-cube-gradient-footprint` (precision).
   `PrecisionNote::CubeGradientFootprint`: An explicit-gradient sample of a cube texture takes
@@ -4932,7 +2841,7 @@ bound.
   The module reads, gathers, or samples a texture with a `half` result, the device's `float` texel
   rounded to nearest even on every device: within one `half` ulp of Metal's, but a 32-bit float
   texel's sample past `±65504`, the infinity where Metal saturates. On MoltenVK, whose `float`
-  texel is Metal's, announced at a draw or dispatch that binds a texture of a class whose Metal
+  texel is Metal's, where the command binds a texture of a class whose Metal
   `half` differs from it (a 32-bit float texel's sample, but where the profile takes
   `DriverDeviation::MetalHalfConversion`, measured on the Apple M3 Max to answer Metal's `half` of
   every `float` word; a 16-bit normalized texel; a format not measured) and a two-plane YCbCr texture on the grid `8192` at a slot sampled through a runtime
@@ -4944,27 +2853,26 @@ bound.
   module samples a texture with a `half` result through a filter (linear minification or
   magnification, a linear mip filter, anisotropy, or a runtime sampler slot whose bound sampler
   filters so) that Metal's own sampler (MoltenVK) answers otherwise than Metal filters the format
-  bound there: a two-plane YCbCr texture's, at a slot or held by an argument buffer (announced as
-  `ycbcr-filter-not-exact`); or, on any device, a linear sample by Vulkan's Y′CbCr model of a
-  4:2:0 texture's planes read in place (`YCbCrInPlacePolicy::Model`).
+  bound there: a two-plane YCbCr texture's, at a slot or held by an argument buffer; or, on any
+  device, a linear sample by Vulkan's Y′CbCr model of a 4:2:0 texture's planes read in place
+  (`YCbCrInPlacePolicy::Model`).
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit
   sRGB format. The device's decode is the only form wherever it samples the format (an 8-bit sRGB
   format, or the sRGB form of a BC, PVRTC, ETC2, EAC or ASTC format, through the texture's or its
-  decoded twin's sRGB view), so it is announced at a draw or dispatch that binds such a texture,
-  at an argument buffer's texture access, and at a render pipeline that reads an sRGB color
-  attachment as an input attachment; never on MoltenVK, whose decode is Metal's own. Where the
+  decoded twin's sRGB view), so it holds where a command binds such a texture, at an argument
+  buffer's texture access, and for a render pipeline that reads an sRGB color attachment as an
+  input attachment; never on MoltenVK, whose decode is Metal's own. Where the
   device holds the format as its UNORM twin, or a storage texture holds it through its UNORM
   alias (at a slot, or held by an argument buffer), the module decodes the codes (or the
-  device's filter of them) by the MSL transfer through the device's `Pow`, announced at every
-  such access on every device.
+  device's filter of them) by the MSL transfer through the device's `Pow`, at every such access on
+  every device.
 - `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
   module samples a texture with a `float` result through a filter that Metal's own sampler
   (MoltenVK) answers otherwise than Metal filters the format bound there: a two-plane YCbCr
-  texture's, at a slot or held by an argument buffer (announced as `ycbcr-filter-not-exact`); or,
-  on any device, a linear sample by Vulkan's Y′CbCr model of a 4:2:0 texture's planes read in
-  place (`YCbCrInPlacePolicy::Model`).
+  texture's, at a slot or held by an argument buffer; or, on any device, a linear sample by
+  Vulkan's Y′CbCr model of a 4:2:0 texture's planes read in place (`YCbCrInPlacePolicy::Model`).
 - `metal2vulkan-degrade-function-storage-assumed` (precision).
   `PrecisionNote::FunctionStorageAssumed`: A vertex or fragment function keeps more private memory
   (its `alloca`s, a call stack among them, or constants held as `Private` variables) than the floor,
@@ -5020,31 +2928,6 @@ bound.
   the source. Another device
   is not bounded past one code (an NVIDIA RTX 5080 Laptop GPU's blend into an 8-bit sRGB attachment
   stored up to 11 codes from Metal's).
-  Also a render pass's clear of a normalized, sRGB, packed 16-bit, half or small-float color
-  attachment to a color whose conversion is in question (a normalized channel's scaled value off a
-  whole code, an sRGB channel inside its range, a value the format does not hold exactly): the
-  device converts the clear color, where Metal's clear rounds each channel to nearest, a tie to
-  even, and truncates a small float's and a shared exponent's mantissas. Vulkan lets the device
-  store either of the two codes closest to a normalized channel's scaled value, asking for the
-  nearest, and devices are measured to take the farther one off a midpoint: NVIDIA's on the RTX 5080
-  Laptop GPU, whose 8- and 16-bit channels' clears went toward zero (`R16Unorm`'s 0.001, 65.535
-  codes, stored 65), ANV on the Iris Xe of RPL-P, whose clear's code also depends on the image (a
-  private optimal image's and one in place over host pages can stand a code apart), and RADV on the
-  Radeon RX 550 (Polaris 12), whose 8- and 10-bit channels' clears take the colour cut to a `half`
-  toward zero (`runtime_lane::color_fills`). So the rule is the spec's on every device, with one
-  measured exception: not for a clear by the load operation of an attachment the pass's render area
-  covers on a driver whose load operation clears as Metal's `Clear` load action does
-  (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on the M3
-  Max), nor for the same clear by that driver's clear command of a whole level and layer (an
-  attachment the pass's first instance leaves out, cleared before the pass; a memoryless
-  attachment's backing; the copy a draw sampling the attachment after a memory barrier at the
-  pass's start reads), measured to store Metal's bytes too; the same clear made otherwise there (a
-  render pass of the attachment alone, or its sample planes) is announced. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
-  format) of a texture of such a format the device renders, which the device's clear of the color
-  writes, to a color whose conversion is in question against Metal's fill packing (a normalized
-  channel's scaled value off a whole code, an sRGB channel inside its range, a value a half, small
-  float or shared exponent does not hold exactly): Metal's fill rounds a tie half up and takes an
-  sRGB channel's code whose decoded value is nearest.
 - `metal2vulkan-degrade-device-interpolation` (precision). `PrecisionNote::DeviceInterpolation`: A
   fragment function reads a varying the device interpolates (`center_perspective`, `centroid`,
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does
@@ -5166,9 +3049,7 @@ bound.
   `pixel-sampler-scaling`'s bound. A sample through a state of nearest filters, one level and no
   anisotropy hands the device its texel's centre instead, where the device reads exactly Metal's
   texel but at a negative subnormal coordinate, whose `floor` is the device's
-  (`device-denormals`' reading, which this note records for such a sampler). Announced at the first
-  draw or dispatch of a pipeline that records it while the device holds a sampler state of pixel
-  coordinates.
+  (`device-denormals`' reading, which this note records for such a sampler).
 - `metal2vulkan-degrade-half-output-precision` (precision). `PrecisionNote::HalfOutputPrecision`: A
   fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to an
   attachment the pipeline has, and either its module is compiled without fast math
@@ -5245,10 +3126,8 @@ bound.
   function writes `[[point_size]]`, or a mesh function that outputs points `set_point_size`, on a
   device whose `pointSizeRange` ends below Metal's largest point, 511 pixels
   (`Limits::max_point_size`: 255 on ANV, 256 on lavapipe). A line or triangle mesh's size draws
-  nothing, and its function records no note. Announced at the first draw of such a pipeline that
-  rasterizes points: a draw of `MTLPrimitiveTypePoint`, or a mesh draw of a mesh function that
-  outputs points. A draw of lines or triangles of the same pipeline is Metal's exactly and
-  announces nothing.
+  nothing, and its function records no note. The render pipeline state carries the note whatever
+  primitive a draw of it takes; a draw of lines or triangles of it is Metal's exactly.
 - `metal2vulkan-degrade-clipped-coverage-split` (precision). `PrecisionNote::ClippedCoverageSplit`:
   A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]` on a device whose
   rasterizer is not Apple's (`DriverWorkaround::ClippedCoverageNotMetals`): Apple's GPU draws a
@@ -5428,7 +3307,7 @@ bound.
   macOS 27 identity, whose widening, narrowing, `float` `fneg` and `fabs` and `half` `fabs` were
   measured to answer Metal's bits (every `half` widened, moved through a select, a phi of a
   `half` and of a `half2`, a later block and `fabs`, and 98,368 `float` words negated and taken
-  the magnitude of, on Metal and on the runtime, `runtime_lane::nan_moves`), a `float` `fneg` or
+  the magnitude of, on Metal and on the runtime), a `float` `fneg` or
   `fabs`, a `half`'s widening to `float`, a `half` `fabs`, and a module's reads and encodes of a
   `half`'s bits record no note and require `VkProperty::MetalNanMoves`. The exemption stops where
   the module carries a widened `half` out of the registers before narrowing it (a store to a stage
@@ -5500,7 +3379,7 @@ bound.
   most `2 × 2^-n`). Apple's documentation states neither the slope measure nor the unit. A draw of
   lines is not biased, as Metal biases triangles alone.
 - `metal2vulkan-degrade-swizzled-opaque-black-border` (precision).
-  `PrecisionNote::SwizzledOpaqueBlackBorder`: A sampler on `metal2vulkan-rt` that reads its
+  `PrecisionNote::SwizzledOpaqueBlackBorder`: A sampler that reads its
   border (`ClampToZero` or `ClampToBorderColor` on an axis, both of which read the sampler's
   colour) with an opaque-black border colour. A sampler state carries it as a static note
   (`SamplerState::precision_note`), decided by its descriptor alone on every device; a compute or
@@ -5511,9 +3390,7 @@ bound.
   `borderColorSwizzleFromImage` (`VK_EXT_border_color_swizzle`): Vulkan leaves it undefined unless
   the sampler names the view's mapping, which a sampler that meets every view cannot, and the
   NVIDIA driver reads `(0, 0, 0, 1)`, where Metal reads the border colour in the format's channels
-  through the swizzle. A device with the feature reads Metal's texel. `metal2vulkan-runtime`
-  announces none: it makes the sampler for the view's mapping where it can, and refuses the pair
-  otherwise (`metal::sampler::check_border_view`).
+  through the swizzle. A device with the feature reads Metal's texel.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,
@@ -5530,7 +3407,7 @@ bound.
   `float` conversion of the four named formats on MoltenVK, Metal's own there. **Exempt:** on a
   profile that takes `DriverDeviation::MetalPackConversions`, MoltenVK on Apple's GPUs of the
   Apple M3 Max's macOS 27 identity, the forms measured to answer Metal's at every code and every
-  `half` (on Metal and on the runtime, `runtime_lane::pack_conversions`) record no note and
+  `half` (on Metal and on the runtime) record no note and
   require `VkProperty::MetalPackConversions`: `unorm565` in `float`, and in `half` `unorm4x8`,
   `snorm4x8`, `unorm10a2` and `unorm565` both ways and `unorm2x16` and `snorm2x16` packed. The
   sRGB format, `unorm10a2` in `float` (9,163 of 131,072 unpacked words and 1,257 of 3,083,776
@@ -5559,10 +3436,7 @@ bound.
   function decodes the same way: such a stage records the note as a specialized note, holding
   where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which the binding plan
   gives from the textures the command makes resident or binds), so a reading of the module alone
-  holds it and a draw or dispatch whose command can name one announces it. The runtime also
-  announces it naming the texture, at the first command that binds a heap set holding it (whether
-  or not its function reads it) or as it is placed in a set a command buffer that bound the set
-  and has not completed may read through.
+  holds it, and so does a command that can name one.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

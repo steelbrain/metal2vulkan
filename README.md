@@ -135,7 +135,7 @@ For the runtime, start at [its README](crates/metal2vulkan-rt/README.md).
 
 | Document | Read it when |
 |---|---|
-| [docs/API.md](docs/API.md) | You use the translator's API: devices, libraries, pipelines, binding, caching, errors; and the runtime's degrade notices |
+| [docs/API.md](docs/API.md) | You use the translator's API: devices, libraries, pipelines, binding, caching, errors; and the runtime's precision notes |
 | [Runtime README](crates/metal2vulkan-rt/README.md) | You use the Metal API on Vulkan |
 | [docs/HOWTO.md](docs/HOWTO.md) | You integrate: tools, caching, failures, isolation, the runtime's shader cache |
 | [docs/RUNTIME-PORTING.md](docs/RUNTIME-PORTING.md) | You port Metal calls (Objective-C or metal-rs) to the runtime |
