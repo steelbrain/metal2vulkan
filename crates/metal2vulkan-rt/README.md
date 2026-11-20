@@ -1878,7 +1878,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   it: `wide_bindings` is 4.6% slower on an RTX 3090 and 6.9% slower on an Iris Xe and 9.3% faster
   on a Radeon 780M; `dispatch_chain` 3.0% slower on the RTX 3090; `bind_2000` 25.4% slower in
   GPU time on the RTX 3090 with host time level; the other eight harness rows level on all three
-  cards (jobs m3-max-58429, m3-max-58430, m3-max-58431). Fields past the window go to a 16-byte
+  cards (jobs m3-max-58429, m3-max-58430, m3-max-58431). In a states-only play of all 34
+  recorded streams on lavapipe (jobs m3-max-58471, m3-max-58477, m3-max-58478, m3-max-58483), no
+  recorded kernel keeps a field in its block: 171 kernel stages push past 232 bytes, over
+  2,805,608 dispatches, with 0 fields in a block. The room the tail takes moves fields into a
+  block for 41 fragment stages only: 374 fields over 23,690 draws. `wide_bindings`' loss is a
+  harness row's, not a recorded guest's. Fields past the window go to a 16-byte
   aligned block in the parameter ring, whose address is a field in the window. A kernel whose
   buffers' bounds do not all fit beside its addresses rings one: one of 12 buffers pushes all of
   its fields, and one of 24 or 30 pushes 22 addresses beside the block's. `Counters::metrics`'
@@ -2345,8 +2350,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   Shading Language specification supports imageblocks on macOS for Apple silicon only (sections
   5.6 and 6.14), so a device that answers `supportsImageBlocks` NO gives a guest no imageblock to
   use. Over 34 recorded guest streams, one of them an arm64 macOS 27 boot, two such kernels are
-  made (in ten states), no dispatch binds one, and no stream calls
-  `setImageblockWidth:height:`; the compute encoder has no counterpart for that call.
+  made, no dispatch binds one, and no stream calls `setImageblockWidth:height:`; the compute
+  encoder has no counterpart for that call. One recording, the M3's, makes 10 states refused as
+  `Gap::KernelInput`, the count of its explicit-imageblock makes; none is dispatched (jobs
+  m3-max-58471, m3-max-58477, m3-max-58478 and m3-max-58483, and m3-max-57983 for the count).
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded
