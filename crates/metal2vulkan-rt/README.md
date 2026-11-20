@@ -1670,10 +1670,16 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   writes the buffer's bytes there. Outside the buffer, a load reads zero, from 16 bytes of zeros
   the device keeps in a ring chunk of their own, taken at the first dispatch or draw that checks a
   load, which nothing is bound to and nothing writes; a store or an atomic does nothing, and an
-  atomic answers 0. This holds on every device. An access at a constant offset is not checked: a
-  function's fixed access past a binding shorter than it reaches past the buffer, a fault of the
-  kind above where nothing maps there. An access through a pointer loaded from memory or made
-  from an integer is not checked either: no binding bounds it.
+  atomic answers 0. This holds on every device. An access at a constant offset is not checked,
+  before the bind offset or past it: a draw or dispatch that binds a buffer shorter than the
+  function's constant-offset accesses to it meets the device's own out-of-bounds behaviour, and
+  where nothing maps there that is a fault, which loses the device on NVIDIA's driver and on RADV
+  (above). Three recorded replays, each played through its recording range, hold more than 860,000
+  draws and 530,000 dispatches of kernels that write memory: none bound a buffer shorter than its
+  function's constant-offset accesses, and no function's bounded window of a buffer started before
+  the bind offset (the draws counted on an AMD Radeon 780M, the dispatches on an NVIDIA GeForce RTX
+  5080 Laptop GPU, an AMD Radeon RX 550 and an Intel Iris Xe). An access through a pointer loaded
+  from memory or made from an integer is not checked either: no binding bounds it.
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
