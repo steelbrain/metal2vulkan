@@ -428,7 +428,7 @@ pub fn link(
         mesh::payload(&ifaces)?;
     }
     let mut table = LinkTable::default();
-    let synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
+    let mut synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
         .as_ref()
         .map(tessellation::ControlPlan::slots)
         .unwrap_or_default()

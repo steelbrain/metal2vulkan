@@ -116,9 +116,8 @@ fn draws_map_to_the_vulkan_draw_of_the_same_arguments() {
 #[test]
 fn only_vertex_and_fragment_stages_are_render_stages() {
     use vk::ShaderStage as S;
-    let stages = |modules: &[S], tessellated| {
-        metal_stages(modules.iter().copied(), (tessellated, false), false)
-    };
+    let stages =
+        |modules: &[S], tessellated| metal_stages(modules.iter().copied(), (tessellated, false));
     let tessellation = [
         S::VERTEX,
         S::TESSELLATION_CONTROL,
@@ -126,7 +125,7 @@ fn only_vertex_and_fragment_stages_are_render_stages() {
         S::FRAGMENT,
     ];
     assert_eq!(
-        metal_stages(tessellation.iter().copied(), (false, true), false),
+        metal_stages(tessellation.iter().copied(), (false, true)),
         Ok(vec![
             (Stage::Vertex, S::VERTEX),
             (Stage::Fragment, S::FRAGMENT)
