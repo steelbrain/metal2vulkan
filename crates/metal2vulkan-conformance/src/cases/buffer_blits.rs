@@ -13,7 +13,7 @@
 //!   they landed in encoded order, since three of the four overlap.
 //! - [`overlapping_copies`]: `copyFromBuffer:` between two ranges of **one** buffer, forwards and
 //!   backwards, in shared memory and in private, and one of them applied twice. Metal moves these
-//!   as `memmove` moves them, which is the lane's claim and is what the recording now holds.
+//!   as `memmove` moves them, which is what the recording holds.
 //! - [`empty_ranges`]: a copy of no bytes and a fill of no bytes, each at an offset inside the
 //!   buffer and at one past its end. Plain Metal skips an empty range wherever it lies and runs the
 //!   encoder's other commands, so the row's answer is that nothing changed and the command buffer
@@ -24,16 +24,15 @@
 //! **A case states what its buffers start from.** Metal does not promise what a fresh buffer holds,
 //! so no row here reads a byte it did not write: a private destination is filled with a known byte
 //! before the probe's own commands, which is also why [`any_range`] can compare the two bytes the
-//! probe's first fill leaves alone. The lane reads those two as zero, which is a fresh Private
-//! buffer's contents on both implementations today and nothing Metal guarantees.
+//! probe's first fill leaves alone. Those two read zero on the oracle, a fresh Private buffer's
+//! contents and nothing Metal guarantees.
 //!
-//! **Not ported, and why.** The lane's other tests are about our own hazard tracking, our fences,
-//! `MTLStorageModeManaged` and where `Shared` storage lies on a device without unified memory —
-//! each an expectation about the venue's memory model rather than a value Metal produced, and the
-//! managed and system-memory rows have no answer at all on a Metal-less host. Its out-of-range
-//! refusals are not portable either: our side returns a typed error, and finding out what plain
-//! Metal does with a copy that runs past a buffer means handing the GPU an out-of-bounds transfer,
-//! which this round does not do. Those stay lanes.
+//! **Not a case, and why.** Our own hazard tracking, our fences, `MTLStorageModeManaged` and where
+//! `Shared` storage lies on a device without unified memory are each an expectation about the
+//! venue's memory model rather than a value Metal produced, and the managed and system-memory rows
+//! have no answer at all on a Metal-less host. A copy that runs past a buffer is not a case either:
+//! finding out what plain Metal does with one means handing the GPU an out-of-bounds transfer,
+//! which no case does.
 //!
 //! Nothing here can fault a GPU: every command is a buffer copy or a buffer fill inside its
 //! buffer, there is no shader, no texture and no loop, and every wait is bounded.
@@ -47,7 +46,7 @@ use crate::work::{Resource, Step, Storage, Work};
 const START: u8 = 0xcd;
 
 /// `length` bytes, byte `i` holding `i % 251`: a period no power of two divides, so a copy that
-/// lands at the wrong offset shows. The lane's own pattern.
+/// lands at the wrong offset shows.
 fn counting(length: usize) -> Vec<u8> {
     (0..length).map(|index| (index % 251) as u8).collect()
 }
@@ -308,7 +307,7 @@ static EMPTY_RANGES: Row = Row {
 /// The 600 KiB [`EVERY_FILL_SIZE`] fills.
 const BIG: u64 = 600 * 1024;
 
-/// The fills of [`EVERY_FILL_SIZE`]: the lane's own, sized to cross 64 KiB, 128 KiB and 256 KiB
+/// The fills of [`EVERY_FILL_SIZE`], sized to cross 64 KiB, 128 KiB and 256 KiB
 /// and to overlap each other, so the answer also states which fill ran last where two meet.
 const FILLS: [(u64, u64, u8); 5] = [
     (0, BIG, 0x11),
@@ -409,7 +408,7 @@ mod tests {
     const EVERY_ROW: [&Row; 4] = [&ANY_RANGE, &OVERLAPPING, &EMPTY_RANGES, &EVERY_FILL_SIZE];
 
     /// The bytes the private destination of [`ANY_RANGE`] holds once its four commands have run, as a
-    /// reader of the lane's own expectation would write it: every byte stated, nothing read that
+    /// reader of the expectation would write it: every byte stated, nothing read that
     /// nothing wrote.
     fn any_range_expected() -> Vec<u8> {
         let mut expected = vec![0x5a; 64];
@@ -530,12 +529,12 @@ mod tests {
         }
     }
 
-    /// **The cross-check the port owes the lane.** Metal's own bytes, as the committed recordings
-    /// hold them, are the bytes the lane computes in Rust: the fills and the copy of any range, and
-    /// the overlapping copies as `memmove` moves them. The lane never ran Metal, so this is what
-    /// ties its expectation to the oracle.
+    /// **The cross-check of the recordings.** Metal's own bytes, as the committed recordings hold
+    /// them, are the bytes computed in Rust: the fills and the copy of any range, and the
+    /// overlapping copies as `memmove` moves them. This is what ties the Rust expectation to the
+    /// oracle.
     #[test]
-    fn metals_bytes_are_the_lanes_expectation() {
+    fn metals_bytes_are_the_expectation() {
         assert_eq!(recorded(&any_range(), "output"), any_range_expected());
 
         let overlapping = overlapping_copies();
@@ -549,9 +548,9 @@ mod tests {
     }
 
     /// The runs of the 600 KiB row are the ranges the fills name, in the order the fills ran, so
-    /// the recording's projection and the lane's own expectation agree.
+    /// the recording's projection and the expectation agree.
     #[test]
-    fn metals_fill_runs_are_the_lanes_ranges() {
+    fn metals_fill_runs_are_the_fills_ranges() {
         let mut expected = vec![0u8; BIG as usize];
         for (offset, length, value) in FILLS {
             expected[offset as usize..(offset + length) as usize].fill(value);

@@ -2,12 +2,11 @@
 //!
 //! A shader may ask for `get_width(lod)` at a level the texture does not have, and Metal answers
 //! something rather than refusing: `max(1, e >> (lod & 255))` of the first level's extent, a shift
-//! of 32 or more answering 1. The lane holds that as a rule measured on this M3 Max, so the lane's
-//! own check is the rule against itself.
+//! of 32 or more answering 1, a rule measured on an Apple M3 Max.
 //!
-//! **The port re-measures it here.** Record mode runs both kernels on Metal at every level of
-//! `LEVELS`, so each recording holds Metal's own words and the rule becomes a committed
-//! cross-check (the test `every_recorded_extent_is_the_lanes_rule`). The levels are the ones that
+//! **Measured here.** Record mode runs both kernels on Metal at every level of `LEVELS`, so each
+//! recording holds Metal's own words and the rule is a committed cross-check (the test
+//! `every_recorded_extent_is_the_level_rule`). The levels are the ones that
 //! make the rule visible: inside the texture's three levels, past them, at 31 and 32 (a shift the
 //! width of the word), at 255 and 256 (where Metal takes the level's low eight bits), and at
 //! `u32::MAX`.
@@ -258,7 +257,7 @@ impl Case for LevelSizes {
 mod tests {
     use super::*;
 
-    /// The words the lane's rule gives at `level` for `which`'s kernel, word by word: what the
+    /// The words the rule gives at `level` for `which`'s kernel, word by word: what the
     /// recording is held against, and the one thing in this module the case itself does not use.
     fn rule(which: Which, level: u32) -> Vec<u32> {
         match which {
@@ -293,13 +292,13 @@ mod tests {
         assert_eq!(extent(100, u32::MAX), 1);
     }
 
-    /// Every word of every committed recording is the lane's rule's.
+    /// Every word of every committed recording is the rule's.
     ///
-    /// This is the cross-check the port exists for: the recordings hold what Metal answered on
-    /// this M3 Max, and the rule is what the lane fitted. A difference is a finding — Metal's
+    /// The recordings hold what Metal answered on an Apple M3 Max, and the rule is fitted. A
+    /// difference is a finding — Metal's
     /// answer at a level past the texture moved — rather than something to edit away.
     #[test]
-    fn every_recorded_extent_is_the_lanes_rule() {
+    fn every_recorded_extent_is_the_level_rule() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         for which in [Which::Sampled, Which::Storage] {
@@ -343,7 +342,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "Metal's recorded extents differ from the lane's rule:\n{}",
+            "Metal's recorded extents differ from the rule:\n{}",
             differ.join("\n")
         );
         assert!(

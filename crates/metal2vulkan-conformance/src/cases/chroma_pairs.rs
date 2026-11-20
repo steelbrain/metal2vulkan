@@ -734,9 +734,9 @@ impl Case for ChromaTexels {
             "pipeline",
             side.compute_pipeline(library, self.access.entry()),
         )?;
-        // The texture is made with its bytes, which is the whole of what the case feeds it: the
-        // lane's own fresh-texture row (a new texture reads opaque black) is a separate question
-        // from what Metal's decode does with known codes, and this case asks the second.
+        // The texture is made with its bytes, which is the whole of what the case feeds it: what
+        // a fresh texture reads is a separate question from what Metal's decode does with known
+        // codes, and this case asks the second.
         let texture = made(
             sites,
             "texture",

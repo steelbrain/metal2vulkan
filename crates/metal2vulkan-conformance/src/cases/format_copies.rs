@@ -6,25 +6,23 @@
 //! between stencil formats. And the stencil view `X32Stencil8` of a `Depth32FloatStencil8` texture
 //! copies the **stencil**, a byte a texel, leaving the depth as it was, with any blit option.
 //!
-//! **The port re-measures both here**: every call is public Metal, so record mode runs the program
-//! and each recording holds the bytes Metal moved. The lane's expectation is that the destination
-//! and the source both read back what was written, which the case states as the recording rather
-//! than as an assertion (the test `every_recorded_copy_moved_the_bytes`).
+//! **Measured here**: every call is public Metal, so record mode runs the program and each
+//! recording holds the bytes Metal moved. The expectation is that the destination and the source
+//! both read back what was written, which the case states as the recording rather than as an
+//! assertion (the test `every_recorded_copy_moved_the_bytes`).
 //!
 //! **One case per pair**, so a venue that holds no texture of one format answers its typed refusal
 //! there and counts as lacking the feature instead of taking fifteen other pairs with it.
 //!
-//! **Not ported, and why.** The lane's refusal rows copy between formats of different units, and
-//! between a combined format and another. Our runtime refuses those typed, which is the lane's
-//! subject — but recording them would mean **encoding an invalid copy on plain Metal**, where the
-//! behaviour is undefined and the device may fault. The round's safety rule forbids that outright,
-//! and Metal's API validation layer is a second fact rather than a licence to run the thing it
-//! objects to. Those rows stay a lane. The same goes for the lane's CPU copies through the stencil
-//! view of a shared combined texture, which are safe but want the view's host reads, a shape no
-//! case here needed yet.
+//! **Not a case, and why.** Copies between formats of different units, and between a combined
+//! format and another: recording them would mean **encoding an invalid copy on plain Metal**, where
+//! the behaviour is undefined and the device may fault. The suite's safety rule forbids that
+//! outright, and Metal's API validation layer is a second fact rather than a licence to run the
+//! thing it objects to. CPU copies through the stencil view of a shared combined texture are safe
+//! but want the view's host reads, a shape no case here has.
 //!
-//! Every texture is one row of four texels, private, and read back through a buffer, as the lane's
-//! probes read theirs. Depth values lie in `[0, 1]`, so no device's clamping decides.
+//! Every texture is one row of four texels, private, and read back through a buffer. Depth values
+//! lie in `[0, 1]`, so no device's clamping decides.
 //!
 //! Nothing here can fault a GPU: blit copies between textures the program makes, of formats whose
 //! copy unit matches, no dispatch, no draw and no loop.
@@ -37,7 +35,7 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 /// Every texture's width; each is one row.
 const W: u64 = 4;
 
-/// Four texels of each size, as the lane's probes wrote them: `Depth32Float` values in `[0, 1]`,
+/// Four texels of each size: `Depth32Float` values in `[0, 1]`,
 /// and 16-bit and 8-bit words with their top bits set and clear.
 const FOUR: [u8; 16] = [
     0x00, 0x00, 0x80, 0x3e, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x40, 0x3f, 0x00, 0x00, 0x80, 0x3f,
@@ -59,7 +57,7 @@ struct Pair {
     target: bool,
 }
 
-/// Every pair the lane copies between, in its order.
+/// Every pair the family copies between, in order.
 const PAIRS: [Pair; 16] = [
     Pair {
         name: "format-copies-d32f-to-r32f",
@@ -192,7 +190,7 @@ impl FormatCopies {
     }
 
     /// The usage the pair's textures are made with: shader-read, and a render target where the
-    /// pair says so. The lane states this per pair because Metal's layout of a render target
+    /// pair says so. The case states this per pair because Metal's layout of a render target
     /// differs from a read-only texture's, and a copy is what the case measures.
     fn usage(&self) -> u32 {
         let usage = if self.pair().target {
@@ -356,8 +354,8 @@ mod tests {
     /// source: Metal's copy between a depth or stencil format and a colour format of its unit
     /// moves the bytes and leaves the source as it was.
     ///
-    /// This is the cross-check the port exists for: the lane asserts it, and here the recording
-    /// states Metal's own answer, so a release in which Metal converts instead of copying shows up
+    /// The recording states Metal's own answer, so a release in which Metal converts instead of
+    /// copying shows up
     /// as a moved recording and this test says which pair.
     #[test]
     fn every_recorded_copy_moved_the_bytes() {

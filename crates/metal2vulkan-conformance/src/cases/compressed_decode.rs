@@ -12,9 +12,7 @@
 //! the recording moves with it and the rule's test says which side moved.
 //!
 //! **One case per format**, so a venue that holds no texture of one answers its typed refusal there
-//! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature). The
-//! lane walks the ten formats in one test, where a device missing one would take the whole lane
-//! down.
+//! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature).
 //!
 //! Each case is four 16 x 16 textures of pseudorandom blocks — a splitmix64 stream at fixed seeds,
 //! so the bytes are the bytes the rule was fitted on — read whole by the owned fixture

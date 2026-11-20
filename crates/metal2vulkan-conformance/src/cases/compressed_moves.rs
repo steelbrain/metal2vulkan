@@ -1,10 +1,10 @@
 //! How block-compressed textures move their blocks.
 //!
-//! The consumer's x86 guests hold BC textures, and corrupt texels on NVIDIA were what made this a
-//! lane. Its subject is every BC format's blocks moving through shapes whose levels end in partial
-//! blocks: a 2D texture 13 x 7 of four levels, a 2D array 10 x 6 of three slices and two levels, a
-//! cube 12 x 12 of three levels, a 3D texture 9 x 5 x 3 of two levels, and a 2D texture 8 x 8
-//! whose last two levels are smaller than a block. Per shape, five steps:
+//! The consumer's x86 guests hold BC textures. This family moves every BC format's blocks through
+//! shapes whose levels end in partial blocks: a 2D texture 13 x 7 of four levels, a 2D array 10 x 6
+//! of three slices and two levels, a cube 12 x 12 of three levels, a 3D texture 9 x 5 x 3 of two
+//! levels, and a 2D texture 8 x 8 whose last two levels are smaller than a block. Per shape, five
+//! steps:
 //!
 //! - `put`: `replaceRegion:` of every level and slice whole, rows padded two blocks past their
 //!   blocks and a 3D image one block past its rows, then one block replaced alone at block (1, 0)

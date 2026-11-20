@@ -18,8 +18,8 @@
 //! second pitch is why this family is worth recording at all: plain Metal is the behavioural
 //! oracle, the validated run is a second recorded fact, and the suite keeps the two apart
 //! ([`crate::validated`]). Nothing here is a *descriptor* Metal's validation rejects, which is the
-//! shape the round's safety rule forbids; a copy its validation objects to still returns, and the
-//! lane's probe measured these rows on two machines.
+//! shape the suite's safety rule forbids; a copy its validation objects to still returns, and the
+//! probe measured these rows on two machines.
 //!
 //! Per level and pitch the case records two reads:
 //!

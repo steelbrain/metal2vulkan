@@ -12,8 +12,8 @@
 //! fixture's fullscreen triangle under a write mask of **no channel** — a draw that writes no
 //! texel, which still makes the pass a drawing pass — and then a pass that loads the same codes and
 //! encodes nothing at all. Metal's answer to both is **run** here rather than copied: record mode
-//! takes it on this M3 Max, and the module's own tests cross-check the recordings against the
-//! lane's table, which is the evidence the port owes the lane.
+//! takes it on an Apple M3 Max, and the module's own tests cross-check the recordings against the
+//! table.
 //!
 //! One case a format, so a format a device cannot render is its own row rather than a refusal that
 //! costs the other five their sites.
@@ -45,10 +45,10 @@ const FIXTURE: &str = "rt6_resolves";
 const VERTEX: &str = "rt6_resolve_full";
 const FRAGMENT: &str = "rt6_resolve_white";
 
-/// The target's side, as the lane's is.
+/// The target's side.
 const SIDE: u32 = 4;
 
-/// The depth the lane's draw takes, which its vertex buffer holds as one `float`.
+/// The depth the draw takes, which its vertex buffer holds as one `float`.
 const DEPTH: f32 = 0.5;
 
 /// What one case asks about: a format, the bytes of one texel, and what the host writes into
@@ -71,7 +71,7 @@ struct Subject {
 }
 
 /// The six signed normalized formats Metal's tile store rewrites, each with its channel's minimum
-/// code, and `RGB9E5Float` with the unnormalized word the lane measured (mantissas 1, 2 and 3
+/// code, and `RGB9E5Float` with the unnormalized word measured (mantissas 1, 2 and 3
 /// under the exponent 20: its largest mantissa below 256).
 const SUBJECTS: &[Subject] = &[
     Subject {
@@ -132,12 +132,12 @@ const SUBJECTS: &[Subject] = &[
     },
 ];
 
-/// The `RGB9E5Float` word the lane writes: mantissas 1, 2 and 3 under the exponent 20.
+/// The `RGB9E5Float` word the case writes: mantissas 1, 2 and 3 under the exponent 20.
 const UNNORMALIZED: [u8; 4] = (1u32 | 2 << 9 | 3 << 18 | 20 << 27).to_le_bytes();
 
 /// The word Metal's store leaves in its place: mantissas 128, 256 and 384 under the exponent 13,
-/// which is the same value normalized. The lane's table, which [`tests`] checks the recording
-/// against, and nothing else reads.
+/// which is the same value normalized. The table, which [`tests`] checks the recording against,
+/// and nothing else reads.
 #[cfg(test)]
 const NORMALIZED: [u8; 4] = (128u32 | 256 << 9 | 384 << 18 | 13 << 27).to_le_bytes();
 
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// Metal's store raised every signed normalized minimum code to the code above it, in every
-    /// texel of the tile, and a pass that drew nothing kept every one: the lane's claim, measured.
+    /// texel of the tile, and a pass that drew nothing kept every one.
     #[test]
     fn the_recorded_drawing_pass_raises_every_snorm_minimum() {
         for subject in SUBJECTS {

@@ -893,7 +893,7 @@ mod tests {
     /// Metal's own 32x32 tile threadgroup, as the recording holds it, is the formula: every
     /// thread's record at the index the formula gives, and every cell added one once.
     #[test]
-    fn the_recorded_32x32_threadgroup_is_the_lanes_formula() {
+    fn the_recorded_32x32_threadgroup_is_the_formula() {
         let recorded = only_outcome("tile-order-32x32");
         let records = words(at(&recorded, "case/32x32/records"));
         for simdgroup in 0..SIDE {
@@ -920,7 +920,7 @@ mod tests {
     /// Metal's threadgroups of even sides, as the recording holds them, are the quad order,
     /// and the cells outside a threadgroup keep what they held.
     #[test]
-    fn the_recorded_even_threadgroups_are_the_lanes_quad_order() {
+    fn the_recorded_even_threadgroups_are_the_quad_order() {
         let recorded = only_outcome("tile-order-even-threadgroups");
         for shape in EVEN_SHAPES {
             let [w, h] = shape[0];

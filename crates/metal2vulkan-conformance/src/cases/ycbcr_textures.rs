@@ -477,8 +477,8 @@ mod tests {
         assert_eq!(formats.len(), 69, "{formats:?}");
         let queries = FormatDescriptors.queries();
         assert_eq!(queries.len(), formats.len() * 4);
-        // Only the 2D descriptors are asked whether Metal makes a texture: those are the ones the
-        // lane establishes Metal answers nil for.
+        // Only the 2D descriptors are asked whether Metal makes a texture: those are the ones
+        // Metal answers nil for.
         let asked = queries.iter().filter(|(_, asks)| *asks).count();
         assert_eq!(asked, formats.len() * 2);
         for (query, asks) in &queries {

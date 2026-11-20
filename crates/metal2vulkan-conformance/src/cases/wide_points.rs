@@ -15,10 +15,10 @@
 //! centre on each axis and `0 <= z <= w`, and Vulkan culls one whose centre leaves the clip volume
 //! at `w`, so these rows are exactly where the two part.
 //!
-//! The case records what Metal wrote, not the lane's table: record mode runs every draw on native
-//! Metal. The lane's own table (`PROBE_9`) and its fitted rule (`metal_pixels`) are a cross-check
-//! this module's tests apply to the recorded coverages, so the port says whether the two agree
-//! instead of copying one into the other.
+//! The case records what Metal wrote: record mode runs every draw on native Metal. A probe's table
+//! (`PROBE_9`) and a fitted rule (`metal_pixels`) are a cross-check this module's tests apply to
+//! the recorded coverages, so the case says whether the two agree instead of copying one into the
+//! other.
 //!
 //! **All 294 draws go into one command buffer**: a pass a row and a blit a row, the blits writing
 //! one row of a single read-back buffer each, so the whole case costs one commit and one wait
@@ -384,7 +384,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// No pixel drawn, in the lane's table.
+    /// No pixel drawn, in the probe's table.
     const NONE: u8 = u8::MAX;
 
     /// The pixel a Metal probe stored, `8 x + y`, through each viewport at each offset along `x`,
@@ -456,7 +456,7 @@ mod tests {
         ],
     ];
 
-    /// The pixels `(x, y)` the lane's fitted rule keeps of a point of `size` at the clip-space
+    /// The pixels `(x, y)` the fitted rule keeps of a point of `size` at the clip-space
     /// `(x, y, z, w)` through `viewport` in an 8 by 8 target: Metal keeps the point while its
     /// centre lies within `1.5 w` on each axis and `0 <= z <= w`, and covers the pixels whose
     /// centres its square `[c - s/2, c + s/2)` reaches, inside the pixels the viewport overlaps.
@@ -507,8 +507,8 @@ mod tests {
         pixels.iter().map(|(x, y)| format!("{x},{y}")).collect()
     }
 
-    /// The lane's table is its own fitted rule's, row for row: the two expectations the lane
-    /// carried agree before either is compared with Metal's bytes.
+    /// The probe's table is the fitted rule's, row for row: the two expectations agree before
+    /// either is compared with Metal's bytes.
     #[test]
     fn the_lane_s_table_is_its_own_fitted_rule_s() {
         let mut checked = 0usize;
@@ -545,12 +545,11 @@ mod tests {
         assert_eq!(named.len(), rows.len());
     }
 
-    /// Every coverage Metal recorded holds exactly the pixels the lane's fitted rule keeps.
+    /// Every coverage Metal recorded holds exactly the pixels the fitted rule keeps.
     ///
-    /// This is the cross-check the port owes the lane: the lane carried a probe's table and a rule,
-    /// the case carries Metal's coverages, and this says whether they agree — over the rows the
-    /// table never reached as well, since the rule covers those. It reads the recording, so it runs
-    /// where there is no GPU.
+    /// The case carries Metal's coverages, and this says whether they agree with the rule — over
+    /// the rows the table never reached as well, since the rule covers those. It reads the
+    /// recording, so it runs where there is no GPU.
     #[test]
     fn metal_s_recorded_coverages_hold_the_fitted_rule_s_pixels() {
         let case = WidePoints;
@@ -593,7 +592,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{} of {checked} recorded coverages differ from the lane's fitted rule",
+            "{} of {checked} recorded coverages differ from the fitted rule",
             differ.len()
         );
     }

@@ -11,24 +11,20 @@
 //! The fixture takes `uint size [[threads_per_threadgroup]]`, a **scalar**, and a scalar carries
 //! the x component alone: a threadgroup of 8 by 4 gives `size == 8` while `t` runs to 31, so
 //! `stage[size - 1u - t]` underflows and the kernel reads its `threadgroup` array far out of
-//! bounds. Measured here on the oracle while porting this lane, by writing those rows and reading
-//! what came back: the 8-by-4 row's words began at 6 (`size - 2 - t` for `size == 8`) and its tail
-//! was uninitialised scratch, and Metal's own API validation named it —
-//! `component 1: 4 must be <= 1 for size [[ threads_per_threadgroup ]]`. The rows were removed. The
-//! lane never dispatches this fixture in more than one dimension, so the lane is not wrong; what is
-//! missing is the fixture saying so, and a Metal fact about where
+//! bounds. Measured on the oracle: the 8-by-4 row's words began at 6 (`size - 2 - t` for
+//! `size == 8`) and its tail was uninitialised scratch, and Metal's own API validation named it —
+//! `component 1: 4 must be <= 1 for size [[ threads_per_threadgroup ]]`. So no row dispatches this
+//! fixture in more than one dimension, and a Metal fact about where
 //! `thread_index_in_threadgroup` puts a thread of a two-dimensional threadgroup needs a kernel that
 //! takes the builtin as a vector.
 //!
-//! **Metal's answer is run, not copied.** The lane never ran Metal: it computes its expectation
-//! from a formula in Rust (this crate's own `tests::metals_words_are_the_lanes_formula` keeps that
-//! formula, as the readable model, and checks the recorded words against it). So the words here are
-//! the words Metal's threads wrote on the oracle, and the lane's formula is now evidence rather
-//! than a comment.
+//! **Metal's answer is run, not copied.** The words here are the words Metal's threads wrote on the
+//! oracle, and a formula in Rust (`tests::metals_words_are_the_formula` keeps it, as the readable
+//! model) is checked against them.
 //!
-//! **The device's limit is pinned by a dispatch, not by a getter.** The lane reads
-//! `maxTotalThreadsPerThreadgroup` off the state and sizes its dispatch from it, which cannot
-//! work where there is no Metal: the number is the *device's* (Metal's 1024 on Apple's GPUs, 512
+//! **The device's limit is pinned by a dispatch, not by a getter.** Sizing a dispatch from
+//! `maxTotalThreadsPerThreadgroup` off the state cannot work where there is no Metal: the number
+//! is the *device's* (Metal's 1024 on Apple's GPUs, 512
 //! on a device that emulates 32-lane simdgroups in 32 KiB of shared memory), and a venue that
 //! answers less is a smaller device rather than a divergence. So every row here states a fixed
 //! threadgroup, Metal's own, and the row at Metal's 1024 is **last**: a venue that cannot hold it
@@ -38,13 +34,13 @@
 //! `staticThreadgroupMemoryLength`, which is the shader's own number and so the same wherever the
 //! shader is compiled.
 //!
-//! **Not ported, and why.** The lane also dispatches a threadgroup of 2048 threads, past Metal's
-//! 1024, and a threadgroup within Metal's limit but past the device's through
-//! `dispatchThreadgroupsWithIndirectBuffer:`. Both are rows about an over-limit threadgroup, which
-//! this round may not hand a GPU: Metal's API validation asserts on it and plain Metal leaves it
-//! undefined. The over-limit direct form is [`past_metals_limit`], which carries the Apple M4
-//! measurement this tree already holds and forbids re-recording; the indirect form needs a
-//! dispatch call the suite's vocabulary does not have, and stays a lane.
+//! **Over-limit threadgroups.** A threadgroup of 2048 threads, past Metal's 1024, and a threadgroup
+//! within Metal's limit but past the device's through `dispatchThreadgroupsWithIndirectBuffer:`.
+//! Both are rows about an over-limit threadgroup, which no case may hand a GPU: Metal's API
+//! validation asserts on it and plain Metal leaves it undefined. The over-limit direct form is
+//! [`past_metals_limit`], which carries the Apple M4 measurement this tree already holds and
+//! forbids re-recording; the indirect form needs a dispatch call the suite's vocabulary does not
+//! have.
 //!
 //! Nothing here can fault a GPU: one compute pass a row, one shared buffer, no texture, no loop,
 //! and every threadgroup inside Metal's own 1024 threads.
@@ -274,7 +270,7 @@ const NEVER_RE_RECORD: &str = "a threadgroup of 2048 threads is past Metal's 102
 /// The chip the carried measurement was taken on.
 const CARRIED_CHIP: &str = crate::recording::APPLE_M4;
 
-/// The threads the over-limit case dispatches: twice Metal's limit, as the lane dispatches it.
+/// The threads the over-limit case dispatches: twice Metal's limit.
 const PAST_METAL: u32 = 2 * METAL_THREADS;
 
 /// The runs the carried measurement stands on. The probe behind it reported one answer for each
@@ -404,7 +400,7 @@ mod tests {
     /// The model of what the kernel writes: for threadgroup `g` of `size`
     /// threads at thread `t`, the staged value of thread `size - 1 - t` shuffled down one lane,
     /// lane 31 filled from lane 0's `float4(0)`.
-    fn lanes_formula(size: u32, g: u32, t: u32) -> [f32; 4] {
+    fn kernel_model(size: u32, g: u32, t: u32) -> [f32; 4] {
         if t % 32 == 31 {
             [0.0; 4]
         } else {
@@ -470,12 +466,11 @@ mod tests {
         assert_eq!(digests.len(), ROWS.len());
     }
 
-    /// **The cross-check the port owes the lane.** The words Metal wrote, as the committed
-    /// recording holds them, are the words the lane's formula predicts, for every thread of every
-    /// threadgroup of every row. The lane's expectation was never tied to Metal — it was computed
-    /// in Rust and compared against our own runtime — and this is what ties it.
+    /// **The cross-check of the formula.** The words Metal wrote, as the committed recording holds
+    /// them, are the words the formula predicts, for every thread of every threadgroup of every
+    /// row. The formula is computed in Rust, and this is what ties it to Metal.
     #[test]
-    fn metals_words_are_the_lanes_formula() {
+    fn metals_words_are_the_formula() {
         let case = simd_scratch();
         let recording = crate::recording::read(case.name()).expect("the committed recording");
         let answer = recording
@@ -500,7 +495,7 @@ mod tests {
             let layout = row.layout();
             for g in 0..GROUPS {
                 for t in 0..row.size() {
-                    let wanted = lanes_formula(row.size(), g, t);
+                    let wanted = kernel_model(row.size(), g, t);
                     for (channel, &word) in wanted.iter().enumerate() {
                         let at = layout.at(0, g, t * 4 + channel as u32);
                         let found =

@@ -7,20 +7,17 @@
 //! texture at byte 0 of a shared placement heap of Metal's size, every byte of the heap set to
 //! `0xEE` through a buffer over it, and the heap's changed bytes read back.
 //!
-//! **One case per format**, which is the port's one real gain over the lane. The lane walks the 50
-//! formats in one test and, where the device holds no texture of one, prints a line and
-//! `continue`s to the next format — so a format the venue cannot make leaves the test green with
-//! nothing compared and nothing counted. Here the venue's typed refusal stops that format's case
+//! **One case per format** of the 50, so the venue's typed refusal stops that format's case
 //! alone, and the suite counts it as [`LacksFeature`](crate::verdict::Verdict::LacksFeature):
 //! neither a pass nor a failure, and visible in the matrix. That matters on lavapipe, which holds
 //! no texture of several of these formats.
 //!
-//! **The fidelity is the lane's and no better**: Metal's answer per format is the 16-hex-digit
-//! digest of its 20 cases' lines, each line `<case> <answer>` where the answer is itself the digest
-//! of that case's read-back lines. The probes kept the outer digest alone, so the case's site is
-//! digest-only and the suite reports it as such. A difference names the format and no more — the
-//! same reach the lane has, because a digest of digests is all anybody wrote down. Porting it does
-//! not make it sharper; recording the per-case digests would, and that needs the probe run again.
+//! **The fidelity is a digest's**: Metal's answer per format is the 16-hex-digit digest of its 20
+//! cases' lines, each line `<case> <answer>` where the answer is itself the digest of that case's
+//! read-back lines. The probes kept the outer digest alone, so the case's site is digest-only and
+//! the suite reports it as such. A difference names the format and no more, because a digest of
+//! digests is all anybody wrote down; recording the per-case digests would make it sharper, and
+//! that needs the probe run again.
 //!
 //! Metal's answer is **carried** and re-recording is **forbidden**: Metal fills a texture through
 //! private API. The digests were measured on **an Apple M4**, not on this M3 Max, which the
@@ -573,8 +570,7 @@ pub struct TextureFills {
     metal: &'static str,
 }
 
-/// Every ported case: one per format of the lane's table, and one per format of the own-memory
-/// two-plane table.
+/// Every case: one per format of the table, and one per format of the own-memory two-plane table.
 pub fn all() -> Vec<TextureFills> {
     let mut cases: Vec<TextureFills> = FORMATS
         .iter()
@@ -767,11 +763,10 @@ impl Case for TextureFills {
 
 /// The two cases whose whole changed run this family measures on Metal itself.
 ///
-/// `two_plane_case`'s formatter cut each run at 64 bytes and wrote `...({n})`, and exactly two
-/// cases of the whole lane reach it: `b5` of 550 and of 551, whose texture is 7 by 5 texels, so the
-/// fill's rows (16 bytes each, level 0's `4 w` rounded down to 16) overlap into **one 92-byte run**
-/// and 28 of its bytes were in no comparison. Metal's bytes there had never been measured: the
-/// probes printed the same truncation the lane did.
+/// The probes' formatter cut each run at 64 bytes and wrote `...({n})`, and exactly two cases reach
+/// it: `b5` of 550 and of 551, whose texture is 7 by 5 texels, so the fill's rows (16 bytes each,
+/// level 0's `4 w` rounded down to 16) overlap into **one 92-byte run** and 28 of its bytes are
+/// past the cut.
 ///
 /// These two cases measure them. Each runs the same program the family's `b5` row runs — a 7 by 5
 /// `RGB10A8_2P_XR10` (or its sRGB twin) at byte 0 of a shared placement heap of the probes' size,
@@ -783,8 +778,8 @@ const HEAP_FILL_RUNS: [(&str, u32); 2] = [
     ("texture-fills-heap-run-551-b5", 551),
 ];
 
-/// The case name of [`HEAP_FILL_RUNS`]: the one case of the lane's twenty whose run is long enough
-/// to have been elided.
+/// The case name of [`HEAP_FILL_RUNS`]: the one case of the twenty whose run is long enough to be
+/// elided.
 const HEAP_FILL_CASE: &str = "b5";
 
 /// The heap's bytes these cases place their texture in, as the probes sized it.

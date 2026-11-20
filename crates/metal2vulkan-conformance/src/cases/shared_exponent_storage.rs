@@ -2,7 +2,7 @@
 //!
 //! This is a format whose storage is nothing like its read type: one 32-bit word holds three
 //! nine-bit mantissas and the five-bit exponent they share, and what a kernel writes as three
-//! `float`s becomes that word. Metal's word, as the lane measured it on **this M3 Max under macOS
+//! `float`s becomes that word. Metal's word, as measured on **an Apple M3 Max under macOS
 //! 27.0.1**: each channel clamped to `[0, 65408]` (a NaN, a negative value and `-0` giving 0), the
 //! exponent `e = max(floor(log2 m), -16) + 16` of the largest clamped channel `m`, and each
 //! mantissa the channel times `2^(24 - e)` **truncated**. A read gives each channel
@@ -23,13 +23,13 @@
 //! complete small space — every one of the 65,536 bit patterns, each reaching three channels — which
 //! the suite's record-shape rule keeps whole whatever its size.
 //!
-//! **The `float` sweep is a stated reduction of the lane's.** The lane takes the 196 pairs of its
+//! **The `float` sweep is a stated reduction of the probe's.** The probe takes the 196 pairs of its
 //! fourteen specials and then 16,384 iterations of its generator, two texels each: 33,024 texels,
 //! whose stored words alone would be 132 KiB a kernel. The case keeps the 196 special pairs whole
 //! and [`ITERATIONS`] of the same generator, in the same order, so the values are the probe's own
 //! prefix rather than a different set: [`FLOAT_TEXELS`] texels. Each iteration still contributes
-//! both of the lane's texels — a spread magnitude with two smaller channels, and a mantissa-step
-//! edge with its two neighbouring `f32`s — so both shapes the generator exists for are kept.
+//! both of its texels — a spread magnitude with two smaller channels, and a mantissa-step edge with
+//! its two neighbouring `f32`s — so both shapes the generator exists for are kept.
 //!
 //! Every texel holds `0xA5A5A5A5` before a write ([`BLANK_WORD`]), so a texel the kernel did not
 //! reach is a recorded value rather than whatever the allocator left.
@@ -55,7 +55,7 @@ pub const WIDTH: u32 = 256;
 /// The word every texel holds before a write.
 pub const BLANK_WORD: u32 = 0xA5A5_A5A5;
 
-/// The generator iterations the `float` sweep keeps of the lane's 16,384, each contributing two
+/// The generator iterations the `float` sweep keeps of the probe's 16,384, each contributing two
 /// texels.
 pub const ITERATIONS: usize = 512;
 
@@ -109,7 +109,7 @@ const SPECIALS: [f32; 14] = [
     f32::from_bits(0x3380_0000),
 ];
 
-/// The texels the `float` sweep writes, in the lane's order.
+/// The texels the `float` sweep writes, in the probe's order.
 pub fn floats() -> Vec<[f32; 4]> {
     let mut out: Vec<[f32; 4]> = SPECIALS
         .iter()
@@ -494,14 +494,14 @@ mod tests {
         Some(found)
     }
 
-    /// Every word Metal stored is the lane's rule's, over every write case.
+    /// Every word Metal stored is the rule's, over every write case.
     ///
-    /// The lane measured this chip, so this is the one family of the batch whose rule was already
-    /// the oracle's — and the recording is what stops that measurement evaporating the next time
-    /// macOS moves. The truncation is what the rule turns on: a device's own conversion rounds each
-    /// mantissa half up, so a leg that let the device encode would differ on about half the inputs.
+    /// The rule was measured on the oracle's chip, and the recording is what stops that
+    /// measurement evaporating the next time macOS moves. The truncation is what the rule turns
+    /// on: a device's own conversion rounds each mantissa half up, so a leg that let the device
+    /// encode would differ on about half the inputs.
     #[test]
-    fn every_recorded_word_is_the_lanes_rule() {
+    fn every_recorded_word_is_the_shared_exponent_rule() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -542,7 +542,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{checked} words checked; Metal's recorded words differ from the lane's rule:\n{}",
+            "{checked} words checked; Metal's recorded words differ from the rule:\n{}",
             differ.join("\n")
         );
         assert!(

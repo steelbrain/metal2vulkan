@@ -14,13 +14,12 @@
 //!
 //! **One case per row**, so a sample count the venue does not render stops that row alone and the
 //! suite counts it as [`LacksFeature`](crate::verdict::Verdict::LacksFeature). That is not
-//! cosmetic: lavapipe does not render 2 samples, which Vulkan leaves optional, and the lane's own
-//! loop prints a line and carries on, leaving nothing compared and nothing counted.
+//! cosmetic: lavapipe does not render 2 samples, which Vulkan leaves optional.
 //!
 //! **The digest-only row.** `d32-wide-4` fills a depth texture with the 16-byte pattern, so its
-//! samples are depths outside `[0, 1]`, and the lane committed that row's digest alone. The ported
-//! case keeps that shape exactly: a digest-only site, compared by its digest. Its lines are not
-//! recoverable on this host and the port does not pretend otherwise.
+//! samples are depths outside `[0, 1]`, and only that row's digest is committed. The case keeps
+//! that shape exactly: a digest-only site, compared by its digest. Its lines are not recoverable
+//! on this host.
 //!
 //! Metal's answer is **carried** and re-recording is **forbidden**: Metal fills a texture through
 //! private API.
@@ -62,10 +61,10 @@ const P32: &str = "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedf
 /// Depths in `[0, 1]`, one a sample: a denormal, 1, 0 and 0.25.
 const DEPTHS: &str = "010000000000803f000000000000803e";
 
-/// The one case whose depths lie outside `[0, 1]`, whose lines the lane kept as a digest alone.
+/// The one case whose depths lie outside `[0, 1]`, whose lines are kept as a digest alone.
 const WIDE_DEPTH: &str = "d32-wide-4";
 
-/// The digest the probe printed of `d32-wide-4`'s lines, which is all the lane keeps of it.
+/// The digest the probe printed of `d32-wide-4`'s lines, which is all that is kept of it.
 const WIDE_DEPTH_DIGEST: &str = "9c5b7be066d1c9fc";
 
 /// What a case fills: bytes in hexadecimal, or a color packed in the texture's own format.
@@ -362,7 +361,7 @@ const NAMES: [&str; 17] = [
     "sample-fills-whole-2",
 ];
 
-/// Every ported case: one per row.
+/// Every case: one per row.
 pub fn all() -> Vec<SampleFills> {
     ROWS.iter()
         .zip(NAMES)

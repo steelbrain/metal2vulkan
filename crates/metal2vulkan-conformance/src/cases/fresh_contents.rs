@@ -2093,7 +2093,7 @@ mod tests {
     /// The expectation, as this family states it: zero in every `Shared` and `Managed`
     /// texture, Metal's pattern in a `Private` one's patterned levels and zero in the rest.
     #[test]
-    fn the_expectation_is_the_lanes_rule() {
+    fn the_expectation_is_the_fresh_texture_rule() {
         for storage in [Storage::Shared, Storage::Managed] {
             let expected = RGBA8_2D.expected_fresh(storage);
             assert!(expected.iter().all(|&byte| byte == 0), "{storage:?}");

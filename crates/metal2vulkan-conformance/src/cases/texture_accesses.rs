@@ -7,23 +7,20 @@
 //! `access::write` at 3, an `access::write` at 5 the function never references, and a sampled
 //! texture at 6). The runtime answers it through `RenderPipelineState::texture_access`.
 //!
-//! **Why this port was worth doing first.** The lane holds Metal's answers in its module
-//! documentation and nowhere else: a prose list, measured on an Apple M4 under macOS 27.0.1, with
-//! the lane's own `want` table written to match it by hand. Nothing ties that table to Metal.
-//! Here record mode asks Metal itself, on this M3 Max, and the recording holds Metal's per-slot
-//! answer as a value; the table stops being a comment somebody has to keep in step.
+//! **Metal's answer as a value.** Record mode asks Metal itself, on an Apple M3 Max, and the
+//! recording holds Metal's per-slot answer as a value (an Apple M4 under macOS 27.0.1 answered the
+//! same list).
 //!
 //! **One stage at a time.** Metal states its reflection as one binding list per stage, so a single
 //! `MTLRenderStages` bit has a Metal answer and the case asks for one bit at a time — vertex,
-//! fragment, tile, object and mesh. The lane also asks the runtime about a *union* of stages and
-//! about no stage at all; those answers are a composition rule of our own API with no Metal
-//! counterpart, so they stay in the lane and out of the transcript.
+//! fragment, tile, object and mesh. A *union* of stages and no stage at all are a composition rule
+//! of our own API with no Metal counterpart, so they stay out of the transcript.
 //!
-//! **Why the shader is a fixture and not the lane's AIR text.** The lane carries the functions as
-//! an inline opaque-pointer AIR string. `xcrun metal-as` assembles that text and `xcrun metallib`
-//! packages it once a target triple is added — but Metal then refuses the pipeline with "Failed to
-//! upgrade function bitcode" (verified on this M3 Max), so the lane's text cannot be put in front
-//! of Metal's compiler at all. The case therefore names the owned fixture
+//! **Why the shader is a fixture and not inline AIR text.** An inline opaque-pointer AIR string
+//! assembles with `xcrun metal-as` and packages with `xcrun metallib` once a target triple is added
+//! — but Metal then refuses the pipeline with "Failed to upgrade function bitcode" (on an Apple M3
+//! Max), so such text cannot be put in front of Metal's compiler at all. The case therefore names
+//! the owned fixture
 //! `reflection/texture_accesses`, whose MSL declares the same texture arguments at the same slots
 //! and whose generated AIR carries the same `air.texture` metadata, down to the array length of
 //! two at slot 3 and `air.arg_unused` at slot 5.
@@ -41,7 +38,7 @@ use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 /// The fixture's name under the owned `reflection` fixtures.
 const FIXTURE: &str = "texture_accesses";
 
-/// The color attachment the pipeline writes, which is the lane's.
+/// The color attachment the pipeline writes.
 const ATTACHMENT: PixelFormat = PixelFormat::RGBA8Unorm;
 
 /// The vertex function.
@@ -212,12 +209,12 @@ mod tests {
         }
     }
 
-    /// The fixture declares the texture arguments the lane's probe declares, at the same slots,
-    /// with the array of two at slot 3 and the unreferenced argument at slot 5. This is what makes
-    /// the case the lane's question rather than a new one, and it reads the committed AIR rather
-    /// than trusting the MSL beside it.
+    /// The fixture declares the texture arguments the probe declares, at the same slots, with the
+    /// array of two at slot 3 and the unreferenced argument at slot 5. This is what makes the case
+    /// the probe's question rather than a new one, and it reads the committed AIR rather than
+    /// trusting the MSL beside it.
     #[test]
-    fn the_fixture_declares_the_lanes_texture_arguments() {
+    fn the_fixture_declares_the_probes_texture_arguments() {
         let air = text(METAL_TEXT).expect("the typed AIR");
         for wanted in [
             r#"!"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d<float, read>", !"air.arg_name", !"r""#,

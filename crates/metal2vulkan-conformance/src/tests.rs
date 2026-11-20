@@ -212,8 +212,7 @@ struct WordsCase {
     allowances: Vec<Allowance>,
     /// The input fingerprint the case states, so a test can make the inputs move.
     input: Vec<u8>,
-    /// Whether the output site holds its digest alone, as a case ported from a probe that kept
-    /// one does.
+    /// Whether the output site holds its digest alone, as a case whose probe kept one does.
     digest_only: bool,
 }
 
@@ -1428,11 +1427,10 @@ fn every_recorded_heap_texture_answer_is_held_by_its_property() {
     assert!(cases >= 18 && held >= 2000, "{cases} cases, {held} fields");
 }
 
-/// A case that names two notices separately must see **both** fire. Before the subset check the
-/// walk stopped at the first covering allowance that held, so a case declaring two announced
-/// notices read "3 named, 2 fired, 1 never fired" and its second declaration was permanently dead
-/// -- which a stream met in live use while porting a buffer-backed texture lane. A declaration now
-/// fires on its own code being announced.
+/// A case that names two notices separately must see **both** fire. A walk that stops at the first
+/// covering allowance that holds reads a case declaring two announced notices as "3 named, 2
+/// fired, 1 never fired", and its second declaration is dead. A declaration fires on its own code
+/// being announced.
 #[test]
 fn two_notice_declarations_both_fire_when_both_notices_are_announced() {
     let first = Degradation::GradFromBias;
@@ -1616,8 +1614,7 @@ fn an_allowance_whose_notice_did_not_fire_fails_the_case() {
 
 /// A notice is announced once per device per kind, so which of a case's notices its own run sees
 /// depends on what ran before it. A case that names several therefore has to be justified by any
-/// one of them that fired, not by whichever it listed first: the first ported batch failed two
-/// cases this way, over digests that matched Metal exactly.
+/// one of them that fired, not by whichever it listed first.
 #[test]
 fn any_one_of_a_sites_allowances_firing_justifies_the_difference() {
     let fired = Degradation::PixelSamplerScaling;
@@ -3250,7 +3247,7 @@ fn a_venues_own_answer_on_a_compressing_venue_leaves_the_site_its_one_row() {
 }
 
 /// A refusal nothing documents is still exactly one refusal, and the words say plain Metal
-/// answered. This is the shape the ported lanes will mostly meet.
+/// answered.
 #[test]
 fn an_undocumented_refusal_is_one_row_and_names_no_excuse() {
     let metal = Transcript::new(vec![Node::leaf(
@@ -3346,7 +3343,7 @@ fn the_rate_map_cases_name_what_justifies_them() {
 /// `Side` gives most of its calls a default that answers `Failure::unavailable`, so a method the
 /// wrapper forgets to forward makes `Announcing<MetalSide>` answer "no such call" where
 /// `MetalSide` answers perfectly well — and the compiler says nothing, because the default is
-/// there to be inherited. The trait grows with every ported batch, so the guard must be mechanical
+/// there to be inherited. The trait grows with every case family, so the guard must be mechanical
 /// rather than a list somebody remembers to extend.
 ///
 /// Comparing transcripts through a stub does not do it: a stub that does not implement the method
@@ -4486,8 +4483,8 @@ impl Case for DiedOnMetal {
 
 #[test]
 fn a_call_metal_did_not_return_from_is_its_own_verdict() {
-    // The hole this closes: a row that ends Metal's process has nothing to carry -- the lane holds
-    // no line for it -- so it was not recorded-only material, it had no verdict at all. `Exact`
+    // A row that ends Metal's process has nothing to carry, so it is not recorded-only material
+    // and needs a verdict of its own. `Exact`
     // would claim a value matched where Metal produced none; `Divergent` would claim a behaviour
     // of Metal's to differ from; `Refused` is for a call plain Metal answered, and counting it
     // there would bury a real gap of ours among rows that are not one.

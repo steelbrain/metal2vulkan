@@ -2,16 +2,12 @@
 //!
 //! # Why this is recorded rather than carried
 //!
-//! The runtime lane `rotated_textures` checks every plane byte against a *rule* — where a pass's
-//! texel `(x, y)` lands at each rotation, and what a load leaves at the texels a draw does not
-//! reach. That rule was measured on an Apple M4 under macOS 27.0.1, a chip this tree no longer has,
-//! which makes it the weakest kind of row: it can never be checked against the oracle again.
-//!
-//! So the rule is **re-measured here**, on an Apple M3 Max under macOS 27.0.1 (26A434), and the
-//! cases record Metal's own plane bytes rather than the rule's prediction. The re-measurement
-//! reproduced the M4's rule exactly, all five rotations, every texel of an 8x4 frame, store and
-//! load alike (`probes/rotated_surface_planes.m`) — so the lane's numbers were right, and they are
-//! now a fact on the oracle instead of a number from a machine that is gone.
+//! A *rule* says where a pass's texel `(x, y)` lands at each rotation, and what a load leaves at
+//! the texels a draw does not reach. It was measured on an Apple M4 under macOS 27.0.1 and again
+//! on an Apple M3 Max under macOS 27.0.1 (26A434), which reproduced it exactly, all five
+//! rotations, every texel of an 8x4 frame, store and load alike
+//! (`probes/rotated_surface_planes.m`). The cases record Metal's own plane bytes rather than the
+//! rule's prediction.
 //!
 //! # What the Metal leg needs, and why it is private
 //!
@@ -34,15 +30,12 @@
 //! equal to (32) bytes
 //! ```
 //!
-//! for a 4x8 surface at its own tight stride behind an 8x4 texture — which is exactly the plane the
-//! lane this ports uses for a quarter turn. So **every plane here carries a stride of at least the
-//! frame's own row**, [`crate::surface::PlaneSpec::unsafe_stride`] refuses the rest, and both sides
-//! check it at the call rather than trusting a case body. Nothing in this module can end Metal's
-//! process, fault the GPU or hang it: one single-sampled pass a case, one triangle, no loop, and
-//! every byte written inside the surface's own allocation.
-//!
-//! That rule is also a **finding**, recorded in this stream's report: the lane passes with a plane
-//! stride Metal would assert on, so the runtime accepts a descriptor plain Metal refuses.
+//! for a 4x8 surface at its own tight stride behind an 8x4 texture, the tightest plane for a
+//! quarter turn. So **every plane here carries a stride of at least the frame's own row**,
+//! [`crate::surface::PlaneSpec::unsafe_stride`] refuses the rest, and both sides check it at the
+//! call rather than trusting a case body. Nothing in this module can end Metal's process, fault the
+//! GPU or hang it: one single-sampled pass a case, one triangle, no loop, and every byte written
+//! inside the surface's own allocation.
 //!
 //! # The shape
 //!
@@ -58,7 +51,7 @@
 //! 32x32, which is one tile. The two-tile frame is deliberate: measured here, at rotation 4 Metal
 //! mirrors the loaded texels left to right in the tile the draw reached (480 of 480 undrawn texels)
 //! and **keeps every texel of the tile it did not reach** (512 of 512). A one-tile frame cannot
-//! tell that from mirroring every tile, which is why the lane's own 32x32 test never did.
+//! tell that from mirroring every tile.
 
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
@@ -88,7 +81,7 @@ const RECT: &str = "tob_rect";
 /// drawn texel names the pass position it was drawn at.
 const READ: &str = "tob_read";
 
-/// The pass texels a partial draw covers, the lane's own corner.
+/// The pass texels a partial draw covers: a corner.
 const DRAWN: [u32; 2] = [8, 4];
 
 /// What a case asks of one rotation.
@@ -156,8 +149,7 @@ impl RotatedPlane {
     /// The padding is the point of the stride: a case asserts that the bytes between the rows
     /// stayed as they were, which needs rows that are wider than their texels. **The stride is at
     /// least the frame's own row**, which is the rule Metal asserts on
-    /// ([the module's header](self)); for a quarter turn that is wider than the plane's texels,
-    /// which is exactly the case the lane this ports got wrong.
+    /// ([the module's header](self)); for a quarter turn that is wider than the plane's texels.
     fn plane(&self) -> PlaneSpec {
         let plane = plane_extent(self.rotation, self.frame);
         let stride = (plane[0].max(self.frame[0])) * TEXEL + 16;

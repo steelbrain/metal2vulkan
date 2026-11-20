@@ -8,15 +8,14 @@
 //!
 //! - each attachment's whole 8x8 of `RGBA32Uint` texels as bytes under a [`ByteLayout`] that names
 //!   the level, the slice and the extent, read as 32-bit words, so a difference names the texel's
-//!   row, the word inside it and both values — where the lane's line diff named a whole line;
-//! - the texels any attachment wrote a non-zero word into, as a count, which is the lane's
-//!   `drawn=` at the altitude a reader wants it;
+//!   row, the word inside it and both values;
+//! - the texels any attachment wrote a non-zero word into, as a count, the probe's `drawn=`;
 //! - every call of the pass, in order, by the Metal selector it makes, so a draw we refuse where
 //!   Metal drew is a [`Refused`](crate::verdict::Verdict::Refused) verdict naming the call rather
 //!   than a line printed to stderr;
 //! - the command buffer's status and its error.
 //!
-//! The lane's line form drops every all-zero texel, so the two forms detect the same differences;
+//! The probe's line form drops every all-zero texel, so the two forms detect the same differences;
 //! what the typed form adds is where the failure points and that the refusals are counted.
 //!
 //! Three families are separate cases because their verdicts mean different things: the grid draws
@@ -24,11 +23,9 @@
 //! that leave a partial object threadgroup, which Metal runs with the threads left over. Each of
 //! the last is a case of its own, so a refusal of one is a `Refused` verdict naming its call.
 //!
-//! Nothing here can fault a GPU: every grid is either small or one Metal and the runtime both
-//! answer by drawing nothing. The lane's other two tests are **not** ported here. Its object-grid
-//! counter tables (`OBJECT_GRID_CASES`) are a raw-value table rather than probe lines, so they
-//! belong to a later batch, and one of their rows is a grid Metal's GPU discards — a recovery
-//! victim, which this round must not run.
+//! Nothing here can fault a GPU: every grid is either small or one Metal answers by drawing
+//! nothing. Object-grid counter tables are **not** cases here: they are a raw-value table rather
+//! than probe lines, and one of their rows is a grid Metal's GPU discards, which no case may run.
 
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side, TARGET_TEXEL,
@@ -126,8 +123,7 @@ struct Row {
     draw: Draw,
 }
 
-/// The probe's cases of `mesh_draws_grid`, its threads per object threadgroup 1 (the lane's
-/// `GRID_CASES`).
+/// The probe's cases of `mesh_draws_grid`, its threads per object threadgroup 1.
 const GRID_ROWS: &[Row] = &[
     grid(
         "grid-groups-3x2-by-4",
@@ -156,7 +152,7 @@ const GRID_ROWS: &[Row] = &[
     grid("grid-groups-0", Draw::Groups([0, 2, 1], ONE, [4, 1, 1])),
 ];
 
-/// Grids of `mesh_draws_grid` Metal draws nothing for (the lane's `PAST_CASES`): an axis past
+/// Grids of `mesh_draws_grid` Metal draws nothing for: an axis past
 /// 65,535, direct and indirect, and 2^20 threadgroups.
 const GRID_PAST_ROWS: &[Row] = &[
     grid("grid-groups-65536", Draw::Groups([65_536, 1, 1], ONE, ONE)),
@@ -174,8 +170,8 @@ const GRID_PAST_ROWS: &[Row] = &[
     ),
 ];
 
-/// The probe's object cases whose draw is of threadgroups or indirect (the lane's `OBJECT_CASES`
-/// but for its two `drawMeshThreads` rows), each with the object function's control words, in both
+/// The probe's object cases whose draw is of threadgroups or indirect (all but its two
+/// `drawMeshThreads` rows), each with the object function's control words, in both
 /// binding forms.
 const OBJECT_ROWS: &[Row] = &[
     object(
@@ -228,9 +224,9 @@ const OBJECT_ROWS: &[Row] = &[
     ),
 ];
 
-/// The probe's object cases whose `drawMeshThreads` leaves a partial object threadgroup (the
-/// lane's `OBJECT_CASES`' two `Threads` rows). Metal draws them, its last object threadgroup
-/// along an axis running the threads left, and so does the runtime.
+/// The probe's object cases whose `drawMeshThreads` leaves a partial object threadgroup. Metal
+/// draws them, its last object threadgroup along an axis running the threads left, and so does
+/// the runtime.
 ///
 /// Each is a case of its own, holding one row. A refused call stops a run, and the run's later
 /// rows are then neither compared nor reported, so two refusing rows in one case would report one
@@ -250,8 +246,7 @@ const OBJECT_THREAD_ROWS: [&[Row]; 2] = [
     )],
 ];
 
-/// Object draws whose object threadgroups each set a mesh grid Metal launches nothing for (the
-/// lane's `OBJECT_PAST_CASES`).
+/// Object draws whose object threadgroups each set a mesh grid Metal launches nothing for.
 const OBJECT_PAST_ROWS: &[Row] = &[
     object(
         "object-grid-1024x1024",

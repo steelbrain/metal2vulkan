@@ -554,7 +554,7 @@ mod tests {
     /// function's `half4` carries the case's own numbers and the blend's rounding is the only
     /// rounding in the answer.
     #[test]
-    fn the_sweep_is_exact_in_half_and_spans_the_lanes_ranges() {
+    fn the_sweep_is_exact_in_half_and_spans_both_ranges() {
         for index in 0..SOURCES {
             let value = source(index);
             // Round-trips through the code, which `half_code` asserts is exact anyway.

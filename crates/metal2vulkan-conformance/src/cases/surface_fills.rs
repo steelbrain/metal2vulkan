@@ -8,12 +8,11 @@
 //! `fillTextureColor:` are Apple SPI, so there is no public call a Metal side could make. What the
 //! case carries is our own measurement of this chip, stated in the shape the case emits.
 //!
-//! This port is where the typed form catches something the lane cannot. The lane compares the
-//! *formatted* run string, and the formatter prints at most 24 bytes of a run and then ` ..`, so
-//! every byte past the 24th of a run is never compared at all — 32 bytes of one case's answer. The
-//! case compares the whole surface buffer byte for byte under a layout that names each plane's
-//! rows and pitch, with [`Gaps::Compared`], so the bytes the fill must not have touched compare
-//! too and a difference names the byte's row, its index and both values.
+//! The typed form matters here. A *formatted* run string prints at most 24 bytes of a run and then
+//! ` ..`, so a comparison of it never reads a byte past the 24th of a run — 32 bytes of one case's
+//! answer. The case compares the whole surface buffer byte for byte under a layout that names each
+//! plane's rows and pitch, with [`Gaps::Compared`], so the bytes the fill must not have touched
+//! compare too and a difference names the byte's row, its index and both values.
 //!
 //! The one row whose printed runs truncate, a color packed in `RGBA8Unorm` over the whole of an
 //! 8x4 `RG10Unorm_X12_sRGB` texture on a buffer, is carried here from a **second** measurement:
@@ -42,8 +41,8 @@ const MEASURED_IN: &str =
      RG10Unorm_X12_sRGB buffer row from probes/surface_buffer_fills.m (an Apple M3 Max, macOS \
      27.0.1)";
 
-/// The runs the carried table stands on: the weakest row's, the lane probe's own single pass over
-/// the cases. (`probes/surface_buffer_fills.m` took the `579 p70` row over three passes, which
+/// The runs the carried table stands on: the weakest row's, the probes' single pass over the
+/// cases. (`probes/surface_buffer_fills.m` took the `579 p70` row over three passes, which
 /// printed the same bytes each time; the table's number is the one every row holds.)
 pub const MEASURED_RUNS: u32 = 1;
 
@@ -63,7 +62,7 @@ fn pattern(bytes: usize) -> Vec<u8> {
 }
 
 /// A surface's layout as CoreVideo made it: its length and its two planes' first byte and
-/// `bytesPerRow` (the lane's `S8X4` and `S8X4_444`).
+/// `bytesPerRow`.
 #[derive(Clone, Copy, Debug)]
 struct Surface {
     length: u64,
@@ -176,8 +175,8 @@ const fn buf(
     }
 }
 
-/// Metal's fills over a surface's plane or a buffer, as the probes measured them: the lane's
-/// `OVER`, whole, its last row's 32-byte runs from `probes/surface_buffer_fills.m`.
+/// Metal's fills over a surface's plane or a buffer, as the probes measured them, whole, the last
+/// row's 32-byte runs from `probes/surface_buffer_fills.m`.
 const ROWS: &[Row] = &[
     surf(b"420v", [8, 4], (500, 0), S8X4, "b4", FillOf::Whole(4),
         " [0x200+8: 01 01 01 01 01 01 01 01] [0x240+8: 01 01 01 01 01 01 01 01] [0x280+8: 01 01 01 01 01 01 01 01] [0x2c0+8: 01 01 01 01 01 01 01 01]"),
@@ -215,10 +214,10 @@ const ROWS: &[Row] = &[
     buf(577, [7, 3], 32, "b4", FillOf::Whole(4),
         " [0+14: 01 02 01 02 01 02 01 02 01 02 01 02 01 02] [0x20+14: 01 02 01 02 01 02 01 02 01 02 01 02 01 02] [0x40+14: 01 02 01 02 01 02 01 02 01 02 01 02 01 02]"),
     buf(578, [8, 4], 64, "r3", FillOf::Small(3), " [0x44+8: 01 02 03 01 01 02 03 01]"),
-    // The row the lane's formatter truncated at 24 of each run's 32 bytes, measured whole by
+    // The row a formatted run truncates at 24 of each run's 32 bytes, measured whole by
     // `probes/surface_buffer_fills.m`: a 4-byte texel over eight texels a row, so each row's 32
-    // bytes are the packed color eight times. The last eight bytes of each run are the ones no
-    // passing test had ever compared.
+    // bytes are the packed color eight times. The last eight bytes of each run are the ones a
+    // formatted comparison never reads.
     buf(579, [8, 4], 64, "p70", FillOf::Color(70),
         " [0+32: 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff] [0x40+32: 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff] [0x80+32: 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff] [0xc0+32: 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff 40 80 bf ff]"),
 ];
@@ -241,8 +240,7 @@ pub fn over_planes_and_buffers() -> SurfaceFills {
 }
 
 impl Row {
-    /// The row's site name: its format and the probe's case word, as the lane printed a
-    /// difference.
+    /// The row's site name: its format and the probe's case word.
     fn site(&self) -> String {
         let format = match self.over {
             PlaneTextureOf::Surface { format, .. } | PlaneTextureOf::Buffer { format, .. } => {
