@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7457 |
+| ledger rows (a case whose gap is recorded) | 7627 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2297,9 +2297,26 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
 | `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
 | `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
+| `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
 | `depth16-texel-reads` | The device's own answer (rule 1): a 16-bit depth texel's decode to `float` is one ulp from Metal's (Metal 0x3b808081, ours 0x3b808080). Note `device-texel-conve… |
 | `depth16-texel-reads` | The device's own answer (rule 1): a 16-bit depth texel's decode to `float` is one ulp from Metal's (Metal 0x3b808081, ours 0x3b808080). Note `device-texel-conve… |
 | `depthstencil-depth-slot` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
+| `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
 | `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
 | `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
 | `device-linear-texture-alignments` | The device's own answer (rule 1): rt answers minimumLinearTextureAlignmentForPixelFormat: with the device's linear row rounding (rt README, Device::minimum_line… |
@@ -3022,9 +3039,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `a2c-on-1-alpha-50` | The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the… |
 | `a2c-on-1-alpha-50` | The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the… |
 | `a2c-on-1-alpha-50` | The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the… |
+| `a2c-on-1-alpha-50` | The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the… |
 | `a2one-off-1-blend-source-alpha` | The device's own answer (rule 1): the device's fixed-function blend. The first differing element is red, the source's 0.25 blended over the destination's 1 at a… |
 | `a2one-on-1-blend-source-alpha` | The device's own answer (rule 1): with alpha-to-one the blend stores the source, whose green channel is 0.5, a tie between two 8-bit codes, stored by the device… |
 | `a2one-on-1-mask-no-alpha` | The device's own answer (rule 1): with alpha-to-one and no alpha write, the stored green channel is 0.5, a tie between two 8-bit codes, stored by the device's c… |
+| `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
 | `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
 | `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
 | `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
@@ -3036,17 +3055,22 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of layer 1 of an `R32Float` array texel holding a denormal word. Metal's sampler hands back t… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of layer 1 of an `R32Float` array texel holding a denormal word. Metal's sampler hands back t… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of layer 1 of an `R32Float` array texel holding a denormal word. Metal's sampler hands back t… |
+| `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of layer 1 of an `R32Float` array texel holding a denormal word. Metal's sampler hands back t… |
+| `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `R32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal 0x… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `R32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal 0x… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `R32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal 0x… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `R32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal 0x… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `RGBA32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `RGBA32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal… |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `RGBA32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal… |
+| `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, clamp to edge, of an `RGBA32Float` texel holding a denormal word. Metal's sampler hands back the word (Metal… |
+| `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, repeating, at a texel offset of (1, -1), of an `RGBA32Float` texel holding a denormal word. Metal's sampler … |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, repeating, at a texel offset of (1, -1), of an `RGBA32Float` texel holding a denormal word. Metal's sampler … |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, repeating, at a texel offset of (1, -1), of an `RGBA32Float` texel holding a denormal word. Metal's sampler … |
 | `denormal-word-fetches` | The device's own answer (rule 1): a nearest sample, repeating, at a texel offset of (1, -1), of an `RGBA32Float` texel holding a denormal word. Metal's sampler … |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3055,12 +3079,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
+| `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3072,6 +3098,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
+| `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
@@ -3080,11 +3107,13 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
+| `extended-swizzles-a1bgr5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3092,6 +3121,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3103,6 +3133,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
+| `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
@@ -3110,6 +3141,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3121,24 +3153,28 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
+| `extended-swizzles-abgr4unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
+| `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
+| `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3150,6 +3186,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
+| `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
@@ -3158,24 +3195,28 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
+| `extended-swizzles-b5g6r5unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
+| `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `0ag1` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
+| `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `ar10` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `bgra` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3187,12 +3228,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
+| `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `gggg` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
 | `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | The device's own answer (rule 1): a linear sample through the runtime sampler, clamp to border opaque white, of a packed 16-bit texture under the `rgba` swizzle… |
 | `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
@@ -3205,16 +3248,20 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `level-sizes-storage` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
+| `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of a `half` NaN (the operands 0x7e01, 0xfe55 and the signalling 0x7c01): Metal keeps the operand's bits; th… |
+| `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of a `half` NaN (the operands 0x7e01, 0xfe55 and the signalling 0x7c01): Metal keeps the operand's bits; th… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge of the mirrored axis lands on the device's texel: Metal reads… |
+| `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge of the mirrored axis lands on the device's texel: Metal reads… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge of the mirrored axis lands on the device's texel: Metal reads… |
+| `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
@@ -3270,6 +3317,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `fast::tanh` of a `float` by the device's own `Tanh` (Metal 0x357ffff0, ours 0x35800000 at the first differing element); the s… |
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `fast::tanh` of a `float` by the device's own `Tanh` (Metal 0x357ffff0, ours 0x35800000 at the first differing element); the s… |
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `fast::tanh` of a `float` by the device's own `Tanh` (Metal 0x357ffff0, ours 0x35800000 at the first differing element); the s… |
+| `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `fast::tanh` of a `float` by the device's own `Tanh` (Metal 0x357ffff0, ours 0x35800000 at the first differing element); the s… |
+| `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `tanh` of a `half` by the device's own `Tanh` and its narrowing to `half`. Notes `native-transcendentals` and `native-half-con… |
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `tanh` of a `half` by the device's own `Tanh` and its narrowing to `half`. Notes `native-transcendentals` and `native-half-con… |
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `tanh` of a `half` by the device's own `Tanh` and its narrowing to `half`. Notes `native-transcendentals` and `native-half-con… |
 | `pass-bytes-half-tanh-regimes` | The device's own answer (rule 1): `tanh` of a `half` by the device's own `Tanh` and its narrowing to `half`. Notes `native-transcendentals` and `native-half-con… |
@@ -3278,6 +3327,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
 | `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
 | `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
+| `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
+| `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
+| `pass-bytes-srgb-decode-all-bytes` | The device's own answer (rule 1): the module decodes an sRGB byte by the MSL transfer function through the device's `Pow`, where Metal decodes through its twelv… |
+| `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
@@ -3442,7 +3495,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
@@ -3452,12 +3507,15 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
-| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
-| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
-| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
-| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
@@ -3467,7 +3525,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
@@ -3477,32 +3537,40 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the three axes' address modes, through the device's own sampler. 25 e… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
-| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
+| `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-border-colours` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
@@ -3536,22 +3604,31 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 0.5 Metal reads level 0 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 0.5 Metal reads level 0 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 0.5 Metal reads level 0 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 0.5 Metal reads level 0 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 0.5 Metal reads level 0 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
+| `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
+| `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
+| `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the runtime sampler's nearest sample at `r` = -2^-149, the negative denormal nearest zero, in the lane whose `s` and `t` are t… |
 | `sampler-r-address-modes` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` one unit in the l… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of a `half` NaN. Metal keeps the payload (0x7e01); the device answers the quiet NaN (0x7e00). Note `native-… |
@@ -7074,6 +7151,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-10x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_LDR with the usage the case asks, so rt makes no such … |
 | `astc-10x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_LDR with the usage the case asks, so rt makes no such … |
 | `astc-10x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_LDR with the usage the case asks, so rt makes no such … |
+| `astc-10x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_LDR with the usage the case asks, so rt makes no such … |
+| `astc-10x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-10x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-10x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-10x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
@@ -7081,6 +7160,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-10x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x5_sRGB with the usage the case asks, so rt makes no such … |
@@ -7088,6 +7169,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-10x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x6_sRGB with the usage the case asks, so rt makes no such … |
@@ -7095,6 +7178,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-10x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_LDR with the usage the case asks, so rt makes no such t… |
 | `astc-10x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_LDR with the usage the case asks, so rt makes no such t… |
+| `astc-10x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_sRGB with the usage the case asks, so rt makes no such … |
 | `astc-10x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x8_sRGB with the usage the case asks, so rt makes no such … |
@@ -7102,6 +7187,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-12x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_LDR with the usage the case asks, so rt makes no such … |
 | `astc-12x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_LDR with the usage the case asks, so rt makes no such … |
 | `astc-12x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_LDR with the usage the case asks, so rt makes no such … |
+| `astc-12x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_LDR with the usage the case asks, so rt makes no such … |
+| `astc-12x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x10_sRGB with the usage the case asks, so rt makes no such… |
@@ -7109,6 +7196,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-12x12-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_LDR with the usage the case asks, so rt makes no such … |
 | `astc-12x12-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_LDR with the usage the case asks, so rt makes no such … |
 | `astc-12x12-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_LDR with the usage the case asks, so rt makes no such … |
+| `astc-12x12-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_LDR with the usage the case asks, so rt makes no such … |
+| `astc-12x12-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x12-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x12-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_sRGB with the usage the case asks, so rt makes no such… |
 | `astc-12x12-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_12x12_sRGB with the usage the case asks, so rt makes no such… |
@@ -7116,6 +7205,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-4x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-4x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-4x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-4x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-4x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-4x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-4x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-4x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7123,6 +7214,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-5x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-5x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-5x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-5x4-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-5x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x4-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7130,6 +7223,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-5x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-5x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-5x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-5x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-5x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-5x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x5_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7137,6 +7232,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-6x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-6x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-6x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-6x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-6x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x5_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7144,6 +7241,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-6x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-6x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-6x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-6x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-6x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-6x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_6x6_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7151,6 +7250,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-8x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x5-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x5-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x5_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7158,6 +7259,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-8x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x6-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x6-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x6_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7165,6 +7268,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-8x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
+| `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
@@ -7229,8 +7334,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-d16-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-s8-54-2` | The device's own answer (rule 2): this device's framebuffer sample counts do not include 2, so rt makes no texture of that count (Error::Limit). |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
 | `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
@@ -7298,30 +7405,40 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `eac-r11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Snorm with the usage the case asks, so rt makes no such te… |
 | `eac-r11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Snorm with the usage the case asks, so rt makes no such te… |
 | `eac-r11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Snorm with the usage the case asks, so rt makes no such te… |
+| `eac-r11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Snorm with the usage the case asks, so rt makes no such te… |
+| `eac-r11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `eac-r11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `eac-r11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `eac-r11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `eac-rg11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Snorm with the usage the case asks, so rt makes no such t… |
 | `eac-rg11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Snorm with the usage the case asks, so rt makes no such t… |
 | `eac-rg11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Snorm with the usage the case asks, so rt makes no such t… |
+| `eac-rg11-snorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Snorm with the usage the case asks, so rt makes no such t… |
+| `eac-rg11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Unorm with the usage the case asks, so rt makes no such t… |
 | `eac-rg11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Unorm with the usage the case asks, so rt makes no such t… |
 | `eac-rg11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Unorm with the usage the case asks, so rt makes no such t… |
 | `eac-rg11-unorm` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RG11Unorm with the usage the case asks, so rt makes no such t… |
 | `eac-rgba8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `eac-rgba8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `eac-rgba8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
+| `eac-rgba8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
+| `eac-rgba8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8_sRGB with the usage the case asks, so rt makes no such … |
 | `eac-rgba8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8_sRGB with the usage the case asks, so rt makes no such … |
 | `eac-rgba8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8_sRGB with the usage the case asks, so rt makes no such … |
 | `eac-rgba8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8_sRGB with the usage the case asks, so rt makes no such … |
 | `etc2-rgb8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
 | `etc2-rgb8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
 | `etc2-rgb8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
+| `etc2-rgb8` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
+| `etc2-rgb8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8_sRGB with the usage the case asks, so rt makes no such … |
 | `etc2-rgb8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8_sRGB with the usage the case asks, so rt makes no such … |
 | `etc2-rgb8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8_sRGB with the usage the case asks, so rt makes no such … |
 | `etc2-rgb8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8_sRGB with the usage the case asks, so rt makes no such … |
 | `etc2-rgb8a1` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1 with the usage the case asks, so rt makes no such tex… |
 | `etc2-rgb8a1` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1 with the usage the case asks, so rt makes no such tex… |
 | `etc2-rgb8a1` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1 with the usage the case asks, so rt makes no such tex… |
+| `etc2-rgb8a1` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1 with the usage the case asks, so rt makes no such tex… |
+| `etc2-rgb8a1-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1_sRGB with the usage the case asks, so rt makes no suc… |
 | `etc2-rgb8a1-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1_sRGB with the usage the case asks, so rt makes no suc… |
 | `etc2-rgb8a1-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1_sRGB with the usage the case asks, so rt makes no suc… |
 | `etc2-rgb8a1-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8A1_sRGB with the usage the case asks, so rt makes no suc… |
@@ -7788,6 +7905,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
+| `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-over-buffer-barrier-read` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-over-buffer-barrier-read` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-over-buffer-barrier-sample` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
@@ -7930,12 +8048,15 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
+| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
+| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
+| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
@@ -8122,6 +8243,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sample-fills-d32-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-d32-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-d32-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `sample-fills-d32-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-d32-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-d32-wide-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-d32s8-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
@@ -8132,8 +8254,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sample-fills-rgba16f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba16f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba16f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `sample-fills-rgba16f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba16f-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba32f-2` | The device's own answer (rule 2): this device's framebuffer sample counts do not include 2, so rt makes no texture of that count (Error::Limit). |
+| `sample-fills-rgba32f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba32f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba32f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba32f-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
@@ -8141,9 +8265,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sample-fills-rgba8-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba8-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba8-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `sample-fills-rgba8-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-rgba8-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-s8-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-whole-2` | The device's own answer (rule 2): this device's framebuffer sample counts do not include 2, so rt makes no texture of that count (Error::Limit). |
+| `sample-fills-whole-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-whole-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-whole-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `sample-fills-whole-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
@@ -8519,7 +8645,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-170` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `texture-fills-170` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `texture-fills-170` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
+| `texture-fills-170` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `texture-fills-170` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `texture-fills-178` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-178` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-178` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-178` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
@@ -8527,7 +8655,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-180` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-180` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-180` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
+| `texture-fills-180` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-180` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `texture-fills-187` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `texture-fills-187` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `texture-fills-187` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `texture-fills-187` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
@@ -8535,8 +8665,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
+| `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `texture-fills-198` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-20` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
+| `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
@@ -8648,8 +8780,16 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatASTC_4x4_LDR… |
 | `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatASTC_4x4_LDR… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
+| `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
@@ -9469,6 +9609,36 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-usage-crossings` | rt has no usage getter; the site reads descriptor().usage, the descriptor as given; rt takes no bits as every usage wherever it acts. |
 | `texture-pairs-usage-crossings` | rt has no usage getter; the site reads descriptor().usage, the descriptor as given; rt takes no bits as every usage wherever it acts. |
 | `bicubic-texel-classes` | Known gap (the rt README, Known gaps of textures): a kernel's bicubic constexpr sample of a texture of 8-bit sRGB codes is `Gap::BicubicTexels`, naming the slot… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
