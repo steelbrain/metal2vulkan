@@ -162,7 +162,7 @@ mod on_device {
             );
             rd.mipmap_level_count = 2;
             rd.array_length = 2;
-            rd.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            rd.usage = TextureUsage::RENDER_TARGET;
             rd.storage_mode = StorageMode::Shared;
             let into =
                 (device.new_texture(&rd, None)).unwrap_or_else(|error| panic!("{name}: {error}"));

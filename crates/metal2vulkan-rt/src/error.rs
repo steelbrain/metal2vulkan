@@ -795,8 +795,9 @@ pub enum Refusal {
     ResolveTexture,
     /// A resolve of a render pass color attachment of an integer pixel format.
     ///
-    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops the pass, the
-    /// format "cannot be a MSAA resolve target").
+    /// Basis: metal-documented (Metal's validation asserts that an integer color format "cannot
+    /// be a MSAA resolve target", and plain Metal writes values no sample holds, as
+    /// `metal2vulkan-runtime`'s `RenderPassProblem::ResolveFormat` records).
     ResolveFormat {
         /// The attachment's pixel format.
         pixel_format: PixelFormat,
