@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7378 |
+| ledger rows (a case whose gap is recorded) | 7478 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2283,7 +2283,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `buffer-tails-blits` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-kernels` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-texture-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `buffer-texture-blits-overlapping` | Known gap (rt README, blit encoder): a copy of one level and slice of a texture into itself is Gap::TextureCopy, not built: one vkCmdCopyImage in the floor does… |
+| `buffer-texture-blits-overlapping` | Known gap (rt README, blit encoder): a copy between overlapping regions of one level and slice of one image is Gap::TextureCopy, not built. Metal leaves such a … |
 | `compressed-views-bc4-r-snorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc4-r-unorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc5-rg-snorm` | An accepted difference: Metal documents no BC5 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
@@ -5010,6 +5010,109 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
@@ -7687,8 +7790,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pipeline-handler-tile-options-binding-info` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no pipeline made through a completion handler). … |
 | `pipeline-handler-tile-options-none` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no pipeline made through a completion handler). … |
 | `pipeline-handler-tile-options-refused` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no pipeline made through a completion handler). … |
-| `primitive-type-restart-indices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no draw of MTLPrimitiveTypePoint). rt refuses it… |
-| `primitive-type-restart-indices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no draw of MTLPrimitiveTypePoint). rt refuses it… |
 | `pvrtc-cpu-order-rgb-2bpp` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatPVRTC_RGB_2B… |
 | `pvrtc-cpu-order-rgb-2bpp-srgb` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatPVRTC_RGB_2B… |
 | `pvrtc-cpu-order-rgb-4bpp-srgb` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatPVRTC_RGB_4B… |
@@ -7812,8 +7913,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `render-draw-forms-empty` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no draw of MTLPrimitiveTypePoint). rt refuses it… |
-| `render-draw-forms-points` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no draw of MTLPrimitiveTypePoint). rt refuses it… |
+| `render-draw-forms-empty` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
+| `render-draw-forms-points` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
 | `render-draw-forms-triangles` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
 | `render-state-depth-bias` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every setDepthBias:slopeScale:clamp: clamp 0). r… |
 | `render-state-depth-clip` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every depth clip mode Clip). rt refuses it (a dr… |
@@ -8612,7 +8713,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `tile-simd-blur-columns` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no tile render pipeline). The rt side of the sui… |
 | `tile-simd-blur-rows` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no tile render pipeline). The rt side of the sui… |
 | `tile-state-thread-limits` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no tile render pipeline). The rt side of the sui… |
-| `topology-class-point-size-function` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no draw of MTLPrimitiveTypePoint). rt refuses it… |
 | `two-plane-announced-row-blits` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `two-plane-heap-blits` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `two-plane-pad-fills` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
