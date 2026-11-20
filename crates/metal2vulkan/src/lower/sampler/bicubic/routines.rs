@@ -3,10 +3,9 @@
 //!
 //! Each routine takes the bound format's `BicubicTexels` bits (or its `TexelFormat` class) as an
 //! argument, the texture slot's specialization constant at every call, so once a device
-//! specializes the module and inlines a call, the paths of the other formats fold away. Each is
-//! started by `ModuleBuilder::routine` or `ModuleBuilder::texel_routine`, so on a profile whose
-//! driver converts every function to one inlined at each call
-//! (`DriverWorkaround::FunctionsInlinedAtEveryCall`, MoltenVK 1.4.1) it states `DontInline`.
+//! specializes the module and inlines a call, the paths of the other formats fold away. The
+//! texel routine (the in-place linear quad's sum) is a kept routine (`ModuleBuilder::kept_routine`),
+//! declared `DontInline`; the others are plain functions.
 //!
 //! - [`Plane`] (a 2D bicubic sample): the Catmull-Rom weights (`a = -1/2`) of each axis's fraction
 //!   `k / 256` in `f32`, the footprint's sixteen taps summed row by row and then the rows, in the
@@ -98,7 +97,7 @@ pub struct Line {
 /// Define the 2D bicubic sample's routine in `mb`.
 pub fn define_plane(mb: &mut ModuleBuilder) -> BResult<Plane> {
     let t = types(mb)?;
-    let mut fb = mb.routine(t.vf)?;
+    let mut fb = mb.function(t.vf)?;
     let mut taps = Vec::with_capacity(16);
     for _ in 0..16 {
         taps.push(fb.param(t.vf)?);
@@ -158,7 +157,7 @@ pub fn define_plane(mb: &mut ModuleBuilder) -> BResult<Plane> {
 /// Define the 1D bicubic sample's routine in `mb`.
 pub fn define_line(mb: &mut ModuleBuilder) -> BResult<Line> {
     let t = types(mb)?;
-    let mut fb = mb.routine(t.vf)?;
+    let mut fb = mb.function(t.vf)?;
     let t0 = fb.param(t.vf)?;
     let t1 = fb.param(t.vf)?;
     let k = fb.param(t.u)?;
@@ -549,7 +548,7 @@ fn quad_params(fb: &mut FunctionBuilder<'_>, t: Tys) -> BResult<QuadParams> {
 /// 7, and below `2^16` where it is 8), and so is the biased one.
 fn define_exact_quad(mb: &mut ModuleBuilder) -> BResult<FuncId> {
     let t = types(mb)?;
-    let mut fb = mb.texel_routine(t.vf)?;
+    let mut fb = mb.kept_routine(t.vf)?;
     let q = quad_params(&mut fb, t)?;
     let fb_ = &mut fb;
     let g = grid(fb_, t, q.flags, Packed::Field)?;

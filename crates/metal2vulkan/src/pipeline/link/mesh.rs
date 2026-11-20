@@ -135,7 +135,7 @@ pub fn synthesized_stage(
 ) -> Result<(StageModule, Requirements), Error> {
     let module = vertex_module(r, last_first)?;
     let stats = crate::spirv::verify::verify(&module, p, m)?;
-    let module = crate::spirv::serialize::serialize_for(module, p)?;
+    let module = crate::spirv::serialize::serialize(module)?;
     let words = crate::spirv::serialize::relocate(&module, table)?;
     Ok((
         StageModule {

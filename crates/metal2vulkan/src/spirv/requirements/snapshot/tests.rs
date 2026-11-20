@@ -256,14 +256,14 @@ fn module(sink: Sink) -> TypedModule {
         .expect("pointer");
     let callee = match sink {
         Sink::ArmCallsDerivative => {
-            let mut g = b.routine(vec4).expect("routine");
+            let mut g = b.function(vec4).expect("routine");
             let x = g.param(vec4).expect("x");
             let d = g.derivative(DerivOp::DPdx, x).expect("derivative");
             g.ret(Some(d)).expect("ret");
             Some(g.finish().expect("callee"))
         }
         Sink::ThroughCall | Sink::DerivativeOfCall | Sink::BranchInCall => {
-            let mut g = b.routine(vec4).expect("routine");
+            let mut g = b.function(vec4).expect("routine");
             let x = g.param(vec4).expect("x");
             let y = match sink {
                 Sink::BranchInCall => {
@@ -276,7 +276,7 @@ fn module(sink: Sink) -> TypedModule {
             Some(g.finish().expect("callee"))
         }
         Sink::BranchInCallThroughPointer => {
-            let mut g = b.routine(void).expect("routine");
+            let mut g = b.function(void).expect("routine");
             let p = g.param(ptr).expect("p");
             let v = g.load(p, MemAccess::default()).expect("load");
             branch_on(&mut g, v, f32_);
@@ -284,7 +284,7 @@ fn module(sink: Sink) -> TypedModule {
             Some(g.finish().expect("callee"))
         }
         Sink::StoredByCallee => {
-            let mut g = b.routine(void).expect("routine");
+            let mut g = b.function(void).expect("routine");
             let p = g.param(ptr).expect("p");
             let x = g.param(f32_).expect("x");
             let zero = scalar(&mut g, u32_, 0);

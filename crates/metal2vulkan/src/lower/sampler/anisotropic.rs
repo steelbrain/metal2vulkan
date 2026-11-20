@@ -632,7 +632,7 @@ fn define(
 ) -> BResult<FuncId> {
     let f32_ = mb.ty(SType::Float { width: 32 })?;
     let ret = mb.ty(SType::Vector { elem: f32_, len: 4 })?;
-    let mut fb = mb.sampling_routine(ret)?;
+    let mut fb = mb.kept_routine(ret)?;
     let mut params = Vec::with_capacity(tys.len());
     for &ty in tys {
         params.push(fb.param(ty)?);

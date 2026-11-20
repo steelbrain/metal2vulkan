@@ -19,15 +19,6 @@ use crate::spirv::ir::{
 };
 use crate::spirv::requirements;
 
-/// How a function was started: a plain function, a routine, a texel routine, or a sampling routine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Started {
-    Plain,
-    Routine,
-    Texel,
-    Sampling,
-}
-
 /// A function under construction.
 #[derive(Clone, Debug)]
 pub(super) struct FunctionDraft {
@@ -38,12 +29,8 @@ pub(super) struct FunctionDraft {
     pub(super) vars: Vec<VarId>,
     /// Set by `FunctionBuilder::finish`.
     pub(super) fn_ty: Option<TypeId>,
-    /// Started by [`ModuleBuilder::routine`].
-    pub(super) routine: bool,
-    /// Started by [`ModuleBuilder::texel_routine`].
+    /// Started by [`ModuleBuilder::kept_routine`].
     pub(super) kept: bool,
-    /// Started by [`ModuleBuilder::sampling_routine`].
-    pub(super) sampling: bool,
 }
 
 /// A block under construction: `term` is `None` until the block is terminated.
@@ -1086,43 +1073,23 @@ impl ModuleBuilder {
 
     /// Start a function returning `ret`. Its entry block is open.
     pub fn function(&mut self, ret: TypeId) -> BResult<FunctionBuilder<'_>> {
-        self.start_function(ret, Started::Plain)
+        self.start_function(ret, false)
     }
 
-    /// Start a routine returning `ret`: a function the lowering defines once and calls from
-    /// every site that needs it. Written for a profile whose driver converts every function to
-    /// one inlined at each call (`DriverWorkaround::FunctionsInlinedAtEveryCall`: MoltenVK's
-    /// SPIRV-Cross 1.4.1, which still does so), it is declared `DontInline` (`OpFunction`'s
-    /// function control), the standard SPIR-V statement that each call should stay a call; for
-    /// any other profile it takes no control ([`crate::spirv::serialize::serialize_for`]). Its
+    /// Start a kept routine returning `ret`: a function the lowering defines once and calls from
+    /// every site that needs it, declared `DontInline` (`OpFunction`'s function control) on every
+    /// serialization (`crate::spirv::serialize::serialize`), the standard SPIR-V statement that its
+    /// calls stay calls. A linear filter emulation's sum (a texel routine) and one combined
+    /// binding's sample emulation (a sampling routine) are kept routines. A driver that honours the
+    /// control (NVIDIA's) compiles it once where it would otherwise compile it again inside every
+    /// sample that calls it, which made a fragment of a few hundred emulated samples take tens of
+    /// seconds to create on an RTX 3090; one that inlines every function (Mesa's) ignores it. Its
     /// entry block is open.
-    pub fn routine(&mut self, ret: TypeId) -> BResult<FunctionBuilder<'_>> {
-        self.start_function(ret, Started::Routine)
+    pub fn kept_routine(&mut self, ret: TypeId) -> BResult<FunctionBuilder<'_>> {
+        self.start_function(ret, true)
     }
 
-    /// Start a texel routine returning `ret`: a [`routine`](Self::routine) that sums a linear
-    /// filter emulation's taps, declared `DontInline` for every profile
-    /// ([`crate::spirv::serialize::serialize_for`]). A driver that honours the control (NVIDIA's)
-    /// compiles it once where it would otherwise compile it again inside every sample that calls
-    /// it, which made a fragment of a few hundred emulated samples take tens of seconds to create
-    /// on an RTX 3090; one that inlines every function (Mesa's) ignores it. Its entry block is
-    /// open.
-    pub fn texel_routine(&mut self, ret: TypeId) -> BResult<FunctionBuilder<'_>> {
-        self.start_function(ret, Started::Texel)
-    }
-
-    /// Start a sampling routine returning `ret`: a [`routine`](Self::routine) that holds the
-    /// emulation of one combined binding's sample shape, which every sample of that shape calls
-    /// with its plain data. It is declared `DontInline` where the profile states that its driver
-    /// keeps such a call a call (`DriverWorkaround::DontInlineKeepsCalls`, a measured cost fact),
-    /// and, as every routine, where its driver inlines every function at each call
-    /// (`DriverWorkaround::FunctionsInlinedAtEveryCall`); elsewhere it takes no control
-    /// ([`crate::spirv::serialize::serialize_for`]). Its entry block is open.
-    pub fn sampling_routine(&mut self, ret: TypeId) -> BResult<FunctionBuilder<'_>> {
-        self.start_function(ret, Started::Sampling)
-    }
-
-    fn start_function(&mut self, ret: TypeId, started: Started) -> BResult<FunctionBuilder<'_>> {
+    fn start_function(&mut self, ret: TypeId, kept: bool) -> BResult<FunctionBuilder<'_>> {
         match self.types.facts(ret)?.shape {
             Shape::Plain | Shape::Implicit => {}
             Shape::NotData if matches!(self.types.get(ret)?, Type::Void) => {}
@@ -1139,9 +1106,7 @@ impl ModuleBuilder {
             blocks: vec![entry],
             vars: Vec::new(),
             fn_ty: None,
-            routine: started != Started::Plain,
-            kept: started == Started::Texel,
-            sampling: started == Started::Sampling,
+            kept,
         });
         Ok(FunctionBuilder::new(self, func, entry))
     }
@@ -1337,9 +1302,7 @@ impl ModuleBuilder {
                 params: d.params,
                 blocks: d.blocks,
                 vars: d.vars,
-                routine: d.routine,
                 kept: d.kept,
-                sampling: d.sampling,
             });
         }
         let mut blocks = Vec::with_capacity(self.blocks.len());

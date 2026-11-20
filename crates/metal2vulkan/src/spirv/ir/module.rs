@@ -1216,19 +1216,11 @@ pub struct Function {
     pub blocks: Vec<BlockId>,
     /// `Function`-storage variables, declared at the top of the entry block.
     pub vars: Vec<VarId>,
-    /// Whether the function is a routine its callers share (`ModuleBuilder::routine`), which
-    /// `serialize::serialize_for` declares `DontInline` for a profile whose driver converts every
-    /// function to one inlined at each call.
-    pub routine: bool,
-    /// Whether the routine is a texel routine (`ModuleBuilder::texel_routine`): a linear filter
-    /// emulation's sum, which `serialize` declares `DontInline` for every profile, so a driver
-    /// that honours the control compiles it once and calls it from each site.
+    /// Whether the function is a kept routine (`ModuleBuilder::kept_routine`): a linear filter
+    /// emulation's sum or one combined binding's sample emulation, which `serialize` declares
+    /// `DontInline`, so a driver that honours the control compiles it once and calls it from each
+    /// site.
     pub kept: bool,
-    /// Whether the routine is a sampling routine (`ModuleBuilder::sampling_routine`): one
-    /// combined binding's sample emulation, which `serialize::serialize_for` declares
-    /// `DontInline` for a profile whose driver keeps such a call a call
-    /// (`DriverWorkaround::DontInlineKeepsCalls`) or inlines every function at each call.
-    pub sampling: bool,
 }
 
 /// Metadata of every loop, recorded by `FunctionBuilder::loop_`.

@@ -127,7 +127,7 @@ pub fn define(mb: &mut ModuleBuilder) -> BResult<FuncId> {
         signed: false,
     })?;
     let vf = mb.ty(SType::Vector { elem: f32_, len: 4 })?;
-    let mut fb = mb.routine(vf)?;
+    let mut fb = mb.function(vf)?;
     let x = fb.param(vf)?;
     let flags = fb.param(u32_)?;
     let channel = fb.param(u32_)?;

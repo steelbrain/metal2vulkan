@@ -13,12 +13,8 @@
 //! value's id (`lazy_values`), so SPIRV-Cross evaluates it where the module does, never inside a
 //! `?:` arm or a `&&`/`||` operand. A value SPIRV-Cross would forward into its one reader without
 //! the dependencies of its operands is written the same way (`forwards_without_dependencies`), so
-//! it is evaluated where the module does, before any later write overwrites what it reads. For a
-//! driver whose converter writes a composite insert into the composite it reads, or reads memory
-//! again in a loop for a value loaded before it ([`serialize_for`]), an insert whose composite is
-//! defined outside the innermost loop holding it reads a copy written just before it, and a value
-//! read from memory that a loop not defining it reads is materialized where it is defined, so no
-//! iteration reads what an earlier one wrote.
+//! it is evaluated where the module does, before any later write overwrites what it reads. A kept
+//! routine (a texel routine's sum or a sampling routine's emulation) is declared `DontInline`.
 //!
 //! Every number link assigns (descriptor set and binding, `Location`/`Component`, `SpecId`) is a
 //! literal operand of an `OpDecorate`. The serializer writes 0 there and records a relocation
@@ -27,7 +23,6 @@
 
 use crate::spv::{Decoration, Op};
 
-use crate::device::profile::{DeviceProfile, DriverWorkaround};
 use crate::device::requirements::Requirements;
 use crate::pipeline::sym::{ResourceKind, Symbol};
 use crate::spirv::builder::mesh_per_primitive;
@@ -110,124 +105,14 @@ pub fn relocate(r: &RelocatableModule, link: &impl SymbolTable) -> BResult<Vec<u
     Ok(words)
 }
 
-/// Serialize a finalized module (consumes it; only the words are retained).
+/// Serialize a finalized module (consumes it; only the words are retained). Each kept routine
+/// (`ModuleBuilder::kept_routine`) is declared `DontInline`, the standard SPIR-V statement that its
+/// calls stay calls: a driver that honours it (NVIDIA's) compiles the routine once, and one that
+/// inlines every function whatever its control (Mesa's) is unchanged. No other function takes a
+/// control: NVIDIA's driver ran a kernel of many plain routines 8.1 times as long with it on the
+/// RTX 3090.
 pub fn serialize(m: TypedModule) -> BResult<RelocatableModule> {
-    write(m, Options::default())
-}
-
-/// Serialize a finalized module for the driver `p` describes: as [`serialize`] does, and where
-/// the profile takes `DriverWorkaround::CompositeInsertsWrittenInPlace` (MoltenVK 1.4.1, whose
-/// SPIRV-Cross writes `c.x = v;` for an insert into `c` wherever no later read of `c` in the
-/// text it writes stops it), every `OpCompositeInsert` whose composite is defined outside the
-/// innermost loop holding it inserts into an `OpCopyObject` of the composite written just before
-/// it. SPIRV-Cross declares that copy where it stands, in the loop, and inserts into it, so no
-/// iteration overwrites the composite a later iteration reads. The composite itself is materialized
-/// where it is defined (its instruction under its own id, then the copy that carries its id, as the
-/// forwarding forms write a value): SPIRV-Cross would otherwise forward a composite it loads into
-/// the loop's copy, which reads memory a store in the loop may have changed since, where the
-/// in-place insert made it declare the composite before the loop. An insert outside every loop, or
-/// in the loop that defines its composite, runs once per definition: SPIRV-Cross's own tracking of
-/// later reads keeps it right, and it is written as [`serialize`] writes it.
-///
-/// Where the profile takes `DriverWorkaround::LoadsForwardedIntoLoops` (MoltenVK 1.4.1, whose
-/// SPIRV-Cross writes a loaded value into the text of each instruction that reads it, without
-/// counting reads, so a loop reads the memory again on every iteration), every value read from
-/// memory (an `OpLoad` of data or of a `PhysicalStorageBuffer` pointer, or an `OpCompositeExtract`
-/// or `OpVectorShuffle` of such a value, which SPIRV-Cross forwards the same way) that a loop not
-/// defining it reads is materialized where it is defined, so the loop reads the value loaded before
-/// it, never what a store of an earlier iteration left in that memory. A materialized array is
-/// copied element by element and constructed from the copies (`Ser::copy`), since that
-/// SPIRV-Cross initializes an array's `OpCopyObject` with a buffer block's plain array, which
-/// Metal's compiler refuses.
-///
-/// Where the profile takes `DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls`
-/// (MoltenVK 1.4.1, whose SPIRV-Cross declares `Workgroup` and `Private` variables in the entry
-/// point and so forwards a load from one past an atomic on it, or a call that writes it), each load
-/// from a `Workgroup` variable in a function holding an atomic that writes `Workgroup` memory, and
-/// each load from a `Workgroup` or `Private` variable in a function holding a call to a function
-/// that writes memory of that class, is materialized where it is defined, so its reader reads the
-/// value loaded there, never what the atomic or the call left.
-///
-/// Where the profile takes `DriverWorkaround::FunctionsInlinedAtEveryCall` (MoltenVK 1.4.1,
-/// whose SPIRV-Cross writes every function `always_inline`), each routine
-/// (`ModuleBuilder::routine`) is declared `DontInline`; for any other profile, as for
-/// [`serialize`], no function takes a control but a texel routine (`ModuleBuilder::texel_routine`),
-/// which every serialization declares `DontInline`. Where the profile takes
-/// `DriverWorkaround::DontInlineKeepsCalls` (a measured cost fact of NVIDIA's driver), each
-/// sampling routine (`ModuleBuilder::sampling_routine`) is declared `DontInline` too.
-pub fn serialize_for(m: TypedModule, p: &DeviceProfile) -> BResult<RelocatableModule> {
-    write(
-        m,
-        Options {
-            forwarding: Forwarding::of(p),
-            dont_inline: states_dont_inline(p),
-            keeps_calls: p
-                .fields()
-                .workarounds
-                .contains(&DriverWorkaround::DontInlineKeepsCalls),
-        },
-    )
-}
-
-/// What [`serialize_for`] writes for a profile beyond [`serialize`]'s words.
-#[derive(Clone, Copy, Default)]
-struct Options {
-    /// The encodings for a driver whose shader converter forwards values where the module reads
-    /// them otherwise.
-    forwarding: Forwarding,
-    /// Each routine is declared `DontInline`.
-    dont_inline: bool,
-    /// Each sampling routine is declared `DontInline`.
-    keeps_calls: bool,
-}
-
-/// What [`serialize_for`] writes for a driver whose shader converter forwards values where the
-/// module reads them otherwise, from the profile's workarounds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Forwarding {
-    /// `DriverWorkaround::CompositeInsertsWrittenInPlace`: an insert in a loop that does not
-    /// define its composite inserts into a copy, and the composite is materialized.
-    copy_inserts: bool,
-    /// `DriverWorkaround::LoadsForwardedIntoLoops`: a value read from memory that a loop not
-    /// defining it reads is materialized.
-    materialize_loads: bool,
-    /// `DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls`: a load from a `Workgroup`
-    /// or `Private` variable in a function holding a write SPIRV-Cross does not see as one to that
-    /// memory (an atomic, or a call) is materialized ([`localized_loads`]).
-    localized_loads: bool,
-}
-
-impl Forwarding {
-    fn of(p: &DeviceProfile) -> Forwarding {
-        let takes = |w: DriverWorkaround| p.fields().workarounds.contains(&w);
-        Forwarding {
-            copy_inserts: takes(DriverWorkaround::CompositeInsertsWrittenInPlace),
-            materialize_loads: takes(DriverWorkaround::LoadsForwardedIntoLoops),
-            localized_loads: takes(DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls),
-        }
-    }
-
-    /// Whether a loop encoding is written ([`loop_reads`]).
-    fn loops(self) -> bool {
-        self.copy_inserts || self.materialize_loads
-    }
-}
-
-/// Whether [`serialize_for`] declares each routine `DontInline` for `p`: where its driver converts
-/// every function to one inlined at each call, the GPU's compiler compiles a routine once per call,
-/// and `DontInline` states that the calls should stay calls. Elsewhere the control is left out:
-/// NVIDIA's driver honours it at a measured cost (a routine-heavy kernel ran 8.1 times as long with
-/// it on the RTX 3090), and Mesa's inline every function whatever it states.
-fn states_dont_inline(p: &DeviceProfile) -> bool {
-    p.fields()
-        .workarounds
-        .contains(&DriverWorkaround::FunctionsInlinedAtEveryCall)
-}
-
-/// Serialize `m` by `options` ([`serialize_for`]): with `options.forwarding`, the encodings its
-/// workarounds ask for; with `dont_inline`, each routine is declared `DontInline`.
-fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
-    let ids = Ids::assign(&m, options.forwarding)?;
+    let ids = Ids::assign(&m)?;
     let mut w = Writer::default();
     // Header; the bound is patched below.
     w.words
@@ -242,8 +127,6 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
     let s = Ser {
         m: &m,
         ids: &ids,
-        dont_inline: options.dont_inline,
-        keeps_calls: options.keeps_calls,
         controls,
     };
     s.preamble(&mut w)?;
@@ -262,23 +145,16 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
     })
 }
 
-/// The heap bytes of the id tables [`serialize_for`] holds while it writes `m` for `p`, for the
-/// byte ledger: one `u32` per value, block, and function, two per type (its id and its module-level
-/// `OpUndef`'s), one `bool` per value (which values SPIRV-Cross may evaluate lazily), one byte per
-/// value (how often SPIRV-Cross reads it and whether it may carry an index) and one `u32` per value
-/// while those are found (each copy's root), and the maps of void calls' ids and of materialized
-/// values' own ids, each at up to twice its bound (void calls; tangled instructions and
-/// instructions whose result SPIRV-Cross may forward without its operands' dependencies), rounded
-/// to a power of two as the map grows. Where `p` takes a loop encoding: two `u32`s per block (its
-/// layout position and its innermost loop's header's) and the stack of open loops, at most every
-/// loop of the module; where it copies inserts, the map of those copies' ids at up to twice the
-/// module's inserts; and the materialized values' map grown by every value it may materialize (each
-/// insert's composite, and each load, extract, or shuffle where it materializes loads). Where it
-/// materializes loads past atomics and calls: one byte per function (the storage classes it writes
-/// and those whose writes it holds unseen), and every load in the materialized values' map. One
-/// `BlockId` and `Unrolling` per loop that asks something of the driver's unrolling (the sorted
-/// headers the loop merges look up).
-pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
+/// The heap bytes of the id tables [`serialize`] holds while it writes `m`, for the byte ledger: one
+/// `u32` per value, block, and function, two per type (its id and its module-level `OpUndef`'s),
+/// one `bool` per value (which values SPIRV-Cross may evaluate lazily), one byte per value (how
+/// often SPIRV-Cross reads it and whether it may carry an index) and one `u32` per value while
+/// those are found (each copy's root), and the maps of void calls' ids and of materialized values'
+/// own ids, each at up to twice its bound (void calls; tangled instructions and instructions whose
+/// result SPIRV-Cross may forward without its operands' dependencies), rounded to a power of two as
+/// the map grows. One `BlockId` and `Unrolling` per loop that asks something of the driver's
+/// unrolling (the sorted headers the loop merges look up).
+pub fn id_table_bytes(m: &TypedModule) -> usize {
     let dense = m
         .types
         .len()
@@ -299,36 +175,6 @@ pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
         0 => 0,
         n => n.saturating_mul(2).next_power_of_two(),
     };
-    let form = Forwarding::of(p);
-    let inserts = match form.copy_inserts {
-        true => insts()
-            .filter(|n| matches!(n.inst, Inst::CompositeInsert { .. }))
-            .count(),
-        false => 0,
-    };
-    let loads = insts()
-        .filter(|n| match n.inst {
-            Inst::Load { .. } => form.materialize_loads || form.localized_loads,
-            Inst::CompositeExtract { .. } | Inst::VectorShuffle { .. } => form.materialize_loads,
-            _ => false,
-        })
-        .count();
-    let per_function = match form.localized_loads {
-        true => m.functions.len(),
-        false => 0,
-    };
-    let positions = match form.loops() {
-        true => m
-            .blocks
-            .len()
-            .saturating_mul(2 * std::mem::size_of::<u32>())
-            .saturating_add(
-                m.loops
-                    .len()
-                    .saturating_mul(std::mem::size_of::<(BlockId, u32)>()),
-            ),
-        false => 0,
-    };
     dense
         .saturating_mul(std::mem::size_of::<u32>())
         .saturating_add(
@@ -340,12 +186,8 @@ pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
             slots(void_calls).saturating_mul(std::mem::size_of::<((u32, u32), u32)>() + 1),
         )
         .saturating_add(
-            slots(materializable.saturating_add(inserts).saturating_add(loads))
-                .saturating_mul(std::mem::size_of::<(Value, u32)>() + 1),
+            slots(materializable).saturating_mul(std::mem::size_of::<(Value, u32)>() + 1),
         )
-        .saturating_add(slots(inserts).saturating_mul(std::mem::size_of::<((u32, u32), u32)>() + 1))
-        .saturating_add(positions)
-        .saturating_add(per_function)
         .saturating_add(
             m.loops
                 .iter()
@@ -536,8 +378,6 @@ fn forwards_without_dependencies(m: &TypedModule, inst: &Inst, reads: &Reads) ->
 /// carry an index that is not a constant.
 struct Reads {
     flags: Vec<u8>,
-    /// Each value's root: the value whose id a copy takes, itself for every other value.
-    root: Vec<u32>,
 }
 
 impl Reads {
@@ -549,15 +389,6 @@ impl Reads {
     const INDEXED: u8 = 0b0100_0000;
     /// While [`reads`] counts one instruction's reads: the value has been counted for it.
     const SEEN: u8 = 0b0010_0000;
-    /// [`serialize_for`] materializes the value where it is defined: it is the composite of an
-    /// insert in a loop that does not define it, a value read from memory ([`Reads::FROM_MEMORY`])
-    /// that such a loop reads, or a load from a `Workgroup` or `Private` variable past which its
-    /// function may write that memory unseen ([`localized_loads`]).
-    const MATERIALIZED: u8 = 0b0001_0000;
-    /// The value is read from memory as SPIRV-Cross forwards a load: an `OpLoad` of data or of a
-    /// `PhysicalStorageBuffer` pointer, or an `OpCompositeExtract` or `OpVectorShuffle` of such a
-    /// value.
-    const FROM_MEMORY: u8 = 0b0000_1000;
 
     /// `f` with one more read counted, saturating at 2.
     fn counted(f: u8) -> u8 {
@@ -578,28 +409,6 @@ impl Reads {
         self.flags
             .get(v.index())
             .is_none_or(|f| f & Self::INDEXED != 0)
-    }
-
-    /// The value whose id `v` takes: `v`'s root through copies.
-    fn root(&self, v: Value) -> BResult<Value> {
-        self.root
-            .get(v.index())
-            .map(|r| Value::new(*r))
-            .ok_or(BuildError::Dangling(Dangling::Value(v)))
-    }
-
-    /// Whether `v` has `flag`.
-    fn has(&self, v: Value, flag: u8) -> bool {
-        self.flags.get(v.index()).is_some_and(|f| f & flag != 0)
-    }
-
-    /// Give `v` `flag`.
-    fn mark(&mut self, v: Value, flag: u8) -> BResult<()> {
-        *self
-            .flags
-            .get_mut(v.index())
-            .ok_or(BuildError::Dangling(Dangling::Value(v)))? |= flag;
-        Ok(())
     }
 }
 
@@ -783,275 +592,7 @@ fn reads(m: &TypedModule) -> BResult<Reads> {
             }
         }
     }
-    Ok(Reads { flags, root })
-}
-
-/// What [`serialize_for`] writes for the values loops read in `form`: each `OpCompositeInsert` in a
-/// loop whose composite (through copies) is defined before the loop's header, by `(block,
-/// instruction index)`, each with 0 for its copy's id, which [`Ids::assign`] numbers; and, in
-/// `reads`, each value to materialize where it is defined ([`Reads::MATERIALIZED`]): such an
-/// insert's composite that an instruction defines, and a value read from memory
-/// ([`Reads::FROM_MEMORY`]) defined before the header of the innermost loop holding one of its
-/// reads (a phi reads its incoming value at the end of that value's block).
-///
-/// A loop is the layout interval from its header to its merge (which the verifier checks), and a
-/// value's definition dominates its reads, so a value is defined outside the innermost loop holding
-/// a read exactly when its block is laid out before that loop's header. A composite that is a
-/// constant, a global, or a parameter is never written into in place (SPIRV-Cross holds those as
-/// constants or variables), nor is a phi's, which it holds as a variable; a phi's is still copied,
-/// which costs nothing.
-fn loop_reads(
-    m: &TypedModule,
-    reads: &mut Reads,
-    form: Forwarding,
-) -> BResult<std::collections::HashMap<(u32, u32), u32>> {
-    let block = |b: &BlockId| {
-        m.blocks
-            .get(b.index())
-            .ok_or(BuildError::Dangling(Dangling::Block(*b)))
-    };
-    let dangling = |b: BlockId| BuildError::Dangling(Dangling::Block(b));
-    // Each block's layout position in its function, and the position of the header of the
-    // innermost loop holding it (`u32::MAX` outside every loop).
-    let mut position = vec![u32::MAX; m.blocks.len()];
-    let mut header = vec![u32::MAX; m.blocks.len()];
-    // The loops open at the block being visited, innermost last: each one's merge block, which
-    // closes it, and its header's position.
-    let mut open: Vec<(BlockId, u32)> = Vec::new();
-    for f in &m.functions {
-        open.clear();
-        for (at, b) in f.blocks.iter().enumerate() {
-            let at = u32::try_from(at).unwrap_or(u32::MAX);
-            while open.last().is_some_and(|(merge, _)| merge == b) {
-                open.pop();
-            }
-            if let Some(Merge::Loop { merge, .. }) = block(b)?.merge {
-                open.push((merge, at));
-            }
-            *position.get_mut(b.index()).ok_or(dangling(*b))? = at;
-            *header.get_mut(b.index()).ok_or(dangling(*b))? = open.last().map_or(u32::MAX, |l| l.1);
-        }
-    }
-    // Where `v` (through copies) is defined by an instruction or a phi, its block's position.
-    let defined = |reads: &Reads, v: Value| -> BResult<Option<(Value, u32, bool)>> {
-        let root = reads.root(v)?;
-        let (d, by_instruction) = match m.value(root)?.origin {
-            ValueOrigin::Inst(d) => (d, true),
-            ValueOrigin::Phi(d) => (d, false),
-            _ => return Ok(None),
-        };
-        let at = position.get(d.index()).copied().ok_or(dangling(d))?;
-        Ok(Some((root, at, by_instruction)))
-    };
-    let mut copies = std::collections::HashMap::new();
-    if form.materialize_loads {
-        // Which values are read from memory: one forward pass in layout order (definitions
-        // before their uses but a phi's incoming values, which these instructions never read).
-        for f in &m.functions {
-            for b in &f.blocks {
-                for n in &block(b)?.insts {
-                    let Some(r) = n.result else { continue };
-                    let from_memory = match &n.inst {
-                        Inst::Load { .. } => matches!(
-                            m.types().get(m.value(r)?.ty)?,
-                            Type::Bool
-                                | Type::Int { .. }
-                                | Type::Float { .. }
-                                | Type::Vector { .. }
-                                | Type::Matrix { .. }
-                                | Type::Array { .. }
-                                | Type::Struct { .. }
-                                | Type::Pointer {
-                                    class: StorageClass::PhysicalStorageBuffer,
-                                    ..
-                                }
-                        ),
-                        Inst::CompositeExtract { composite, .. } => {
-                            reads.has(reads.root(*composite)?, Reads::FROM_MEMORY)
-                        }
-                        Inst::VectorShuffle { a, b, .. } => {
-                            reads.has(reads.root(*a)?, Reads::FROM_MEMORY)
-                                || reads.has(reads.root(*b)?, Reads::FROM_MEMORY)
-                        }
-                        _ => false,
-                    };
-                    if from_memory {
-                        reads.mark(r, Reads::FROM_MEMORY)?;
-                    }
-                }
-            }
-        }
-        // A read in a loop of a value read from memory before the loop's header.
-        let crossing = |reads: &mut Reads, v: Value, h: u32| -> BResult<()> {
-            if h == u32::MAX {
-                return Ok(());
-            }
-            match defined(reads, v)? {
-                Some((root, at, true)) if at < h && reads.has(root, Reads::FROM_MEMORY) => {
-                    reads.mark(root, Reads::MATERIALIZED)
-                }
-                _ => Ok(()),
-            }
-        };
-        for f in &m.functions {
-            for b in &f.blocks {
-                let bd = block(b)?;
-                let h = header.get(b.index()).copied().ok_or(dangling(*b))?;
-                for p in &bd.phis {
-                    for (v, from) in &p.incoming {
-                        let h = header.get(from.index()).copied().ok_or(dangling(*from))?;
-                        crossing(reads, *v, h)?;
-                    }
-                }
-                let mut failed = None;
-                let mut visit = |v: Value| {
-                    if failed.is_none() {
-                        failed = crossing(reads, v, h).err();
-                    }
-                };
-                for n in &bd.insts {
-                    n.inst.for_each_value(&mut visit);
-                }
-                bd.term.for_each_value(&mut visit);
-                if let Some(e) = failed {
-                    return Err(e);
-                }
-            }
-        }
-    }
-    if form.copy_inserts {
-        for f in &m.functions {
-            for b in &f.blocks {
-                let h = header.get(b.index()).copied().ok_or(dangling(*b))?;
-                if h == u32::MAX {
-                    continue;
-                }
-                for (i, n) in block(b)?.insts.iter().enumerate() {
-                    let Inst::CompositeInsert { composite, .. } = &n.inst else {
-                        continue;
-                    };
-                    let Some((root, at, by_instruction)) = defined(reads, *composite)? else {
-                        continue;
-                    };
-                    if at >= h {
-                        continue;
-                    }
-                    copies.insert((b.0, i as u32), 0);
-                    if by_instruction {
-                        reads.mark(root, Reads::MATERIALIZED)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(copies)
-}
-
-/// Marks, in `reads`, each load SPIRV-Cross could forward past a write it does not see as one to
-/// the load's memory, which [`serialize_for`] materializes where it is defined
-/// ([`Reads::MATERIALIZED`]).
-///
-/// SPIRV-Cross's MSL backend declares the `Workgroup` and `Private` variables in the entry point
-/// (`CompilerMSL::localize_global_variables`, which removes them from `global_variables`), and the
-/// forwarded loads an atomic or a call invalidates are those of `global_variables`
-/// (`Compiler::flush_all_atomic_capable_variables`; `adec7acb`, MoltenVK 1.4.1's pin, and upstream
-/// `aa217aeb`). A plain store invalidates the loads of its own variable, so only these writes go
-/// unseen: in a function, an atomic that writes `Workgroup` (or `Private`) memory, and a call to a
-/// function that writes memory of either class, itself or through its own calls (SPIR-V has no
-/// recursion, so the closure settles within as many rounds as there are functions). Each load
-/// from a pointer of a class some write in its function hides is marked; a loaded value read
-/// before the write is copied too, which costs a copy and changes no answer.
-fn localized_loads(m: &TypedModule, reads: &mut Reads) -> BResult<()> {
-    // Per function: the classes it writes (itself or through its calls), and, shifted left by
-    // `HIDDEN`, the classes a write SPIRV-Cross does not see in it writes.
-    const WRITES_WORKGROUP: u8 = 0b01;
-    const WRITES_PRIVATE: u8 = 0b10;
-    const HIDDEN: u8 = 2;
-    // The bit a write through `ptr` sets: its storage class's, if SPIRV-Cross localizes it.
-    let written = |ptr: Value| -> BResult<u8> {
-        Ok(match m.types().get(m.value(ptr)?.ty)? {
-            Type::Pointer {
-                class: StorageClass::Workgroup,
-                ..
-            } => WRITES_WORKGROUP,
-            Type::Pointer {
-                class: StorageClass::Private,
-                ..
-            } => WRITES_PRIVATE,
-            _ => 0,
-        })
-    };
-    let block = |b: &BlockId| {
-        m.blocks
-            .get(b.index())
-            .ok_or(BuildError::Dangling(Dangling::Block(*b)))
-    };
-    let dangling = |fi: usize| {
-        BuildError::Dangling(Dangling::Func(FuncId::new(
-            u32::try_from(fi).unwrap_or(u32::MAX),
-        )))
-    };
-    let mut bits = vec![0u8; m.functions.len()];
-    for (fi, f) in m.functions.iter().enumerate() {
-        let mut own = 0u8;
-        for b in &f.blocks {
-            for n in &block(b)?.insts {
-                own |= match &n.inst {
-                    Inst::Store { ptr, .. } => written(*ptr)?,
-                    Inst::AtomicStore { ptr, .. }
-                    | Inst::Atomic { ptr, .. }
-                    | Inst::AtomicCompareExchange { ptr, .. } => {
-                        let w = written(*ptr)?;
-                        w | (w << HIDDEN)
-                    }
-                    _ => 0,
-                };
-            }
-        }
-        *bits.get_mut(fi).ok_or_else(|| dangling(fi))? = own;
-    }
-    // A call writes what its callee writes, unseen by SPIRV-Cross in the caller.
-    for _ in 0..=m.functions.len() {
-        let mut changed = false;
-        for (fi, f) in m.functions.iter().enumerate() {
-            let mut from_calls = 0u8;
-            for b in &f.blocks {
-                for n in &block(b)?.insts {
-                    if let Inst::Call { func, .. } = &n.inst {
-                        let callee = bits
-                            .get(func.index())
-                            .ok_or(BuildError::Dangling(Dangling::Func(*func)))?;
-                        let w = callee & (WRITES_WORKGROUP | WRITES_PRIVATE);
-                        from_calls |= w | (w << HIDDEN);
-                    }
-                }
-            }
-            let at = bits.get_mut(fi).ok_or_else(|| dangling(fi))?;
-            if *at | from_calls != *at {
-                *at |= from_calls;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    for (fi, f) in m.functions.iter().enumerate() {
-        let hides = bits.get(fi).copied().unwrap_or(0) >> HIDDEN;
-        if hides == 0 {
-            continue;
-        }
-        for b in &f.blocks {
-            for n in &block(b)?.insts {
-                if let (Some(r), Inst::Load { ptr, .. }) = (n.result, &n.inst) {
-                    if written(*ptr)? & hides != 0 {
-                        reads.mark(r, Reads::MATERIALIZED)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    Ok(Reads { flags })
 }
 
 // ---- Ids ----
@@ -1069,22 +610,15 @@ struct Ids {
     /// `(block, instruction index)`; a lookup table, never iterated.
     void_calls: std::collections::HashMap<(u32, u32), u32>,
     /// The instruction's own result id of each value SPIRV-Cross could evaluate where the module
-    /// does not: a tangled value it could evaluate lazily, a value it would forward into its one
-    /// reader without the dependencies of its operands, and a value [`serialize_for`] materializes
-    /// for its driver. The value's id is its `OpCopyObject`'s, written right after it. A lookup
-    /// table, never iterated.
+    /// does not: a tangled value it could evaluate lazily, and a value it would forward into its
+    /// one reader without the dependencies of its operands. The value's id is its
+    /// `OpCopyObject`'s, written right after it. A lookup table, never iterated.
     materialized: std::collections::HashMap<Value, u32>,
-    /// The id of the copy of its composite each `OpCompositeInsert` in a loop that does not define
-    /// the composite inserts into, by `(block, instruction index)`, where the serializer copies
-    /// them (empty otherwise); a lookup table, never iterated.
-    insert_copies: std::collections::HashMap<(u32, u32), u32>,
     bound: u32,
 }
 
 impl Ids {
-    /// In `form`, also each id of [`Ids::insert_copies`] and each value the workarounds
-    /// materialize.
-    fn assign(m: &TypedModule, form: Forwarding) -> BResult<Ids> {
+    fn assign(m: &TypedModule) -> BResult<Ids> {
         let mut next = 1u32;
         let mut take = || -> BResult<u32> {
             let id = next;
@@ -1103,15 +637,7 @@ impl Ids {
         let mut void_calls = std::collections::HashMap::new();
         let mut materialized = std::collections::HashMap::new();
         let lazy = lazy_values(m)?;
-        let mut reads = reads(m)?;
-        let mut insert_copies = if form.loops() {
-            loop_reads(m, &mut reads, form)?
-        } else {
-            std::collections::HashMap::new()
-        };
-        if form.localized_loads {
-            localized_loads(m, &mut reads)?;
-        }
+        let reads = reads(m)?;
         fn set(values: &mut [u32], v: Value, id: u32) -> BResult<()> {
             *values
                 .get_mut(v.index())
@@ -1181,23 +707,15 @@ impl Ids {
                     set(&mut values, p.result, take()?)?;
                 }
                 for (i, n) in bd.insts.iter().enumerate() {
-                    // An insert in a loop that does not define its composite inserts into a
-                    // copy, numbered just before it.
-                    if let Some(copy) = insert_copies.get_mut(&(b.0, i as u32)) {
-                        *copy = take()?;
-                    }
                     // A value SPIRV-Cross could evaluate where the module does not is written with
                     // its own id and a copy that carries the value's: a tangled value it could
-                    // evaluate lazily, a value it would forward into its one reader without the
-                    // dependencies of its operands, a value a loop that does not define it reads,
-                    // which it could forward into the loop, and a load it could forward past an
-                    // atomic or a call.
+                    // evaluate lazily, and a value it would forward into its one reader without
+                    // the dependencies of its operands.
                     let materialize = match n.result {
                         Some(r) => {
                             (n.inst.is_tangled() && lazy.get(r.index()).copied().unwrap_or(false))
                                 || (reads.count(r) == 1
                                     && forwards_without_dependencies(m, &n.inst, &reads)?)
-                                || reads.has(r, Reads::MATERIALIZED)
                         }
                         None => false,
                     };
@@ -1248,7 +766,6 @@ impl Ids {
             undefs,
             void_calls,
             materialized,
-            insert_copies,
             bound: next,
         })
     }
@@ -1338,10 +855,6 @@ fn string(s: &str) -> Vec<u32> {
 struct Ser<'a> {
     m: &'a TypedModule,
     ids: &'a Ids,
-    /// Each routine is declared `DontInline` ([`Options::dont_inline`]).
-    dont_inline: bool,
-    /// Each sampling routine is declared `DontInline` ([`Options::keeps_calls`]).
-    keeps_calls: bool,
     /// The headers of the loops whose `OpLoopMerge` asks something of the driver's unrolling,
     /// with what they ask, sorted ([`crate::spirv::ir::LoopMeta::unrolling`]).
     controls: Vec<(BlockId, Unrolling)>,
@@ -2015,15 +1528,8 @@ impl Ser<'_> {
             &[
                 self.ty(fd.ret)?,
                 self.ids.func(f)?,
-                // FunctionControl: `DontInline` (0x2) for a routine where the profile states it,
-                // for a texel routine on every profile, and for a sampling routine where the driver
-                // keeps its calls, else `None`.
-                if (self.dont_inline && fd.routine) || fd.kept || (self.keeps_calls && fd.sampling)
-                {
-                    0x2
-                } else {
-                    0
-                },
+                // FunctionControl: `DontInline` (0x2) for a kept routine, else `None`.
+                if fd.kept { 0x2 } else { 0 },
                 self.ty(fd.fn_ty)?,
             ],
         )?;
@@ -2067,7 +1573,7 @@ impl Ser<'_> {
             }
             w.inst(Op::Phi, &ops)?;
         }
-        for (i, n) in b.insts.iter().enumerate() {
+        for n in &b.insts {
             let own = n
                 .result
                 .and_then(|r| self.ids.materialized.get(&r).map(|id| (r, *id)));
@@ -2075,7 +1581,7 @@ impl Ser<'_> {
                 // A materialized value: the instruction under its own id, then the copy SPIRV-Cross
                 // declares as a temporary where it stands.
                 Some((r, own)) => {
-                    self.inst(w, (id, i as u32), Some((r, own)), &n.inst)?;
+                    self.inst(w, Some((r, own)), &n.inst)?;
                     let at = self.val(r)?;
                     let mut parts = at.checked_add(1).ok_or(BuildError::IdSpaceExhausted)?;
                     self.copy(w, self.value_ty(r)?, at, own, &mut parts)?;
@@ -2085,7 +1591,7 @@ impl Ser<'_> {
                         .result
                         .map(|r| self.val(r).map(|id| (r, id)))
                         .transpose()?;
-                    self.inst(w, (id, i as u32), result, &n.inst)?;
+                    self.inst(w, result, &n.inst)?;
                 }
             }
         }
@@ -2244,13 +1750,7 @@ impl Ser<'_> {
 
     /// Write `inst`; `result` is its value and the id the instruction writes it under (the
     /// value's own id, or a materialized value's instruction id).
-    fn inst(
-        &self,
-        w: &mut Writer,
-        site: (BlockId, u32),
-        result: Option<(Value, u32)>,
-        inst: &Inst,
-    ) -> BResult<()> {
+    fn inst(&self, w: &mut Writer, result: Option<(Value, u32)>, inst: &Inst) -> BResult<()> {
         // `[result type, result id]` of an instruction with a result.
         let head = || -> BResult<Vec<u32>> {
             let (r, id) = result.ok_or(BuildError::IdSpaceExhausted)?;
@@ -2325,19 +1825,7 @@ impl Ser<'_> {
                 composite,
                 indices,
             } => {
-                // An insert in a loop that does not define its composite inserts into a copy
-                // written here, where the copy's id says so.
-                let into = match self.ids.insert_copies.get(&(site.0 .0, site.1)) {
-                    Some(copy) => {
-                        w.inst(
-                            Op::CopyObject,
-                            &[self.result_ty(*composite)?, *copy, v(*composite)?],
-                        )?;
-                        *copy
-                    }
-                    None => v(*composite)?,
-                };
-                let mut ops = with(head()?, &[v(*object)?, into]);
+                let mut ops = with(head()?, &[v(*object)?, v(*composite)?]);
                 ops.extend_from_slice(indices);
                 w.inst(Op::CompositeInsert, &ops)
             }

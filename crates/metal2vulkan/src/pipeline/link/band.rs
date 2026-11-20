@@ -374,7 +374,7 @@ impl LineBand {
             ),
         ] {
             let stats = crate::spirv::verify::verify(&module, p, m)?;
-            let module = crate::spirv::serialize::serialize_for(module, p)?;
+            let module = crate::spirv::serialize::serialize(module)?;
             let words = crate::spirv::serialize::relocate(&module, table)?;
             out.push((
                 StageModule {

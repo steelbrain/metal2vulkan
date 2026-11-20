@@ -446,7 +446,7 @@ fn per_lane(fb: &mut FunctionBuilder<'_>, func: FuncId, f: Form, args: &[Value])
 /// remainder ([`fmod::fmod`]).
 pub fn define_fmod(mb: &mut ModuleBuilder) -> BResult<FuncId> {
     let t = mb.ty(Type::Float { width: 32 })?;
-    let mut fb = mb.routine(t)?;
+    let mut fb = mb.function(t)?;
     let (x, y) = (fb.param(t)?, fb.param(t)?);
     let mut e = E { fb: &mut fb };
     let v = fmod::fmod(&mut e, x, y)?;

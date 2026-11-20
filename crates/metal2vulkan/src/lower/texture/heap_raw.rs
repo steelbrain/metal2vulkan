@@ -86,7 +86,7 @@ pub fn define(mb: &mut ModuleBuilder, half: bool) -> BResult<FuncId> {
     let bool_ = mb.ty(SType::Bool)?;
     let vf = mb.ty(SType::Vector { elem: f32_, len: 4 })?;
     let vu = mb.ty(SType::Vector { elem: u32_, len: 4 })?;
-    let mut fb = mb.routine(vf)?;
+    let mut fb = mb.function(vf)?;
     let raw = fb.param(vu)?;
     let form = fb.param(u32_)?;
     let inb = fb.param(bool_)?;

@@ -2,12 +2,10 @@
 //! function none, and the entry states none.
 
 use super::kernel_on;
-use crate::device::DevicePolicy;
 use crate::lower::sampler::bicubic::routines;
 use crate::lower::texture::half;
-use crate::pipeline::testing::profile;
 use crate::spirv::builder::ModuleBuilder;
-use crate::spirv::serialize::serialize_for;
+use crate::spirv::serialize::serialize;
 
 /// Each `OpFunction`'s function control in `words`, in module order.
 fn controls(words: &[u32]) -> Vec<u32> {
@@ -24,8 +22,8 @@ fn controls(words: &[u32]) -> Vec<u32> {
     out
 }
 
-/// The texel conversion and the linear and bicubic filters' sums beside a kernel entry: on every
-/// profile the texel routine states `DontInline` (0x2, the in-place linear quad's exact sum) and
+/// The texel conversion and the linear and bicubic filters' sums beside a kernel entry: the texel
+/// routine, a kept routine, states `DontInline` (0x2, the in-place linear quad's exact sum) and
 /// every other function `None`.
 #[test]
 fn the_texel_routine_alone_is_declared_dont_inline() {
@@ -35,19 +33,12 @@ fn the_texel_routine_alone_is_declared_dont_inline() {
     routines::define_line(&mut b).expect("line");
     routines::define_quad(&mut b).expect("quad");
     let m = kernel_on(b, 3, &|_, p, _| Ok(p)).expect("kernel");
-    for stem in ["moltenvk-m3", "amd-rdna3-radv"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
-        let words = serialize_for(m.clone(), &p).expect("serialized").words;
-        let mut got = controls(&words);
-        got.sort_unstable();
-        // 4 routines (the plane's, the line's, the quad's, and the texel conversion) and the
-        // entry.
-        assert!(got.len() >= 5, "{stem}: {} functions", got.len());
-        let mut want = vec![0; got.len() - 1];
-        want.push(0x2);
-        assert_eq!(
-            got, want,
-            "{stem}: each routine's control, and none on the entry"
-        );
-    }
+    let words = serialize(m).expect("serialized").words;
+    let mut got = controls(&words);
+    got.sort_unstable();
+    // 4 routines (the plane's, the line's, the quad's, and the texel conversion) and the entry.
+    assert!(got.len() >= 5, "{} functions", got.len());
+    let mut want = vec![0; got.len() - 1];
+    want.push(0x2);
+    assert_eq!(got, want, "each routine's control, and none on the entry");
 }

@@ -411,7 +411,7 @@ fn typed_module_of(
     fences.apply(&mut module)?;
     crate::spirv::verify::verify(&module, p, m)?;
     if walked(&plan) {
-        let words = crate::spirv::serialize::serialize_for(module.clone(), p)?.words;
+        let words = crate::spirv::serialize::serialize(module.clone())?.words;
         assert_walk_estimate(entry, &plan, words.len());
     }
     Ok((plan, module))

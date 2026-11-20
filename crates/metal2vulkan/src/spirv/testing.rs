@@ -28,7 +28,7 @@ use crate::pipeline::sym::Symbol;
 use crate::spirv::ir::TypedModule;
 use crate::spirv::serialize::RelocatableModule;
 #[cfg(test)]
-use crate::spirv::serialize::{relocate, serialize_for};
+use crate::spirv::serialize::{relocate, serialize};
 
 /// A `spirv-val --target-env` value. Every profile emits SPIR-V 1.5, which both accept.
 #[non_exhaustive]
@@ -168,7 +168,7 @@ pub fn link_dense(r: &RelocatableModule) -> BTreeMap<Symbol, u32> {
 }
 
 /// L3 for a finished module on `profile`: the owned verifier (every rule, requirements ⊆ profile),
-/// serialization for the profile (`serialize_for`), a dense link ([`link_dense`]), and `spirv-val`
+/// serialization (`serialize`), a dense link ([`link_dense`]), and `spirv-val`
 /// under Vulkan 1.2 and the profile's environment with the profile's layout relaxations. Returns
 /// the linked words, or the first failure with a disassembly.
 #[cfg(test)]
@@ -176,7 +176,7 @@ pub fn check_valid(m: TypedModule, profile: &DeviceProfile) -> Result<Vec<u32>, 
     let mut meter = Meter::new(&Budget::default());
     crate::spirv::verify::check(&m, profile, &mut meter)
         .map_err(|e| format!("owned verifier: {e}"))?;
-    let r = serialize_for(m, profile).map_err(|e| format!("serialize: {e}"))?;
+    let r = serialize(m).map_err(|e| format!("serialize: {e}"))?;
     let words = relocate(&r, &link_dense(&r)).map_err(|e| format!("relocate: {e}"))?;
     check_words_valid(&words, &r.requirements, profile)?;
     Ok(words)

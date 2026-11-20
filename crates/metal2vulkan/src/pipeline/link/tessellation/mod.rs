@@ -439,7 +439,7 @@ pub fn synthesized_stages(
     let mut out = Vec::with_capacity(modules.len());
     for (module, stage) in modules {
         let stats = crate::spirv::verify::verify(&module, p, m)?;
-        let module = crate::spirv::serialize::serialize_for(module, p)?;
+        let module = crate::spirv::serialize::serialize(module)?;
         let words = crate::spirv::serialize::relocate(&module, table)?;
         out.push((
             StageModule {

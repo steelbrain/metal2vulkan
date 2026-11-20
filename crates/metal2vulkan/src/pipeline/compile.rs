@@ -3459,9 +3459,9 @@ fn lower_bounded<K>(
     // The bits of each specialization constant the module never reads.
     crate::spirv::spec_bits::mark_unread(&module, &mut symbols.spec, &specialized, m)?;
     // The serializer's id tables live while it writes.
-    let ids = crate::spirv::serialize::id_table_bytes(&module, p);
+    let ids = crate::spirv::serialize::id_table_bytes(&module);
     m.charge(ids)?;
-    let module = crate::spirv::serialize::serialize_for(module, p)?;
+    let module = crate::spirv::serialize::serialize(module)?;
     m.release(ids);
     m.charge(module.footprint())?; // The retained words and relocations.
 

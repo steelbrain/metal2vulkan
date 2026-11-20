@@ -509,7 +509,7 @@ impl GeometryStages {
         for class in CLASSES {
             let module = self.module(class)?;
             let stats = crate::spirv::verify::verify(&module, p, m)?;
-            let module = crate::spirv::serialize::serialize_for(module, p)?;
+            let module = crate::spirv::serialize::serialize(module)?;
             let words = crate::spirv::serialize::relocate(&module, table)?;
             let mut requirements = module.requirements;
             if self.multiview {
