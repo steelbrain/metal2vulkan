@@ -2700,6 +2700,7 @@ impl Backend for NewRuntime {
             ("submissions", metrics.submissions),
             ("pushes", metrics.pushes),
             ("pushes_held", metrics.pushes_held),
+            ("push_bytes", metrics.push_bytes),
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),

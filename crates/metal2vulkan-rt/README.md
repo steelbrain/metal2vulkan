@@ -2627,10 +2627,16 @@ or does not check is rebuilt from the generations' names, with young counted ful
   plus offsets, the resource IDs of their textures and sampler states, the state's constexpr
   sampler indices), binds the vertex buffers its vertex descriptor reads and the index buffer,
   and sets the dynamic state that changed since the encoder's last draw: all of it at the first.
-  A draw or a dispatch whose push bytes the command buffer already holds pushes nothing: the push
-  stays across pipelines, which share the one layout, so 2,000 draws of unchanged bindings are one
-  push and 2,000 `vkCmdDraw`s, as Metal's bindings set once stay for the draws after them.
-  `Counters::metrics`' `pushes` counts each push recorded and `pushes_held` each one skipped.
+  A bind marks its own slot: the next draw finds that slot's facts (its vertex binding's offset,
+  its buffer's alignment, whether it reaches a device copy or what the host reads) and fills that
+  slot's fields alone, writing into the parameter ring only a parameter block one of them is in;
+  a change of pipeline state finds and fills them all. Push constants belong to the
+  `VkCommandBuffer`: every pipeline shares the one layout and push range, so a push stays across
+  pipelines, both bind points and encoders, and a draw or a dispatch pushes only the words the
+  command buffer does not hold (the whole window at its first, then from the first word that
+  differs to the last). 2,000 draws of unchanged bindings are one push and 2,000 `vkCmdDraw`s, as
+  Metal's bindings set once stay for the draws after them. `Counters::metrics`' `pushes` counts
+  each push recorded, `pushes_held` each one skipped and `push_bytes` the bytes pushed.
   A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
   any number of draws records the barriers a pass of one does. A draw of no vertices, indices or instances
   records nothing.

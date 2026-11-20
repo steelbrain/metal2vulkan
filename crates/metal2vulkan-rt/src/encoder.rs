@@ -1524,8 +1524,17 @@ impl Building {
             if self.bind(pipeline) {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             }
-            if !push.is_empty() && self.push_needed(push) {
-                device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
+            // Every word of the window compared with what the command buffer holds, whoever
+            // pushed it: the words that differ are pushed.
+            let words = match push.is_empty() {
+                true => None,
+                false => self.push_words(push, 0..push.len(), &mut u64::MAX),
+            };
+            if let Some(words) = words {
+                // Word-aligned: each field is at a multiple of its size, 4 bytes or more, and the
+                // window ends at a multiple of 4.
+                let offset = words.start as u32;
+                device.cmd_push_constants(command, core.layout, PUSH_STAGES, offset, &push[words]);
             }
             match *launch {
                 Launch::Direct(groups) => {

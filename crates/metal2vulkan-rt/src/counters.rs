@@ -109,6 +109,8 @@ pub(crate) enum Metric {
     Pushes,
     /// [`Metrics::pushes_held`].
     PushesHeld,
+    /// [`Metrics::push_bytes`].
+    PushBytes,
     /// [`Metrics::upload_waits`].
     UploadWaits,
     /// [`Metrics::staging_sleeps`].
@@ -163,6 +165,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::RingWrites,
     Metric::Pushes,
     Metric::PushesHeld,
+    Metric::PushBytes,
     Metric::UploadWaits,
     Metric::StagingSleeps,
     Metric::Synchronizations,
@@ -207,7 +210,12 @@ const _: () = assert!(METRICS <= u32::BITS as usize);
 impl Tally {
     /// Counts one more of `metric`.
     pub(crate) fn count(&mut self, metric: Metric) {
-        self.counts[metric as usize] += 1;
+        self.count_some(metric, 1);
+    }
+
+    /// Counts `count` more of `metric`.
+    pub(crate) fn count_some(&mut self, metric: Metric, count: u64) {
+        self.counts[metric as usize] += count;
         self.counted |= 1 << metric as usize;
     }
 }
@@ -383,6 +391,7 @@ struct Atomics {
     ring_writes: AtomicU64,
     pushes: AtomicU64,
     pushes_held: AtomicU64,
+    push_bytes: AtomicU64,
     upload_waits: AtomicU64,
     staging_sleeps: AtomicU64,
     synchronizations: AtomicU64,
@@ -527,6 +536,7 @@ impl Counters {
             Metric::RingWrites => &a.ring_writes,
             Metric::Pushes => &a.pushes,
             Metric::PushesHeld => &a.pushes_held,
+            Metric::PushBytes => &a.push_bytes,
             Metric::UploadWaits => &a.upload_waits,
             Metric::StagingSleeps => &a.staging_sleeps,
             Metric::Synchronizations => &a.synchronizations,
@@ -1041,6 +1051,7 @@ impl Counters {
             ring_writes: a.ring_writes.load(Relaxed),
             pushes: a.pushes.load(Relaxed),
             pushes_held: a.pushes_held.load(Relaxed),
+            push_bytes: a.push_bytes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
             staging_sleeps: a.staging_sleeps.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
@@ -1395,6 +1406,10 @@ pub struct Metrics {
     /// push: every pipeline shares the device's one layout and push range, so a push stays for the
     /// draws and dispatches after it.
     pub pushes_held: u64,
+    /// The bytes those pushes recorded: of a draw's or a dispatch's push bytes, from the first word
+    /// the command buffer did not hold to the last, and every word past the bytes it held, which
+    /// are undefined at a command buffer's start (`vkCmdPushConstants`).
+    pub push_bytes: u64,
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,
