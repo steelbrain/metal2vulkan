@@ -80,23 +80,10 @@
 //! ([`ShadowMergeRead`]), and [`shadow_merge_kept_image_module`] reading the kept texels from an
 //! image copy of the shadow too), and where a device copies a shadow back faster by a dispatch, [`shadow_copy_back_module`] stores its texels' words at their rows, and
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
-//! A copy of many
-//! equal rows between two buffers is one dispatch of [`rows_copy_module`] where a copy's region
-//! per row costs more. A reset of a run of indirect commands is one dispatch of
-//! [`icb_reset_module`], which writes only the records whose written flag is set. A copy of 32-bit float depths into a depth image of a device that takes
+//! A copy of 32-bit float depths into a depth image of a device that takes
 //! none outside `[0, 1]` clamps them first through [`depth_clamp_module`] ([`clamped_depth`] on
-//! the CPU). A blit through a `BGRA10_XR` texture Metal keeps losslessly compressed
-//! writes Metal's canonical encoding of its texels through [`extended_canonical_module`] where
-//! the policy asks for it. A blit between a buffer
-//! and a two-plane extended-range texture moves its color words through [`plane_words_module`],
-//! and a blit between two such textures moves both planes as Metal's blit does through
-//! [`plane_copy_module`]. A rotated texture's texels move between its
-//! pass's frame and its store through [`rotate_texels_module`], and a heap's two-plane
-//! extended-range texture's texels between its image and its two planes in the heap's bytes through
-//! [`two_plane_texels_module`]; a blit into such a texture of a heap writes the heap's bytes at
-//! Metal's rows through [`plane_bytes_copy_module`]. A heap texture over host pages keeps its
-//! elements in the heap's bytes in Metal's tiled layout, moved between its image and those bytes
-//! through [`tiled_texels_module`]. An ASTC texture
+//! the CPU). A heap's two-plane extended-range texture's texels move between its image and its two
+//! planes in the heap's bytes through [`two_plane_texels_module`]. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names); a PVRTC texture on a device without its
 //! format through a twin of its texels' codes ([`PvrtcDecode`]); an ETC2 or EAC texture on a
@@ -133,14 +120,10 @@ pub(crate) mod depth_clamp;
 pub(crate) mod depth_stencil_copy;
 pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
-pub(crate) mod dynamic_views;
 pub(crate) mod etc_decode;
-pub(crate) mod extended_canonical;
-pub(crate) mod extended_shadow;
 pub mod fan_out;
 pub(crate) mod graphics;
 pub(crate) mod heap;
-pub(crate) mod icb_reset;
 pub(crate) mod index_bounds;
 pub(crate) mod index_rewrite;
 pub(crate) mod indirect_clamp;
@@ -150,17 +133,11 @@ pub(crate) mod mesh_arguments;
 pub(crate) mod mesh_scan;
 pub(crate) mod mipmap_filter;
 pub(crate) mod neutral;
-pub(crate) mod pages_copy;
 pub(crate) mod plan;
-pub(crate) mod plane_bytes_copy;
-pub(crate) mod plane_copy;
-pub(crate) mod plane_words;
 pub(crate) mod pvrtc_decode;
 pub(crate) mod rate_map;
 pub(crate) mod replay;
 pub(crate) mod resident;
-pub(crate) mod rotate_texels;
-pub(crate) mod rows_copy;
 pub(crate) mod sample_interleave;
 pub(crate) mod sample_planes;
 pub(crate) mod shadow_copy_back;
@@ -174,13 +151,10 @@ pub(crate) mod tessellation_scan;
 pub(crate) mod texel_parts;
 pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
-pub(crate) mod tiled_texels;
 pub(crate) mod two_plane_texels;
 pub(crate) mod visibility_combine;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
-pub(crate) mod ycbcr_refresh;
-pub(crate) mod ycbcr_sample;
 pub(crate) mod ycbcr_write;
 
 pub use acceleration::{
@@ -212,10 +186,6 @@ pub use depth_stencil_resolve::{
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
-pub use extended_canonical::{
-    extended_canonical_module, extended_range_canonical, ExtendedCanonicalModule,
-};
-pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
     alpha_test_code, DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups,
     MeshRecordsRegion, TessellationDispatch, TessellationRecords,
@@ -250,7 +220,6 @@ pub use mipmap_filter::{
     MipmapFilterModule,
 };
 pub use neutral::NeutralResource;
-pub use pages_copy::{pages_copy_module, PagesCopy, PagesCopyModule};
 pub use plan::resources::sampler_desc;
 pub use plan::{
     AccessClass, BindingPlan, ByteRange, ComputeTemplate, DescriptorWrite, FieldLocation,
@@ -297,16 +266,7 @@ pub use state::{
 };
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
-pub use dynamic_views::{dynamic_views_module, DynamicViewsModule};
-pub use icb_reset::{icb_reset_module, IcbResetModule};
-pub use plane_bytes_copy::{
-    plane_bytes_copy_module, PlaneBytes, PlaneBytesCopyModule, PlaneSource,
-};
-pub use plane_copy::{plane_copy_module, PlaneCopyModule, PlaneRows};
-pub use plane_words::{plane_words_module, PlaneWordsModule};
 pub use pvrtc_decode::PvrtcDecode;
-pub use rotate_texels::{rotate_texels_module, RotateTexelsModule};
-pub use rows_copy::{rows_copy_module, RowsCopyModule};
 pub use sample_interleave::{
     interleave_merge_modules, interleave_split_module, InterleaveMergeModules,
     InterleaveSplitModule,
@@ -332,7 +292,6 @@ pub use tessellation_scan::{
 pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
-pub use tiled_texels::{tiled_texels_module, TiledLevelMove, TiledTexelsModule};
 pub use two_plane_texels::{two_plane_texels_module, PlaneLayout, TwoPlaneTexelsModule};
 pub use visibility_combine::{
     visibility_combine_module, ContinuedResult, VisibilityCombine, VisibilityCombineModule,
@@ -342,6 +301,4 @@ pub use ycbcr_convert::{
     YCbCrConversion, YCbCrConvertModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
 };
 pub use ycbcr_in_place::{YCbCrInPlace, YCbCrPlanesSampler};
-pub use ycbcr_refresh::{ycbcr_refresh_module, YCbCrRefreshModule};
-pub use ycbcr_sample::{ycbcr_sample_module, YCbCrSampleModule};
 pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};

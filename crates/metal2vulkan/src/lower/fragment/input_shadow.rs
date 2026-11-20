@@ -30,8 +30,7 @@
 //! refused (`NotImplemented(FramebufferFetch)`), and so is one that returns a sample mask, one in a
 //! pipeline with alpha to coverage (both drop samples of the codes after the function), one that
 //! loops over its covered samples, and in a multisampled pipeline one that does not read the
-//! attachment (Metal runs it once per pixel, where the shadow holds each sample): the runtime keeps
-//! such a draw's colors on the codes (`render/extended_shadow.rs`), which it announces.
+//! attachment (Metal runs it once per pixel, where the shadow holds each sample).
 
 use std::collections::BTreeMap;
 

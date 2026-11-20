@@ -6,9 +6,7 @@
 //! either sign is 1.0 (`0x3f800000`), `-0.0` stays, every other value with its sign set is 0,
 //! a value above 1.0 (`+inf` among them) is 1.0, and every other value stays. A copy into a depth
 //! image of a device without `VK_EXT_depth_range_unrestricted` takes no value outside `[0, 1]`
-//! (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and such a device stores one clamped; the
-//! heap's tiled texels clamp as they move into their image by this same clamp
-//! ([`TiledLevelMove::clamps_depth`](super::TiledLevelMove::clamps_depth)).
+//! (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and such a device stores one clamped.
 //!
 //! **The module.** One `GLCompute` entry `main` with local size
 //! ([`DepthClampModule::LOCAL_SIZE`], 1, 1), [`DepthClampModule::PUSH_BYTES`] of `COMPUTE` push

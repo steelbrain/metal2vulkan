@@ -13,7 +13,7 @@
 //! the [`RegisteredBuffer`] whose interval holds a buffer's address. The device replay (`replay_preprocess`)
 //! reads the same records on the GPU. Storage may hold a written flag per command past the
 //! records ([`written_flag_offset`]), which a kernel's writes of a record set, so a reset need
-//! touch only the flagged records (`IcbResetModule`).
+//! touch only the flagged records.
 
 pub use crate::indirect_commands::records_address;
 pub use crate::indirect_commands::written_flag_offset;

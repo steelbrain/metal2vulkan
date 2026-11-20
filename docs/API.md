@@ -1594,9 +1594,8 @@ finds them only at their start: records may run past later IDs' starts, and a re
 (`bind::ResidentSet`) keeps each records range whole. Each of the kernel's writes of a command's
 record also stores 1 at the command's written flag, a `u32` a command past the records
 (`bind::indirect_commands::written_flag_offset`), where the storage holds them; storage that ends
-at its records takes none. A consumer whose own writes of the records set the flags too resets a
-run of commands with `icb_reset_module`, which writes only the flagged records and clears their
-flags.
+at its records takes none. A consumer whose own writes of the records set the flags too may reset
+only the flagged records of a run of commands, clearing each flag with its record.
 
 ## 7. Caching
 

@@ -15,7 +15,6 @@ use crate::bind::{
 };
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
-use crate::metal::format::ExtendedRange;
 use crate::metal::{
     TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition, Winding,
 };
@@ -27,23 +26,6 @@ type Build = (
     String,
     Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>,
 );
-
-/// Every value of `ExtendedRange`.
-const EXTENDED: [ExtendedRange; 13] = [
-    ExtendedRange::Bgr10 { srgb: false },
-    ExtendedRange::Bgr10 { srgb: true },
-    ExtendedRange::Bgra10 { srgb: false },
-    ExtendedRange::Bgra10 { srgb: true },
-    ExtendedRange::Planes { srgb: false },
-    ExtendedRange::Planes { srgb: true },
-    ExtendedRange::R10X6,
-    ExtendedRange::Rg10X12,
-    ExtendedRange::R10X6Srgb,
-    ExtendedRange::Rg10X12Srgb,
-    ExtendedRange::R16Bfloat,
-    ExtendedRange::Rg16Bfloat,
-    ExtendedRange::Rgba16Bfloat,
-];
 
 /// Both forms of a shadow merge's stores.
 const STORES: [bind::ShadowMergeStores; 2] = [
@@ -65,17 +47,10 @@ fn modules() -> Vec<Build> {
         indirect_clamp_module,
         mesh_object_arguments_module,
         mesh_scan_module,
-        plane_bytes_copy_module,
-        plane_copy_module,
-        plane_words_module,
         predication_step_module,
         replay_preprocess_module,
-        rotate_texels_module,
-        rows_copy_module,
-        tiled_texels_module,
         two_plane_texels_module,
         visibility_combine_module,
-        ycbcr_refresh_module,
         ycbcr_write_module,
     );
     let mut push =
@@ -86,12 +61,6 @@ fn modules() -> Vec<Build> {
         push(
             format!("shadow_merge_module({stores:?})"),
             Box::new(move |d| Ok(bind::shadow_merge_module(d, stores)?.spirv)),
-        );
-    }
-    for form in EXTENDED {
-        push(
-            format!("extended_shadow_module({form:?})"),
-            Box::new(move |d| Ok(bind::extended_shadow_module(d, form)?.spirv)),
         );
     }
     for program in RewriteProgram::ALL {
@@ -134,12 +103,6 @@ fn modules() -> Vec<Build> {
         push(
             format!("ycbcr_convert_floats_module({conversion:?})"),
             Box::new(move |d| Ok(bind::ycbcr_convert_floats_module(d, conversion)?.spirv)),
-        );
-    }
-    for copy in bind::PagesCopy::ALL {
-        push(
-            format!("pages_copy_module({copy:?})"),
-            Box::new(move |d| Ok(bind::pages_copy_module(d, copy)?.spirv)),
         );
     }
     for copy in PlanesCopy::ALL {

@@ -146,7 +146,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/lower/access/mod.rs", "compile-time translation, reached only from lower/dispatch.rs's kernel plan, which asks `identity` whether the profile takes the identity domains; what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests; the tile staging format reaches a run through the plan"),
         ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
-        ("metal2vulkan/src/lower/arith/extended_range.rs", "the extended-range arithmetic, compile-time translation: the runtime reaches it only through the half shadow's load (bind/extended_shadow.rs), which emits tile_value, the fetch's own decode that every pipeline reading such an attachment compiles, so a change to it is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
+        ("metal2vulkan/src/lower/arith/extended_range.rs", "the extended-range arithmetic, compile-time translation: the runtime reaches it only through the extended-range color resolve (bind/color_resolve.rs), which emits its decode, encode and pack, the ones a pipeline reading or writing such an attachment compiles, so a change to it is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
         // The block decode (`bind/block_decode.rs`) and its exact division
         // (`lower/arith/exact_division.rs`) reach the numeric forms and the constant emission at
         // run time.

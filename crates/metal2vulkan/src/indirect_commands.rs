@@ -102,7 +102,7 @@ pub const WRITTEN_FLAG_BYTES: usize = 4;
 /// flag, and its records are written as before. A consumer whose storage holds the flags, and
 /// whose own writes of the records set them as well, knows a record whose flag is clear to hold
 /// what it last reset it to, and may reset only the flagged ones, clearing each flag with its
-/// record (`bind::IcbResetModule`).
+/// record.
 pub const fn written_flag_offset(capacity: u32, index: u32) -> u64 {
     COMMAND_BUFFER_HEADER_BYTES as u64
         + capacity as u64 * COMMAND_BYTES as u64
