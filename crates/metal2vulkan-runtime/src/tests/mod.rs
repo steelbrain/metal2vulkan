@@ -43,6 +43,7 @@ pub(crate) mod layouts;
 mod linear_planes;
 #[cfg(m2v_gpu)]
 mod locks;
+mod lost_writes;
 mod lowered;
 mod maker_yield;
 mod managed;
