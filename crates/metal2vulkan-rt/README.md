@@ -210,7 +210,8 @@ in its memory.
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
   larger than the staging region), `zero_source_allocations` and `take_allocations` (a take that
   no free range fits). A take's parts are timed apart, each as a `Timed` (calls, bytes, total
-  and longest time, and the calls over 1, 5 and 20 ms): `Metrics::takes` (each take whole, a
+  and longest time, the longest call's bytes and whether it made an allocation of its own, and
+  the calls over 1, 5 and 20 ms): `Metrics::takes` (each take whole, a
   texture block's among them), `take_lock_waits` (its wait for the pool's lock), `take_makes`
   (an allocation it made for itself on the caller's thread: the buffer, `vkAllocateMemory`, the
   bind, the address and a Shared one's map), `take_maps` (the consumer's `BlockMappings::map` of

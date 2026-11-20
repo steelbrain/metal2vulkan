@@ -844,10 +844,11 @@ impl Pool {
         let mut state = self.lock();
         let locked = crate::host_time();
         self.counters
-            .timed(Part::TakeLock, 0, locked.saturating_sub(started));
-        let took = |memory: Memory| {
+            .timed(Part::TakeLock, 0, locked.saturating_sub(started), false);
+        let took = |memory: Memory, made: bool| {
             self.counters.rise_by(class.placed_gauge(), memory.len);
-            (self.counters).timed(Part::Take, memory.len, crate::host_time() - started);
+            let nanos = crate::host_time() - started;
+            (self.counters).timed(Part::Take, memory.len, nanos, made);
             memory
         };
         // A take is a pool event: the block-maker thread tries a failed allocation again.
@@ -868,14 +869,14 @@ impl Pool {
             // The block-maker thread runs the idle rule on this take, and makes an allocation
             // where it took the class's last wholly free unit.
             self.changed.notify_all();
-            return Ok(took(carve.block(id, class, len)));
+            return Ok(took(carve.block(id, class, len), false));
         }
         drop(state);
         let memory = self.own(core, class, len, align, id, site)?;
         let mut state = self.lock();
         self.settle(&mut state, class);
         self.changed.notify_all();
-        Ok(took(memory))
+        Ok(took(memory, true))
     }
 
     /// Makes block `id` of `len` bytes at a multiple of `align` at the start of an allocation of
@@ -894,10 +895,10 @@ impl Pool {
         let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN), Some(site))?;
         let made = crate::host_time();
         let bytes = allocation.len;
-        (self.counters).timed(Part::TakeMake, bytes, made.saturating_sub(started));
+        (self.counters).timed(Part::TakeMake, bytes, made.saturating_sub(started), true);
         let mapped = self.map(&allocation, class, true);
         if self.mappings.is_some() {
-            (self.counters).timed(Part::TakeMap, bytes, crate::host_time() - made);
+            (self.counters).timed(Part::TakeMap, bytes, crate::host_time() - made, false);
         }
         if !mapped {
             free_allocation(core, allocation);
@@ -1275,6 +1276,7 @@ fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
         Part::MakerMake,
         allocation.len,
         crate::host_time() - started,
+        true,
     );
     if !core.pool.map(&allocation, class, false) {
         free_allocation(core, allocation);

@@ -260,10 +260,10 @@ impl Device {
                             .write_bytes(0, (length - from) as usize)
                     };
                     let nanos = crate::host_time() - started;
-                    (self.core().counters).timed(Part::ZeroWrite, length - from, nanos);
+                    (self.core().counters).timed(Part::ZeroWrite, length - from, nanos, false);
                     if block.memory.len > MemoryClass::Shared.block_len() {
                         let part = Part::LongTakeZeroWrite;
-                        (self.core().counters).timed(part, length - from, nanos);
+                        (self.core().counters).timed(part, length - from, nanos, false);
                     }
                 }
                 None => (self.core().work).zero(self.core(), &block, offset + from, end)?,

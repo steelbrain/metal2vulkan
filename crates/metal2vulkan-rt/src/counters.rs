@@ -1,8 +1,9 @@
 //! The device's counters: cumulative metrics and live gauges, as relaxed atomics that are always
-//! on. Each part of the runtime adds to its own; nothing turns them on or off.
+//! on, and each timed part's longest call under a lock taken only when a call passes it. Each part
+//! of the runtime adds to its own; nothing turns them on or off.
 
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The most threads a device runs at once: its reaper, block-maker, submit and completion
 /// threads, and its cache directory's removal thread while one runs.
@@ -47,6 +48,15 @@ pub(crate) enum Part {
 
 /// The number of [`Part`]s.
 const PARTS: usize = Part::LongTakeZeroWrite as usize + 1;
+
+/// A [`Part`]'s longest call: its nanoseconds, its bytes, and whether it made an allocation of
+/// its own ([`Timed::longest_made`]).
+#[derive(Clone, Copy, Default)]
+struct Longest {
+    nanos: u64,
+    bytes: u64,
+    made: bool,
+}
 
 /// A metric the runtime adds to.
 #[derive(Clone, Copy)]
@@ -383,6 +393,8 @@ struct Atomics {
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
+    /// Each [`Part`]'s longest call, at its index, set whole by the call that passes it.
+    longest: [Mutex<Longest>; PARTS],
     handles_out: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
@@ -653,12 +665,20 @@ impl Counters {
 
     /// One call of `part`, of `bytes` bytes, that took `nanos` nanoseconds ([`Metrics::takes`]
     /// and the other parts').
-    pub(crate) fn timed(&self, part: Part, bytes: u64, nanos: u64) {
+    pub(crate) fn timed(&self, part: Part, bytes: u64, nanos: u64, made: bool) {
         let [count, all, total, longest, over @ ..] = &self.atomics.parts[part as usize];
         count.fetch_add(1, Relaxed);
         all.fetch_add(bytes, Relaxed);
         total.fetch_add(nanos, Relaxed);
-        longest.fetch_max(nanos, Relaxed);
+        // Only a call past the longest so far takes the lock, which nothing else holds while it
+        // takes another; of two that pass it at once, the longer is kept.
+        if nanos > longest.fetch_max(nanos, Relaxed) {
+            let record = &self.atomics.longest[part as usize];
+            let mut record = record.lock().unwrap_or_else(PoisonError::into_inner);
+            if nanos > record.nanos {
+                *record = Longest { nanos, bytes, made };
+            }
+        }
         for (bound, over) in OVER_NANOS.iter().zip(over) {
             if nanos > *bound {
                 over.fetch_add(1, Relaxed);
@@ -912,12 +932,16 @@ impl Counters {
             }
         };
         let part = |part: Part| {
-            let [count, bytes, total, longest, over_1, over_5, over_20] = &a.parts[part as usize];
+            let [count, bytes, total, _, over_1, over_5, over_20] = &a.parts[part as usize];
+            let longest =
+                *(a.longest[part as usize].lock()).unwrap_or_else(PoisonError::into_inner);
             Timed {
                 count: count.load(Relaxed),
                 bytes: bytes.load(Relaxed),
                 total_nanos: total.load(Relaxed),
-                longest_nanos: longest.load(Relaxed),
+                longest_nanos: longest.nanos,
+                longest_bytes: longest.bytes,
+                longest_made: longest.made,
                 over_1_ms: over_1.load(Relaxed),
                 over_5_ms: over_5.load(Relaxed),
                 over_20_ms: over_20.load(Relaxed),
@@ -1482,6 +1506,14 @@ pub struct Timed {
     /// The longest, in nanoseconds; a maximum since the device was made, so the difference of two
     /// reads does not apply to it.
     pub longest_nanos: u64,
+    /// The longest call's bytes, as the part counts them; with
+    /// [`longest_nanos`](Self::longest_nanos), from the same call.
+    pub longest_bytes: u64,
+    /// Whether the longest call made an allocation of its own: for
+    /// [`Metrics::takes`], a take no free range fit; every take make and maker make is one
+    /// ([`Metrics::take_makes`], [`Metrics::maker_makes`]); false for the other parts. From the
+    /// same call as [`longest_nanos`](Self::longest_nanos).
+    pub longest_made: bool,
     /// Those longer than 1 ms.
     pub over_1_ms: u64,
     /// Those longer than 5 ms.

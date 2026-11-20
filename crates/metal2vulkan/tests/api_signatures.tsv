@@ -2618,6 +2618,8 @@ field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.red	pub red: TextureSwizzle
 field	metal2vulkan-rt::Timed.bytes	pub bytes: u64
 field	metal2vulkan-rt::Timed.count	pub count: u64
+field	metal2vulkan-rt::Timed.longest_bytes	pub longest_bytes: u64
+field	metal2vulkan-rt::Timed.longest_made	pub longest_made: bool
 field	metal2vulkan-rt::Timed.longest_nanos	pub longest_nanos: u64
 field	metal2vulkan-rt::Timed.over_1_ms	pub over_1_ms: u64
 field	metal2vulkan-rt::Timed.over_20_ms	pub over_20_ms: u64

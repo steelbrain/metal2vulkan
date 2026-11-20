@@ -6,7 +6,27 @@
 //! free range makes nothing, and its buffer's zeros are no such write; a placed texture adds
 //! its image's bytes to the texture block bytes; and each gauge falls back as its object goes.
 //! Each call's total time holds its longest, and the buckets over 1, 5 and 20 ms each hold no more
-//! calls than the one below.
+//! calls than the one below; the longest call's bytes are in the part's, and every make made its
+//! allocation. Without a device: a part's longest call keeps its own bytes and make.
+
+use crate::counters::{Counters, Part};
+use crate::Timed;
+
+/// A part's longest call keeps its own bytes and whether it made an allocation, whichever calls
+/// come before and after it: a longer call replaces them, a shorter one does not, and the other
+/// parts keep nothing.
+#[test]
+fn a_parts_longest_call_keeps_its_bytes_and_make() {
+    let counters = Counters::new();
+    counters.timed(Part::Take, 4096, 2_000, false);
+    counters.timed(Part::Take, 150 << 20, 9_000, true);
+    counters.timed(Part::Take, 64, 5_000, false);
+    let longest = |t: Timed| (t.longest_nanos, t.longest_bytes, t.longest_made);
+    assert_eq!(longest(counters.metrics().takes), (9_000, 150 << 20, true));
+    counters.timed(Part::Take, 8192, 12_000, false);
+    assert_eq!(longest(counters.metrics().takes), (12_000, 8192, false));
+    assert_eq!(counters.metrics().take_makes, Timed::default());
+}
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -32,6 +52,7 @@ mod on_device {
             t.count >= t.over_1_ms && t.over_1_ms >= t.over_5_ms && t.over_5_ms >= t.over_20_ms,
             "{name}: {part}: {t:?}"
         );
+        assert!(t.longest_bytes <= t.bytes, "{name}: {part}: {t:?}");
     }
 
     #[test]
@@ -155,6 +176,9 @@ mod on_device {
                 m.maker_makes.count > 0,
                 "{name}: the allocations made ahead"
             );
+            for (part, t) in [("makes", m.take_makes), ("maker makes", m.maker_makes)] {
+                assert!(t.count == 0 || t.longest_made, "{name}: {part}: {t:?}");
+            }
             println!(
                 "{name}: take {:?}; lock {:?}; make {:?}; zero {:?}; long take zero {:?}; texture \
                  bytes placed {placed}, own {own}",
