@@ -1242,20 +1242,17 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     DeviceInterpolation,
-    /// A fragment function runs a quad or simdgroup operation on a device that shades a
-    /// triangle it clips as several triangles
-    /// ([`DriverWorkaround::ClippedTrianglesSplitPixelFragments`]): a quad a seam between the
+    /// A fragment function runs a quad or simdgroup operation, recorded on every device: a device
+    /// may shade a triangle it clips as several triangles, and then a quad a seam between the
     /// pieces crosses runs once per piece, each run with the other piece's pixels as helper
     /// invocations, so the operation counts or combines fewer active lanes than Metal's, whose
     /// quad holds all four. Metal permits a partly occupied quad, so the device's answer is one
-    /// Metal's API allows, not the reference's; no Vulkan mechanism keeps the clipped triangle
-    /// one primitive (a guard band emulated by scaling the viewport is exact only within the
-    /// viewport limits).
+    /// Metal's API allows, not the reference's; no Vulkan query tells such a device apart, and no
+    /// Vulkan mechanism keeps the clipped triangle one primitive (a guard band emulated by scaling
+    /// the viewport is exact only within the viewport limits).
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, which C3 names as the answer gap of a case that meets it.
-    ///
-    /// [`DriverWorkaround::ClippedTrianglesSplitPixelFragments`]: crate::device::DriverWorkaround::ClippedTrianglesSplitPixelFragments
     QuadsSplitByClipping,
     /// A vertex function runs a simdgroup or quad operation on a device whose vertex stage takes
     /// no required subgroup size and whose driver is measured to group vertices otherwise than
@@ -1559,15 +1556,17 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     DevicePointSize,
-    /// A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]` on a
-    /// device whose rasterizer is not Apple's
+    /// A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]`, or reads
+    /// a centroid varying and runs once per pixel, on a device whose rasterizer is not Apple's
     /// ([`DriverWorkaround::ClippedCoverageNotMetals`](crate::device::DriverWorkaround::ClippedCoverageNotMetals)):
     /// Apple's GPU draws a triangle that extends past the viewport as pieces whose shared edges
     /// cross pixels, and such a pixel's fragments can run once per piece, each reading that
     /// piece's coverage (on an M3 Max and an M4), where the device hands the pixel's fragment its
     /// coverage by the whole primitive (lavapipe by its own pieces). Where Metal splits a pixel,
-    /// the function reads the whole coverage once instead of each piece's; no Vulkan mechanism
-    /// follows Apple's clipper.
+    /// the function reads the whole coverage once instead of each piece's, and a centroid varying
+    /// at the centroid of the whole coverage instead of a piece's; no Vulkan mechanism follows
+    /// Apple's clipper. A function that runs per sample reads a centroid varying at its sample,
+    /// which no split moves.
     ///
     /// Validation derives no tolerance and no explanation from it: C3 names it as the answer gap
     /// of a case that meets it (`ClippedPrimitiveSplit`).

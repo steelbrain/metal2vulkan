@@ -124,13 +124,6 @@
 //!   pixel's center and `SampleMask` the fragment's coverage. The sample mask a function returns
 //!   keeps, under either API, the samples of the invocation whose bits it sets (measured with
 //!   `[[sample_id]]` and with a device atomic).
-//! - **Split pixel fragments**. A driver that rasterizes a triangle it clips as several
-//!   (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`: lavapipe) runs a pixel-rate function
-//!   once per piece in each pixel on the pieces' shared edges, with that piece's coverage, where
-//!   Metal runs it once with the pixel's: its `[[sample_mask]]` holds part of the samples and a
-//!   centroid varying moves to a covered sample. There link refuses a pipeline of more than one
-//!   sample whose fragment function reads either (`Unsupported{PixelCoverage}` or
-//!   `Unsupported{CentroidVarying}`, `Needs::DriverDefect`).
 //! - **Fragment outputs**: a color output to an attachment the descriptor sets must have the
 //!   attachment's numeric class (`float` to a float, normalized, or sRGB format, `uint` to an
 //!   unsigned-integer one, `int` to a signed-integer one); an output of another class is Metal's
@@ -191,7 +184,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::device::requirements::{FormatUsage, VkFeature, VkLimit, VkProperty};
-use crate::device::{DeviceProfile, DriverWorkaround};
+use crate::device::DeviceProfile;
 use crate::error::{
     Attachment, Capability, DescriptorError, DriverDeviation, Error, Feature, MetalAnswer,
     RuntimeInput, Unsupported,
@@ -854,7 +847,6 @@ pub fn graphics_state(
     };
     // The sample count against the attachments' sample counts.
     state.sample_count_properties(&p.fields().enabled.properties)?;
-    split_pixel_fragments(r, fs, p, state.sample_shading)?;
     Ok(state)
 }
 
@@ -917,50 +909,6 @@ fn interpolates_at_sample(io: &StageIo) -> bool {
             }
         )
     })
-}
-
-/// Refuse what a fragment stage `fs` of a multisampled pipeline reads of its coverage on a
-/// driver that rasterizes a clipped triangle as several
-/// ([`DriverWorkaround::ClippedTrianglesSplitPixelFragments`]): `[[sample_mask]]` and a centroid
-/// varying, each of which such a split changes in the pixels on the pieces' shared edges.
-/// `[[sample_mask]]` is read once per pixel here: `sample_invocations` refused it beside a function
-/// that runs per sample under sample shading. A function sample shading surely runs per sample
-/// (the pipeline's, `sample_shading`, or the one a `SampleId` input enables; a `Sample` input only
-/// may enable it) reads a centroid varying at its own sample, which lies in one piece: no split
-/// changes it.
-fn split_pixel_fragments(
-    r: &RenderLinkInputs,
-    fs: Option<&StageInterface>,
-    p: &DeviceProfile,
-    sample_shading: bool,
-) -> Result<(), Error> {
-    let defect = DriverWorkaround::ClippedTrianglesSplitPixelFragments;
-    let Some(fs) = fs else {
-        return Ok(());
-    };
-    if r.raster_sample_count <= 1 || !p.fields().workarounds.contains(&defect) {
-        return Ok(());
-    }
-    let io = &fs.io;
-    if io.builtins.contains(&StageBuiltin::SampleMaskIn) {
-        return Err(Unsupported::driver_defect(Feature::PixelCoverage, defect).into());
-    }
-    if sample_shading || io.builtins.contains(&StageBuiltin::SampleId) {
-        return Ok(());
-    }
-    let centroid = io.inputs.iter().any(|v| {
-        matches!(
-            v.role,
-            IoRole::Varying {
-                interpolation: Some(Interpolation::Smooth { sampling, .. }),
-                ..
-            } if sampling.reads_centroid()
-        )
-    });
-    if centroid {
-        return Err(Unsupported::driver_defect(Feature::CentroidVarying, defect).into());
-    }
-    Ok(())
 }
 
 /// Check how the fragment stage `fs` runs and reads under multisampling (see the module docs),

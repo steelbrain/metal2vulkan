@@ -298,9 +298,9 @@ pub enum AnswerGap {
     /// holds all four. Metal permits a partly occupied quad, so the device's answer is a valid
     /// Metal answer, not the reference's; no Vulkan mechanism keeps the clipped triangle one
     /// primitive (a guard band emulated by scaling the viewport and the position is exact only
-    /// within the viewport limits). No Vulkan query states the split, and the product decides
-    /// nothing by a driver's identity, so its modules record no note of it; the venue's driver
-    /// decides the gap, as it decides the clipped-primitive split. A case meets it when its
+    /// within the viewport limits). No Vulkan query states the split, so the product's modules
+    /// record its note on every device (`PrecisionNote::QuadsSplitByClipping`); the venue's
+    /// driver decides the gap, as it decides the clipped-primitive split. A case meets it when its
     /// answer can read a split quad: a fragment case drawn by the generated full-screen triangle,
     /// which extends past the viewport, whose function runs a quad or simdgroup operation over
     /// its active lanes (`GroupOp::reads_active_lanes`).

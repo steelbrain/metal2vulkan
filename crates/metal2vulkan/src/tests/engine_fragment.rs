@@ -4530,6 +4530,33 @@ fn a_sum_before_a_discard_takes_metals_placement() {
     assert!(!noted(&old, "discard_loop"));
 }
 
+/// On every committed profile `Device::from_queries` derives, a fragment function that runs a
+/// quad or simdgroup operation (`fragment_discard_msl22`'s `discard_simd`, a `simd_sum`) records
+/// `PrecisionNote::QuadsSplitByClipping`, and one that runs none (its `discard_terminate`) does
+/// not: no Vulkan query tells a device that shades a clipped triangle as several apart.
+#[test]
+fn a_fragment_group_operation_records_the_clipping_split_on_every_device() {
+    let Some(bc) = fixture("fragment_discard_msl22") else {
+        return;
+    };
+    let note = PrecisionNote::QuadsSplitByClipping;
+    let mut noted = 0;
+    for (stem, p) in crate::spirv::testing::committed_profiles().expect("committed profiles") {
+        let plain = compile(&bc, "discard_terminate", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            !plain.precision.contains(&note),
+            "{stem}: discard_terminate"
+        );
+        // A device without the subgroup operations refuses the sum.
+        let Ok(a) = compile(&bc, "discard_simd", &p) else {
+            continue;
+        };
+        assert!(a.precision.contains(&note), "{stem}: discard_simd");
+        noted += 1;
+    }
+    assert!(noted >= 7, "{noted} profiles noted the split");
+}
+
 /// The kills (`OpKill` and `OpTerminateInvocation`) and returns of function `f`.
 fn exits(m: &TypedModule, f: FuncId) -> (usize, usize) {
     let (mut kills, mut returns) = (0, 0);

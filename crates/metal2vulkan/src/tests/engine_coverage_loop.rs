@@ -334,6 +334,55 @@ fn a_multisampled_coverage_reader_announces_the_split() {
     assert!(noted >= 7, "{noted} pipelines noted the split");
 }
 
+/// A function that reads a centroid varying and runs once per pixel (`air_2_1_front_end`'s
+/// `a21_blit_fs`) records `PrecisionNote::ClippedCoverageSplit` in a multisampled pipeline on every
+/// device, its centroid the whole coverage's where Metal's may be a piece's; at one sample it records
+/// nothing, and neither does one that runs per sample (`multisample`'s
+/// `multisample_centroid_at_sample`), which reads the varying at its own sample.
+#[test]
+fn a_multisampled_centroid_reader_at_the_pixel_announces_the_split() {
+    let (Some(a21), Some(ms)) = (library("air_2_1_front_end"), library("multisample")) else {
+        return;
+    };
+    let note = PrecisionNote::ClippedCoverageSplit;
+    let mut noted = 0;
+    for stem in stems() {
+        let dev = device(&stem);
+        for (lib, vertex, fragment, samples, recorded) in [
+            (&a21, "a21_blit_vs", "a21_blit_fs", 4, true),
+            (&a21, "a21_blit_vs", "a21_blit_fs", 1, false),
+            (
+                &ms,
+                "multisample_vertex",
+                "multisample_centroid_at_sample",
+                4,
+                false,
+            ),
+        ] {
+            let mut d = RenderPipelineDescriptor::new(function(lib, vertex));
+            d.fragment = Some(function(lib, fragment));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+            d.raster_sample_count = samples;
+            match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                Ok(p) => {
+                    let notes: Vec<PrecisionNote> = (p.stages.iter())
+                        .flat_map(|m| m.precision_notes.iter().copied())
+                        .collect();
+                    assert_eq!(
+                        notes.contains(&note),
+                        recorded,
+                        "{stem}: {fragment} at {samples}"
+                    );
+                    noted += usize::from(recorded);
+                }
+                Err(Error::Unsupported(_)) => {}
+                Err(e) => panic!("{stem}: {fragment} at {samples}: {e}"),
+            }
+        }
+    }
+    assert!(noted >= 7, "{noted} pipelines noted the split");
+}
+
 /// The interface states the loop: `Looped` under `multisampled`, `Unlooped` without, and link asks
 /// a function compiled without it for `multisampled` at four samples and takes it at one; a
 /// function that runs per sample without reading the coverage has no loop; one with a color output

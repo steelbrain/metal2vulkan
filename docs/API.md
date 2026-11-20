@@ -2303,8 +2303,10 @@ bound.
   -2 and 0.5 (the Radeon 780M, Mesa 26.2.6). A no-perspective input is exact there and records
   nothing. It is the device's own interpolation, which Vulkan states no precision for.
 - `metal2vulkan-degrade-quads-split-by-clipping` (precision). `PrecisionNote::QuadsSplitByClipping`:
-  Recorded by no device: its condition, `DriverWorkaround::ClippedTrianglesSplitPixelFragments`,
-  is one no profile takes (`Device::from_queries` reads no driver identity).
+  A fragment function runs a quad or simdgroup operation, recorded on every device: a device may
+  shade a triangle it clips as several triangles, and then a quad a seam between the pieces crosses
+  runs once per piece, each run with the other piece's pixels as helper invocations, so the
+  operation counts or combines fewer active lanes than Metal's, whose quad holds all four.
 - `metal2vulkan-degrade-vertex-simdgroup-grouping` (precision).
   `PrecisionNote::VertexSimdgroupGrouping`: Recorded by no device: its condition,
   `DriverWorkaround::VertexGroupingNotApples`, is one no profile takes.
@@ -2447,12 +2449,13 @@ bound.
   nothing, and its function records no note. The render pipeline state carries the note whatever
   primitive a draw of it takes; a draw of lines or triangles of it is Metal's exactly.
 - `metal2vulkan-degrade-clipped-coverage-split` (precision). `PrecisionNote::ClippedCoverageSplit`:
-  A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]`, on every
-  device (`DriverWorkaround::ClippedCoverageNotMetals`, which every profile takes: no query tells
-  Apple's rasterizer apart): Apple's GPU draws a
-  triangle that extends past the viewport as pieces whose shared edges cross pixels, and such a
-  pixel's fragments can run once per piece, each reading that piece's coverage, where the device
-  hands the pixel's fragment its coverage by the whole primitive (lavapipe by its own pieces).
+  A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]`, or reads a
+  centroid varying and runs once per pixel, on every device (`DriverWorkaround::ClippedCoverageNotMetals`,
+  which every profile takes: no query tells Apple's rasterizer apart): Apple's GPU draws a triangle
+  that extends past the viewport as pieces whose shared edges cross pixels, and such a pixel's
+  fragments can run once per piece, each reading that piece's coverage, where the device hands the
+  pixel's fragment its coverage by the whole primitive (lavapipe by its own pieces). A centroid
+  varying is read at the centroid of the whole coverage there.
 - `metal2vulkan-degrade-looped-sample-outputs` (precision). `PrecisionNote::LoopedSampleOutputs`: A
   fragment function that reads `[[sample_mask]]`, runs once per covered sample on Metal and writes
   an output runs once per pixel in a multisampled pipeline, its body once per covered sample, on

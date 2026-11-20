@@ -54,9 +54,9 @@
 //! Metal's rasterizer splits a primitive it clips into pieces whose coverages it hands to
 //! separate runs, which no Vulkan rasterizer reproduces; the loop reads the pixel's coverage of the
 //! whole primitive, as today's pixel-rate read does. A function compiled for a multisampled
-//! pipeline that reads `[[sample_mask]]`, looped or not, records
-//! `PrecisionNote::ClippedCoverageSplit` on a device whose rasterizer is not Apple's
-//! (`DriverWorkaround::ClippedCoverageNotMetals`).
+//! pipeline that reads `[[sample_mask]]`, looped or not, or that reads a centroid varying and runs
+//! once per pixel, records `PrecisionNote::ClippedCoverageSplit` on a device whose rasterizer is
+//! not Apple's (`DriverWorkaround::ClippedCoverageNotMetals`).
 //!
 //! MoltenVK on Apple's GPU runs a shader that writes memory once per covered sample, as Metal
 //! does, sample shading or not (`DriverWorkaround::MemoryWritingFragmentsRunPerSample`), so the
@@ -128,9 +128,9 @@ fn arg_used(body: &Body, param: u32) -> bool {
     })
 }
 
-/// Whether used parameter role `role` of AIR argument `param` is a sample-qualified float varying
-/// (an integer or `bool` varying is flat whatever it is qualified with).
-fn sample_varying(cx: &SelectCx<'_>, param: u32, role: &ParamRole) -> bool {
+/// Whether used parameter role `role` of AIR argument `param` is a float varying interpolated at
+/// `sampling` (an integer or `bool` varying is flat whatever it is qualified with).
+fn sampled_varying(cx: &SelectCx<'_>, param: u32, role: &ParamRole, sampling: AirSampling) -> bool {
     let ParamRole::FragmentInput(v) = role else {
         return false;
     };
@@ -144,13 +144,7 @@ fn sample_varying(cx: &SelectCx<'_>, param: u32, role: &ParamRole) -> bool {
     if cx.inputs.uniform_varyings.contains(&key) {
         return false;
     }
-    if !matches!(
-        v.interpolation,
-        AirInterp::Smooth {
-            sampling: AirSampling::Sample,
-            ..
-        }
-    ) {
+    if !matches!(v.interpolation, AirInterp::Smooth { sampling: s, .. } if s == sampling) {
         return false;
     }
     cx.value_ty(Value::Arg(ArgIdx::new(param)))
@@ -173,17 +167,32 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .iter()
             .any(|b| role(&b.role) && arg_used(body, b.param))
     };
-    if !used(&|r| {
+    let varying = |cx: &SelectCx<'_>, sampling| {
+        e.ep.params
+            .iter()
+            .any(|b| sampled_varying(cx, b.param, &b.role, sampling) && arg_used(body, b.param))
+    };
+    let mask = used(&|r| {
         matches!(
             r,
             ParamRole::Builtin(Builtin::SampleMaskIn | Builtin::PostDepthCoverage)
         )
-    }) {
+    });
+    let centroid = cx.inputs.multisampled && varying(cx, AirSampling::Centroid);
+    if !mask && !centroid {
         return Ok(());
     }
-    // Off Apple's rasterizer, a multisampled read of the coverage meets no split of a clipped
-    // primitive, where Metal's can (the module docs).
+    let sample_id = used(&|r| matches!(r, ParamRole::Builtin(Builtin::SampleId)));
+    let sample_varying = varying(cx, AirSampling::Sample);
+    let writes = body
+        .insts
+        .iter()
+        .any(|(id, inst)| super::discard::side_effect(cx, id, inst));
+    let per_sample = sample_id || sample_varying || writes;
+    // Off Apple's rasterizer, a multisampled read of the coverage, or of a centroid varying at the
+    // pixel, meets no split of a clipped primitive, where Metal's can (the module docs).
     if cx.inputs.multisampled
+        && (mask || !per_sample)
         && cx
             .profile
             .fields()
@@ -192,16 +201,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     {
         cx.precision.insert(PrecisionNote::ClippedCoverageSplit);
     }
-    let sample_id = used(&|r| matches!(r, ParamRole::Builtin(Builtin::SampleId)));
-    let sample_varying =
-        e.ep.params
-            .iter()
-            .any(|b| sample_varying(cx, b.param, &b.role) && arg_used(body, b.param));
-    let writes = body
-        .insts
-        .iter()
-        .any(|(id, inst)| super::discard::side_effect(cx, id, inst));
-    if !(sample_id || sample_varying || writes) {
+    if !mask {
+        return Ok(());
+    }
+    if !per_sample {
         // Metal runs it once per pixel, which reads the pixel's coverage as Vulkan's does.
         return Ok(());
     }

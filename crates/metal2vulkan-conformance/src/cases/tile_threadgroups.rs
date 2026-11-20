@@ -99,8 +99,8 @@ const EVEN_SHAPES: &[&[[u32; 2]]] = &[
 /// answers, such as the NaN encoding it copies the blur's `RGBA16Float` attachment with
 /// (`device-nan-encoding`), are the suite's to declare ([`crate::replay::NATIVE_NOTES`]).
 pub const TILE_PASS_NOTICES: &[Degradation] = &[
-    // A device that splits a fragment quad at a clipped edge where Metal keeps it whole. Announced
-    // on lavapipe. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
+    // A device may split a fragment quad at a clipped edge where Metal keeps it whole. Announced on
+    // every device. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
     // and it compares exactly -- so the kind is declared and no value is loosened.
     Degradation::QuadsSplitByClipping,
 ];

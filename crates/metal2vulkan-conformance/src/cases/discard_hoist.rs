@@ -204,11 +204,12 @@ impl Case for DiscardHoist {
                     crate::allowance::Justification::notice(Degradation::QuadsCountedBeforeDiscard),
                 )
             })
-            // Two more kinds our side announces on lavapipe, declared so the notices site stays
-            // readable there: it splits a fragment quad at a clipped edge where Metal keeps it
-            // whole (`quads-split-by-clipping`) and groups a fragment simdgroup its own way
-            // (`fragment-simdgroup-grouping`). Declarations only: the grouping's note derives no
-            // tolerance, so a sum it moves stays divergent, a ledger row (the module doc).
+            // Two more kinds our side announces, declared so the notices site stays readable: a
+            // device may split a fragment quad at a clipped edge where Metal keeps it whole
+            // (`quads-split-by-clipping`, on every device), and lavapipe groups a fragment
+            // simdgroup its own way (`fragment-simdgroup-grouping`). Declarations only: the
+            // grouping's note derives no tolerance, so a sum it moves stays divergent, a ledger
+            // row (the module doc).
             .chain(
                 [
                     Degradation::QuadsCountedBeforeDiscard,

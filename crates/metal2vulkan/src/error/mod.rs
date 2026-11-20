@@ -1555,12 +1555,6 @@ pub enum Feature {
     /// a multisampled depth or stencil aspect between images of different formats only through a
     /// colour image of maintenance8's depth-stencil/colour table.
     SeparateMultisampledDepthStencil,
-    /// The fragment's coverage (`[[sample_mask]]` read) in a fragment function of a pipeline of
-    /// more than one sample that runs once per pixel.
-    PixelCoverage,
-    /// A centroid varying (`[[centroid_perspective]]`, `[[centroid_no_perspective]]`) in a
-    /// fragment function of a pipeline of more than one sample.
-    CentroidVarying,
     /// A stage whose private memory (its `thread` variables and arrays, and the constants it
     /// holds per thread) takes more Function storage a thread than the device holds correctly
     /// (`VkLimit::FunctionStorageBytesPerThread`): its measured value, or on a device not measured

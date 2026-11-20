@@ -79,7 +79,6 @@ use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::intrinsics::{AirIntrinsic, Fragment};
 use crate::air::ir::{Callee, Const, Inst, InstId, InstKind, Value};
 use crate::budget::Meter;
-use crate::device::profile::DriverWorkaround;
 use crate::device::subgroup::OpBits;
 use crate::error::{Attachment, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::legal::{form_on, Form};
@@ -358,15 +357,9 @@ fn returns(cx: &SelectCx<'_>) -> u64 {
 /// the input attachments, the predicated returns, and the interlocked entry add to the stage
 /// interface's size estimate.
 pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
-    // On a device that shades a triangle it clips as several, a quad a seam crosses runs once
-    // per piece: an operation over the active lanes sees each piece's.
-    if cx
-        .profile
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::ClippedTrianglesSplitPixelFragments)
-        && counts_active_lanes(cx)
-    {
+    // A device may shade a triangle it clips as several, and then a quad a seam crosses runs
+    // once per piece: an operation over the active lanes sees each piece's (on every device).
+    if counts_active_lanes(cx) {
         cx.precision.insert(PrecisionNote::QuadsSplitByClipping);
     }
     let looped = coverage::finish(cx)?;
