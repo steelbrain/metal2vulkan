@@ -983,9 +983,11 @@ pub struct Metrics {
     /// block ([`external_acquires`](Self::external_acquires)), and one for each release of one
     /// ([`external_releases`](Self::external_releases)). Any other draw takes none. An upload
     /// adds one where it moves new textures' images to their home layouts, one more after the
-    /// zeroing of those it zeroes ([`texture_clear_barriers`](Self::texture_clear_barriers)), and
-    /// two around each copy between a texture's image and the staging region or a named buffer
-    /// (`replaceRegion` and `getBytes`).
+    /// zeroing of those it zeroes ([`texture_clear_barriers`](Self::texture_clear_barriers)), two
+    /// around each copy between a texture's image and the staging region or a named buffer
+    /// (`replaceRegion` and `getBytes`), and one before a zero fill of bytes an earlier fill of the
+    /// upload wrote (a new buffer's zeroed bytes, or a range
+    /// [`Device::zero_block_range`](crate::Device::zero_block_range) zeroes).
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own

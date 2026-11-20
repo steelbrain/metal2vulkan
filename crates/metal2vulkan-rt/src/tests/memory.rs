@@ -2146,6 +2146,69 @@ mod on_device {
         }
     }
 
+    /// Zero fills of one upload that meet the same bytes are ordered: a new Private buffer
+    /// zeroed, released before any commit, and a second one zeroed over its first half (a place
+    /// taken again before a commit, as a player's pool takes it) takes one barrier before its
+    /// fill; a third zeroed over other bytes takes none, and a range
+    /// [`Device::zero_block_range`] zeroes over the third's bytes takes one again. The upload then
+    /// runs, under the validation layer, and the device tears down to zero gauges.
+    #[test]
+    fn every_device_orders_zero_fills_of_the_same_bytes_in_one_upload() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            let len = (WORDS * 4) as u64;
+            let private = (device.take_block(MemoryClass::Private, 2 * len))
+                .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
+            let zeroed = |at: u64, length: u64| {
+                (device.new_buffer(private.id, at, length, Some(0)))
+                    .unwrap_or_else(|error| panic!("{name}: a zeroed buffer: {error}"))
+            };
+            let barriers = || counters.metrics().barriers;
+            let before = barriers();
+            drop(zeroed(0, len));
+            assert_eq!(
+                barriers() - before,
+                0,
+                "{name}: a first fill takes no barrier"
+            );
+            let again = zeroed(0, len / 2);
+            assert_eq!(
+                barriers() - before,
+                1,
+                "{name}: a fill of bytes the upload filled takes a barrier first"
+            );
+            let other = zeroed(len, len);
+            assert_eq!(
+                barriers() - before,
+                1,
+                "{name}: a fill of other bytes takes none"
+            );
+            (device.zero_block_range(private.id, len, 4))
+                .unwrap_or_else(|error| panic!("{name}: a zero fill: {error}"));
+            assert_eq!(
+                barriers() - before,
+                2,
+                "{name}: a range zeroed over the last fill's bytes takes a barrier first"
+            );
+            let value = core.work.flush();
+            (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!(
+                "memory: {name}: zero fills of the same bytes in one upload ordered; metrics {:?}",
+                counters.metrics()
+            );
+            drop((again, other));
+            device.release_block(private).expect("a release");
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
+
     /// The runtime zeroes what the consumer asks over bytes it cannot see written: the consumer's
     /// writes through a new Shared block's mapping, outside every buffer, then a buffer zeroed
     /// over some of them, read zero there and as written elsewhere; a new Private block's bytes

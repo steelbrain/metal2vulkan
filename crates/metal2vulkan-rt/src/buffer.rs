@@ -5,7 +5,6 @@ use crate::capture::Named;
 use crate::counters::Gauge;
 use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
-use crate::fill;
 use crate::hazard::HeapId;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
 use crate::over::ManagedOvers;
@@ -346,18 +345,8 @@ impl Device {
         if copied < length {
             let (copy_buffer, start) = copy.range(copied);
             let end = start + (length - copied);
-            let zeros = fill::zeros_for(core, start, end)?;
-            core.work.upload(
-                core,
-                None,
-                [Held::Copy(Arc::clone(&copy))],
-                // SAFETY: the upload's command buffer is recording, under the work lock; the copy
-                // block's buffer has every usage, `start..end` lies in it, `zeros` is what
-                // `zeros_for` answered for it, and the upload holds the copy.
-                |device, command| unsafe {
-                    fill::record(device, command, zeros, copy_buffer, start, end)
-                },
-            )?;
+            let held = Held::Copy(Arc::clone(&copy));
+            core.work.fill(core, held, copy_buffer, start, end)?;
             core.counters.zeroed(length - copied);
         }
         let buffer = self.buffer(block, offset, length, contents, Some(copy), None);

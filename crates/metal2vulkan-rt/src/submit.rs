@@ -226,6 +226,9 @@ pub(crate) struct Upload {
     /// Where a surface waits for the moves this upload records ([`Work::ready_point`]): set to
     /// the progress value of the submission that takes it, 0 until then.
     ready: Option<Arc<AtomicU64>>,
+    /// The buffer ranges its zero fills wrote since its last barrier ([`Work::fill`]), at most
+    /// one a call ([`UPLOAD_ENTRIES`]).
+    filled: Vec<(vk::Buffer, u64, u64)>,
 }
 
 /// What an upload keeps until it retires.
@@ -269,6 +272,7 @@ impl Upload {
                 spans: Vec::new(),
                 span_bytes: 0,
                 ready: None,
+                filled: Vec::new(),
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -531,7 +535,9 @@ impl Work {
         held: [Held; N],
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), Error> {
-        let recorded = self.record_upload(core, stage, held, record);
+        let recorded = self.record_upload(core, stage, held, |device, upload| {
+            record(device, upload.command)
+        });
         if recorded.is_err() {
             if let Some(Stage::Region { number, .. }) = stage {
                 self.give_up(*number);
@@ -628,13 +634,14 @@ impl Work {
         error
     }
 
-    /// [`upload`](Self::upload) up to the span's give-up on a failure.
+    /// [`upload`](Self::upload) up to the span's give-up on a failure, `record` given the upload
+    /// itself.
     fn record_upload<const N: usize>(
         &self,
         core: &Core,
         stage: Option<&Stage>,
         held: [Held; N],
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+        record: impl FnOnce(&ash::Device, &mut Upload),
     ) -> Result<(), Error> {
         let staging = match stage {
             Some(Stage::Own(staging)) => staging.len,
@@ -654,7 +661,7 @@ impl Work {
             })
             .collect();
         upload.home(core, &homes);
-        record(device, upload.command);
+        record(device, upload);
         upload.entries += 1;
         upload.staging += staging;
         for item in held {
@@ -896,9 +903,9 @@ impl Work {
         (state.region.as_ref()).map_or_else(Vec::new, |region| region.ring.live())
     }
 
-    /// Records the zero fill of `offset..end` of `block` into the upload.
+    /// Records the zero fill of `offset..end` of `block` into the upload ([`fill`](Self::fill)).
     ///
-    /// Err: as [`upload`](Self::upload); what [`fill::zeros_for`] returns.
+    /// Err: as [`fill`](Self::fill).
     pub(crate) fn zero(
         &self,
         core: &Core,
@@ -907,19 +914,41 @@ impl Work {
         end: u64,
     ) -> Result<(), Error> {
         let (buffer, base) = block.memory.range(0);
-        let (start, end) = (base + offset, base + end);
+        let held = Held::Block(Arc::clone(block));
+        self.fill(core, held, buffer, base + offset, base + end)
+    }
+
+    /// Records the zero fill of `start..end` of `buffer` into the upload, which keeps `held`, what
+    /// holds the buffer, until it retires. The upload's commands are in no order of their own:
+    /// a fill that meets bytes an earlier fill of the upload wrote goes after a barrier, so the
+    /// two do not write the same bytes at once (a write-after-write hazard). Fills of other bytes
+    /// take none.
+    ///
+    /// Err: as [`upload`](Self::upload); what [`fill::zeros_for`] returns.
+    pub(crate) fn fill(
+        &self,
+        core: &Core,
+        held: Held,
+        buffer: vk::Buffer,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Error> {
         let zeros = fill::zeros_for(core, start, end)?;
-        self.upload(
-            core,
-            None,
-            [Held::Block(Arc::clone(block))],
-            |device, command| {
-                // SAFETY: the upload's command buffer is recording, under the lock; the block's
-                // allocation's buffer has every usage, `start..end` lies in it, and `zeros` is
-                // what `zeros_for` answered for it.
-                unsafe { fill::record(device, command, zeros, buffer, start, end) }
-            },
-        )
+        self.record_upload(core, None, [held], |device, upload| {
+            let meets = |&(filled, from, to): &(vk::Buffer, u64, u64)| {
+                filled == buffer && from < end && start < to
+            };
+            if upload.filled.iter().any(meets) {
+                record::barrier(device, upload.command, Reach::Commands);
+                core.counters.count(Metric::Barriers);
+                upload.filled.clear();
+            }
+            upload.filled.push((buffer, start, end));
+            // SAFETY: the upload's command buffer is recording, under the lock; `held` holds the
+            // buffer, which has every usage, `start..end` lies in it, and `zeros` is what
+            // `zeros_for` answered for it.
+            unsafe { fill::record(device, upload.command, zeros, buffer, start, end) }
+        })
     }
 
     /// Has the upload submitted at once, alone where no group goes: the progress value at which
