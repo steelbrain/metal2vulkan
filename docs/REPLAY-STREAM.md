@@ -508,7 +508,7 @@ and the (name id, value) answer pairs.
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
-[--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays a stream (its first segment) on one device through the
+[--video-handle dma-buf|opaque-fd] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
 old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `--video-handle`
 names the consumer's decoder route on the new runtime, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
@@ -569,6 +569,19 @@ records as text, and
   On a device with unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
+- **Which copy a read takes.** A check or dump of a buffer the play keeps two copies of (a
+  two-copy stream's Managed buffer: the runtime's device copy beside the consumer's bytes, or on a
+  device with unified memory, the player's own CPU copy beside the device's one copy) reads its
+  CPU copy, as Metal's `contents` answers, and says so: its `check` line ends `(CPU copy)` and its
+  dump holds a `.copy` file (below). With `--read-device-copies yes` (the new runtime's play only)
+  it reads the device copy instead, back through a blit into a Shared buffer of the play's own
+  where the runtime keeps one (that blit's commit takes the ranges named and not yet taken, as the
+  program's next commit would), and its line ends `(device copy, read back)`. On a device that
+  keeps a device copy of each Managed buffer, the line after `device` says which the play reads:
+  `managed digests: this device keeps a device copy of each Managed buffer; a check or dump of one
+  reads its CPU copy only, as Metal's contents answers (--read-device-copies yes reads the device
+  copy back)`, or `... reads the device copy back`. Two plays' CPU copies agreeing says nothing of
+  their device copies, which commands read.
 - **Managed buffers on the old runtime** take the same one-copy rule: under a one-copy identity
   record (or `--managed one-copy`), every Managed buffer and block plays as a Shared one, so a CPU
   write reaches the GPU as it reached the recording device's, with or without a
@@ -963,7 +976,8 @@ stream may differ from what the program did` first where the stream's header lac
 6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
-`device NAME runtime old|rt snapshots yes|no`, then
+`device NAME runtime old|rt snapshots yes|no`, then on the new runtime on a device that keeps a
+device copy of each Managed buffer, `managed digests: ...` (above), then
 `addresses address_looking_words=N misaligned_address_words=N address_arguments=N
 relocated_words=N differing_ids=N: written words play as recorded; NOTES` (the census of the
 written words that look like addresses, at a multiple of 8 and 4 past one, which play as the
@@ -999,7 +1013,7 @@ Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
-guest makes its objects on (section 4), `check ID frame F SHA256 match|differs|unrecorded|covered|receiver` (`F` the frame it was read in, the presents played before it), `id ID RECORDED PLAYED` for each object whose runtime
+guest makes its objects on (section 4), `check ID frame F SHA256 match|differs|unrecorded|covered|receiver` (`F` the frame it was read in, the presents played before it), ending `(CPU copy)` or `(device copy, read back)` for a buffer with two copies (above), `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
@@ -1100,13 +1114,18 @@ command buffer whose stream id lies in `FIRST..=LAST` completed (a split command
 their own ids), every buffer its encoders named, read after the wait that saw the command buffer
 complete and before the next call plays: `cbC-objO.bin` its bytes, `cbC-objO.cover` the ranges of
 it covered then (as above, `start..end` byte offsets joined by commas, or `-`), and
-`cbC-objO.unread` in place of the bytes where the backend could not read it. `command-replay
+`cbC-objO.unread` in place of the bytes where the backend could not read it, and for a buffer with
+two copies `cbC-objO.copy`, which copy the bytes are: `CPU copy` or `device copy, read back`
+(above). `command-replay
 compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
 wholly inside a range either play held covered (the old runtime answers no slot access, so its
 plays cover less), and prints `differs cb #C obj #O: N words outside every cover, the first word
 W; M covered; lengths A and B` for each buffer that differs outside every cover, `only in a|b:
-cbC-objO` for a dump one play lacks, `unread in a|b: cbC-objO: WHY`, then `compared N buffers: D
-differ, U words outside every cover, M covered; O dumps in one play only, R unread: agree|DIFFER`.
+cbC-objO` for a dump one play lacks, `unread in a|b: cbC-objO: WHY`, `copies differ: cbC-objO: a
+read its COPY, b its COPY` for a buffer the two plays read different copies of (`one copy` where a
+dump holds no `.copy` file), which it does not compare, then `compared N buffers (C as both plays'
+CPU copies, V as their device copies, read back): D differ, U words outside every cover, M
+covered; O dumps in one play only, R unread, X of different copies: agree|DIFFER`.
 Its exit status is 0 for `agree`, 1 for `DIFFER` and 2 for a bad command line or an unreadable
 dump. This compare says whether two plays of a range of command buffers agree; a whole-object
 checksum does not, as a buffer partly under a cover would differ under it and a difference outside

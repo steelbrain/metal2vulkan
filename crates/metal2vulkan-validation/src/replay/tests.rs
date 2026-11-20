@@ -13,8 +13,8 @@ use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{judged_records, Ended};
 use super::pixels::{difference, Shape};
 use super::player::{
-    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
-    Shown, TextureWrites, WAIT_COMPLETED,
+    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, ReadCopy, Relaid,
+    Report, Shown, TextureWrites, WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
@@ -506,6 +506,8 @@ struct Kept {
     kernel_writes: HashMap<u64, Vec<u64>>,
     /// The counts each submission adds to its counters.
     per_commit: Counters,
+    /// The buffers it keeps two copies of, and which one its read takes.
+    read_copies: HashMap<u64, ReadCopy>,
 }
 
 impl Backend for Kept {
@@ -590,6 +592,10 @@ impl Backend for Kept {
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
         let memory = self.memory.get(&object).cloned();
         Ok(memory.unwrap_or_else(|| object.to_le_bytes().to_vec()))
+    }
+
+    fn read_copy(&self, object: u64) -> Option<ReadCopy> {
+        self.read_copies.get(&object).copied()
     }
 
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
@@ -3198,8 +3204,9 @@ fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
         [
             "differs cb #20 obj #3: 1 words outside every cover, the first word 1536; 1 covered; \
              lengths 8192 and 8192",
-            "compared 1 buffers: 1 differ, 1 words outside every cover, 1 covered; 0 dumps in one \
-             play only, 0 unread: DIFFER",
+            "compared 1 buffers (0 as both plays' CPU copies, 0 as their device copies, read \
+             back): 1 differ, 1 words outside every cover, 1 covered; 0 dumps in one play only, 0 \
+             unread, 0 of different copies: DIFFER",
         ]
     );
 }
@@ -3296,6 +3303,78 @@ fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
     assert_eq!(comparison.only_one, [("cb21-obj3".to_owned(), 'a')]);
     assert!(!comparison.agrees());
+}
+
+/// A play whose backend reads buffer #3 as `copy` of its two copies and keeps one copy of #4:
+/// command buffer #20 binds both, then the stream checks both; dumped into `dir`.
+fn play_copies(dir: &std::path::Path, copy: ReadCopy) -> Report {
+    let mut kept = Kept::default();
+    kept.read_copies.insert(3, copy);
+    let (report, ended) = dumped(&mut kept, dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        for buffer in [3, 4] {
+            let made = [Value::Uint(16), Value::Uint(0)];
+            w.call("newBufferWithLength:options:", 1, buffer, &made, &[])?;
+        }
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        w.call("computeCommandEncoder", 20, 21, &[], &[])?;
+        for (buffer, index) in [(3, 0), (4, 1)] {
+            let bound = [Value::Object(buffer), Value::Uint(0), Value::Uint(index)];
+            w.call("setBuffer:offset:atIndex:", 21, 0, &bound, &[])?;
+        }
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 20, 0, &[], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3), Value::Object(4)],
+            &[],
+        )
+    });
+    ended.unwrap();
+    report
+}
+
+/// A read of a buffer with two copies says which copy it took, in its check line and in its dump,
+/// and the dump compare compares only the same copy of both plays: #3's check line ends `(CPU
+/// copy)` or `(device copy, read back)` and its dump holds a `.copy` file with those words; #4,
+/// one copy, has neither. Two plays that read #3's CPU copy compare it as such; a play that read
+/// its device copy against one that read its CPU copy differs, #3 not compared.
+#[test]
+fn a_read_of_a_buffer_with_two_copies_says_which_copy_it_took() {
+    let dirs = ["cpu-a", "cpu-b", "device"].map(|name| ScratchDir::new(name).unwrap());
+    let copies = [ReadCopy::Cpu, ReadCopy::Cpu, ReadCopy::Device];
+    let reports: Vec<Report> = (dirs.iter().zip(copies))
+        .map(|(dir, copy)| play_copies(dir.path(), copy))
+        .collect();
+    let checks = |report: &Report| -> Vec<String> {
+        let lines = report.lines().into_iter();
+        let checks = lines.filter(|line| line.starts_with("check "));
+        checks
+            .map(|line| line.split(' ').skip(6).collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(checks(&reports[0]), ["(CPU copy)", ""]);
+    assert_eq!(checks(&reports[2]), ["(device copy, read back)", ""]);
+    let copy_file = |dir: &ScratchDir, name: &str| std::fs::read_to_string(dir.path().join(name));
+    assert_eq!(copy_file(&dirs[0], "cb20-obj3.copy").unwrap(), "CPU copy");
+    assert_eq!(
+        copy_file(&dirs[2], "cb20-obj3.copy").unwrap(),
+        "device copy, read back"
+    );
+    assert!(copy_file(&dirs[0], "cb20-obj4.copy").is_err());
+    let alike = compare_dumps(dirs[0].path(), dirs[1].path()).unwrap();
+    assert_eq!(
+        (alike.compared, alike.cpu_copies, alike.agrees()),
+        (2, 1, true)
+    );
+    let crossed = compare_dumps(dirs[0].path(), dirs[2].path()).unwrap();
+    assert_eq!((crossed.compared, crossed.agrees()), (1, false));
+    let differ = "copies differ: cb20-obj3: a read its CPU copy, b its device copy, read back";
+    assert_eq!(crossed.lines()[0], differ);
 }
 
 /// A Managed buffer descriptor of `length` bytes made with `contents`, a no-copy one where

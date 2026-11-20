@@ -97,6 +97,12 @@ pub trait Backend {
     fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)>;
     /// The bytes of buffer or texture `object`, for a checksum.
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
+    /// Which of its two copies [`read`](Self::read) takes of `object`, a buffer the play keeps two
+    /// copies of (a Managed buffer of a stream recorded without unified memory): none for any
+    /// other object, and on a backend that does not say.
+    fn read_copy(&self, _object: u64) -> Option<ReadCopy> {
+        None
+    }
     /// The pixel format and size of texture `object` as the backend made it, which a picture
     /// of its bytes (`read`) is read by; none for an object that is no texture of the backend's.
     fn texture_shape(&mut self, _object: u64) -> Option<Shape> {
@@ -302,6 +308,28 @@ pub struct Shown {
     pub shape: Option<Shape>,
 }
 
+/// Which copy of a buffer with two copies a read took ([`Backend::read_copy`]): Metal's Managed
+/// buffer keeps the CPU's bytes, which `contents` answers and the program writes, apart from the
+/// GPU's, which commands read and write, until `didModifyRange:` or `synchronizeResource:` copies
+/// one into the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadCopy {
+    /// The CPU's copy, as `contents` answers it.
+    Cpu,
+    /// The device's copy, read back through a copy of the play's own.
+    Device,
+}
+
+impl ReadCopy {
+    /// The words a check line and a dump name it by.
+    pub fn label(self) -> &'static str {
+        match self {
+            ReadCopy::Cpu => "CPU copy",
+            ReadCopy::Device => "device copy, read back",
+        }
+    }
+}
+
 /// One `m2v.check` or present readback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Check {
@@ -316,6 +344,8 @@ pub struct Check {
     pub covered: bool,
     /// A surface's receiver buffer (`Player::receivers`): not compared.
     pub receiver: bool,
+    /// Which copy the read took, of a buffer with two copies ([`Backend::read_copy`]).
+    pub copy: Option<ReadCopy>,
 }
 
 /// An object whose `gpuResourceID` in the runtime is not the one the program saw: the bytes that
@@ -852,8 +882,11 @@ impl Report {
                 Some(_) => "differs",
             };
             let sha = super::value::hex(&check.sha256);
+            let copy = check
+                .copy
+                .map_or(String::new(), |copy| format!(" ({})", copy.label()));
             lines.push(format!(
-                "check #{} frame {} {sha} {verdict}",
+                "check #{} frame {} {sha} {verdict}{copy}",
                 check.object, check.frame
             ));
         }
@@ -1912,7 +1945,8 @@ impl<'b, B: Backend> Player<'b, B> {
             let covered = self.covers.ranges(object);
             let bytes = self.uncounted(left_out, |player| player.read_back(object));
             let bytes = bytes.as_deref().map_err(|error| error.to_string());
-            dumps::write(&dir, command_buffer, object, bytes, &covered).map_err(|error| {
+            let copy = self.backend.read_copy(object);
+            dumps::write(&dir, command_buffer, object, bytes, &covered, copy).map_err(|error| {
                 PlayError::Dump(format!(
                     "{}: cb #{command_buffer} #{object}: {error}",
                     dir.display()
@@ -2320,6 +2354,7 @@ impl<'b, B: Backend> Player<'b, B> {
             recorded,
             covered: self.covers.covered(object),
             receiver: self.receivers.contains(&object),
+            copy: self.backend.read_copy(object),
         });
         Ok(bytes)
     }

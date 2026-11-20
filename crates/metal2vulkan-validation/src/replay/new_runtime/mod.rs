@@ -30,7 +30,7 @@ pub use judged::judged_records;
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::covers::SlotStage;
 use super::pixels::Shape;
-use super::player::{Backend, Counters, Made, PlayError};
+use super::player::{Backend, Counters, Made, PlayError, ReadCopy};
 use super::stream::Call;
 use super::translator;
 use super::value::Value;
@@ -409,6 +409,9 @@ pub struct NewRuntime {
     /// The places of the GPU copies of the Managed buffers in a place of the play's own, on a
     /// device that keeps a GPU copy: given back with the buffer's place.
     device_copies: HashMap<u64, Place>,
+    /// Whether a check or dump of a buffer with two copies reads its device copy back, in place
+    /// of its CPU copy (`reading_device_copies`).
+    device_reads: bool,
     /// The queue each command buffer was made on.
     queue_of: HashMap<u64, u64>,
     /// The queue of the play's own that reads a Private buffer back (`private_bytes`), made at
@@ -805,6 +808,7 @@ impl NewRuntime {
             seconds: second::Seconds::default(),
             asides: aside::Asides::default(),
             device_copies: HashMap::new(),
+            device_reads: false,
             queue_of: HashMap::new(),
             reads: None,
             unanswered_pipeline_ids: 0,
@@ -818,6 +822,35 @@ impl NewRuntime {
     pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
         self.managed = Some(copies);
         self
+    }
+
+    /// The backend whose checks and dumps of a buffer with two copies read its device copy back,
+    /// where it would read its CPU copy, as Metal's `contents` answers: through a blit into a
+    /// Shared buffer of the play's own where the runtime keeps the device copy (that blit's
+    /// commit takes the ranges named and not yet taken, as the program's next commit would), and
+    /// through the buffer's mapping where the device's one copy is the GPU's and the player keeps
+    /// the CPU's (`second`).
+    pub fn reading_device_copies(mut self) -> Self {
+        self.device_reads = true;
+        self
+    }
+
+    /// The report header's line on a device that keeps a device copy of each Managed buffer (no
+    /// unified memory): which copy a check or dump of one reads. None on a device with one copy,
+    /// where a buffer the player keeps a second copy of says it in its own check line.
+    pub fn managed_digests(&self) -> Option<String> {
+        if self.device.has_unified_memory() {
+            return None;
+        }
+        Some(match self.device_reads {
+            false => "managed digests: this device keeps a device copy of each Managed buffer; a \
+                      check or dump of one reads its CPU copy only, as Metal's contents answers \
+                      (--read-device-copies yes reads the device copy back)"
+                .to_owned(),
+            true => "managed digests: this device keeps a device copy of each Managed buffer; a \
+                     check or dump of one reads the device copy back"
+                .to_owned(),
+        })
     }
 
     /// The backend told the consumer's decoder route, the handle its video surfaces are made
@@ -979,7 +1012,8 @@ impl NewRuntime {
         Ok(())
     }
 
-    /// The bytes of `buffer`, a Private buffer, which has no `contents`: a blit copies them into
+    /// The bytes of `buffer`, a Private buffer, which has no `contents`, or the device copy of a
+    /// Managed one, which `contents` does not answer (`reading_device_copies`): a blit copies them into
     /// a Shared buffer of the play's own, on a queue of its own (`reads`), and the read waits for
     /// it. The player reads only after the work that writes the buffer completed. A length that is
     /// not a multiple of 4 is the copy's own refusal (`rt::Refusal::BufferCopyUnaligned`).
@@ -2568,8 +2602,13 @@ impl Backend for NewRuntime {
         }
         // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them: its
         // aside from a read-back of a stream that records its announced bytes to its next
-        // announcement (`aside`).
-        let cpu = self.asides.read(object).or(self.seconds.cpu(object));
+        // announcement (`aside`). Where the play reads device copies, the buffer's own: the
+        // device's copy, which a blit reads where the runtime keeps one.
+        let device = self.read_copy(object) == Some(ReadCopy::Device);
+        let cpu = match device {
+            true => None,
+            false => self.asides.read(object).or(self.seconds.cpu(object)),
+        };
         let buffer = match (cpu, self.objects.get(&object)) {
             (Some(cpu), _) => Some(cpu),
             (None, Some(Object::Buffer(buffer, _))) => Some(buffer),
@@ -2578,6 +2617,13 @@ impl Backend for NewRuntime {
         let Some(buffer) = buffer else {
             return Err(unread("no buffer or texture"));
         };
+        if device && self.device_copies.contains_key(&object) {
+            let buffer = buffer.clone();
+            return (self.private_bytes(&buffer)).map_err(|error| PlayError::Runtime {
+                selector: "m2v.check".into(),
+                error: error.to_string(),
+            });
+        }
         let length = usize::try_from(buffer.length()).map_err(|_| unread("its length"))?;
         let Some(contents) = buffer.contents() else {
             let buffer = buffer.clone();
@@ -2591,6 +2637,16 @@ impl Backend for NewRuntime {
         // SAFETY: the buffer's mapping holds its length, and the player waited for the work that
         // writes it.
         Ok(unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec())
+    }
+
+    fn read_copy(&self, object: u64) -> Option<ReadCopy> {
+        // A Managed buffer of a two-copy stream: the runtime's device copy and the consumer's
+        // bytes, or the player's own CPU copy beside the device's one copy.
+        let two = self.device_copies.contains_key(&object) || self.seconds.cpu(object).is_some();
+        two.then_some(match self.device_reads {
+            true => ReadCopy::Device,
+            false => ReadCopy::Cpu,
+        })
     }
 
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {

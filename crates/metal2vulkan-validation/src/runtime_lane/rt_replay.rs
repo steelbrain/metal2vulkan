@@ -27,6 +27,10 @@
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
 //!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
+//! - A check of a two-copy stream's Managed buffer names the copy it read: its CPU copy, which a
+//!   blit's fill does not reach, or where the play reads device copies, its device copy, read
+//!   back, which holds the fill; a Shared buffer's check names none. On a device that keeps a
+//!   device copy, the backend's header line says which copy the play reads.
 //! - A two-copy stream's Managed buffers start their GPU copies from the bytes they were made with:
 //!   a no-copy descriptor buffer and a copied one, each made with 7s and written 7s before its
 //!   first use with no `didModifyRange:`, read as 7s through a blit (on the old runtime too,
@@ -89,8 +93,8 @@ use super::host_memory::on_device_with;
 use super::{at_plan, ScratchCache};
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    Backend, NewRuntime, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
-    WAIT_COMPLETED,
+    Backend, NewRuntime, OldRuntime, PlayError, Player, ReadCopy, Report, StreamReader,
+    StreamWriter, Value, WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -1094,6 +1098,75 @@ fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
     for check in &report.checks {
         let object = check.object;
         assert_eq!(Some(check.sha256), check.recorded, "#{object}: {lines:?}");
+    }
+}
+
+#[test]
+fn a_check_of_a_managed_buffer_names_the_copy_it_read() {
+    let dir = ScratchDir::new("rt-replay-read-copies").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let identity = [("hasUnifiedMemory", Value::Bool(false))];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Managed (MTLResourceStorageModeManaged, 1 << 4), #4 Shared, 4 bytes each, zeros.
+        let made = "newBufferWithLength:options:";
+        for (id, options) in [(3, 16), (4, 0)] {
+            w.call(made, 1, id, &[Value::Uint(4), Value::Uint(options)], &[])?;
+        }
+        // A fill of 7s reaches #3's GPU copy; its CPU copy keeps its zeros.
+        let range = uints(&[("location", 0), ("length", 4)]);
+        let fill = [Value::Object(3), range, Value::Uint(7)];
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("blitCommandEncoder", 10, 11, &[], &[])?;
+        w.call("fillBuffer:range:value:", 11, 0, &fill, &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3), Value::Object(4)],
+            &[],
+        )
+    });
+    for device_reads in [false, true] {
+        let cache = ScratchCache::new().unwrap();
+        let device = rt_device(cache.path());
+        let unified = device.has_unified_memory();
+        let backend = NewRuntime::new(device, gpu::TEST_DEVICE).unwrap();
+        let mut backend = match device_reads {
+            true => backend.reading_device_copies(),
+            false => backend,
+        };
+        let header = backend.managed_digests();
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        let lines = report.lines();
+        for line in header.iter().chain(&lines) {
+            eprintln!("REPLAY read-copies {device_reads} {line}");
+        }
+        ended.unwrap();
+        let (copy, bytes, said) = match device_reads {
+            false => (ReadCopy::Cpu, [0u8; 4], "reads its CPU copy only"),
+            true => (ReadCopy::Device, [7u8; 4], "reads the device copy back"),
+        };
+        assert_eq!(report.checks.len(), 2, "{lines:?}");
+        let (managed, shared) = (&report.checks[0], &report.checks[1]);
+        assert_eq!((managed.object, managed.copy), (3, Some(copy)), "{lines:?}");
+        assert_eq!(managed.sha256[..], Sha256::digest(bytes)[..], "{lines:?}");
+        assert_eq!((shared.object, shared.copy), (4, None), "{lines:?}");
+        let label = format!("({})", copy.label());
+        let check = lines.iter().find(|line| line.starts_with("check #3 "));
+        assert!(
+            check.is_some_and(|line| line.ends_with(&label)),
+            "{lines:?}"
+        );
+        assert_eq!(header.is_some(), !unified, "{header:?}");
+        if let Some(header) = header {
+            assert!(header.contains(said), "{header}");
+        }
     }
 }
 

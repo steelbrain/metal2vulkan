@@ -49,10 +49,16 @@
 //! named, with the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section
 //! 10).
 //!
+//! A check or dump of a buffer the play keeps two copies of (a Managed buffer of a stream recorded
+//! without unified memory) names the copy it read: its CPU copy, as Metal's `contents` answers, or
+//! with `--read-device-copies yes` (the new runtime's play only) its device copy, read back. On a
+//! device that keeps a device copy of each Managed buffer, the report's `managed digests` line
+//! after its `device` line says which.
+//!
 //! `command-replay compare-dumps --a DIR --b DIR` compares two plays' dumps word by word, leaving
 //! out the words either play held covered, and prints a line per buffer that differs outside every
-//! cover, per dump only one play has and per dump a play could not read, then a summary ending
-//! `agree` or `DIFFER`. The exit status is 0 where they agree, 1 where they differ, 2 for a bad
+//! cover, per dump only one play has, per dump a play could not read and per buffer the two plays
+//! read different copies of, then a summary ending `agree` or `DIFFER`. The exit status is 0 where they agree, 1 where they differ, 2 for a bad
 //! command line or an unreadable dump.
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
@@ -84,7 +90,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
-                     [--check-presents F,...] \
+                     [--check-presents F,...] [--read-device-copies yes|no] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
@@ -443,6 +449,16 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let device_copies = match options.get("read-device-copies").map(String::as_str) {
+        None | Some("no") => false,
+        Some("yes") => true,
+        Some(other) => {
+            report.line(&format!(
+                "error read-device-copies: {other} is neither yes nor no"
+            ));
+            return 2;
+        }
+    };
     let managed = match options.get("managed").map(String::as_str) {
         None => None,
         Some("one-copy") => Some(ManagedCopies::One),
@@ -525,6 +541,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     };
     let cache = PathBuf::from(&options["shader-cache"]);
     match options.get("runtime").map(String::as_str) {
+        None | Some("old") if device_copies => {
+            report.line("error read-device-copies: the new runtime's play only (--runtime rt)");
+            2
+        }
         None | Some("old") => {
             let mut device_options = DeviceOptions::default();
             device_options.shader_cache =
@@ -555,6 +575,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             let mut backend = match open_rt(device_type, cache) {
                 Ok((backend, name)) => {
                     report.line(&format!("device {name} runtime rt {mode}"));
+                    let backend = match device_copies {
+                        true => backend.reading_device_copies(),
+                        false => backend,
+                    };
+                    if let Some(line) = backend.managed_digests() {
+                        report.line(&line);
+                    }
                     let backend = match managed {
                         Some(copies) => backend.with_managed(copies),
                         None => backend,

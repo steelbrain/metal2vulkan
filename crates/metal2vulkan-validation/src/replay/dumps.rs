@@ -7,33 +7,43 @@
 //! - `cb<C>-obj<O>.cover`: the ranges of it the player's cover rule (`covers.rs`) held covered
 //!   then, as `start..end` byte offsets joined by commas, or `-` for none;
 //! - `cb<C>-obj<O>.unread`: where the backend could not read the buffer, why, in place of its
-//!   bytes.
+//!   bytes;
+//! - `cb<C>-obj<O>.copy`: for a buffer the play keeps two copies of, which one the bytes are
+//!   ([`ReadCopy::label`]): its CPU copy, or its device copy, read back.
 //!
 //! [`compare_dumps`] reads two plays' dumps and compares each buffer's bytes word by word (4 bytes).
 //! It leaves out a word that lies wholly inside a covered range of either play: the cover rule
 //! leaves those bytes undefined, and a backend that answers no texture writes covers less
 //! (`Backend::texture_writes`). Every other differing word is reported, and so is a dump that
-//! only one play has, a buffer that either play could not read, and a difference in length.
+//! only one play has, a buffer that either play could not read, and a difference in length. So is
+//! a buffer the two plays read different copies of: the CPU's bytes of one and the device's of the
+//! other are no compare of either. The summary counts the buffers compared by the copy both read.
 //! A whole-object checksum is no such compare: one word under a cover would make a buffer differ,
 //! and one word outside it would hide behind a cover elsewhere in the buffer.
 
+use super::player::ReadCopy;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
 /// The dump of buffer `object` named by command buffer `command_buffer`: its bytes, or why the
-/// backend could not read them, and the ranges of it covered then, written into `dir`.
+/// backend could not read them, which of its two copies they are where it has two, and the ranges
+/// of it covered then, written into `dir`.
 pub(super) fn write(
     dir: &Path,
     command_buffer: u64,
     object: u64,
     bytes: Result<&[u8], String>,
     covered: &[(u64, u64)],
+    copy: Option<ReadCopy>,
 ) -> io::Result<()> {
     let base = dir.join(format!("cb{command_buffer}-obj{object}"));
     match bytes {
         Ok(bytes) => std::fs::write(base.with_extension("bin"), bytes)?,
         Err(why) => std::fs::write(base.with_extension("unread"), why)?,
+    }
+    if let Some(copy) = copy {
+        std::fs::write(base.with_extension("copy"), copy.label())?;
     }
     let text: Vec<String> = covered.iter().map(|(s, e)| format!("{s}..{e}")).collect();
     let text = match text.is_empty() {
@@ -76,6 +86,13 @@ pub struct Comparison {
     pub only_one: Vec<(String, char)>,
     /// The dumps a play could not read (`cb<C>-obj<O>`, the play, and why).
     pub unread: Vec<(String, char, String)>,
+    /// The buffers the two plays read different copies of (`cb<C>-obj<O>`, then the copy each
+    /// read: a `.copy` file's words, or `one copy` where it has none), not compared.
+    pub copies: Vec<(String, String, String)>,
+    /// Of the buffers compared, those both plays read the CPU copy of, and those both read the
+    /// device copy of, read back.
+    pub cpu_copies: u64,
+    pub device_copies: u64,
 }
 
 impl Comparison {
@@ -85,9 +102,12 @@ impl Comparison {
     }
 
     /// Whether the plays agree: no differing word outside every cover, every dump in both plays,
-    /// and each read by both.
+    /// each read by both, and of the same copy.
     pub fn agrees(&self) -> bool {
-        self.uncovered() == 0 && self.only_one.is_empty() && self.unread.is_empty()
+        self.uncovered() == 0
+            && self.only_one.is_empty()
+            && self.unread.is_empty()
+            && self.copies.is_empty()
     }
 
     /// The comparison's lines: one per buffer that differs outside every cover, one per dump only
@@ -113,15 +133,22 @@ impl Comparison {
         for (dump, play, why) in &self.unread {
             lines.push(format!("unread in {play}: {dump}: {why}"));
         }
+        for (dump, a, b) in &self.copies {
+            lines.push(format!("copies differ: {dump}: a read its {a}, b its {b}"));
+        }
         let covered: u64 = self.differences.iter().map(|d| d.covered).sum();
         lines.push(format!(
-            "compared {} buffers: {} differ, {} words outside every cover, {covered} covered; \
-             {} dumps in one play only, {} unread: {}",
+            "compared {} buffers ({} as both plays' CPU copies, {} as their device copies, read \
+             back): {} differ, {} words outside every cover, {covered} covered; {} dumps in one \
+             play only, {} unread, {} of different copies: {}",
             self.compared,
+            self.cpu_copies,
+            self.device_copies,
             self.differences.len(),
             self.uncovered(),
             self.only_one.len(),
             self.unread.len(),
+            self.copies.len(),
             match self.agrees() {
                 true => "agree",
                 false => "DIFFER",
@@ -137,6 +164,8 @@ struct Held {
     bytes: Option<Vec<u8>>,
     unread: Option<String>,
     covered: Vec<(u64, u64)>,
+    /// The `.copy` file's words: which of its two copies the bytes are.
+    copy: Option<String>,
 }
 
 /// The dumps in `dir`, by command buffer and buffer.
@@ -158,6 +187,7 @@ fn read_dir(dir: &Path) -> io::Result<BTreeMap<(u64, u64), Held>> {
             "bin" => held.bytes = Some(std::fs::read(&path)?),
             "unread" => held.unread = Some(std::fs::read_to_string(&path)?),
             "cover" => held.covered = ranges(&std::fs::read_to_string(&path)?, &path)?,
+            "copy" => held.copy = Some(std::fs::read_to_string(&path)?.trim().to_owned()),
             _ => {}
         }
     }
@@ -234,7 +264,17 @@ pub fn compare_dumps(a: &Path, b: &Path) -> io::Result<Comparison> {
         let (Some(bx), Some(by)) = (&x.bytes, &y.bytes) else {
             continue;
         };
+        if x.copy != y.copy {
+            let copy = |held: &Held| held.copy.clone().unwrap_or_else(|| "one copy".to_owned());
+            out.copies.push((name, copy(&x), copy(&y)));
+            continue;
+        }
         out.compared += 1;
+        match x.copy.as_deref() {
+            Some(copy) if copy == ReadCopy::Cpu.label() => out.cpu_copies += 1,
+            Some(copy) if copy == ReadCopy::Device.label() => out.device_copies += 1,
+            _ => {}
+        }
         let covered = [&x.covered[..], &y.covered[..]].concat();
         let (differing, under, first) = words(bx, by, &covered);
         if differing > 0 {

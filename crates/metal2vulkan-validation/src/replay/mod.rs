@@ -28,7 +28,7 @@ pub use pixels::Shape;
 pub use player::WAIT_COMPLETED;
 pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, ManagedReads, PlayError, Player,
-    PrivateBytes, ReadClass, Relaid, Report, Shown, TextureWrites,
+    PrivateBytes, ReadClass, ReadCopy, Relaid, Report, Shown, TextureWrites,
 };
 pub use range::{
     display_library, recording_range, sidecar, RangeRow, RangeSource, RecordingRange,
