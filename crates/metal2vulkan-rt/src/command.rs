@@ -245,7 +245,7 @@ impl Pushed {
     }
 
     /// The bytes held.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -1226,7 +1226,7 @@ impl Building {
     }
 
     /// The push bytes the current command buffer holds.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn pushed(&self) -> &[u8] {
         self.pushed.bytes()
     }

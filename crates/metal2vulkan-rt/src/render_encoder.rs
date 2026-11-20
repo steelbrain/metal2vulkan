@@ -2682,7 +2682,7 @@ impl Drop for RenderCommandEncoder {
 /// What a draw's facts and fields hold: the vertex buffers it binds, whether it reads an
 /// attachment, reaches a device copy and writes what the host reads, its push bytes with each
 /// parameter block's address zeroed, and its blocks.
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 #[derive(Debug, PartialEq)]
 pub(crate) struct Filled {
     vertex: Vec<(u32, vk::Buffer, u64)>,
@@ -2692,7 +2692,7 @@ pub(crate) struct Filled {
 }
 
 /// An encoder's facts and fields beside a find and fill of every slot ([`RenderCommandEncoder::refilled`]).
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) struct Refilled {
     /// The facts and fields the encoder's draws left, found and filled slot by slot since the
     /// pipeline state was set.
@@ -2706,7 +2706,7 @@ pub(crate) struct Refilled {
     pub(crate) held: Vec<u8>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 impl RenderCommandEncoder {
     /// Its facts and fields beside a find and fill of every slot of what is bound now.
     pub(crate) fn refilled(&self) -> Refilled {

@@ -1560,7 +1560,7 @@ struct Parameters {
 /// A dispatch's facts and fields: the slots that reach a device copy and that write what the host
 /// reads, the push bytes with the block's address zeroed (each fill writes its own block), and
 /// the block's bytes.
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 #[derive(Debug, PartialEq)]
 pub(crate) struct DispatchFilled {
     facts: [Slots; 2],
@@ -1570,7 +1570,7 @@ pub(crate) struct DispatchFilled {
 
 /// An encoder's facts and fields beside a find and fill of every slot
 /// ([`ComputeCommandEncoder::refilled`]).
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) struct DispatchRefilled {
     /// The facts and fields the encoder's dispatches left, found and filled slot by slot since
     /// the pipeline state was set.
@@ -1584,7 +1584,7 @@ pub(crate) struct DispatchRefilled {
     pub(crate) held: Vec<u8>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 impl ComputeCommandEncoder {
     /// Its facts and fields beside a find and fill of every slot of what is bound now, after a
     /// dispatch filled its parameters.
