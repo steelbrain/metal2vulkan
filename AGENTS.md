@@ -311,7 +311,9 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
 - Run `cargo fmt --all` before every commit; keep clippy clean.
 - Match the surrounding style; prefer small files and structural fixes over special-case tables.
 - No dead code: delete what nothing uses. A published crate's public item that a consumer
-  calls is used, though no caller is in this tree: ask the consumer before deleting one.
+  calls is used, though no caller is in this tree. Before deleting one, search the consumer's
+  checkout for it and name the hit or the zero in the commit message; ask the consumer only
+  where a search cannot answer (a macro, a re-export).
 
 ## Docs and comments
 
