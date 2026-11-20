@@ -243,7 +243,7 @@ pub trait BlockMappings: Send + Sync {
     /// The allocation `allocation` describes was made. True once the consumer has mapped it; false
     /// where it has no place for it (no guest address): the runtime then frees the allocation and
     /// hands out none of its blocks, and a take that made it returns
-    /// [`Limit::AllocationNotMapped`](crate::Limit::AllocationNotMapped), counted in
+    /// [`Limit::AllocationNotMapped`], counted in
     /// [`Metrics::allocation_map_refusals`](crate::Metrics::allocation_map_refusals).
     ///
     /// It runs where the allocation is made: on the block-maker thread for the allocations made

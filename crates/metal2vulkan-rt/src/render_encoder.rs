@@ -1299,10 +1299,10 @@ impl RenderCommandEncoder {
     /// resolve texture began resolving into it, so an action that resolves changes nothing
     /// either. An index with no attachment is nothing to store.
     ///
-    /// Err: [`Refusal::ResolveTexture`](crate::Refusal::ResolveTexture) for an action that
+    /// Err: [`Refusal::ResolveTexture`] for an action that
     /// resolves an attachment with no resolve texture; [`Gap::RenderPass`] of
-    /// [`RenderPassKind::LateStore`](crate::RenderPassKind::LateStore) for one that does not, of
-    /// an attachment with one; of [`RenderPassKind::StoreAction`](crate::RenderPassKind::StoreAction)
+    /// [`RenderPassKind::LateStore`] for one that does not, of
+    /// an attachment with one; of [`RenderPassKind::StoreAction`]
     /// for `CustomSampleDepthStore`.
     pub fn set_color_store_action(
         &mut self,

@@ -1526,7 +1526,7 @@ impl Surface {
     /// scheduled handler; [`Error::Quiesced`]; [`Limit::ExportType`] where the buffer's memory
     /// requirements (and for a dma-buf the fd's query) do not list the surface memory's type, ask
     /// more than its length, or require an allocation of its own;
-    /// [`Limit::NoImport`](crate::Limit::NoImport) for a dma-buf on a device whose buffers import
+    /// [`Limit::NoImport`] for a dma-buf on a device whose buffers import
     /// none; [`Error::Fd`]; [`Limit::MemoryAllocations`]; [`Limit::BlockIds`]; [`Error::Vulkan`]
     /// where the buffer, its import, its binding or the upload's command buffer cannot be made.
     /// A refused call makes nothing, and a later call tries again.
