@@ -2036,22 +2036,32 @@ fn point_size_object(objects: &[IoObject], object: usize) -> bool {
 
 /// The point size `size` (an `f32`) a vertex or mesh function stores to `PointSize`, as Metal
 /// draws it: [`METAL_POINT_SIZE_LIMIT`] where `size` is past it (an infinity too), `size` itself
-/// otherwise. A NaN fails the ordered comparison and is stored as written: Metal's answer for a
-/// NaN, a negative or a denormal size is not measured.
+/// where it is greater than 0 and at most the limit, and 1.0 where it is not greater than 0: a
+/// zero, a negative or a NaN, which fails the ordered comparison. Vulkan's points take a
+/// `PointSize` greater than zero alone ("The value written to PointSize must be greater than
+/// zero"), and 1.0 is the size every device draws, the one a function without `[[point_size]]`
+/// writes. Metal's answer for a zero, a negative or a NaN size is undocumented and unmeasured.
 pub(crate) fn metal_point_size(fb: &mut FunctionBuilder<'_>, size: SValue) -> BResult<SValue> {
     let f32_ = fb.module().ty(SType::Float { width: 32 })?;
-    let limit = fb.module().constant(Constant::Scalar {
-        ty: f32_,
-        bits: ConstBits(u64::from(METAL_POINT_SIZE_LIMIT.to_bits())),
-    })?;
-    let limit = fb.module().const_value(limit)?;
+    let mut float = |value: f32| -> BResult<SValue> {
+        let constant = fb.module().constant(Constant::Scalar {
+            ty: f32_,
+            bits: ConstBits(u64::from(value.to_bits())),
+        })?;
+        fb.module().const_value(constant)
+    };
+    let limit = float(METAL_POINT_SIZE_LIMIT)?;
+    let zero = float(0.0)?;
+    let one = float(1.0)?;
     let past = fb.binary(BinOp::FOrdGreaterThan, size, limit)?;
-    fb.select(past, limit, size)
+    let held = fb.select(past, limit, size)?;
+    let positive = fb.binary(BinOp::FOrdGreaterThan, size, zero)?;
+    fb.select(positive, held, one)
 }
 
-/// The words [`metal_point_size`] adds to a store: the comparison, the select and the limit's
-/// constant.
-pub(crate) const POINT_SIZE_WORDS: u64 = 3;
+/// The words [`metal_point_size`] adds to a store: the two comparisons, the two selects and the
+/// three constants.
+pub(crate) const POINT_SIZE_WORDS: u64 = 7;
 
 /// Store the window depth `z / w` of position `position`, as the vertex function stores it, to
 /// its varying ([`WindowDepth`]): the division of the measured form, unfused.

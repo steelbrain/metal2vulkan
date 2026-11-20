@@ -915,6 +915,64 @@ pub(crate) mod on_device {
         });
     }
 
+    /// Points whose `[[point_size]]` is not greater than 0, a zero, a negative and a NaN
+    /// (`sized_vertex`), draw 1 pixel wide, the size the module writes for each, and their
+    /// command buffer completes: Vulkan's `PointSize` takes a size greater than zero alone.
+    #[test]
+    fn every_device_draws_a_point_of_no_positive_size_1_pixel_wide() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.vertex = StageSource::Function(FunctionDescriptor::new(
+            library.function("sized_vertex").expect("the function"),
+        ));
+        let marks = [(1, 1), (6, 2), (3, 6)];
+        let sizes = [0.0, -1.0, f32::NAN];
+        each_device("draw_point_sizes", |name, _, device| {
+            let sized = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let positions: Vec<f32> = marks.iter().flat_map(|&(x, y)| centre(x, y)).collect();
+            let positions = buffers.of(&device, &floats(&positions));
+            let colors = buffers.of(&device, &floats(&GREEN.repeat(3)));
+            let sizes = buffers.of(&device, &floats(&sizes));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&sized));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_vertex_buffer(Some(&sizes), 0, 2));
+            draw(encoder.draw_primitives(PrimitiveType::Point, 0, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let texels = read(&color, 4);
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let i = ((y * SIDE + x) * 4) as usize;
+                    let want = if marks.contains(&(x, y)) {
+                        GREEN
+                    } else {
+                        BLACK
+                    };
+                    assert_eq!(
+                        texels[i..i + 4],
+                        rgba8(want),
+                        "{name}: sizes 0, -1 and NaN: ({x}, {y})"
+                    );
+                }
+            }
+            println!("{name}: points of size 0, -1 and NaN drew 1 pixel wide");
+        });
+    }
+
     /// A stencil state that replaces marks the top half; one that tests keeps a later draw there.
     #[test]
     fn every_device_marks_and_tests_the_stencil() {

@@ -33,6 +33,24 @@ fragment float4 colored_fragment(Varyings in [[stage_in]]) {
     return in.color;
 }
 
+// draw's point sizes: colored_vertex's points, each vertex's `[[point_size]]` read from a buffer.
+struct SizedVaryings {
+    float4 position [[position]];
+    float4 color [[flat]];
+    float size [[point_size]];
+};
+
+vertex SizedVaryings sized_vertex(device const float2 *positions [[buffer(0)]],
+                                  device const float4 *colors [[buffer(1)]],
+                                  device const float *sizes [[buffer(2)]],
+                                  uint id [[vertex_id]]) {
+    SizedVaryings out;
+    out.position = float4(positions[id], 0.0, 1.0);
+    out.color = colors[id];
+    out.size = sizes[id];
+    return out;
+}
+
 // The runtime's made_at_creation lane: each pixel of the triangles sampled from a half texture
 // through a linear filter, at its position over an 8-texel side.
 fragment half4 sampled_fragment(Varyings in [[stage_in]],
