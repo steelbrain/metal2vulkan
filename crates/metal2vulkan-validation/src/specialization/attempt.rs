@@ -1064,11 +1064,13 @@ mod tests {
         assert!(description
             .features
             .remove(&metal2vulkan::device::VkFeature::ShaderStorageImageWriteWithoutFormat));
-        let profile =
-            metal2vulkan::device::Device::from_queries(description, DevicePolicy::default())
-                .unwrap()
-                .profile()
-                .clone();
+        let profile = metal2vulkan::device::Device::from_queries(
+            description,
+            metal2vulkan::device::DevicePolicy::default(),
+        )
+        .unwrap()
+        .profile()
+        .clone();
         let result = replay_specialized(
             &bitcode,
             "kernel_write_one_dimensional_textures",
