@@ -552,10 +552,11 @@ mod tests {
     /// Object and mesh functions are rows like any other, read through the one stage vocabulary
     /// (`case::Stage`): a public module declaring one of each is two entry rows of those stages,
     /// and a private module declaring a mesh function is its shard's row. A cold census reflects
-    /// and classifies all three: the object function draws with the generated launch observer of
-    /// its payload, and each mesh function, which sets its primitive's ID but no position and
-    /// writes no device memory, carries `mesh_companion` (a fragment stage no executor generates),
-    /// so it is classified and unresolved, never skipped; a warm pass selects and reads nothing.
+    /// and classifies all three: each carries `mesh_render_pipeline` (no candidate draws a mesh
+    /// render pipeline), the object function draws with the generated launch observer of its
+    /// payload, and each mesh function, which sets its primitive's ID but no position and writes no
+    /// device memory, also carries `mesh_companion` (a fragment stage no executor generates), so
+    /// each is classified and unresolved, never skipped; a warm pass selects and reads nothing.
     #[test]
     fn object_and_mesh_rows_are_indexed_and_classified() {
         let scratch = ScratchDir::new("census-mesh-rows").unwrap();
@@ -630,10 +631,13 @@ mod tests {
         assert_eq!(cold.summary.total_sources, 3);
         assert_eq!(cold.summary.classified_sources, 3);
         assert_eq!(cold.summary.remaining_sources(), 0);
-        assert_eq!(cold.summary.unresolved_sources, 2, "{:?}", cold.summary);
+        assert_eq!(cold.summary.unresolved_sources, 3, "{:?}", cold.summary);
         assert_eq!(
             cold.summary.requirements,
-            BTreeMap::from([(ToolingRequirement::MeshCompanion, 2)]),
+            BTreeMap::from([
+                (ToolingRequirement::MeshCompanion, 2),
+                (ToolingRequirement::MeshRenderPipeline, 3),
+            ]),
             "{:?}",
             cold.summary
         );

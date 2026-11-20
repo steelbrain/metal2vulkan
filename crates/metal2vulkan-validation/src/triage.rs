@@ -2311,7 +2311,7 @@ define void @{name}(ptr addrspace(2) %ab, ptr addrspace(1) %out) {{
     /// A mesh function that sets no vertex or primitive and writes nothing (an empty body, or a
     /// primitive count alone, constant or read from its payload) has no effect a stage observes:
     /// its row draws with rasterization off and an empty observation, needs no stage, and carries
-    /// no requirement.
+    /// only the requirement every mesh row carries (`mesh_render_pipeline`).
     #[test]
     fn an_effect_free_mesh_row_needs_no_stage() {
         for (module, entry) in [
@@ -2334,7 +2334,11 @@ define void @{name}(ptr addrspace(2) %ab, ptr addrspace(1) %out) {{
             ),
         ] {
             let classified = classify(&entry_of(module, entry)).unwrap();
-            assert_eq!(classified.tooling_requirements, [], "{entry}");
+            assert_eq!(
+                classified.tooling_requirements,
+                [ToolingRequirement::MeshRenderPipeline],
+                "{entry}"
+            );
             let draw = classified.mesh_draw.expect("a mesh draw");
             assert!(draw.missing.is_empty(), "{entry}: {:?}", draw.missing);
         }

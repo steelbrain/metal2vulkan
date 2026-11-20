@@ -2477,9 +2477,10 @@ fn replay_templates_skip_another_familys_literal_and_map_both_families_of_a_mixe
         .case
         .command_buffers
         .push(executed_command_buffer(compute_commands()));
-    let error = replay_templates(&checked).err().unwrap().to_string();
+    let error = replay_templates(&checked).err().unwrap();
     assert!(
-        error.contains("binds more than buffers and threadgroup memory"),
+        matches!(&error, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
+            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
         "{error}"
     );
 
