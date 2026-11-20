@@ -379,12 +379,6 @@ pub struct StageIo {
     /// output can differ there. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub half_fast_colors: Vec<u32>,
-    /// The color outputs declared with 16-bit `float` lanes, in the order of the entry's outputs:
-    /// none, as every device receives a `half` color output widened to `float` (the stage plan
-    /// declares no output 16-bit). Every user variable is declared 32-bit (a narrower value
-    /// widened).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub half_outputs: Vec<VaryingKey>,
     /// The index builtins, `Layer` and `ViewportIndex`, a fragment function reads as 0 on a device
     /// that cannot declare them (`Layer` needs `geometryShader` or `shaderOutputLayer`,
     /// `ViewportIndex` `multiViewport` or `shaderOutputViewportIndex`), sorted: compiled for a
@@ -883,8 +877,7 @@ pub struct IoType {
     pub numeric: IoNumeric,
     pub components: u8,
     /// The AIR element width (8, 16, or 32; 16 for `half`; 1 for `bool`, carried as `uint` 0 or
-    /// 1): narrower values are widened at the interface, but a color output of
-    /// [`StageIo::half_outputs`], declared 16-bit.
+    /// 1): narrower values are widened at the interface, which declares every lane 32-bit.
     pub source_bits: u8,
 }
 

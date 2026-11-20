@@ -199,25 +199,12 @@ fn user(
     ty: IoType,
     deco: IoDecor,
 ) -> Result<usize, Error> {
-    declare(sp, key, dir, ty, deco, false)
-}
-
-/// [`user`], declared with 16-bit `float` lanes where `half` (`IoObject::User::half`).
-fn declare(
-    sp: &mut StageIoPlan,
-    key: VaryingKey,
-    dir: IoDir,
-    ty: IoType,
-    deco: IoDecor,
-    half: bool,
-) -> Result<usize, Error> {
     let o = IoObject::User {
         key: key.clone(),
         dir,
         numeric: ty.numeric,
         components: ty.components,
         deco,
-        half,
     };
     // One key per direction: a second, different declaration of the same key is not a Metal
     // interface.
@@ -3312,12 +3299,8 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
                 index: (index == 1).then_some(1),
                 ..IoDecor::default()
             };
-            let half = false;
             let sp = &mut cx.families.stage_io;
-            let object = declare(sp, key.clone(), IoDir::Output, declared, deco, half)?;
-            if half {
-                sp.interface.half_outputs.push(key.clone());
-            }
+            let object = user(sp, key.clone(), IoDir::Output, declared, deco)?;
             push_var(
                 &mut sp.interface.outputs,
                 IoVariable {

@@ -1175,7 +1175,7 @@ codec_struct! {
         early_fragment_tests, extended_range_colors, unattached_colors, sample_mask,
         rotated_colors, rotated_factors, rotated_blends, decoded_fetches,
         texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
-        half_blend_colors, half_fast_colors, half_outputs, float_blend_colors, zero_indices,
+        half_blend_colors, half_fast_colors, float_blend_colors, zero_indices,
         color_group, word_colors, alpha_in_red_colors, alpha_test, depth_compares,
         logic_operation,
     }

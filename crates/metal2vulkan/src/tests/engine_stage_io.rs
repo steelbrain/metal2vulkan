@@ -1000,7 +1000,6 @@ fn a_half_color_output_is_declared_32_bit_on_every_device() {
         let p = prof(stem);
         let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         let words = validate(&half, &alone(&half, &p), &p);
-        assert!(half.interface.io.half_outputs.is_empty(), "{stem}");
         assert_eq!(output_widths(&words), [32], "{stem}");
         assert!(
             !half
@@ -1010,13 +1009,13 @@ fn a_half_color_output_is_declared_32_bit_on_every_device() {
             "{stem}"
         );
         let float = compile(&bc, "stage_io_fragment", &p).expect("float");
-        assert!(float.interface.io.half_outputs.is_empty(), "{stem}");
         let words = validate(&float, &alone(&float, &p), &p);
         assert!(output_widths(&words).iter().all(|w| *w == 32), "{stem}");
         let mut inputs = LowerInputs::new();
         inputs.rotated_colors.insert(0);
         let rotated = compile_with(&bc, "stage_io_fragment_point", &p, &inputs).expect("rotated");
-        assert!(rotated.interface.io.half_outputs.is_empty(), "{stem}");
+        let words = validate(&rotated, &alone(&rotated, &p), &p);
+        assert_eq!(output_widths(&words), [32], "{stem}");
     }
 }
 

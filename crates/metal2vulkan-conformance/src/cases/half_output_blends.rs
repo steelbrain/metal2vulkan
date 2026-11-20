@@ -72,15 +72,9 @@
 //! blend-colour sites are not modelled by that rule (`bc-1msa` does not fit it at the first word of
 //! `r16f`: Metal stores 0.60498046875 where the rule gives 0.6044921875).
 //!
-//! **What our side does.** Where the device enables `storageInputOutput16` (MoltenVK, RADV, ANV)
-//! the pipeline hands it the function's `half` as a 16-bit output (`StageIo::half_outputs`), so
-//! the device blends the `half` Metal's attachment receives as its own `half` output. On the M3
-//! Max under MoltenVK 1.4.2 that is Metal's compiler blending Metal's own output type: every word
-//! of every blend stores Metal's code, in the 16- and the 32-bit float formats alike, the
-//! blend-colour rows included (a replay of the six cases against the committed recordings). RADV
-//! and ANV are not measured with it. Where the device lacks the feature (lavapipe, NVIDIA's) the
-//! pipeline hands it the `half` widened to `float`, and the device's blend is the answer (the
-//! native-arithmetic contract): the sites where it differs from Metal's stay `divergent` rather
+//! **What our side does.** On every device the pipeline hands the device the function's `half`
+//! widened to `float` (the stage plan declares no 16-bit output), and the device's blend is the
+//! answer (the native-arithmetic contract): the sites where it differs from Metal's stay `divergent` rather
 //! than being loosened, because `half-output-fast-math-blend`'s own definition says validation
 //! derives no tolerance from it, and `known-gaps-rt.tsv` carries a row for each, per venue.
 //!
