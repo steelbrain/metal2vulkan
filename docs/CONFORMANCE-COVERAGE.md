@@ -507,7 +507,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 23 |
-| tolerances in all | 26 |
+| tolerances in all | 28 |
 | modules declaring a notice (loosening no value) | 145 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -571,7 +571,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `dynamic_libraries` | 3 | 3 | every field | 6 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
 | `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 41 |
-| `event_orders` | 5 | 5 | 2 tolerance(s): `AcceptedDifference` | 27 |
+| `event_orders` | 5 | 5 | 4 tolerance(s): `AcceptedDifference` | 27 |
 | `extended_range_blends` | 18 | 18 | every field | 124 |
 | `extended_range_gamut` | 39 | 39 | every field | 115 |
 | `extended_range_gradients` | 8 | 8 | every field | 116 |
