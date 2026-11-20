@@ -1,7 +1,8 @@
-//! Two textures over one buffer in host memory's import, as a drawer and a compositor hold a shared
-//! surface: T1, a render target shaders also read, and T2, a texture shaders read, both over the
-//! same bytes, each in an image of its own (host memory's import takes no image in place, on every
-//! device). Under a device cfg, on every device of the cfg's kind that imports host memory, in
+//! Two textures over the same bytes of host memory's import, as a drawer and a compositor hold a
+//! shared surface: T1, a render target shaders also read, and T2, a texture shaders read, made
+//! second and first, over one buffer, and apart, each over a buffer of its own over the same bytes
+//! of the import; each in an image of its own (host memory's import takes no image in place, on
+//! every device). Under a device cfg, on every device of the cfg's kind that imports host memory, in
 //! BGRA8Unorm and then in RGBA16Float, 32 by 16 texels at 256-byte rows. Three command buffers, each
 //! read exact:
 //!
@@ -214,14 +215,20 @@ mod on_device {
         }
     }
 
-    /// The three command buffers in `format` on `device`, over host memory it imports.
-    fn shape(name: &str, device: &Device, reader: &ComputePipelineState, format: Format) {
+    /// The three command buffers in `format` on `device`, over host memory it imports: the
+    /// textures over one buffer, or `apart`, each over a buffer of its own.
+    fn shape(
+        name: &str,
+        device: &Device,
+        reader: &ComputePipelineState,
+        (format, apart): (Format, bool),
+    ) {
         let Some((_, alignment)) = device.core().imports.host.as_ref() else {
             println!("imported aliases: {name}: imports no host memory; not run");
             return;
         };
         let alignment = *alignment;
-        let name = &format!("{name}: {format:?}");
+        let name = &format!("{name}: {format:?}, apart {apart}");
         let answer = (device.minimum_linear_texture_alignment(format.pixel()))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let pitch = PITCH.next_multiple_of(answer);
@@ -244,15 +251,20 @@ mod on_device {
         // release.
         let (import, _) = unsafe { device.import_host_memory(pointer, len, release) }
             .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
-        let buffer = (device.new_buffer(import.id, 0, len, None)).expect("a buffer");
+        // T2's buffer, and T1's: the same one, or, apart, a second over the same bytes.
+        let b2 = (device.new_buffer(import.id, 0, len, None)).expect("a buffer");
+        let b1 = match apart {
+            true => (device.new_buffer(import.id, 0, len, None)).expect("a buffer"),
+            false => b2.clone(),
+        };
         let first = IndexClass::Texture.range().start;
         let mut d = TextureDescriptor::new(TextureType::Type2D, format.pixel(), WIDTH, HEIGHT);
-        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-        let t1 = (buffer.new_texture(&d, Some(first), 0, pitch))
-            .unwrap_or_else(|error| panic!("{name}: T1: {error}"));
         d.usage = TextureUsage::SHADER_READ;
-        let t2 = (buffer.new_texture(&d, Some(first + 1), 0, pitch))
+        let t2 = (b2.new_texture(&d, Some(first + 1), 0, pitch))
             .unwrap_or_else(|error| panic!("{name}: T2: {error}"));
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let t1 = (b1.new_texture(&d, Some(first), 0, pitch))
+            .unwrap_or_else(|error| panic!("{name}: T1: {error}"));
         assert!(
             t1.copied_over().is_some() && t2.copied_over().is_some(),
             "{name}: host memory's import takes images of their own"
@@ -306,7 +318,7 @@ mod on_device {
             after.over_copies - before.over_copies,
             after.over_copies_imported - before.over_copies_imported,
         );
-        drop((queue, t1, t2, buffer, import, out, out_block, buffers));
+        drop((queue, t1, t2, b1, b2, import, out, out_block, buffers));
         wait_until("the release", || released.load(Ordering::SeqCst));
         free(mapping);
     }
@@ -323,8 +335,10 @@ mod on_device {
             let first = IndexClass::Texture.range().start;
             (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
             // BGRA8Unorm first: the RGBA16Float images then take places the first run's freed.
-            for format in [Format::Bgra8, Format::Half] {
-                shape(name, &device, &reader, format);
+            for apart in [false, true] {
+                for format in [Format::Bgra8, Format::Half] {
+                    shape(name, &device, &reader, (format, apart));
+                }
             }
         });
     }
