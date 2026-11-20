@@ -448,8 +448,9 @@ pub(crate) struct Target {
     load: vk::AttachmentLoadOp,
     store: vk::AttachmentStoreOp,
     clear: vk::ClearValue,
-    /// Where its store action resolves, its resolve.
-    pub(crate) resolve: Option<Resolve>,
+    /// Where its store action resolves, its resolve, boxed: a pass that resolves nothing moves
+    /// no resolve's room.
+    pub(crate) resolve: Option<Box<Resolve>>,
 }
 
 impl Target {
@@ -578,11 +579,11 @@ impl Pass {
     pub(crate) fn resolves(&self) -> impl Iterator<Item = &Resolve> {
         #[cfg(test)]
         RESOLVE_WALKS.with(|walks| walks.set(walks.get() + 1));
-        let depth = self.depth.as_ref().and_then(|t| t.resolve.as_ref());
+        let depth = self.depth.as_ref().and_then(|t| t.resolve.as_deref());
         let stencil =
-            (self.stencil.as_ref().and_then(|t| t.resolve.as_ref())).filter(|_| depth.is_none());
+            (self.stencil.as_ref().and_then(|t| t.resolve.as_deref())).filter(|_| depth.is_none());
         (self.colors.iter().flatten())
-            .filter_map(|t| t.resolve.as_ref())
+            .filter_map(|t| t.resolve.as_deref())
             .chain(depth)
             .chain(stencil)
     }
@@ -685,13 +686,13 @@ impl Pass {
                         slice: c.resolve_slice,
                         depth_plane: c.resolve_depth_plane,
                     };
-                    Some(resolve(
+                    Some(Box::new(resolve(
                         core,
                         texture,
                         &attachment,
                         into,
                         vk::ResolveModeFlags::AVERAGE,
-                    )?)
+                    )?))
                 }
                 _ => None,
             };
@@ -746,7 +747,7 @@ impl Pass {
                             slice: z.resolve_slice,
                             depth_plane: z.resolve_depth_plane,
                         };
-                        Some(resolve(core, texture, &attachment, into, mode)?)
+                        Some(Box::new(resolve(core, texture, &attachment, into, mode)?))
                     }
                     _ => None,
                 };
@@ -809,7 +810,7 @@ impl Pass {
                             slice: s.resolve_slice,
                             depth_plane: s.resolve_depth_plane,
                         };
-                        Some(resolve(core, texture, &attachment, into, mode)?)
+                        Some(Box::new(resolve(core, texture, &attachment, into, mode)?))
                     }
                     _ => None,
                 };
@@ -1044,7 +1045,7 @@ fn target(
     load: LoadAction,
     store: StoreAction,
     clear: vk::ClearValue,
-    resolve: Option<Resolve>,
+    resolve: Option<Box<Resolve>>,
 ) -> Result<Target, Error> {
     let (load, store) = ops(load, store)?;
     let layout = match attachment.home {
