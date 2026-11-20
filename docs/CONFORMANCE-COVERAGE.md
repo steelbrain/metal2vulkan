@@ -3644,7 +3644,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `command-buffer-facts` | The consumer's, not a gap: a queue's label and a command buffer's `device` and `commandQueue` are the consumer's own objects and never reach the GPU, so metal2v… |
 | `command-buffer-facts` | The consumer's, not a gap: a queue's label and a command buffer's `device` and `commandQueue` are the consumer's own objects and never reach the GPU, so metal2v… |
 | `command-buffer-facts` | The consumer's, not a gap: a queue's label and a command buffer's `device` and `commandQueue` are the consumer's own objects and never reach the GPU, so metal2v… |
-| `command-buffer-facts` | A typed refusal, as the sparse family's: metal2vulkan-runtime has no resource-state command encoder (`resourceStateCommandEncoder`), which maps sparse textures alone… |
+| `command-buffer-facts` | A typed refusal, as the sparse family's: metal2vulkan-runtime has no resource-state command encoder (`resourceStateCommandEncoder`), which maps sparse textures … |
 | `format-footprints-plain-stragglers` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
 | `handler-waits-completed-until-completed` | An accepted difference: Apple documents waitUntilCompleted as "Blocks the current thread until the GPU finishes executing the command buffer and all of its comp… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
