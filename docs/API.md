@@ -81,10 +81,10 @@ queries alone, reading no vendor, device or driver identity. It refuses a device
 `DevicePolicy` holds your product choices; together with the description they decide everything a
 compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
 
-- **Containment and isolation on.** Every access stays inside the resources the binder supplied,
-  and guest shaders cannot reach each other's resources. Where the device enables
-  `robustBufferAccess`, buffer accesses and vertex input are left to it. (MoltenVK advertises the
-  feature without implementing it; there such accesses are not contained, as on native Metal.)
+- **Bounds on a buffer-slot access at a run-time offset.** Such an access stays inside the range
+  the binder supplied: where the device enables `robustBufferAccess`, buffer accesses and vertex
+  input are left to it, and elsewhere the shader checks them. (MoltenVK advertises the feature
+  without implementing it; there such accesses are not bounded, as on native Metal.)
 - **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
   `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, the grouping and fusion of
   fast-math sums and products (each operation in the AIR's order, its own fast-math flags its
@@ -107,7 +107,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   compared, or that are read through another type than their own) is the module's own there: a
   `Private` array of its words, zero-padded to 16 bytes, which every load is checked against, and
   no stage carries a `constant_blob`. A blob past 64 KiB is refused
-  (`Unsupported{IdentityDomains}`, naming the constant data's size). With containment on, an access of the slot whose byte offset is not a
+  (`Unsupported{IdentityDomains}`, naming the constant data's size). An access of the slot whose byte offset is not a
   translation-time constant is checked against the slot's buffer (`PushField::SlotBounds`), from
   the buffer's start to its end, as Metal's domain is the buffer: an offset before the bind
   offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a
@@ -245,8 +245,8 @@ println!("  Metal properties: {:?}", device.metal_properties());
   the device is valid under. The command line runs exactly these.
 - The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`, the
   driver workarounds and measured deviations it takes (`workarounds()`, `driver_deviations()`),
-  its `subgroups()` model and `simd_tier(...)`, how it contains an out-of-bounds access
-  (`containment()`, `checks_buffers_in_shader()`, `checks_atomics_in_shader()`), and the Function
+  its `subgroups()` model and `simd_tier(...)`, the buffer robustness that bounds a buffer-slot
+  access (`robustness()`, `checks_buffers_in_shader()`), and the Function
   storage a thread holds (`function_storage()`: `FunctionStorage::Measured` bytes for a measured
   device, or `FunctionStorage::Assumed` with the 16 KiB floor, past which a vertex or fragment
   function runs with `FunctionStorageAssumed` up to 192 KiB and any other stage is refused).
@@ -732,7 +732,7 @@ A `RenderPipeline` holds:
 - `layout`: one pipeline layout for every stage;
 - `vertex_input`: Vulkan bindings and attributes. An attribute Vulkan cannot fetch as described is
   pulled in the shader instead, and so is every attribute on a device without
-  `robustBufferAccess` (unless containment is off). A `FloatRGB9E5` attribute is pulled on every
+  `robustBufferAccess`. A `FloatRGB9E5` attribute is pulled on every
   device: no device must fetch the shared-exponent format as vertex input, and its decode is
   exact, so the shader's is the answer a conformant fetch gives. Under the identity domains
   nothing is pulled, as the pulled fetch reads through a
@@ -1079,7 +1079,7 @@ for dependency in &pipeline.dependencies {
   program stored) and a pointer made from an integer are the device address the word holds,
   unbiased and used directly, unchecked: there is no root table, no `PushField::RootTableAddress`
   and no search. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
-- Under the identity domains with containment on, a buffer slot that an access may reach at a
+- Under the identity domains, a buffer slot that an access may reach at a
   byte offset that is not a translation-time constant (an index the memory plan does not prove
   one value, a looping `memcpy` or `memset`, a pulled fetch) also reads
   `PushField::SlotBounds`: a `uvec2`, the bound buffer's bytes before the bind offset (the bind
