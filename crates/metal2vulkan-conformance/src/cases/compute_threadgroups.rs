@@ -1,6 +1,6 @@
 //! Compute threadgroups: what Metal's own threads of one threadgroup wrote, at Metal's sizes.
 //!
-//! Ported from the runtime lane `runtime_lane/compute_threadgroups.rs`. The owned fixture
+//! The owned fixture
 //! `ttg_compute_simd_scratch` holds a 24 KiB `threadgroup` array and shuffles a `float4` one lane
 //! down its simdgroup, so what it writes pins three Metal facts at once in each dispatch: what
 //! `threads_per_threadgroup` answers, what `simd_shuffle_and_fill_down` fills the last lane of a
@@ -274,9 +274,8 @@ impl Case for SimdScratch {
 }
 
 /// The over-limit case's carried measurement, and where it is written down.
-const CARRIED_FROM: &str = "metal2vulkan_runtime::compute::ComputeCommandEncoder::threadgroup, \
-                            whose Apple M4 measurement under macOS 27.0.1 found that plain Metal \
-                            runs nothing for a threadgroup past its limit for the state";
+const CARRIED_FROM: &str = "an Apple M4 measurement under macOS 27.0.1, which found that plain \
+                            Metal runs nothing for a threadgroup past its limit for the state";
 
 /// Why record mode must never run the over-limit case on Metal.
 const NEVER_RE_RECORD: &str = "a threadgroup of 2048 threads is past Metal's 1024: its API \
@@ -424,8 +423,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// The lane's own model of what the kernel writes, kept exactly as
-    /// `runtime_lane::compute_threadgroups::expected` states it: for threadgroup `g` of `size`
+    /// The model of what the kernel writes: for threadgroup `g` of `size`
     /// threads at thread `t`, the staged value of thread `size - 1 - t` shuffled down one lane,
     /// lane 31 filled from lane 0's `float4(0)`.
     fn lanes_formula(size: u32, g: u32, t: u32) -> [f32; 4] {

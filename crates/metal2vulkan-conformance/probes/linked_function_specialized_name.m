@@ -4,8 +4,8 @@
 // it was given no value for, by the way it was made.
 //
 // Measured on an Apple M3 Max under macOS 27.0.1 (26A434), `MTL_DEBUG_LAYER` out of the
-// environment, one case a process; the compile layer's `tests::engine_specialized_name` and the
-// runtime lane's `runtime_lane::linked_functions` hold the answers.
+// environment, one case a process; the compile layer's `tests::engine_specialized_name` holds the
+// answers.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o linked_function_specialized_name \

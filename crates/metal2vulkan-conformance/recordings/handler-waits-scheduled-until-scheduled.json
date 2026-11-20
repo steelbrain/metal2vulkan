@@ -12,7 +12,7 @@
       },
       "provenance": {
         "never_returned": {
-          "from": "metal2vulkan-validation runtime_lane::handler_waits, waits_from_a_command_buffer_s_own_handlers_answer_at_once",
+          "from": "a Metal probe of waits from a command buffer's own handlers, on an Apple M4",
           "call": "addScheduledHandler/waitUntilScheduled"
         }
       },

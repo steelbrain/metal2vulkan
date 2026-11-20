@@ -5929,7 +5929,7 @@ each item named states the rule in full.
   own `DontCare` (MoltenVK), which decides it. A pass that renders such a texture in place, as
   the default policy renders a texture's own image, otherwise announces `dont-care-store`.
 
-- **The new runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-rt`'s
+- **The runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-rt`'s
   render encoder stores a `DontCare` attachment as it stores a `Store` one, its README's render
   passes). Apple's page for
   `MTLStoreAction.dontCare`: "The GPU has permission to discard the rendered contents of the
@@ -6186,7 +6186,7 @@ each item named states the rule in full.
 - **A heap's texture answers the size that placed it** (`Texture::allocated_size`, Metal's
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
-- **The new runtime's heap texture size and alignment are the device's own**
+- **The runtime's heap texture size and alignment are the device's own**
   (`metal2vulkan-rt`'s `Device::heap_texture_size_and_align`, its README's heaps): the device's
   own image requirements, not Metal's, the size rounded up to and the alignment raised to the
   device's `bufferImageGranularity`, so a buffer placed by the same answers never shares a
@@ -6368,7 +6368,7 @@ each item named states the rule in full.
   (the call gives no plane height), and a face past the surface lies in the texture's tail, zero
   when made, announced (`metal2vulkan-degrade-surface-texels-tail`). One of another format, off
   16 or of several levels stays `NotImplemented(SurfacePlaneShape)`.
-- **The new runtime's Managed copies read the consumer's bytes when the GPU reaches them**
+- **The runtime's Managed copies read the consumer's bytes when the GPU reaches them**
   (`metal2vulkan-rt`'s `Buffer::did_modify_range` and `Texture::upload_region`). On a device whose
   Shared memory is not device-local, a Managed buffer's changed range is one device copy from the
   consumer's bytes into the buffer's device copy, and on every device a Managed texture's uploaded
@@ -6628,7 +6628,7 @@ each item named states the rule in full.
 
 **Queues and command buffers**
 
-- **The new runtime schedules a command buffer once its submit thread is free**
+- **The runtime schedules a command buffer once its submit thread is free**
   (`metal2vulkan-rt`'s `CommandBuffer::status`, `add_scheduled_handler` and
   `wait_until_scheduled`). Apple defines `MTLCommandBufferStatusScheduled` as "All dependencies
   have been resolved and the command buffer has been scheduled for execution", and promises no

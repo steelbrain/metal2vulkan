@@ -1,6 +1,6 @@
 // How many samples plain Metal's alpha to coverage covers, pixel by pixel, over a sweep of alphas
-// at every sample count the device offers: the reference `runtime_lane::alpha_coverage` and the
-// `device-alpha-coverage` note's bound are read against.
+// at every sample count the device offers: the reference the `device-alpha-coverage` note's bound
+// is read against.
 //
 // The sweep is the lane's, drawn the lane's way, so the two print maps that compare line by line:
 // every multiple of 1/512 in [0, 1] and the float either side of every multiple of 1/16 inside it,
@@ -17,7 +17,7 @@
 //   - 1 sample: a pixel is covered exactly where alpha > 0.5, at every pixel alike;
 //   - 2 and 4 samples: the count depends on the pixel, each pixel's floor(alpha * n) or
 //     ceil(alpha * n), and exactly alpha * n where that is an integer;
-//   - every line equals MoltenVK 1.4.2's on the same chip (`runtime_lane::alpha_coverage`'s dump),
+//   - every line equals MoltenVK 1.4.2's on the same chip,
 //     which hands `alphaToCoverageEnable` to `alphaToCoverageEnabled`.
 //
 // So Metal's coverage is not floor(alpha * n): the conformance family `alpha_coverage_pairs` reads

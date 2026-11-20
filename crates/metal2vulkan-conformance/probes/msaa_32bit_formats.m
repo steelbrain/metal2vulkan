@@ -36,7 +36,7 @@
 //   `kSpecial`, pixels 8 to 15 `pseudo(i)`. The pass resolves into a 4 x 4 texture of the same
 //   format (`StoreAndMultisampleResolve` with `store`, `MultisampleResolve` with `resolve`), read
 //   back by a blit, and the samples (after `store`) through the kernel. Each resolved channel is
-//   compared with the rule `runtime_lane::resolve_rounding` states: the samples summed in order in
+//   compared with the rule: the samples summed in order in
 //   `float` from sample 0, each input, partial sum and the result times `1 / n` a denormal flushed
 //   to the zero of its sign, and a NaN anywhere the canonical `0x7fc00000`.
 // - `int-resolve`: an integer attachment filled as `int-samples` fills it, resolved into a

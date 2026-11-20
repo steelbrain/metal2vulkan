@@ -3,8 +3,8 @@
 // linked function or a plain one, and the bytes of the stitched library.
 //
 // Measured on an Apple M3 Max under macOS 27.0.1 (26A434), `MTL_DEBUG_LAYER` out of the
-// environment, one case a process; the compile layer's `tests::engine_stitched` and the runtime
-// lane's `runtime_lane::stitched_functions` hold the answers.
+// environment, one case a process; the compile layer's `tests::engine_stitched` holds the
+// answers.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o stitched_function_linked stitched_function_linked.m \

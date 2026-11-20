@@ -9,8 +9,8 @@
 //     -framework Foundation -framework Metal
 // Run: ./tns_air29, MTL_DEBUG_LAYER unset.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the runtime lane's
-// `runtime_lane::tensors_air29` module docs.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): the module docs of
+// `runtime_lane::tensors_air29` in metal2vulkan-validation before 8871d40bdf.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

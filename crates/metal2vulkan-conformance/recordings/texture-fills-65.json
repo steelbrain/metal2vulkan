@@ -12,7 +12,7 @@
       },
       "provenance": {
         "carried": {
-          "from": "runtime_lane::texture_fills, from the probes tfl.swift, tfl3.swift and tfl4.swift (an Apple M4, macOS 27.0.1) -- another chip than this round's oracle",
+          "from": "the probes tfl.swift, tfl3.swift and tfl4.swift (an Apple M4, macOS 27.0.1) -- another chip than this round's oracle",
           "measured_on": "apple-m4"
         }
       },

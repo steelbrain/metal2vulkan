@@ -2,8 +2,7 @@
 // no pixel format for, when the fragment function writes that color itself.
 //
 // Measured on an Apple M3 Max under macOS 27.0.1, `MTL_DEBUG_LAYER` out of the environment
-// (Metal's validation stops such a draw), one case a process; the runtime lane
-// `runtime_lane::extra_colors` holds the answers.
+// (Metal's validation stops such a draw), one case a process.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o written_color_the_pipeline_lacks \

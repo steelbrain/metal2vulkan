@@ -1,5 +1,4 @@
-//! Metal's private texture fills of multisample textures, ported from
-//! `runtime_lane::sample_fills`.
+//! Metal's private texture fills of multisample textures.
 //!
 //! The probe (`ms.m`, an Apple M3 Max under macOS 27.0.1): a private multisample texture of 5 x 3
 //! texels (a two-slice array for one), every slice cleared by a render pass that draws nothing
@@ -39,8 +38,7 @@ use crate::transcript::{Digest, DigestKind, Node, Observed, Sites, Transcript, V
 use crate::work::{Clear, Rect, Resource, Step, TextureSpec, Work};
 
 /// Where the carried values were measured.
-const MEASURED_IN: &str =
-    "runtime_lane::sample_fills, from the probe ms.m (an Apple M3 Max, macOS 27.0.1)";
+const MEASURED_IN: &str = "the probe ms.m (an Apple M3 Max, macOS 27.0.1)";
 
 /// Why record mode must not run these cases on Metal.
 const NO_PUBLIC_CALL: &str =

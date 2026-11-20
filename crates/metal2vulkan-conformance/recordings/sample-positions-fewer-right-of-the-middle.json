@@ -24,7 +24,7 @@
       },
       "provenance": {
         "carried": {
-          "from": "the Metal probe behind runtime_lane/sample_positions.rs",
+          "from": "a Metal probe of custom sample positions on an Apple M4",
           "measured_on": "apple-m4"
         }
       },

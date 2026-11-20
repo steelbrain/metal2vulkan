@@ -37,7 +37,7 @@
 //! so nothing can hang.
 //!
 //! On `metal2vulkan-rt` the `MTLEvent` row's waiting command buffer may still read `Committed`,
-//! with no handler run, though its wait is met: the new runtime schedules a command buffer once
+//! with no handler run, though its wait is met: the runtime schedules a command buffer once
 //! its device's one submit thread is free, and Metal promises no time between a command buffer's
 //! dependencies resolving and its scheduling. The case declares that on the new runtime's run
 //! alone, in its allowances.
@@ -304,7 +304,7 @@ impl Case for EventOrder {
 /// The slug of `docs/API.md`'s accepted difference that says when `metal2vulkan-rt` schedules a
 /// command buffer ([`scheduled_once_the_submit_thread_is_free`]).
 const SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE: &str =
-    "the-new-runtime-schedules-a-command-buffer-once-its-submit-thread-is-free";
+    "the-runtime-schedules-a-command-buffer-once-its-submit-thread-is-free";
 
 /// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-rt`'s
 /// run: the waiting command buffer's status while the signaller runs may be `Committed` or

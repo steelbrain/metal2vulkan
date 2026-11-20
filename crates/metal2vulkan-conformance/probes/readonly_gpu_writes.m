@@ -1,8 +1,7 @@
 // What Metal does with a GPU write into memory whose backing is read-only.
 //
 // The owner's rule is that where Metal drops such a write we drop it too, on every driver, with no
-// refusal. Four points are already measured and written down in
-// `metal2vulkan-runtime/src/read_only_view.rs` and `Degradation::PrivateResourceOption`: a blit
+// refusal. Four points are already measured: a blit
 // fill completes with no error and is visible to a later command of the SAME command buffer but
 // not to a later command buffer; a kernel's stores are dropped; the pages' protection is
 // unchanged; and a CPU write through a read-only mapping ends the process. This probe re-measures
@@ -24,12 +23,11 @@
 //
 //   plain            newBufferWithBytesNoCopy over the host pages, MTLResourceStorageModeShared.
 //                    The writable control for the bit-24 column.
-//   bit24            the same with Metal's private MTLResourceOptions bit 24, which
-//                    metal2vulkan-runtime names `ResourceOptions::PRIVATE_BIT`.
+//   bit24            the same with Metal's private MTLResourceOptions bit 24.
 //   viewed           a read-only alias of the same pages (mach_vm_remap sharing them, then
-//                    mprotect PROT_READ), imported by newBufferWithBytesNoCopy with NO bit. This
-//                    is what metal2vulkan-runtime does on macOS, so whether it agrees with bit24
-//                    is what says the emulation is faithful.
+//                    mprotect PROT_READ), imported by newBufferWithBytesNoCopy with NO bit.
+//                    Whether it agrees with bit24 says whether such an alias emulates the bit
+//                    faithfully.
 //   descriptor       a no-copy buffer made through the private MTLBufferDescriptor
 //                    (setContents:, setLength:, setNoCopy:YES, newBufferWithDescriptor:), which
 //                    is how the consuming project makes its own. The writable control for the SPI
@@ -424,8 +422,7 @@ static void sayProtection(const char *prefix, void *address) {
   sayu(key, (unsigned long long)info.shared);
 }
 
-// A read-only alias of `length` bytes of the pages at `pointer`, sharing them: what
-// `metal2vulkan-runtime`'s `read_only_view.rs` makes on macOS.
+// A read-only alias of `length` bytes of the pages at `pointer`, sharing them.
 static void *readOnlyView(void *pointer, size_t length) {
   mach_vm_address_t view = 0;
   vm_prot_t current = 0, maximum = 0;
@@ -1114,7 +1111,7 @@ int main(int argc, const char *argv[]) {
     sayu("unread.byte", kUnread);
 
     // Every run of the process shares this one queue. A queue whose second command buffer fails
-    // with a page fault is revoked (metal2vulkan-runtime's command_buffer/revocation.rs), so from
+    // with a page fault is revoked, so from
     // a faulting shape's second run on, both command buffers fail with AccessRevoked and the
     // later read-back never runs: read a faulting shape's later command buffer from run 0 (M3 Max,
     // macOS 27.0.1, m3-max-29110: one fault leaves the next command buffer Completed; runs 1 to 3

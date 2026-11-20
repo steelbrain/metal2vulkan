@@ -13,7 +13,7 @@
 // error and X's target's centre texel (a 16x16 RGBA8Unorm target cleared to red: green where the
 // kernel's command ran). The functions are the owned fixture
 // `crates/metal2vulkan-validation/fixtures/public/engine/icb_routed_writes.metal`, whose path is
-// the second argument; the runtime's lane `runtime_lane::write_routes` runs the same shape.
+// the second argument.
 //
 // Build (no GPU needed to build):
 //

@@ -24,7 +24,7 @@
       },
       "provenance": {
         "carried": {
-          "from": "metal2vulkan_runtime::compute::ComputeCommandEncoder::threadgroup, whose Apple M4 measurement under macOS 27.0.1 found that plain Metal runs nothing for a threadgroup past its limit for the state",
+          "from": "an Apple M4 measurement under macOS 27.0.1, which found that plain Metal runs nothing for a threadgroup past its limit for the state",
           "measured_on": "apple-m4"
         }
       },

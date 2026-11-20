@@ -2,7 +2,7 @@
 // constant makes dead: a `[[color(0)]]` input in a raster order group, a `const device` buffer in
 // one, a `[[color(0)]]` input of an output in one, and a `[[color(1)]]` input of a color the
 // pipeline has no pixel format for. The reference of `metal2vulkan`'s `tests::engine_dead_reads`
-// and `tests::engine_color_groups`, and of the runtime lane `runtime_lane::color_groups`, over the
+// and `tests::engine_color_groups`, over the
 // owned fixture `engine/dfk_dead_rog` (its source is repeated here, with `color_groups`'
 // `cg_cover`).
 //

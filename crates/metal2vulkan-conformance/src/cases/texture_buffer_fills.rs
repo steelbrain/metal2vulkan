@@ -1,5 +1,4 @@
-//! Metal's private fills of a texture over a buffer, ported from
-//! `runtime_lane::texture_buffer_fills`.
+//! Metal's private fills of a texture over a buffer.
 //!
 //! The probes (`tb.m` and `tblf.m`, an Apple M3 Max under macOS 27.0.1): a texture buffer 12
 //! texels wide of a format of 1 to 16 bytes a texel, at an offset into a shared buffer of 512
@@ -39,9 +38,7 @@ use crate::transcript::{
 use crate::work::{Rect, Resource, Step, Storage, TextureKind, TextureSpec, Work};
 
 /// Where the carried values were measured.
-const MEASURED_IN: &str =
-    "runtime_lane::texture_buffer_fills, from the probes tb.m and tblf.m (an Apple M3 Max, \
-     macOS 27.0.1)";
+const MEASURED_IN: &str = "the probes tb.m and tblf.m (an Apple M3 Max, macOS 27.0.1)";
 
 /// Why record mode must not run these cases on Metal.
 const NO_PUBLIC_CALL: &str =

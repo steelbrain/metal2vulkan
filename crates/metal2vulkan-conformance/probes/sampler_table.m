@@ -1,7 +1,6 @@
 // What Metal answers for a program-scope table of constexpr samplers read at an index only the
 // run knows: the owned fixture `engine/sampler_table.metal`'s `sampler_table_slot` (a texture
-// slot) and `sampler_table_held` (a texture held in an argument buffer). The runtime lane's
-// `runtime_lane::sampler_tables` holds the answers.
+// slot) and `sampler_table_held` (a texture held in an argument buffer).
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o sampler_table sampler_table.m \

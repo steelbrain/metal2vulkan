@@ -31,8 +31,7 @@
 //! A **completed** handler's `waitUntilScheduled` is the fourth combination, and the probe says
 //! Metal returns from it, scheduling having already happened. It is left out: running it on Metal
 //! would stake a record run on that prose, and the suite's standing rule against a shape that may
-//! not come back does not bend for a sentence. The runtime's `Ok(())` there stays a `runtime_lane`
-//! assertion.
+//! not come back does not bend for a sentence.
 //!
 //! The runtime's **bounded** wait (`wait_until_completed_for`) is left out too, for a different
 //! reason: Metal has no bounded wait, so its `TimedOut` is not a Metal fact and there is nothing
@@ -44,8 +43,8 @@ use crate::replay::NOTICES_SITE;
 use crate::transcript::{Node, Observed, Sites, Transcript};
 
 /// Where the probe that died is written down.
-const PROBED_IN: &str = "metal2vulkan-validation runtime_lane::handler_waits, \
-                         waits_from_a_command_buffer_s_own_handlers_answer_at_once";
+const PROBED_IN: &str = "a Metal probe of waits from a command buffer's own handlers, on an \
+                         Apple M4";
 
 /// The chip the probe died on, as the suite names it.
 ///

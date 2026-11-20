@@ -1,5 +1,4 @@
-//! Copies of Apple's two-plane extended-range textures, ported from
-//! `runtime_lane::two_plane_copies`.
+//! Copies of Apple's two-plane extended-range textures.
 //!
 //! Two cases, both from the halves of that lane whose Metal values were measured on **this** chip
 //! under **this** release:
@@ -45,9 +44,7 @@ use crate::transcript::{Digest, DigestKind, Node, Observed, Sites, Transcript, V
 use crate::work::{Plane, Rect, Resource, Step, Storage, TextureSpec, Work};
 
 /// Where the carried values were measured.
-const MEASURED_IN: &str =
-    "runtime_lane::two_plane_copies, from the probes bp.m and pad.m (an Apple M3 Max, \
-     macOS 27.0.1)";
+const MEASURED_IN: &str = "the probes bp.m and pad.m (an Apple M3 Max, macOS 27.0.1)";
 
 /// Why record mode must not run a case that fills on Metal.
 ///

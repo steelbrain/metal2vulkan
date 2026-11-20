@@ -64,8 +64,8 @@
 // The consumer's probes on a Radeon Pro 5300M and a UHD Graphics 630 under macOS 26.7.1 agree on
 // the defined cases; there the 5300M read a `float` passed to a `half` as its low 16 bits, a value
 // for a pointer as the pointer's low 32 bits, and a `constant` pointer for a `device` one through
-// it, where the 630 stored nothing. The translator's tests (`tests::engine_linked_signatures`,
-// `runtime_lane::linked_signatures`) hold these answers, from
+// it, where the 630 stored nothing. The translator's tests (`tests::engine_linked_signatures`)
+// hold these answers, from
 // `metal2vulkan_devtools::linked_signatures`.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

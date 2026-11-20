@@ -2,7 +2,7 @@
 // One case per process; every case graded at the commit (status, error, counts the stages wrote).
 //
 // Measured on an Apple M3 Max under macOS 27.0.1, `MTL_DEBUG_LAYER` out of the environment,
-// one case a process; the runtime lane `runtime_lane::memoryless_uses` holds the answers.
+// one case a process.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o memoryless_bind \

@@ -3,10 +3,9 @@
 // the family cuts it.
 //
 // THE QUESTION. A render pipeline making is attributed end to end elsewhere; the driver's
-// `vkCreateGraphicsPipelines` is the largest single phase of it. The runtime gives every making a
-// `VkPipelineCache` of its own, seeded from a record named by the whole graphics key
-// (`metal2vulkan-runtime/src/shader_cache/driver.rs`), so 32 states over one shader pair get 32
-// records and 32 caches. MoltenVK keys a converted stage by its SPIR-V and its conversion
+// `vkCreateGraphicsPipelines` is the largest single phase of it. A runtime that gives every making
+// a `VkPipelineCache` of its own, seeded from a record named by the whole graphics key, gets 32
+// records and 32 caches for 32 states over one shader pair. MoltenVK keys a converted stage by its SPIR-V and its conversion
 // configuration (`MVKPipelineCache::getShaderLibraryImpl`), not by the pipeline's state, so a
 // cache shared by the family SHOULD convert each stage once. This probe measures whether it does,
 // and what share of the call that is.

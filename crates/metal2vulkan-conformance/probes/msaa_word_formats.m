@@ -67,8 +67,7 @@
 //
 // So the word's format holds Metal's samples exactly, and the crate-owned resolve
 // (`bind::ColorResolveFormat::word`) is Metal's for `RGB9E5Float` and an 8-bit sRGB format, and a
-// near-equivalent for the packed formats (`Degradation::WordResolve`). The validation lane
-// `runtime_lane::word_samples_msaa` replays the first 16 pixels' answers.
+// near-equivalent for the packed formats (`Degradation::WordResolve`).
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

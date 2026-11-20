@@ -1,8 +1,7 @@
 //! Where Metal puts a multisampled pass's samples: the device's own positions, custom ones, and
 //! what Metal does to a coordinate that is not already a sixteenth of a pixel.
 //!
-//! Ported from the runtime lane `runtime_lane/sample_positions.rs`, whose first test is the Metal
-//! probe's pass: a one-pixel multisampled `RGBA8Unorm` target cleared to zero, one triangle
+//! The Metal probe's pass: a one-pixel multisampled `RGBA8Unorm` target cleared to zero, one triangle
 //! covering everything left of a vertical edge, resolved into a single-sampled texture. The owned
 //! fixture `rt6_restart` draws it — its vertex function places each vertex where buffer 0 holds it,
 //! its fragment function writes alpha 1 — so the resolved alpha **is** the pixel's coverage, and
@@ -36,8 +35,7 @@
 //! is a count Metal's API validation stops, and the probe measured what plain Metal does with it: the
 //! samples past the positions rasterize at the pixel's corner. The answer is written down, so the
 //! row compares; the row is not re-recorded because the neighbouring shape, **one position past**
-//! the pass's samples, is measured to end Metal's process
-//! (`metal2vulkan_runtime::RenderPassProblem::SamplePositionsSamples`), and a record run that may
+//! the pass's samples, is measured to end Metal's process, and a record run that may
 //! walk this family must not be one keystroke away from that.
 //!
 //! **Not ported at all** — the lane's refusal rows: a coordinate at 1.0 or below 0, one position in
@@ -228,7 +226,7 @@ const FEWER: &[Shape] = &[
 ];
 
 /// Where the carried rows' Metal answer was measured, and why record mode must not replace it.
-const CARRIED_FROM: &str = "the Metal probe behind runtime_lane/sample_positions.rs";
+const CARRIED_FROM: &str = "a Metal probe of custom sample positions on an Apple M4";
 const NEVER_RE_RECORD: &str = "fewer custom sample positions than the pass's samples is a count \
                                Metal's API validation stops, and one position past the pass's \
                                samples is measured to end Metal's process: a record run must not \
@@ -246,9 +244,8 @@ const PASS_NOTICES: &[Degradation] = &[
     Degradation::SharedInSystemMemory,
     // The fixture's vertex function writes `[[point_size]]`, which sizes no triangle. Where the
     // device's `pointSizeRange` ends below Metal's largest point, its translation records the
-    // static note `PrecisionNote::DevicePointSize`, which the new runtime's side announces as the
-    // pipeline state is made (the Iris Xe and lavapipe); the old runtime announces it at a draw of
-    // points alone, which this family makes none of. Naming it loosens no byte.
+    // static note `PrecisionNote::DevicePointSize`, which the runtime's side announces as the
+    // pipeline state is made (the Iris Xe and lavapipe). Naming it loosens no byte.
     Degradation::DevicePointSize,
     // A device that resolves the multisampled attachment through a pass of its own rather than in
     // the store. Announced on lavapipe, where the whole resolve is emulated; MoltenVK resolves in
@@ -607,11 +604,10 @@ pub fn all() -> Vec<Box<dyn Case>> {
 
 #[cfg(test)]
 mod tests {
-    //! The cross-check the port owes the lane: the coverage Metal produced, as the recordings hold
-    //! it, against the lane's own table.
+    //! The cross-check of the coverage Metal produced, as the recordings hold it, against the
+    //! probe's own table.
     //!
-    //! The table is the lane's (`runtime_lane/sample_positions.rs`), restated here because a
-    //! conformance case may not depend on the validation crate. A disagreement is a finding about
+    //! The table is the probe's, restated here. A disagreement is a finding about
     //! one of the two chips or about the port, never something to edit away.
 
     use super::*;

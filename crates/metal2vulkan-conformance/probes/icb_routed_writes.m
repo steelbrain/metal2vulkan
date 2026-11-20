@@ -16,8 +16,7 @@
 // into words 0 to 3 of a zeroed buffer). It prints, per kind, whether the executed commands ran:
 // the target's centre texel (and the corner's), and the buffer's four words. The functions are the
 // owned fixture `crates/metal2vulkan-validation/fixtures/public/engine/icb_routed_writes.metal`,
-// whose path is the second argument; the runtime's lane
-// `runtime_lane::write_routes` runs the same shapes.
+// whose path is the second argument.
 //
 // Build (no GPU needed to build):
 //

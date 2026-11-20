@@ -4,7 +4,7 @@
 // command, and a fill encoder after it, so the run says which of them ran.
 //
 // Measured on an Apple M3 Max under macOS 27.0.1, `MTL_DEBUG_LAYER` out of the environment,
-// one case a process; the runtime lane `runtime_lane::memoryless_uses` holds the answers.
+// one case a process.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o memoryless_uses \

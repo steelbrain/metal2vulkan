@@ -2,7 +2,6 @@
 // attribute's name as its user key, as Apple's OpenGL front end writes a kernel's stage-in node
 // (`!"air.stage_in", !"air.location_index", i32 0, i32 1, !"attrib_0", ...`). MSL has no spelling
 // for the key; the owned fixture `engine/kernel_stage_in.air.ll` is rewritten so and reassembled.
-// The runtime lane's `runtime_lane::stage_in_strides` holds the answers.
 //
 // Build and run (no cargo target needed), with S a scratch directory and F the fixture:
 //   sed -E 's/(!"air.stage_in", !"air.location_index", i32 ([0-9]+), i32 1, )/\1!"attrib_\2", /g' \
@@ -22,7 +21,7 @@
 // WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): both libraries made their pipelines and wrote the
 // same words, thread t = 5y + x reading layout 1 at 24x and layout 2 at 8y (thread 1: 41300000
 // 41400000 41500000 3f800000 00000000 00000064 000000c8 0000ffff fffffff9 00003c01 00004001
-// 00000001), which are the words `runtime_lane::stage_in_strides` requires of the keyed form.
+// 00000001), the words of the keyed form.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

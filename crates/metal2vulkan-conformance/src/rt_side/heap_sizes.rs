@@ -1,7 +1,7 @@
-//! What the new runtime's `heapTextureSizeAndAlignWithDescriptor:` answer is held to.
+//! What the runtime's `heapTextureSizeAndAlignWithDescriptor:` answer is held to.
 //!
 //! The runtime answers the device's own size and alignment, not Metal's (`docs/API.md` section 10,
-//! "The new runtime's heap texture size and alignment are the device's own"), so the cases that
+//! "The runtime's heap texture size and alignment are the device's own"), so the cases that
 //! ask it do not compare the two numbers with Metal's on its run
 //! ([`crate::texture_query::DEVICE_OWN_SIZES`]). This side holds each answer to what a consumer
 //! places by before it answers it, and answers the failure where it does not hold:

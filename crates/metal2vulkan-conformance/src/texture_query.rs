@@ -339,7 +339,7 @@ impl SizeAndAlign {
 /// not compared with Metal's, and the runtime's side holds each to a property instead, answering
 /// the failure where it does not hold (the alignment a power of two; a Private query's texture
 /// placed at `align` in a heap of `align + size` bytes, and its first slice read back where the
-/// runtime moves the format's bytes). On the old runtime's run nothing is loosened. A refusal is
+/// runtime moves the format's bytes). A refusal is
 /// not an answer, so a site where one side answers and the other refuses still diverges.
 pub const DEVICE_OWN_SIZES: &str =
-    "the-new-runtime-s-heap-texture-size-and-alignment-are-the-device-s-own";
+    "the-runtime-s-heap-texture-size-and-alignment-are-the-device-s-own";

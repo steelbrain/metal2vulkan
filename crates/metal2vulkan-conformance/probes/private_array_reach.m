@@ -2,7 +2,7 @@
 // `float acc[32][32][4][4][4]` (256 KiB) of which the pipeline's tile sizes (function constants)
 // reach a corner, and hands each sum to a linked visible function. The owned fixtures
 // `engine/private_reach_tiles.metal` and `engine/private_reach_functions.metal` hold the same
-// source; the runtime lane's `runtime_lane::private_reach` holds the answers.
+// source.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o private_array_reach private_array_reach.m \

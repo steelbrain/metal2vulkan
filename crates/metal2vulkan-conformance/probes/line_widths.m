@@ -1,6 +1,5 @@
 // What plain Metal draws for `-[MTLRenderCommandEncoder setLineWidth:]` (SPI), the reference the
-// runtime's line widths (`metal2vulkan-runtime`'s `line_width.rs`) and the lane test
-// `runtime_lane::line_widths` are read against.
+// runtime's line widths are read against.
 //
 // One case a process, named on the command line (no name lists them). Every target is cleared
 // to zero and drawn by a pass-through vertex function that places pixel coordinates (y down) of
@@ -35,8 +34,7 @@
 //              triangle and a line, and which pass unbiased across a sloped triangle's edge; and 4
 //              samples at width 2.
 //
-// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (every case's output is
-// `metal2vulkan-validation`'s `runtime_lane/line_widths_m3_max.txt`):
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1:
 //
 //   - Each encoder starts at width 1; a width holds across draws and pipeline states.
 //   - Metal draws w' = floor(16 w) / 16 clamped to [1/16, 16]: every width below 1/16 (0, negative

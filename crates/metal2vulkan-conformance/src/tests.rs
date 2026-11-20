@@ -3145,7 +3145,7 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
 }
 
 /// **The running-signal case's `MTLEvent` reading may be `Committed` on the new runtime's run
-/// alone.** The case names the accepted difference that the new runtime schedules a command
+/// alone.** The case names the accepted difference that the runtime schedules a command
 /// buffer once its submit thread is free ([`Justification::NewRuntimeAccepted`]): on
 /// `metal2vulkan-rt`'s run a waiting command buffer still `Committed` with no handler run, where
 /// Metal had scheduled it, is no divergence; on the old runtime's the same answers are the sites'

@@ -19,7 +19,7 @@
       },
       "provenance": {
         "carried": {
-          "from": "runtime_lane::sample_fills, from the probe ms.m (an Apple M3 Max, macOS 27.0.1)"
+          "from": "the probe ms.m (an Apple M3 Max, macOS 27.0.1)"
         }
       },
       "device": "apple-m3-max",

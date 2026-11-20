@@ -1,4 +1,4 @@
-//! Metal's private texture fills, ported from `runtime_lane::texture_fills`.
+//! Metal's private texture fills.
 //!
 //! The probes (`tfl.swift`, `tfl3.swift` and `tfl4.swift`, an Apple M4 under macOS 27.0.1): a
 //! private 2D or 2D array texture of the case's extent, levels and slices, every byte of every
@@ -36,8 +36,8 @@ use crate::work::{Plane, Rect, Resource, Step, Storage, TextureSpec, Work};
 
 /// Where the carried values were measured.
 const MEASURED_IN: &str =
-    "runtime_lane::texture_fills, from the probes tfl.swift, tfl3.swift and tfl4.swift (an Apple \
-     M4, macOS 27.0.1) -- another chip than this round's oracle";
+    "the probes tfl.swift, tfl3.swift and tfl4.swift (an Apple M4, macOS 27.0.1) -- another chip \
+     than this round's oracle";
 
 /// Why record mode must not run these cases on Metal.
 const NO_PUBLIC_CALL: &str =

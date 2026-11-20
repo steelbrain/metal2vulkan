@@ -94,9 +94,9 @@
 //! may still store the contents back to the texture, but you can't rely on that behavior."
 //! (`MTLRenderPass.h` says only that it is the default.) The M3 Max's kept bytes are one outcome
 //! of that and the clear another, and `metal2vulkan-rt` stores the clear. So a `DontCare` row's
-//! 64 texel bytes are unchecked on the new runtime's run alone, under the accepted difference
-//! `the-new-runtime-s-dontcare-store-writes-what-the-pass-rendered`; on the old runtime's, whose
-//! answer is the M3's, they compare exactly, and every byte outside the texels compares on both.
+//! 64 texel bytes are unchecked on the runtime's run, under the accepted difference
+//! `the-runtime-s-dontcare-store-writes-what-the-pass-rendered`, and every byte outside the texels
+//! compares.
 //!
 //! So a clearing pass treats the inter-row bytes exactly as a blit does, which is what the landed
 //! [`super::buffer_texture_blits`] family measured: the padding keeps its original fill throughout.
@@ -183,7 +183,7 @@ const BUFFER_SITE: &str = "buffer-after-the-pass";
 /// The slug of `docs/API.md`'s accepted difference that says what a `DontCare` store leaves in the
 /// texels on `metal2vulkan-rt`: what the pass rendered, where Apple's page lets the GPU replace
 /// them with arbitrary data.
-const DONT_CARE_TEXELS: &str = "the-new-runtime-s-dontcare-store-writes-what-the-pass-rendered";
+const DONT_CARE_TEXELS: &str = "the-runtime-s-dontcare-store-writes-what-the-pass-rendered";
 
 /// The buffer's bytes before anything runs: byte `i` holds `1 + 11i mod 251`.
 ///
