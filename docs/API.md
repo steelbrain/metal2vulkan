@@ -1185,24 +1185,8 @@ for dependency in &pipeline.dependencies {
   runtime does on every device whose driver is not measured to load such reads ahead of the
   shader) says so with
   `state.uniform_views_at_residual = true`: its uniform views then bind ranges their bind offsets
-  share (below), as a bounded storage view's do. On a profile that takes
-  `DriverWorkaround::PushReadsLengthenThreadPayload` (ANV on the Iris Xe RPL-P, where a light kernel
-  that reads a pushed word was measured at about 2.2 times the time of one that reads none) a
-  storage view declares the key too, and takes the form that reads no residual only at bind offset 0
-  of a slot whose table tells offset 0 apart (the slot's bit in its table's
-  `zero_offset_views`), its class then
-  `bind::ZERO_OFFSET_CLASS`: leave out a slot bound at another offset, as the runtime does, so that
-  the bytes before a bind offset stay reachable through the range from the buffer's start and its
-  dispatches keep one shape. A storage view's slot bound to nothing takes the value a bind at
-  offset 0 gives it, so a plan of nothing bound (a creation's prediction) names the key of a
-  command that binds its storage views at offset 0, the commonest bind. The runtime keeps that key
-  and makes it at a state's creation together with its general form (every view read at its
-  residual), which a command binding a storage view at another offset takes at once while its own
-  key is made, so neither is a second pipeline made at a first command. It reads the profile's
-  uniform views at their residuals: there a kernel of three storage views at offset 0 and inline
-  bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in
-  142.8 us with it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
-  changes nothing.
+  share (below), as a bounded storage view's do. No storage view declares the key: it reads at its
+  residual, its range from the buffer's start, so the bytes before a bind offset stay reachable.
 - A bound buffer's length enters its shape only as a length class (`bind::length_class`), which a
   plan compares with the device's `maxUniformBufferRange` and `maxStorageBufferRange` alone
   (whether every range of the buffer fits each). Set each table's

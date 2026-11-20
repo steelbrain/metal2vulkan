@@ -164,37 +164,27 @@ pub(crate) fn plan_buffer(
 /// consumer's aligned upload; a buffer read through a uniform view, at an offset whose alignment
 /// class (`BufferShape::Buffer::offset_alignment`: `BindState::view_base_alignment` where the
 /// runtime tells it apart at the slot and it divides the offset, else a power of two up to 4) the
-/// base alignment divides; a buffer read through a storage view, at offset 0 alone
-/// (`bind::ZERO_OFFSET_CLASS`, where the runtime tells it apart at the slot): a storage view's
-/// range starts at the buffer's start or its window's aligned first byte
-/// (`instantiate::planned_range`), so its residual is 0 there and elsewhere the bind offset's share
-/// of it, which keeps the bytes before the bind offset reachable as Metal's are. A slot bound to
-/// nothing has the residual 0 (`instantiate::slot_field`), so either form reads the Metal offset
-/// alone of the same descriptor: a uniform view's takes false, the form that reads at the
-/// residual, which keeps the key of a draw that leaves the slot unbound the key that reads every
-/// such slot at its residual; a storage view's takes what a bind at offset 0 takes, the
-/// commonest bind, so that a plan of nothing bound, which a consumer makes before any draw binds
-/// the slot (the runtime's creation, `pipeline/predicted.rs` and `pipeline/dispatch_making.rs`,
-/// and a warm pass's replay of a dispatch, `pipeline/dispatch_record.rs`), names the key of the
-/// draw that binds it there.
+/// base alignment divides. A slot bound to nothing has the residual 0
+/// (`instantiate::slot_field`), so either form reads the Metal offset alone of the same
+/// descriptor: it takes false, the form that reads at the residual, which keeps the key of a draw
+/// that leaves the slot unbound the key that reads every such slot at its residual. Only a uniform
+/// view declares the key (`lower::access`); a storage view's range starts at the buffer's start or
+/// its window's aligned first byte (`instantiate::planned_range`), read at its residual, so it
+/// takes false too.
 pub(crate) fn range_at_bind_offset(
     b: &BufferSlot,
     shape: Option<&BufferShape>,
     limits: &Limits,
 ) -> bool {
+    if !b.form.uniform_view() {
+        return false;
+    }
     let (min, _) = b.form.view_limits(limits);
     let offset = match shape {
-        // A storage view's range starts at its bind offset only where that is the buffer's start.
-        Some(&BufferShape::Buffer {
-            offset_alignment: crate::bind::ZERO_OFFSET_CLASS,
-            ..
-        }) if !b.form.uniform_view() => 0,
-        Some(BufferShape::Buffer { .. }) if !b.form.uniform_view() => return false,
         Some(&BufferShape::Buffer {
             offset_alignment, ..
         }) => u64::from(offset_alignment),
         Some(BufferShape::Bytes { .. }) => 0,
-        None if !b.form.uniform_view() => 0,
         None => return false,
     };
     let alignment = crate::memory::views::base_alignment(min);

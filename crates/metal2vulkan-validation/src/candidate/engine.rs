@@ -880,13 +880,7 @@ pub fn function_constants(
 /// view, and the plans of the two are the same.
 pub const VIEW_BASE_ALIGNMENT: u32 = 256;
 
-/// `state` telling [`VIEW_BASE_ALIGNMENT`] apart at every buffer slot of each of its stages, and
-/// offset 0 too (`StageTable::zero_offset_views`): on a profile that takes
-/// `DriverWorkaround::PushReadsLengthenThreadPayload` a storage view bound at offset 0, as every
-/// buffer the executor binds is, then reads at its bind offset alone in its plan, as in the
-/// runtime's plan of the same binds, which tells offset 0 apart at the slots its pipeline reads
-/// through a storage view there. Elsewhere no storage view declares the key, and a uniform view's
-/// range starts at its bind offset at offset 0 under either class, so the plan is the same. Each
+/// `state` telling [`VIEW_BASE_ALIGNMENT`] apart at every buffer slot of each of its stages. Each
 /// stage table classes its buffers' lengths under `ranges` (`StageTable::buffer_ranges`), the
 /// device's range limits (`BufferRanges::of`), as the runtime's tables class them, so a buffer's
 /// shape states the length class the runtime's shape of the same bind states.
@@ -894,7 +888,6 @@ pub fn views_told_apart(mut state: BindState, ranges: BufferRanges) -> BindState
     state.view_base_alignment = VIEW_BASE_ALIGNMENT;
     for table in state.stages.values_mut() {
         table.at_bind_views = u64::MAX;
-        table.zero_offset_views = u64::MAX;
         table.buffer_ranges = ranges;
     }
     state

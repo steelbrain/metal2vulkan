@@ -896,7 +896,6 @@ pub enum PatchDomain {
     Quad,
 }
 
-impl PipelineInterface {}
 
 impl StageInterface {
     /// The Vulkan stage of the module: the evaluation stage for a post-tessellation vertex
