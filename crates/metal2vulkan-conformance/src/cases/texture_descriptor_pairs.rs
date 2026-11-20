@@ -630,13 +630,13 @@ impl Case for DescriptorPairs {
                 crate::degradation::Degradation::MemorylessTextureBuffer.code(),
             ));
         }
-        // The new runtime's answers are the device's own, held by their property and not by
+        // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
         named.extend(self.queries.iter().map(|query| {
             Allowance::new(
                 format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
                 Loosening::Unchecked,
-                Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+                Justification::accepted(crate::texture_query::DEVICE_OWN_SIZES),
             )
         }));
         named

@@ -534,12 +534,12 @@ impl Case for AstcTextures {
             // `metal2vulkan-rt` keeps no twin: where the device holds the format's block, a
             // linear channel is the device's decode of it, the static note
             // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at
-            // 1/2048. On the old runtime's run it holds nowhere and faults nothing.
+            // 1/2048.
             for round in ROUNDS {
                 all.push(Allowance::new(
                     format!("case/{round}/texels"),
                     Loosening::Absolute(DEVICE_DECODE_BOUND),
-                    Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
+                    Justification::notice(Degradation::CompressedTexelDecode),
                 ));
             }
         }
@@ -790,8 +790,8 @@ mod tests {
                 .map(|allowance| allowance.loosening)
                 .collect();
             // An sRGB form's twin holds Metal's own codes and an HDR format's Metal's halves, so
-            // neither loosens a texel; only the fourteen linear ones do, each round by the old
-            // runtime's compact twin's bound and by the device decode's (the new runtime's).
+            // neither loosens a texel; only the fourteen linear ones do, each round by the compact
+            // twin's bound and by the device decode's.
             if case.compact_bound().is_none() {
                 assert!(bounds.is_empty(), "{}: {bounds:?}", format.name);
                 continue;

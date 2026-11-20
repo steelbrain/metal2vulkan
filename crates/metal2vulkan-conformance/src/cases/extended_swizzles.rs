@@ -396,7 +396,7 @@ impl Case for ExtendedSwizzles {
         // of the four extended-range formats); its values move by it (`known-gaps.tsv`).
         //
         // Every kernel samples or gathers through the runtime sampler at `[[sampler(0)]]`, which
-        // the new runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
+        // the runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
         // holds why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550:
         // it fired for every row the side does not refuse (the four 16-bit packed formats).
         let mut named = vec![

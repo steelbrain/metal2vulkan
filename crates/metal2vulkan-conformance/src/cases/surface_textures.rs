@@ -9,7 +9,7 @@
 //! | `surface-textures-420v-chroma-rg8` | the same | `RG8Unorm` over plane 1 |
 //! | `surface-textures-x420-luma-r16` | `'x420'`, 64x32: a 64x32 plane of 16-bit words at 0, then a 32x16 plane of word pairs at 4,096, each 128 bytes a row | `R16Unorm` over plane 0 |
 //! | `surface-textures-x420-chroma-rg16` | the same | `RG16Unorm` over plane 1 |
-//! | `surface-textures-420v-luma-r8-nvidia`, `-420v-chroma-rg8-nvidia`, `-x420-luma-r16-nvidia`, `-x420-chroma-rg16-nvidia` | the four two-plane cases' surfaces | the same, the new runtime's surface made by NVIDIA's route |
+//! | `surface-textures-420v-luma-r8-nvidia`, `-420v-chroma-rg8-nvidia`, `-x420-luma-r16-nvidia`, `-x420-chroma-rg16-nvidia` | the four two-plane cases' surfaces | the same, the runtime's surface made by NVIDIA's route |
 //!
 //! Each case makes the texture with `newTextureWithDescriptor:iosurface:plane:` (2D, `Shared`,
 //! shader-read usage), writes every texel with `replaceRegion:mipmapLevel:withBytes:bytesPerRow:`,
@@ -74,7 +74,7 @@ fn one_plane(
 
 /// A 4:2:0 surface of two planes, made with a plane dictionary: the luma plane of `code`-byte
 /// texels at 0, then the chroma plane of pairs of them, both `bytes_per_row` apart, and the
-/// texture over `plane`, made by the new runtime's side by `route`.
+/// texture over `plane`, made by the runtime's side by `route`.
 fn two_plane(
     ostype: [u8; 4],
     [luma, chroma]: [PixelFormat; 2],

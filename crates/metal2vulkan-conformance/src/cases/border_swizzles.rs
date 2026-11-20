@@ -312,11 +312,11 @@ impl Case for BorderSwizzles {
         // recording of this suite declares it.
         //
         // The fixture's float texture is sampled through the runtime sampler at `[[sampler(0)]]`,
-        // which the new runtime's pipelines note as scaled
+        // which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
         // on lavapipe, the Radeon 780M and the RX 550: it fired for all 8 rows.
         //
-        // Every row sweeps samplers that read an opaque-black border, which the new runtime's
+        // Every row sweeps samplers that read an opaque-black border, which the runtime's
         // sampler states note on every device (`crate::replay::swizzled_border_notice`).
         let mut named = vec![
             crate::replay::shared_memory_notice(),

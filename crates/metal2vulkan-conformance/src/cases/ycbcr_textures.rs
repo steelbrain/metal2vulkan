@@ -138,14 +138,14 @@ impl Case for FormatDescriptors {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The new runtime's answers are the device's own, held by their property and not by
+        // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
         (self.queries().into_iter())
             .map(|(query, _)| {
                 Allowance::new(
                     format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
                     Loosening::Unchecked,
-                    Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+                    Justification::accepted(crate::texture_query::DEVICE_OWN_SIZES),
                 )
             })
             .collect()

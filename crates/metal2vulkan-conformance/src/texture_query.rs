@@ -331,15 +331,15 @@ impl SizeAndAlign {
     }
 }
 
-/// `docs/API.md` section 10's entry for the new runtime's answer to
+/// `docs/API.md` section 10's entry for the runtime's answer to
 /// `heapTextureSizeAndAlignWithDescriptor:`: the device's own size and alignment, not Metal's.
 ///
 /// Each case that records the answer of a query at `case/<query>/size-and-align` names it at
-/// `case/<query>/size-and-align/Ok/*`, `Unchecked`: on the new runtime's run the two numbers are
-/// not compared with Metal's, and the runtime's side holds each to a property instead, answering
-/// the failure where it does not hold (the alignment a power of two; a Private query's texture
-/// placed at `align` in a heap of `align + size` bytes, and its first slice read back where the
-/// runtime moves the format's bytes). A refusal is
-/// not an answer, so a site where one side answers and the other refuses still diverges.
+/// `case/<query>/size-and-align/Ok/*`, `Unchecked`: the two numbers are not compared with Metal's,
+/// and the runtime's side holds each to a property instead, answering the failure where it does not
+/// hold (the alignment a power of two; a Private query's texture placed at `align` in a heap of
+/// `align + size` bytes, and its first slice read back where the runtime moves the format's bytes).
+/// A refusal is not an answer, so a site where one side answers and the other refuses still
+/// diverges.
 pub const DEVICE_OWN_SIZES: &str =
     "the-runtime-s-heap-texture-size-and-alignment-are-the-device-s-own";

@@ -858,14 +858,13 @@ impl Case for SequenceActions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One set of values is loosened, on one runtime: in a colour cell whose pass A stores
-        // `DontCare`, the texels that hold what that store left (`ColorCell::dont_care_texels`),
-        // unchecked on `metal2vulkan-rt`'s run alone (`DONT_CARE_TEXELS`). Apple's page for
-        // `MTLStoreAction.dontCare` lets the GPU replace the attachment's contents with arbitrary
-        // data: Metal's answer on the M3 Max (the texels it held before pass A) is one outcome of
-        // that, the new runtime's (what pass A rendered) another. Every other texel, and every
-        // texel on the old runtime's run, compares exactly. Two notices are declared and neither is
-        // a difference.
+        // One set of values is loosened: in a colour cell whose pass A stores `DontCare`, the
+        // texels that hold what that store left (`ColorCell::dont_care_texels`), unchecked
+        // (`DONT_CARE_TEXELS`). Apple's page for `MTLStoreAction.dontCare` lets the GPU replace the
+        // attachment's contents with arbitrary data: Metal's answer on the M3 Max (the texels it
+        // held before pass A) is one outcome of that, the runtime's (what pass A rendered)
+        // another. Every other texel compares exactly. Two notices are declared and neither is a
+        // difference.
         //
         // `DontCareStore`: every cell of both cases stores an attachment `DontCare` somewhere. Under
         // the suite's exact policy (`DontCareColorPolicy::Kept`) a colour stored `DontCare` keeps
@@ -906,7 +905,7 @@ impl Case for SequenceActions {
                     Allowance::new(
                         format!("case/planes/{site}/{at}"),
                         crate::allowance::Loosening::Unchecked,
-                        crate::allowance::Justification::new_runtime_accepted(DONT_CARE_TEXELS),
+                        crate::allowance::Justification::accepted(DONT_CARE_TEXELS),
                     )
                 }));
             }

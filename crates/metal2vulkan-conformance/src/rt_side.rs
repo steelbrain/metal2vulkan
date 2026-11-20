@@ -72,7 +72,7 @@ const THE_CONSUMERS: &str = "a queue's label and a command buffer's device and c
 /// The command buffers a queue of this side's holds at once: `newCommandQueue`'s.
 const QUEUE_COMMAND_BUFFERS: u32 = 64;
 
-/// The new runtime's device a replay runs on, with the venue it reports and the indices it hands
+/// The runtime's device a replay runs on, with the venue it reports and the indices it hands
 /// out.
 pub struct RtDevice {
     device: rt::Device,
@@ -304,7 +304,6 @@ fn venue(instance: &rt::Instance, physical: &rt::PhysicalDevice) -> Venue {
             vk::api_version_minor(properties.api_version)
         ),
         lossless_compression: false,
-        new_runtime: true,
         host: (properties.device_type == vk::PhysicalDeviceType::CPU)
             .then(crate::case::host_vector_isa),
     }
@@ -346,7 +345,7 @@ pub(crate) fn reflection_is_the_consumers() -> Failure {
     )
 }
 
-/// The new runtime's side of one case.
+/// The runtime's side of one case.
 pub struct RtSide<'a> {
     on: &'a RtDevice,
     queue: Option<rt::CommandQueue>,

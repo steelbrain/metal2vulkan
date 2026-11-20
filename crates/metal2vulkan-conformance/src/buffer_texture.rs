@@ -196,7 +196,7 @@ pub fn ends_metals_process(request: &BufferTextureRequest) -> Option<String> {
 ///
 /// The three getters metal2vulkan-rt keeps no counterpart of (`cpuCacheMode`,
 /// `hazardTrackingMode`, `allowGPUOptimizedContents`, which its consumer implements) are each the
-/// value a side recorded, so the new runtime's side records its refusal at those three sites alone.
+/// value a side recorded, so the runtime's side records its refusal at those three sites alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BufferTextureFacts {
     /// `textureType`, by its raw `MTLTextureType`.

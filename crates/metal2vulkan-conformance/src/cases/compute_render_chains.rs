@@ -311,7 +311,7 @@ impl Case for ComputeRenderChain {
         // recording of this suite declares it.
         //
         // The row whose fragment function samples the kernel's texture does so through a runtime
-        // sampler slot, which the new runtime's pipelines note as scaled
+        // sampler slot, which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
         let mut named = vec![crate::replay::shared_memory_notice()];
         if self.subject.crossing == Crossing::KernelToFragment {

@@ -229,7 +229,7 @@ impl Case for DepthTexelReads {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         //
-        // Its samples are through a runtime sampler slot, which the new runtime's pipelines note
+        // Its samples are through a runtime sampler slot, which the runtime's pipelines note
         // as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it
         // rests on).
         vec![

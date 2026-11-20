@@ -576,7 +576,6 @@ mod tests {
                 driver: "none".to_owned(),
                 api: "none".to_owned(),
                 lossless_compression: true,
-                new_runtime: false,
                 host: None,
             }
         }

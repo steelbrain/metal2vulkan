@@ -16,7 +16,6 @@ fn venue() -> Venue {
         driver: "stub".to_owned(),
         api: "1.2".to_owned(),
         lossless_compression: true,
-        new_runtime: false,
         host: None,
     }
 }

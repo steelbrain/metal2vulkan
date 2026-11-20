@@ -317,7 +317,7 @@ impl Case for ComputeEncoderCommands {
         // recording of this suite declares it.
         //
         // A sampling row's kernel samples its texture through the runtime sampler at slot 0,
-        // which the new runtime's pipelines note as scaled
+        // which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
         // on lavapipe, the Radeon 780M and the RX 550: it fired for both sampling rows.
         let mut named = vec![crate::replay::shared_memory_notice()];

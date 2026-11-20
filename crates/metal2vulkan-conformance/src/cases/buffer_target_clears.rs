@@ -289,14 +289,13 @@ impl Row {
             .flat_map(move |row| (0..ROW_BYTES).map(move |byte| OFFSET + row * self.pitch + byte))
     }
 
-    /// A `DontCare` row's declarations of its texels, one a byte of [`BUFFER_SITE`], unchecked on
-    /// `metal2vulkan-rt`'s run alone ([`DONT_CARE_TEXELS`]); none for a `Store` row.
+    /// A `DontCare` row's declarations of its texels, one a byte of [`BUFFER_SITE`], unchecked
+    /// ([`DONT_CARE_TEXELS`]); none for a `Store` row.
     ///
     /// Apple's page for `MTLStoreAction.dontCare` lets the GPU replace the attachment's contents
     /// with arbitrary data, and Metal's own answer on the M3 Max (the texels keep the buffer's
-    /// bytes) is one outcome of that, the new runtime's (the clear) another. The old runtime gives
-    /// Metal's, so there the texels still compare exactly, and the bytes outside them compare on
-    /// both runtimes.
+    /// bytes) is one outcome of that, the runtime's (the clear) another. The bytes outside the
+    /// texels compare.
     fn dont_care_texels(&self) -> Vec<crate::allowance::Allowance> {
         if self.store != StoreAction::DontCare {
             return Vec::new();
@@ -306,7 +305,7 @@ impl Row {
                 crate::allowance::Allowance::new(
                     format!("case/{BUFFER_SITE}/{at}"),
                     crate::allowance::Loosening::Unchecked,
-                    crate::allowance::Justification::new_runtime_accepted(DONT_CARE_TEXELS),
+                    crate::allowance::Justification::accepted(DONT_CARE_TEXELS),
                 )
             })
             .collect()
@@ -363,10 +362,9 @@ impl Case for BufferTargetClear {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // One set of bytes is loosened, on one runtime: a `DontCare` row's texels on
-        // `metal2vulkan-rt`'s run, which Apple's page lets the GPU replace with arbitrary data
-        // (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding, the bytes before and after the
-        // target, and every texel on the old runtime's run compare exactly, Metal's against ours.
+        // One set of bytes is loosened: a `DontCare` row's texels, which Apple's page lets the GPU
+        // replace with arbitrary data (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding and the
+        // bytes before and after the target compare exactly, Metal's against ours.
         // The rest is the **announcing**. Our runtime keeps a target
         // whose rows the device's own linear image does not lay out as Metal does as a shadow
         // image the pass renders into and the encoders copy back, and it announces that once per
@@ -475,12 +473,11 @@ mod tests {
         ]
     }
 
-    /// **A `DontCare` row's texels are unchecked on the new runtime's run alone, and nothing else
-    /// is.** Against Metal's kept bytes, ours with the clear in every texel is no divergence on
-    /// `metal2vulkan-rt`'s run and 64 on the old runtime's; a padding byte or a byte before the
-    /// target that moved is a divergence on both. A `Store` row declares no byte at all.
+    /// **A `DontCare` row's texels are unchecked, and nothing else is.** Against Metal's kept
+    /// bytes, ours with the clear in every texel is no divergence; a padding byte or a byte before
+    /// the target that moved is a divergence. A `Store` row declares no byte at all.
     #[test]
-    fn a_dont_care_row_leaves_its_texels_unchecked_on_the_new_runtime_alone() {
+    fn a_dont_care_row_leaves_its_texels_unchecked_and_nothing_else() {
         use crate::allowance::Offered;
         use crate::compare::compare;
         use crate::transcript::Transcript;
@@ -501,8 +498,7 @@ mod tests {
             }
             let allowances = row.dont_care_texels();
             assert_eq!(allowances.len(), 64, "{}", row.case);
-            let old = Offered::notices(&[]);
-            let rt = old.on_new_runtime(true);
+            let rt = Offered::notices(&[]);
             let found = compare(
                 &site(row, kept.clone()),
                 &site(row, stored.clone()),
@@ -511,18 +507,6 @@ mod tests {
             );
             assert!(found.divergences.is_empty(), "{}: {found:?}", row.case);
             assert!(found.bad_allowances.is_empty(), "{}: {found:?}", row.case);
-            let found = compare(
-                &site(row, kept.clone()),
-                &site(row, stored.clone()),
-                &allowances,
-                old,
-            );
-            assert_eq!(
-                paths(&found),
-                [format!("case/{BUFFER_SITE}")],
-                "{}: {found:?}",
-                row.case
-            );
             for at in [0, OFFSET - 1, OFFSET + ROW_BYTES, LEN - 1] {
                 if row.texel_offsets().any(|texel| texel == at) {
                     continue;

@@ -3,8 +3,8 @@
 //! The owned fixture `fc_ushort3_half3` (our MSL) reads each constant through `as_type<half3>`,
 //! which its compiler folds into a `<3 x half>` load of the constant's `<3 x i16>` global: a read
 //! of the global through another type than its own, which the translator holds in the constant
-//! blob. Under the new runtime's identity domains the blob is the module's own words, with no
-//! descriptor; under the old runtime's it is bound. The pipeline is made with both constants'
+//! blob. Under the runtime's identity domains the blob is the module's own words, with no
+//! descriptor. The pipeline is made with both constants'
 //! values (`newFunctionWithName:constantValues:error:`), and one dispatch of `THREADS` threads
 //! stores, for thread `t`, lane `t % 3` of each constant as a float, their `half` sum, and `t`.
 //! The values ([`A`], [`B`]) are halves whose sums are exact, so the answer is the program's.

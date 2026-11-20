@@ -9,7 +9,7 @@
 //! the bind offset and past the kernels' regions included, so an access placed anywhere but its
 //! own address shows as words that moved. The inputs and the bind offsets are
 //! `metal2vulkan_devtools::vector_word_phases`'s, whose `answer` is every access at its own
-//! address; this module's tests hold Metal's recorded answer equal to it, and the new runtime's
+//! address; this module's tests hold Metal's recorded answer equal to it, and the runtime's
 //! device test holds its own equal to it.
 //!
 //! Every input word is a normal `float`, so the kernels' negations and moves are exact on every
@@ -229,7 +229,7 @@ mod tests {
 
     /// Metal's recorded answer at each word phase is every access at its own address: the
     /// buffers `metal2vulkan_devtools::vector_word_phases::answer` gives, byte for byte, which the
-    /// product's interpreter test and the new runtime's device test hold their own answers to.
+    /// product's interpreter test and the runtime's device test hold their own answers to.
     #[test]
     fn metal_places_each_vector_at_its_own_address() {
         for case in all() {

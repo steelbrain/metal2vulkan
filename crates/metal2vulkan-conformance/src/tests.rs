@@ -1302,8 +1302,7 @@ fn a_failing_row_names_the_native_notes_its_run_announced() {
 }
 
 /// Every accepted difference a case names is an entry of `docs/API.md` section 10, a venue's
-/// answer (`Justification::WithoutCompression`) and the new runtime's
-/// (`Justification::NewRuntimeAccepted`) included. A slug that names no entry justifies
+/// answer (`Justification::WithoutCompression`) included. A slug that names no entry justifies
 /// nothing on any venue, and a replay says so only where the site it loosens differs: the
 /// presented-Mac entry's lead-in was reworded while the compression slug kept the old words, so
 /// every site that slug loosens read divergent on the RTX 5080 and on lavapipe, and the M3 Max,
@@ -1314,11 +1313,10 @@ fn every_accepted_difference_a_case_names_is_an_entry() {
     let mut missing = Vec::new();
     for case in crate::cases::all() {
         for allowance in case.allowances() {
-            let (Justification::AcceptedDifference(slug)
-            | Justification::WithoutCompression(slug)
-            | Justification::NewRuntimeAccepted(slug)) = &allowance.justified_by
-            else {
-                continue;
+            let slug = match &allowance.justified_by {
+                Justification::AcceptedDifference(slug)
+                | Justification::WithoutCompression(slug) => slug,
+                _ => continue,
             };
             if !entries.contains(slug) {
                 missing.push(format!(
@@ -1338,13 +1336,13 @@ fn every_accepted_difference_a_case_names_is_an_entry() {
     );
 }
 
-/// Every answer Metal recorded to `heapTextureSizeAndAlignWithDescriptor:` is loosened on the new
-/// runtime's run, both of its numbers, by the entry saying they are the device's own
-/// (`texture_query::DEVICE_OWN_SIZES`); the new runtime's side holds them to their property
+/// Every answer Metal recorded to `heapTextureSizeAndAlignWithDescriptor:` is loosened, both of
+/// its numbers, by the entry saying they are the device's own
+/// (`texture_query::DEVICE_OWN_SIZES`); the runtime's side holds them to their property
 /// instead. An answer the allowances missed would compare the device's numbers with Metal's, which
 /// the entry says they are not; one they reach past would excuse a site that is no answer.
 #[test]
-fn every_recorded_heap_texture_answer_is_held_by_its_property_on_the_new_runtime() {
+fn every_recorded_heap_texture_answer_is_held_by_its_property() {
     /// The paths of the `size-and-align` sites under `node` that recorded an answer.
     fn answered(node: &Node, path: &str, out: &mut Vec<String>) {
         let path = match path.is_empty() {
@@ -1359,7 +1357,7 @@ fn every_recorded_heap_texture_answer_is_held_by_its_property_on_the_new_runtime
             answered(child, &path, out);
         }
     }
-    let own = Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES);
+    let own = Justification::accepted(crate::texture_query::DEVICE_OWN_SIZES);
     let (mut held, mut missed, mut cases) = (0, Vec::new(), 0);
     for case in crate::cases::all() {
         let Ok(recording) = crate::recording::read(case.name()) else {
@@ -1392,7 +1390,7 @@ fn every_recorded_heap_texture_answer_is_held_by_its_property_on_the_new_runtime
     }
     assert!(
         missed.is_empty(),
-        "{} recorded answer field(s) compared with Metal's on the new runtime:\n{}",
+        "{} recorded answer field(s) compared with Metal's on the runtime:\n{}",
         missed.len(),
         missed.join("\n")
     );
@@ -3003,58 +3001,6 @@ fn a_refusal_reads_by_what_metals_validation_did() {
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
-/// **A notice scoped to `metal2vulkan-rt` loosens the new runtime's run alone.**
-/// [`Justification::NewRuntimeNotice`] holds on `metal2vulkan-rt`'s run where the run announced
-/// the notice, and faults the case there where it did not. On the old runtime's run it holds
-/// nowhere and faults nothing, even where the old runtime announces the same notice: the site
-/// compares as if the case loosened nothing, so a difference there is the site's own one row, and
-/// the report says why the bound never fired.
-#[test]
-fn a_notice_scoped_to_the_new_runtime_leaves_the_old_runtimes_site_its_one_row() {
-    let leaf = |bits: u32| {
-        Transcript::new(vec![Node::leaf(
-            "texels",
-            Observed::value(Value::Float {
-                bits: u64::from(bits),
-                width: crate::transcript::FloatWidth::Single,
-            }),
-        )])
-    };
-    let code = Degradation::CompressedTexelDecode.code().to_owned();
-    let allowances = vec![Allowance::new(
-        "case/texels",
-        Loosening::Absolute(0.01),
-        Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
-    )];
-    let metal = leaf(0.5f32.to_bits());
-    let ours = leaf(0.505f32.to_bits());
-    let announced = [code];
-    let old = Offered::new(&announced, &Validated::NotRun);
-    let found = compare(&metal, &ours, &allowances, old);
-    assert!(found.bad_allowances.is_empty(), "{found:?}");
-    let paths: Vec<&str> = found
-        .divergences
-        .iter()
-        .map(|at| at.path.as_str())
-        .collect();
-    assert_eq!(paths, ["case/texels"], "{found:?}");
-    assert_eq!(found.unfired.len(), 1, "{found:?}");
-    assert_eq!(
-        found.unfired[0].why,
-        Some(Unjustified::OldRuntime.to_string())
-    );
-
-    let found = compare(&metal, &ours, &allowances, old.on_new_runtime(true));
-    assert!(found.divergences.is_empty(), "{found:?}");
-    assert!(found.bad_allowances.is_empty(), "{found:?}");
-    assert_eq!(found.announced.len(), 1, "{found:?}");
-
-    let silent = Offered::new(&[], &Validated::NotRun).on_new_runtime(true);
-    let found = compare(&metal, &ours, &allowances, silent);
-    assert_eq!(found.bad_allowances.len(), 1, "{found:?}");
-    assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
-}
-
 /// **A site only Metal reached after a refusal beside it is folded under that refusal.** A row
 /// whose rate map we refused never reaches its labels or its later sites, so those are the
 /// refusal's and no divergence of their own; a site before the refusal, and a site of another row
@@ -3144,15 +3090,13 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
     );
 }
 
-/// **The running-signal case's `MTLEvent` reading may be `Committed` on the new runtime's run
-/// alone.** The case names the accepted difference that the runtime schedules a command
-/// buffer once its submit thread is free ([`Justification::NewRuntimeAccepted`]): on
-/// `metal2vulkan-rt`'s run a waiting command buffer still `Committed` with no handler run, where
-/// Metal had scheduled it, is no divergence; on the old runtime's the same answers are the sites'
-/// rows. The shared event's reading is not loosened, and a status other than the two is a row on
-/// either run.
+/// **The running-signal case's `MTLEvent` reading may be `Committed`.** The case names the
+/// accepted difference that the runtime schedules a command buffer once its submit thread is free
+/// ([`Justification::AcceptedDifference`]): a waiting command buffer still `Committed` with no
+/// handler run, where Metal had scheduled it, is no divergence. The shared event's reading is not
+/// loosened, and a status other than the two is a row.
 #[test]
-fn a_wait_met_by_a_running_signal_may_read_committed_on_the_new_runtime_alone() {
+fn a_wait_met_by_a_running_signal_may_read_committed() {
     let case = (crate::cases::event_orders::all().into_iter())
         .find(|case| case.name() == crate::cases::event_orders::WAIT_BEHIND_A_RUNNING_SIGNAL)
         .expect("the running-signal case");
@@ -3192,11 +3136,7 @@ fn a_wait_met_by_a_running_signal_may_read_committed_on_the_new_runtime_alone() 
         "case/order/event/waiting/handlers-while-the-signaller-runs",
         "case/order/event/waiting/status-while-the-signaller-runs",
     ];
-    let old = Offered::notices(&[]);
-    let found = compare(&metal, &ours, &allowances, old);
-    assert_eq!(paths(&found), event_sites, "{found:?}");
-
-    let rt = old.on_new_runtime(true);
+    let rt = Offered::notices(&[]);
     let found = compare(&metal, &ours, &allowances, rt);
     assert!(found.divergences.is_empty(), "{found:?}");
     assert!(found.bad_allowances.is_empty(), "{found:?}");
@@ -3222,7 +3162,7 @@ fn a_wait_met_by_a_running_signal_may_read_committed_on_the_new_runtime_alone() 
     let unknown = vec![Allowance::new(
         "case/order/event/*",
         Loosening::Unchecked,
-        Justification::new_runtime_accepted("no-such-entry"),
+        Justification::accepted("no-such-entry"),
     )];
     let found = compare(&metal, &ours, &unknown, rt);
     assert_eq!(found.bad_allowances.len(), 1, "{found:?}");
@@ -3773,7 +3713,6 @@ fn venue_named(device: &str) -> Venue {
         driver: "stub".to_owned(),
         api: "none".to_owned(),
         lossless_compression: true,
-        new_runtime: false,
         host: None,
     }
 }
@@ -3790,7 +3729,6 @@ fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.4".to_owned(),
         lossless_compression: false,
-        new_runtime: false,
         host: host.map(str::to_owned),
     };
     let avx2 = venue(Some("x86-64 AVX2"));

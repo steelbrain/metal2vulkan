@@ -975,7 +975,7 @@ impl Case for SamplerCrossings {
             crate::replay::shared_memory_notice(),
             crate::replay::pixel_sampler_scaling_notice(),
         ];
-        // The opaque-black axis-border rows read that border, which the new runtime's sampler
+        // The opaque-black axis-border rows read that border, which the runtime's sampler
         // states note on every device (`crate::replay::swizzled_border_notice`).
         if matches!(
             self.family,

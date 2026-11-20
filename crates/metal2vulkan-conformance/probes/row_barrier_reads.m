@@ -12,11 +12,11 @@
 // Run: ./row_barrier_reads <path of workloads.metal>, MTL_DEBUG_LAYER unset.
 //
 // It compiles the fixture's source, then dispatches `row_barrier` with `dispatchThreads` over the
-// grids the new runtime's device test runs (512 x 3 and 512 x 4 in threadgroups of 32 x 2, 96 x 5
+// grids the runtime's device test runs (512 x 3 and 512 x 4 in threadgroups of 32 x 2, 96 x 5
 // in threadgroups of 32 x 4), and prints for each the words that differ from that answer and the
 // SHA-256 of `seen`.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the new runtime's device test
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the runtime's device test
 // `every_device_keeps_a_kernel_that_reads_across_rows_after_a_barrier_at_its_own_size`.
 #import <CommonCrypto/CommonDigest.h>
 #import <Foundation/Foundation.h>

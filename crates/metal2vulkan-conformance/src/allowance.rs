@@ -64,21 +64,6 @@ pub enum Justification {
     /// ran, the report counts it as a claim nothing checked
     /// ([`crate::report::Report::unchecked_everywhere`]), as it does a notice no run announced.
     WithoutCompression(String),
-    /// **A degrade notice that loosens the site on `metal2vulkan-rt` alone**, by its code. On the
-    /// new runtime's run it holds as [`Justification::Degradation`] does, where the run announced
-    /// it. On the old runtime's it holds nowhere and faults nothing
-    /// ([`Unjustified::OldRuntime`]): the site compares as if the case loosened nothing there,
-    /// and the old runtime's answers keep the rows they had. It is for a bound that is the new
-    /// runtime's contract, a static note it answers by a format's class on every device, where
-    /// the old runtime announces the same notice under other facts.
-    NewRuntimeNotice(String),
-    /// **An entry of `docs/API.md`'s accepted differences that holds on `metal2vulkan-rt` alone**,
-    /// by its slug. On the new runtime's run it holds as [`Justification::AcceptedDifference`]
-    /// does; on the old runtime's it holds nowhere and faults nothing
-    /// ([`Unjustified::OldRuntime`]), so the old runtime's answers at the site still compare
-    /// exactly. It is for an answer the new runtime gives where Metal's documentation is silent
-    /// and the old runtime gives Metal's measured one.
-    NewRuntimeAccepted(String),
 }
 
 impl Justification {
@@ -103,17 +88,6 @@ impl Justification {
         Self::WithoutCompression(slug.into())
     }
 
-    /// A degrade notice's justification on `metal2vulkan-rt`'s run alone.
-    pub fn new_runtime_notice(kind: Degradation) -> Self {
-        Self::NewRuntimeNotice(kind.code().to_owned())
-    }
-
-    /// An accepted difference's justification on `metal2vulkan-rt`'s run alone, by its entry's
-    /// slug.
-    pub fn new_runtime_accepted(slug: impl Into<String>) -> Self {
-        Self::NewRuntimeAccepted(slug.into())
-    }
-
     /// What the report prints for it.
     pub fn describe(&self) -> String {
         match self {
@@ -128,20 +102,13 @@ impl Justification {
                 "a venue presenting no texture compression, the accepted difference {slug} \
                  (docs/API.md section 10)"
             ),
-            Justification::NewRuntimeNotice(code) => {
-                format!("the degrade notice {code}, on metal2vulkan-rt")
-            }
-            Justification::NewRuntimeAccepted(slug) => format!(
-                "the accepted difference {slug} (docs/API.md section 10), on metal2vulkan-rt"
-            ),
         }
     }
 
     /// Why the justification does not hold: the code names no degrade kind, the slug names no
     /// entry, the notice the code names was not announced among `offered`'s notices, the
-    /// recording's validated oracle does not say what the case claims it says, the venue
-    /// presents the compression a venue's own answer needs it not to, or the run is the old
-    /// runtime's where the notice loosens the new runtime's alone.
+    /// recording's validated oracle does not say what the case claims it says, or the venue
+    /// presents the compression a venue's own answer needs it not to.
     pub fn unjustified(&self, offered: &Offered<'_>) -> Option<Unjustified> {
         let notice = |code: &String| {
             if !Degradation::ALL.iter().any(|kind| kind.code() == code) {
@@ -154,20 +121,9 @@ impl Justification {
         };
         match self {
             Justification::Degradation(code) => notice(code),
-            Justification::NewRuntimeNotice(code) => match notice(code) {
-                Some(missing @ Unjustified::NoSuchDegradation(_)) => Some(missing),
-                _ if !offered.new_runtime => Some(Unjustified::OldRuntime),
-                missing => missing,
-            },
             Justification::AcceptedDifference(slug) => {
                 (!accepted_differences().iter().any(|entry| entry == slug))
                     .then(|| Unjustified::NoSuchAcceptedDifference(slug.clone()))
-            }
-            Justification::NewRuntimeAccepted(slug) => {
-                if !accepted_differences().iter().any(|entry| entry == slug) {
-                    return Some(Unjustified::NoSuchAcceptedDifference(slug.clone()));
-                }
-                (!offered.new_runtime).then_some(Unjustified::OldRuntime)
             }
             Justification::MetalValidation { says } => match offered.metal_validation {
                 Validated::Stopped { message, .. } if message.contains(says) => None,
@@ -209,10 +165,6 @@ pub struct Offered<'a> {
     /// `true` unless the run says otherwise ([`Offered::on_venue`]), so a venue's answer justifies
     /// nothing by default.
     pub lossless_compression: bool,
-    /// Whether the run is `metal2vulkan-rt`'s ([`Justification::NewRuntimeNotice`],
-    /// [`Justification::NewRuntimeAccepted`]). `false` unless the run says otherwise
-    /// ([`Offered::on_new_runtime`]).
-    pub new_runtime: bool,
 }
 
 impl<'a> Offered<'a> {
@@ -222,7 +174,6 @@ impl<'a> Offered<'a> {
             announced,
             metal_validation: &Validated::NotRun,
             lossless_compression: true,
-            new_runtime: false,
         }
     }
 
@@ -232,7 +183,6 @@ impl<'a> Offered<'a> {
             announced,
             metal_validation,
             lossless_compression: true,
-            new_runtime: false,
         }
     }
 
@@ -240,14 +190,6 @@ impl<'a> Offered<'a> {
     pub fn on_venue(self, lossless_compression: bool) -> Self {
         Self {
             lossless_compression,
-            ..self
-        }
-    }
-
-    /// What it offers on `metal2vulkan-rt`'s run where `new_runtime`.
-    pub fn on_new_runtime(self, new_runtime: bool) -> Self {
-        Self {
-            new_runtime,
             ..self
         }
     }
@@ -274,22 +216,16 @@ pub enum Unjustified {
     /// The venue presents a Mac that keeps textures compressed, as the recordings' Apple silicon
     /// Mac does, so the answer of a venue that keeps none justifies nothing here.
     VenueCompresses,
-    /// The run is the old runtime's, where a notice or an accepted difference the case scopes to
-    /// `metal2vulkan-rt` ([`Justification::NewRuntimeNotice`],
-    /// [`Justification::NewRuntimeAccepted`]) loosens nothing.
-    OldRuntime,
 }
 
 impl Unjustified {
     /// Whether an allowance that does not hold for this reason faults the case. Every reason does
-    /// but two: a venue's own answer ([`Justification::WithoutCompression`]) on a venue that
-    /// presents Metal's compression holds nowhere, as on the Mac that recorded the case, and a
-    /// notice or accepted difference scoped to `metal2vulkan-rt`
-    /// ([`Justification::NewRuntimeNotice`], [`Justification::NewRuntimeAccepted`]) holds nowhere
-    /// on the old runtime's run, so naming either is no fault there. The site then compares as if the
-    /// case loosened nothing, and a difference there is the site's own and nothing more.
+    /// but one: a venue's own answer ([`Justification::WithoutCompression`]) on a venue that
+    /// presents Metal's compression holds nowhere, as on the Mac that recorded the case, so naming
+    /// it is no fault there. The site then compares as if the case loosened nothing, and a
+    /// difference there is the site's own and nothing more.
     pub fn faults_the_case(&self) -> bool {
-        !matches!(self, Unjustified::VenueCompresses | Unjustified::OldRuntime)
+        !matches!(self, Unjustified::VenueCompresses)
     }
 }
 
@@ -322,10 +258,6 @@ impl std::fmt::Display for Unjustified {
             Unjustified::VenueCompresses => out.write_str(
                 "the venue presents a Mac that keeps textures compressed, as the recordings' Mac \
                  does, so the answer of a venue that keeps none justifies nothing here",
-            ),
-            Unjustified::OldRuntime => out.write_str(
-                "the run is the old runtime's, which a notice or an accepted difference scoped to \
-                 metal2vulkan-rt does not loosen",
             ),
         }
     }

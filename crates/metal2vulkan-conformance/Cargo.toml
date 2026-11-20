@@ -15,7 +15,7 @@ readme = "README.md"
 # builds, so one target directory builds the product (and the runtime on it) once for every suite
 # rather than once per feature set.
 metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
-# The new runtime, which the suite replays through its public API alone (`src/rt_side.rs`).
+# The runtime, which the suite replays through its public API alone (`src/rt_side.rs`).
 metal2vulkan-rt = { path = "../metal2vulkan-rt" }
 # Fixture paths, `llvm_assemble` and the scratch root: the suite's shaders are the owned public
 # fixtures.

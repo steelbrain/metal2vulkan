@@ -846,10 +846,9 @@ pub fn out_tight(
 /// device's decode of the texture's blocks.
 ///
 /// A BC texture keeps no decoded twin on any venue: the device holds every BC format in its own
-/// compressed form and decodes it itself, which the runtime announces as
-/// `compressed-texel-decode` where it makes it (the old runtime where the driver is not measured
-/// to decode a format as Metal does, `metal2vulkan-rt` for every such texture). Every block still
-/// compares exactly: the only site these loosen is the set of notices, which Metal holds empty.
+/// compressed form and decodes it itself, which the runtime announces as `compressed-texel-decode`
+/// for every such texture. Every block still compares exactly: the only site these loosen is the
+/// set of notices, which Metal holds empty.
 ///
 /// What is **not** here: `staged-texture-copy`. Our `replaceRegion:` into a compressed texture does
 /// go through a staging buffer, and the notice fires on **no** venue of this suite for these cases

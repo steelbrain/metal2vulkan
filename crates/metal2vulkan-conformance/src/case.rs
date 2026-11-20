@@ -488,7 +488,7 @@ pub struct Failure {
 }
 
 impl Failure {
-    /// The failure a typed error of the new runtime (`metal2vulkan-rt`) is. A translator refusal
+    /// The failure a typed error of the runtime (`metal2vulkan-rt`) is. A translator refusal
     /// that names a capability the device could enable is the venue's gap ([`device_gap_of`]).
     pub fn of_rt(error: &metal2vulkan_rt::Error) -> Self {
         let lacks = match error {
@@ -511,7 +511,7 @@ impl Failure {
         }
     }
 
-    /// The failure a translator error is, where the new runtime's side calls the translator's
+    /// The failure a translator error is, where the runtime's side calls the translator's
     /// library itself: recorded as the runtime's `Error::Translation` of it, the form the runtime
     /// gives it in.
     pub fn of_translation(error: &metal2vulkan::error::Error) -> Self {
@@ -700,9 +700,6 @@ pub struct Venue {
     /// (`DeviceProperties::lossless_compression`), as the Apple silicon Mac every recording was
     /// taken on does: what a venue's own answer (`Justification::WithoutCompression`) holds by.
     pub lossless_compression: bool,
-    /// Whether the side is `metal2vulkan-rt`'s: what a notice a case scopes to the new runtime
-    /// (`Justification::NewRuntimeNotice`) holds by.
-    pub new_runtime: bool,
     /// For a CPU implementation (`DeviceKind::Cpu`), the host's widest vector instruction set
     /// ([`host_vector_isa`]), which its shader compiler targets; `None` for a GPU. The device's
     /// name and driver do not carry it, and its answers follow it: one llvmpipe build (Mesa 26.2.6,
@@ -2974,7 +2971,7 @@ pub struct SurfaceTexture {
     pub route: SurfaceRoute,
 }
 
-/// How the new runtime's consumer makes a [`SurfaceTexture`]'s surface for one decoder
+/// How the runtime's consumer makes a [`SurfaceTexture`]'s surface for one decoder
 /// (`Device::new_exported_surface`): the handles it tries in turn and the layout's multiples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceRoute {

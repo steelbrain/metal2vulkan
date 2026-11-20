@@ -8,7 +8,7 @@
 //! dispatch, run where earlier threadgroups stored their patterns. The dispatches and the answer
 //! where threadgroup memory reads zero until the program writes it are
 //! `metal2vulkan_devtools::threadgroup_start`'s; this module's test holds Metal's recorded answer
-//! equal to it, and the new runtime's device test holds its own equal to it.
+//! equal to it, and the runtime's device test holds its own equal to it.
 //!
 //! Every output word is an atomic OR or a wrapping sum, the same in any order, so every byte
 //! compares exactly. Nothing here can fault a GPU: one pass of six dispatches, every access inside

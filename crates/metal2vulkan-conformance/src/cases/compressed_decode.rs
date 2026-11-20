@@ -25,15 +25,11 @@
 //! lane uses, kept.
 //!
 //! **The device's decode is the answer.** A BC texture keeps no decoded twin: every device samples
-//! its own BC image through its own decode, announced `compressed-texel-decode` where the runtime
-//! makes it (the old runtime on a driver not measured to decode the format as Metal does;
-//! `metal2vulkan-rt` for every block-compressed texture, its static note). On `metal2vulkan-rt`'s
-//! run each round's texels are loosened by the largest difference that notice's catalogue entry
-//! (docs/API.md) states for the format's family on any driver, justified by the notice alone
-//! (`CompressedDecode::decode_bound`): a texel past it is the note's claim failing, a
-//! divergence. The bound is scoped to the new runtime (`Justification::NewRuntimeNotice`): on the
-//! old runtime's run it loosens nothing, every texel compares exactly, and the device's decode is
-//! a `known-gaps.tsv` row where it differs, as it was before the note.
+//! its own BC image through its own decode, announced `compressed-texel-decode`: the runtime's
+//! static note for every block-compressed texture. Each round's texels are loosened by the largest
+//! difference that notice's catalogue entry (docs/API.md) states for the format's family on any
+//! driver, justified by the notice alone (`CompressedDecode::decode_bound`): a texel past it is the
+//! note's claim failing, a divergence.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -326,7 +322,7 @@ impl Case for CompressedDecode {
             all.push(Allowance::new(
                 format!("case/round/{round}/texels"),
                 Loosening::Absolute(self.decode_bound()),
-                Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
+                Justification::notice(Degradation::CompressedTexelDecode),
             ));
         }
         all

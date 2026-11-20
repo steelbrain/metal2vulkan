@@ -4,7 +4,7 @@
 //! multiple of 4 but was set to 2", the `uint-2` bind of `probes/vector_access_placement.m`), and
 //! the recording keeps those words as its validated fact. Plain Metal runs the pass, and the
 //! recording keeps the pass's outcome: each step's answer, the command buffer's status and error.
-//! The new runtime refuses the dispatch (`Refusal::BufferOffsetAlignment`), so there this case
+//! The runtime refuses the dispatch (`Refusal::BufferOffsetAlignment`), so there this case
 //! is a refusal that Metal's own validation also makes.
 //!
 //! The case compares the outcome and reads no bytes back. Where plain Metal places each element of

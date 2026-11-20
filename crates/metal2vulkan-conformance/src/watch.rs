@@ -1095,7 +1095,6 @@ mod tests {
                 driver: "stub".to_owned(),
                 api: "stub".to_owned(),
                 lossless_compression: true,
-                new_runtime: false,
                 host: None,
             }
         }
@@ -1249,7 +1248,6 @@ mod tests {
                     driver: "slow".to_owned(),
                     api: "slow".to_owned(),
                     lossless_compression: true,
-                    new_runtime: false,
                     host: None,
                 }
             }

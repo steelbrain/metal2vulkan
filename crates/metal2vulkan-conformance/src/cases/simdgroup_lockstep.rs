@@ -16,7 +16,7 @@
 //! and an Apple M4. Record mode now runs the kernels on the oracle, so the recording holds Metal's
 //! own words and the simulation is checked against them.
 //!
-//! The new runtime gives the threads of a SIMD-group no order between barriers: the Metal Shading
+//! The runtime gives the threads of a SIMD-group no order between barriers: the Metal Shading
 //! Language calls these kernels' accesses a data race, and docs/API.md's accepted differences say
 //! so (`the-threads-of-a-simd-group-run-in-no-order-between-barriers`). So the output words go
 //! unchecked, named and counted, with that entry as the justification; the counts half the
@@ -153,7 +153,7 @@ impl Case for Lockstep {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The output words are lockstep's alone, which the new runtime does not give (the module
+        // The output words are lockstep's alone, which the runtime does not give (the module
         // documentation). And two declarations, each loosening the notices site alone. The buffer
         // each dispatch writes its per-lane record into is `Shared`, which is what
         // [`crate::replay::shared_memory_notice`] is for. And both kernels hold simdgroup-scoped

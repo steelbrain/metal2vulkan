@@ -39,8 +39,7 @@
 //! On `metal2vulkan-rt` the `MTLEvent` row's waiting command buffer may still read `Committed`,
 //! with no handler run, though its wait is met: the runtime schedules a command buffer once
 //! its device's one submit thread is free, and Metal promises no time between a command buffer's
-//! dependencies resolving and its scheduling. The case declares that on the new runtime's run
-//! alone, in its allowances.
+//! dependencies resolving and its scheduling. The case declares that in its allowances.
 //!
 //! # What this pulls forward
 //!
@@ -306,25 +305,22 @@ impl Case for EventOrder {
 const SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE: &str =
     "the-runtime-schedules-a-command-buffer-once-its-submit-thread-is-free";
 
-/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-rt`'s
-/// run: the waiting command buffer's status while the signaller runs may be `Committed` or
+/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-rt`:
+/// the waiting command buffer's status while the signaller runs may be `Committed` or
 /// `Scheduled`, and its handlers then none or the scheduled one.
 ///
 /// **What it rests on**, the accepted difference [`SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE`]
 /// names: Apple's `Scheduled` is "All dependencies have been resolved and the command buffer has
-/// been scheduled for execution", with no time promised between the two, and the new runtime
+/// been scheduled for execution", with no time promised between the two, and the runtime
 /// schedules a command buffer on its device's one submit thread, once that thread's earlier
 /// `vkQueueSubmit2` calls have returned, whichever queue they were for. Where the signaller's call
 /// outlasts the reading, the waiting one, its wait already met by that signal, is still
 /// `Committed` with no handler run.
 ///
-/// **It loosens those two sites alone, and only on the new runtime**
-/// ([`Justification::NewRuntimeAccepted`]), so the old runtime's answers still compare exactly.
-/// The shared event's row is not loosened: both runtimes hold its waiting command buffer until
-/// the value is reached, as Metal does.
+/// **It loosens those two sites alone.** The shared event's row is not loosened: the runtime holds
+/// its waiting command buffer until the value is reached, as Metal does.
 fn scheduled_once_the_submit_thread_is_free() -> Vec<Allowance> {
-    let justified =
-        || Justification::new_runtime_accepted(SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE);
+    let justified = || Justification::accepted(SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE);
     vec![
         Allowance::new(
             "case/order/event/waiting/status-while-the-signaller-runs",

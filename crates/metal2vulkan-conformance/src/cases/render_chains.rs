@@ -405,7 +405,7 @@ impl Case for RenderChain {
         //   system memory because that is the only memory both sides can reach. It belongs to
         //   the venue's memory model rather than to a chain's shape.
         // - `pixel-sampler-scaling`, for every row, because each samples its target through a
-        //   runtime sampler slot, which the new runtime's pipelines note as scaled
+        //   runtime sampler slot, which the runtime's pipelines note as scaled
         //   (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
         let mut named = vec![
             crate::replay::shared_memory_notice(),

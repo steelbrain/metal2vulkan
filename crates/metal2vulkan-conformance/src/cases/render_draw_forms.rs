@@ -154,10 +154,9 @@ const RUNS: u32 = 8;
 /// `uint4` the fragment function returned, so every channel of every case still compares exactly.
 ///
 /// - `device-point-size` in every case: the vertex function writes `[[point_size]]`, which a
-///   device whose largest point is below Metal's notes. The old runtime announces it at a draw of
-///   points, the one primitive it sizes; metal2vulkan-rt's render state carries it as a static
-///   note of the state, whatever primitive a draw of it takes, so the triangles and lines cases
-///   announce it there too.
+///   device whose largest point is below Metal's notes. The runtime's render state carries it as a
+///   static note of the state, whatever primitive a draw of it takes, so the triangles and lines
+///   cases announce it too.
 ///
 /// The vertex stage's own arithmetic on a device whose float arithmetic is not Metal's
 /// (`device-arithmetic`) is the device's own answer, which the suite declares for every case

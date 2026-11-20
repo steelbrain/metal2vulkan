@@ -2,7 +2,7 @@
 //! and the kind each of the runtime's precision notes announces as.
 //!
 //! A case loosens a field by naming a code ([`crate::allowance`]), and the comparison holds it
-//! there only where the run announced that code. The new runtime's side announces the codes of
+//! there only where the run announced that code. The runtime's side announces the codes of
 //! the precision notes its states, textures and sampler states carry
 //! ([`Degradation::from_precision_note`]); a code no note announces justifies nothing on its run.
 
