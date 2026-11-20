@@ -657,8 +657,9 @@ impl Device {
     /// (the crate's guide says what each handle asks); else the copy form, whose reason the
     /// answer names, laid alike at the tightest pitch the multiples allow. Decided at the make.
     /// The call makes no submission and waits for nothing: each plane's image in place moves to
-    /// the general layout in the runtime's next submission, and the other API's first write into
-    /// the memory waits for it ([`Surface::wait_until_ready`]). Each form counts in
+    /// the general layout in the runtime's submission that carries the next commit, and the other
+    /// API's first write into the memory waits for it ([`Surface::wait_until_ready`]), which has
+    /// it go at once where none has. Each form counts in
     /// [`Metrics::surfaces_in_place`](crate::Metrics::surfaces_in_place) or
     /// [`Metrics::surfaces_copied`](crate::Metrics::surfaces_copied).
     ///
@@ -756,8 +757,9 @@ impl Device {
             }
         }
         step!("textures");
-        // The images move to the general layout in the next submission, which the make does not
-        // wait for: the consumer waits for it on its own thread (`Surface::wait_until_ready`).
+        // The images move to the general layout in the next commit's submission, which the make
+        // does not wait for: the consumer waits for it on its own thread
+        // (`Surface::wait_until_ready`).
         let ready = Some(core.work.ready_point());
         step!("ready point");
         core.counters.count(Metric::SurfacesInPlace);

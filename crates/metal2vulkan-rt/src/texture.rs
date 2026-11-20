@@ -7,8 +7,8 @@
 //! lets the CPU and blits reach any texture. Its home layout is the one its descriptors name, and
 //! the image leaves it only inside a copy: general where a shader may write it, shader-read-only
 //! where shaders only read it, the attachment layout where only render passes use it. A new image
-//! moves from undefined to home in the upload of the next submission, ahead of every command
-//! buffer committed after [`Device::new_texture`] returns, or ahead of its first copy; nothing
+//! moves from undefined to home in the upload of the next commit, ahead of every command buffer
+//! committed after [`Device::new_texture`] returns, or ahead of its first copy; nothing
 //! holds it until then, so a texture released first is freed at once.
 //!
 //! A texture the runtime places (a new texture of [`Device::new_texture`],
@@ -33,7 +33,7 @@
 //! A drawable's texture ([`Device::new_drawable_texture`]) is over an image of the consumer's
 //! swapchain, which the runtime never destroys. Its home layout is a texture's of its usage; it
 //! moves there only once the consumer acquired it ([`Texture::drawable_acquired`]), in the upload
-//! of the next submission as a new texture's image does, from undefined the first time and from
+//! of the next commit as a new texture's image does, from undefined the first time and from
 //! the present layout after a present, which keeps its texels. The command buffer that presents
 //! it moves it from home to the present layout at its end
 //! ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
@@ -666,7 +666,7 @@ impl Image {
 
     /// Its shadow, made where it has none yet: an image of its format, extent, levels and layers,
     /// bound as a texture's image is, whose move from undefined to its home layout,
-    /// shader-read-only, the upload of the next submission records, ahead of every command buffer
+    /// shader-read-only, the upload of the next commit records, ahead of every command buffer
     /// committed after this returns. The shadow gauges rise with it. `None` for an image of no
     /// shadow.
     ///
@@ -854,8 +854,8 @@ impl Device {
     /// usage), and is then an index of a live [`IndexClass::Texture`](crate::IndexClass::Texture)
     /// grant, whatever the usage. The texture's elements of set 1 are written before the call
     /// returns, and its image moved to its home layout ahead of every command buffer committed
-    /// after it. Until the next submission nothing else holds the texture: released first, it is
-    /// freed at once.
+    /// after it. Until the submission of the next commit nothing else holds the texture: released
+    /// first, it is freed at once.
     ///
     /// An index another texture holds, a live one or one the program released that a command
     /// buffer not yet retired still holds, is taken at once, as Metal's later texture at a
@@ -1430,7 +1430,7 @@ impl Device {
             Some(index) => {
                 let sampled = sampled.map(|view| (view, home));
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
-                // work uses it, the upload of the next submission going first.
+                // work uses it, the upload of the next commit going first.
                 let owner = unsafe {
                     (core.arrays).place_texture(
                         &core.device,
@@ -3464,7 +3464,7 @@ impl Texture {
 
     /// No Metal counterpart: the runtime's part of `CAMetalLayer`'s `nextDrawable`, for a
     /// drawable's texture ([`Device::new_drawable_texture`]) whose swapchain image the consumer has
-    /// acquired. The image moves to its home layout in the upload of the next submission, ahead of
+    /// acquired. The image moves to its home layout in the upload of the next commit, ahead of
     /// every command buffer committed after the call: from the present layout where a command
     /// buffer presented it, which keeps its texels as Vulkan keeps a presented image's, else from
     /// undefined. The texture is used from here until the commit of the command buffer that
@@ -3743,7 +3743,8 @@ impl Texture {
 
     /// The image's bytes of `region` of `level` and `slice`, as [`Texture::get_bytes`] reads them
     /// from a texture without named bytes, once a commit has taken the Managed buffers' named
-    /// ranges (`crate::capture`) and the pending upload has run: for the tests of one with them.
+    /// ranges (`crate::capture`) and the uploads not yet submitted have run: for the tests of one
+    /// with them.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn image_bytes(
         &self,

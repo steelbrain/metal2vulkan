@@ -252,17 +252,17 @@ in its memory.
   heap's memory, whose bytes are undefined, as Metal is silent on them. The consumer passes
   `zero_from` for a buffer Metal zeroes, or zeroes the range at its own carve, once.
 - A texture the runtime places reads zero until written: `Device::new_texture`'s,
-  `new_texture_for_views`'s and `new_managed_texture`'s. The upload of the next submission
-  clears every subresource of its image once, ahead of every command buffer committed after the
-  call: a colour clear, a depth-stencil clear, or copies from the zero source for a
-  block-compressed format, which no clear writes. This is the runtime's choice, not Metal's rule:
-  Metal does not say what a new texture holds (`newTextureWithDescriptor:` is "Allocate a new
-  texture with privately owned storage."). The runtime chose zero because programs read
-  textures they never wrote, an Apple M3 Max answered zero for new Shared and Managed textures,
-  and the memory's last bytes would follow process history. The clear runs on every device.
-  `Metrics::texture_clears` and `texture_clear_bytes` count the clears. A texture in a heap's
-  memory, over a buffer, of a surface's plane, or a drawable's is not cleared: it reads its
-  memory's bytes, or the swapchain's. A view reads its parent's image.
+  `new_texture_for_views`'s and `new_managed_texture`'s. The upload of the next commit clears every
+  subresource of its image once, ahead of every command buffer committed after the call: a colour
+  clear, a depth-stencil clear, or copies from the zero source for a block-compressed format, which
+  no clear writes. This is the runtime's choice, not Metal's rule: Metal does not say what a new
+  texture holds (`newTextureWithDescriptor:` is "Allocate a new texture with privately owned
+  storage."). The runtime chose zero because programs read textures they never wrote, an Apple M3
+  Max answered zero for new Shared and Managed textures, and the memory's last bytes would follow
+  process history. The clear runs on every device. `Metrics::texture_clears` and
+  `texture_clear_bytes` count the clears. A texture in a heap's memory, over a buffer, of a
+  surface's plane, or a drawable's is not cleared: it reads its memory's bytes, or the swapchain's.
+  A view reads its parent's image.
 - `Device::zero_block_range(block, offset, length)` zeroes a range of a Private block the
   consumer holds, where it places a buffer Metal zeroes: by a GPU fill in the upload, ahead of
   every command buffer committed after the call, as a zeroed Private buffer's fill is. The
@@ -313,9 +313,10 @@ in its memory.
   `newBufferWithLength:options:` does, and `None` none, for a buffer placed in a heap (Metal does
   not zero heap memory) or one whose bytes the consumer writes itself; an offset at or past the
   length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns; a
-  Private one by a GPU fill of exactly the range, recorded into the upload, which goes ahead of
-  every command buffer committed after the call and ends with a barrier that orders the fill
-  before every later command (a copy into the buffer among them), and holds the block until it
+  Private one by a GPU fill of exactly the range, recorded into the upload of the next commit,
+  which goes ahead of every command buffer committed after the call; the last upload of its
+  submission ends with a barrier that orders the fill before every
+  later command (a copy into the buffer among them), and the upload holds the block until it
   completes. `Metrics::bytes_zeroed` counts the bytes. A length of 0, a length
   past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
@@ -623,8 +624,9 @@ a texture: the textures a consumer makes over a plane are its views. A plane's i
 formats of the texture's own list that its tiling samples, and none where the device refuses that
 list; a view of another format it does not list is `Gap::TextureView` of
 `TextureViewKind::SurfacePixelFormat`. The make submits nothing and waits for nothing: the
-images move out of the undefined layout into the general one in the runtime's next submission,
-and stay in it through every copy.
+images move out of the undefined layout into the general one in the runtime's submission that
+carries the next commit, or at once where `Surface::wait_until_ready` asks first, and stay in it
+through every copy.
 
 A plane whose texture's usage holds both `ShaderRead` and `RenderTarget` takes, on a device with
 the attachment feedback loop, the feedback usage beside the rest where the handle's image format
@@ -959,9 +961,9 @@ made, with no lock, and never rewritten for layouts.
   general where it has a storage element, shader-read-only where shaders only read it, and the
   attachment layout where only render passes use it. Its elements of set 1 are written before the
   call returns, with that layout, and never rewritten. The image moves from undefined to home in
-  the upload of the next submission, ahead of every command buffer committed after the call, or
-  ahead of its first copy; until then nothing holds it, so a texture released first is freed at
-  once, with nothing submitted.
+  the upload of the next commit, ahead of every command buffer committed after the call, or ahead
+  of its first copy; until then nothing holds it, so a texture
+  released first is freed at once, with nothing submitted.
 - A texture's image lists the formats Metal views the texture as that the device holds in a
   viewed form of the image format's compatibility class, and is then mutable
   (`VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` with a `VkImageFormatListCreateInfo`, its own format
@@ -1121,14 +1123,15 @@ made, with no lock, and never rewritten for layouts.
   memory. Its bytes are never zeroed:
   each copy's span is written, by the host or by the copy, before anything reads it. It is a ring: each copy takes a span at a multiple of 256 bytes,
   free again once the submission that carries the copy completes and no `get_bytes` reads it. The
-  upload is submitted, without a wait, once its copies' spans take 8 MiB, so the GPU copies while
-  the host writes the next. Where the ring has no room, the call waits for its oldest span's
-  submission, submitting the upload first where the span is in it (`Metrics::upload_waits`); where
+  uploads not yet submitted go, without a wait, once their copies' spans take 8 MiB, so the GPU
+  copies while the host writes the next. Where the ring has no room, the call waits for its oldest
+  span's submission, submitting the uploads first where the span is in one
+  (`Metrics::upload_waits`); where
   another call still writes that span's bytes, or holds them for a `get_bytes` to read, it sleeps
   until that call releases the span (`Metrics::staging_sleeps`). A
-  copy larger than 16 MiB has a staging buffer of its own, which counts against the upload's
-  64 MiB. `Gauges::staging_bytes` counts the region once made and each such buffer until the
-  upload that copies through it is gone.
+  copy larger than 16 MiB has a staging buffer of its own, which counts against the 64 MiB of the
+  uploads not yet submitted. `Gauges::staging_bytes` counts the region once made and each such
+  buffer until the upload that copies through it is gone.
 - `Texture::new_texture_view(pixel_format, texture_type, levels, slices, index)` is
   `newTextureViewWithPixelFormat:textureType:levels:slices:`, and with the texture's own type and
   every level and slice `newTextureViewWithPixelFormat:`. A view is a texture over the parent's
@@ -1326,14 +1329,22 @@ made, with no lock, and never rewritten for layouts.
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
   queue's command buffers in groups: a submission holds at most sixteen command buffers of one
-  queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their home
-  layouts), and only its last submit info signals the progress semaphore. Consecutive command
-  buffers that no event wait or signal separates share one submit info, the upload with the first:
-  the GPU runs them in order either way, and a driver may pay for each info (the UHD 630's paid
-  about 160 us apiece). `Metrics::submit_infos` counts them. The upload records at most 4,096 calls
-  and keeps at most 64 MiB on its own account: the staging buffers of copies larger than the staging
-  region, and the textures and blocks released while it held them. A call that finds it past either
-  submits it and waits for it to complete before recording, so nothing grows without a commit. While
+  queue, ahead of them the uploads of their commits (zero fills, texture copies and new textures'
+  moves to their home layouts), and only its last submit info signals the progress semaphore.
+  The calls made between two commits record into an upload of their own, which goes in the first
+  submission whose last command buffer was committed after them: ahead of every command buffer
+  committed after the call, and never in a submission whose command buffers were all committed
+  before it, whenever the submit thread runs.
+  A commit only takes its number; the first call after it begins the next upload, and the
+  submission ends the last upload it carries with the one barrier that makes their writes visible
+  and records the moves home of every texture they keep in one barrier. Consecutive command
+  buffers that no event wait or signal separates share one submit info, the uploads with the
+  first: the GPU runs them in order either way, and a driver may pay for each info (the UHD 630's
+  paid about 160 us apiece). `Metrics::submit_infos` counts them. The uploads not yet submitted
+  record at most 4,096 calls and keep at most 64 MiB on their own account: the staging buffers of
+  copies larger than the staging region, and the textures and blocks released while they held
+  them. A call that finds them past either submits them and waits for them to complete before
+  recording, so nothing grows without a commit. While
   fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
   goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
   scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
@@ -2821,10 +2832,10 @@ renders into the swapchain's images. Nothing is exported, imported or copied.
   call's safety contract: the runtime cannot check it.
 - `Texture::drawable_acquired` (unsafe) is the runtime's part of `nextDrawable`, called once the
   consumer has acquired the image with a fence (`vkAcquireNextImageKHR`) and waited for the fence.
-  The image moves to its home layout in the upload of the next submission, ahead of every command
-  buffer committed after the call, as a new texture's does: from undefined the first time, and
-  from the present layout after a present, which keeps its texels as Vulkan keeps a presented
-  image's. A second acquire before a present is `Refusal::DrawableAcquired`.
+  The image moves to its home layout in the upload of the next commit, ahead of every command buffer
+  committed after the call, as a new texture's does: from undefined the first time, and from the
+  present layout after a present, which keeps its texels as Vulkan keeps a presented image's. A
+  second acquire before a present is `Refusal::DrawableAcquired`.
 - `CommandBuffer::present_drawable` (unsafe) is the runtime's part of `presentDrawable:`: once
   every command of the command buffer has run, wherever it was encoded, the image is in the present
   layout, moved in the last segment's end barrier, and the consumer's binary semaphore is
@@ -2850,8 +2861,8 @@ renders into the swapchain's images. Nothing is exported, imported or copied.
 
 `vkDestroySwapchainKHR` needs every use of the swapchain's images complete. The runtime uses an
 image in the command buffers that encode into or present its drawable, and in the move home each
-`drawable_acquired` queues for the runtime's next submission. Before the consumer destroys a
-swapchain:
+`drawable_acquired` queues for the runtime's submission of the next commit. Before the consumer
+destroys a swapchain:
 
 1. Every command buffer that encoded into or presented one of its drawables has completed
    (`wait_until_completed` has returned for it), and so has each of the consumer's presents.

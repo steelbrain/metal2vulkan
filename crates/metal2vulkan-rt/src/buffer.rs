@@ -168,9 +168,10 @@ impl Device {
     /// itself. An offset at or past the length zeroes nothing. In a block the host maps (Shared,
     /// or host memory imported by its address) the bytes are zeroed through the mapping, before
     /// the call returns; in one it does not map (Private, or an imported dma-buf) by a GPU fill in
-    /// the upload, which is submitted ahead of every command buffer committed after this call and
-    /// ends with a barrier that orders the fill before every later command (a copy into the buffer
-    /// among them), and which holds the block until it completes. The bytes zeroed are counted in
+    /// the upload of the next commit, which is submitted ahead of every command buffer committed
+    /// after this call, the last upload of its submission ending with a barrier that orders the
+    /// fill before every later command (a copy into the buffer among them), and which holds the
+    /// block until it completes. The bytes zeroed are counted in
     /// [`Metrics::bytes_zeroed`](crate::Metrics::bytes_zeroed).
     ///
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length

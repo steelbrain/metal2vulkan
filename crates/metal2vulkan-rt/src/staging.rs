@@ -11,9 +11,9 @@
 //! copy has completed and no host reads it. The next span goes after the last one taken, or back
 //! at the start where the end has no room and the start is free; with no span live the ring starts
 //! again at 0. Where no room is free, the caller waits for the oldest span's submission
-//! ([`Work::stage`](crate::submit::Work::stage)); the pending upload goes without a wait once its
-//! spans take half the region, so the GPU copies while the host writes the rest. A copy larger
-//! than the region has a staging buffer of its own, which the upload's bound counts.
+//! ([`Work::stage`](crate::submit::Work::stage)); the uploads not yet submitted go without a wait
+//! once their spans take half the region, so the GPU copies while the host writes the rest. A copy
+//! larger than the region has a staging buffer of its own, which the uploads' bound counts.
 
 use crate::counters::{Gauge, Site};
 use crate::device::Core;
@@ -54,7 +54,7 @@ struct Span {
 pub(crate) enum At {
     /// Taken: its bytes are being written, or its copy is being recorded.
     Taken,
-    /// Its copy is in the pending upload.
+    /// Its copy is in an upload not yet submitted.
     Recorded,
     /// Its copy is in the submission of this progress value.
     Submitted(u64),
@@ -67,7 +67,7 @@ pub(crate) enum At {
 pub(crate) enum Oldest {
     /// The submission of this progress value completing.
     Submitted(u64),
-    /// The pending upload going, and then completing.
+    /// The uploads not yet submitted going, and then completing.
     Pending,
     /// Another thread finishing its call: writing the span's bytes, or reading them.
     Busy,

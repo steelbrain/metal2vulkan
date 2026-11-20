@@ -257,19 +257,19 @@ impl Done {
 
     /// From the submit thread: a submission passed to `vkQueueSubmit2` with progress `value`.
     /// Its command buffers retire in order once it completes, each ended one with its error, and
-    /// its upload and the copy-ins it took with them.
+    /// its uploads and the copy-ins it took with them.
     pub(crate) fn submitted(
         &self,
         core: &Core,
         value: u64,
-        upload: Option<Upload>,
+        uploads: Vec<Upload>,
         copy_ins: Vec<CopyIn>,
         finished: Vec<Finished>,
         watch: Vec<Arc<EventInner>>,
     ) {
         let mut state = self.lock();
         let mut flight_only = watch.is_empty();
-        if let Some(upload) = upload {
+        for upload in uploads {
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Upload(upload),
