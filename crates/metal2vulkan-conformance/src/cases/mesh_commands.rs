@@ -49,7 +49,6 @@
 //!   left. (A resource ID is a device-local 64-bit value and must never enter a transcript; it is
 //!   an input to the kernel and nothing else.)
 
-use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     Abort, Case, CommandDraw, Failure, Input, MeshCommand, MeshFunctions, MetalSource, Side,
     TARGET_TEXEL,
@@ -352,24 +351,19 @@ impl Case for MeshCommands {
 /// Measured here, which is the point of the row: over **30 runs** on this M3 Max (macOS 27.0.1),
 /// plain Metal produced **one** outcome, every run — the reader read the words the host wrote, so
 /// it drew its single threadgroup at (0, 0) with `(0, 0, 1, 0)` and `drawn` was 2. That matches
-/// the lane's M4 table for the row. Our runtime on MoltenVK 1.4.2 produces the **other** order,
-/// also every run: the emulation records the reader's object dispatch after the writer's mesh
-/// dispatch, so the reader reads `(3, 2, 1, 7)`, draws its 3 by 2 threadgroups and `drawn` is 7.
+/// the lane's M4 table for the row. The runtime builds no mesh pipeline (its README, the known
+/// gaps of render pipeline states), so no run of it reaches this case's rows.
 ///
-/// So the reader's texels are **recorded but not compared**. A recording can only sample an order
-/// Metal's own contract leaves open, and comparing against one sample would make this chip's
-/// scheduling of the moment into our requirement; the outcome set the plan gives racy rows cannot
-/// close that, because it can hold only the orders Metal happened to produce. What the contract
-/// *does* determine is compared, exactly: the writer's own texel at (7, 7), the control words the
-/// pass leaves behind, the calls of the pass, and the command buffer's status and error.
+/// A recording can only sample an order Metal's own contract leaves open, and comparing against
+/// one sample would make this chip's scheduling of the moment into a requirement; the outcome set
+/// the plan gives racy rows cannot close that, because it can hold only the orders Metal happened
+/// to produce. What the contract *does* determine: the writer's own texel at (7, 7), the control
+/// words the pass leaves behind, the calls of the pass, and the command buffer's status and error.
 ///
-/// The whole attachment is still a site of the transcript, loosened to [`Loosening::Unchecked`]
-/// and justified by the accepted difference `docs/API.md` section 10 now carries for the order
-/// (`ORDER_IS_ACCEPTED`, this module's own words for its bold lead-in). Two reasons it is a site
-/// rather than nothing: the recording then holds **Metal's own texels** for every one of the 30
-/// runs, so the next macOS is read against them instead of against a memory of them; and the
-/// loosening has to name a document entry, so the day we announce the order or withdraw the entry,
-/// this case fails and says which.
+/// The whole attachment is a site of the transcript, so the recording holds **Metal's own
+/// texels** for every one of the 30 runs, and the next macOS is read against them instead of
+/// against a memory of them. The case loosens nothing: `docs/API.md` section 10 holds no accepted
+/// difference for the order, as the runtime draws no mesh.
 pub const UNORDERED_DRAWS: &str = "mesh-commands-unordered-draws";
 
 /// The owned fixture the racy row runs: `mesh_barrier`'s writer and object reader, the same
@@ -398,12 +392,6 @@ const UNORDERED_ROW: &str = "cpu_nobarrier";
 
 /// The texel the writer's fragment function covers, whichever order the two draws run in.
 const COVER: [u32; 2] = [7, 7];
-
-/// The bold lead-in of the accepted difference in `docs/API.md` section 10 that the order rests
-/// on: the runtime's emulation of mesh draws orders two unbarriered draws of one pass, where Metal
-/// orders nothing. The slug of these words must be an entry of the document or the case fails.
-const ORDER_IS_ACCEPTED: &str =
-    "Two mesh draws of one pass with no barrier between them run in order.";
 
 /// The site the whole attachment is recorded at, under the row.
 const ATTACHMENT_SITE: &str = "attachment";
@@ -510,14 +498,6 @@ impl Case for UnorderedDraws {
 
     fn record_runs(&self) -> u32 {
         UNORDERED_RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        vec![Allowance::new(
-            format!("case/{UNORDERED_ROW}/{ATTACHMENT_SITE}"),
-            Loosening::Unchecked,
-            Justification::accepted(crate::allowance::accepted_slug(ORDER_IS_ACCEPTED)),
-        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

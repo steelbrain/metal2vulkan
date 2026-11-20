@@ -354,19 +354,20 @@ pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
     notice_allowance(crate::degradation::Degradation::PixelSamplerScaling.code())
 }
 
-/// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
-/// keeps no texture compressed answers, as a Mac with an Intel or AMD GPU does
-/// ([`without_compression`]): "A device answers as the class of Mac it presents".
-pub const WITHOUT_COMPRESSION: &str = "a-device-answers-as-the-class-of-mac-it-presents";
+/// The slug of `docs/API.md`'s accepted difference that says what the runtime, which presents a
+/// Mac that keeps no texture compressed, answers, as a Mac with an Intel or AMD GPU does
+/// ([`without_compression`]): "The runtime answers as a Mac that keeps no texture compressed".
+pub const WITHOUT_COMPRESSION: &str =
+    "the-runtime-answers-as-a-mac-that-keeps-no-texture-compressed";
 
 /// The declaration a case needs at `site`, a value Metal's lossless texture compression decides,
 /// for the one answer a **venue's Mac** changes there. The Apple silicon Mac every recording was
 /// taken on keeps textures compressed: a new `Private` texture reads zero or the compressed
 /// texture's fixed pattern, and a GPU blit through a compressed texture writes some formats'
-/// canonical encoding. A device that presents a Mac keeping none
-/// (`DeviceProperties::lossless_compression` false), as a Mac with an Intel or AMD GPU is, answers
-/// as that Mac: the new texture reads zero (`WorkCounts::private_textures_zero_filled`), what such
-/// a Mac's reads where its memory held nothing, and the blit keeps the bytes.
+/// canonical encoding. The runtime presents a Mac keeping none
+/// ([`crate::case::Venue::lossless_compression`] false), as a Mac with an Intel or AMD GPU is, and
+/// answers as that Mac: the new texture reads zero, what such a Mac's reads where its memory held
+/// nothing, and the blit keeps the bytes.
 ///
 /// **Why it is the venue's and not ours**: no recording holds what a Mac without the compression
 /// reads, and its answer for a new texture is not one value but whatever its memory held. Metal's

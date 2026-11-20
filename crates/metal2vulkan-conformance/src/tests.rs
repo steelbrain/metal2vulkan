@@ -1770,7 +1770,7 @@ fn the_accepted_differences_are_read_from_the_document() {
     let entries = accepted_differences();
     assert!(entries.len() > 20, "{} entries", entries.len());
     assert!(entries.contains(&accepted_slug(
-        "A command's read-back answers Metal's private getters"
+        "Two live textures with one ID: a function reads the holder"
     )));
     assert!(!entries.contains(&"nothing-of-the-sort".to_owned()));
 }
@@ -1782,9 +1782,9 @@ fn the_accepted_differences_are_read_from_the_document() {
 fn an_entry_whose_lead_in_wraps_is_read_whole() {
     let entries = accepted_differences();
     for lead_in in [
-        "An object grid of more than 2^29 threadgroups fails its command buffer by its count, at \
-         once",
-        "A mesh grid of 1,048,577 to 2,097,151 threadgroups draws nothing",
+        "A draw that reads its own pass's color attachment with no barrier reads, at the pass's \
+         first such draw, what the load and the draws before it rendered",
+        "Two live textures with one ID: a function reads the holder",
     ] {
         let slug = accepted_slug(lead_in);
         assert!(entries.contains(&slug), "{slug} is not an entry");

@@ -2821,18 +2821,32 @@ each item named states the rule in full.
   buffer as they were before a clearing pass; the runtime stores the clear there. The bytes
   of the buffer outside the texels keep what they held on both.
 
-- **A draw that reads its own pass's color attachment through a texture reads what the draws
-  before it rendered, where the runtime orders them before it**: at the pass's first such draw,
-  and at the first such draw after a `memory_barrier` (the runtime's README, Render encoders,
-  states each form). Metal defines no answer without a barrier over the render targets, which the
-  Metal Feature Set Tables give to Mac2 GPUs and not to Apple GPUs, and the Macs disagree: an M3
-  Max (macOS 27.0.1) read the texels from before the pass at every pixel, with the barrier too; an
-  AMD Radeon Pro 5300M and an Intel UHD Graphics 630 (macOS 26.7.1) read the earlier draw's
-  texels at 98.6% and 99.99% of the pixels, and at all of them after a barrier over the render
-  targets.
+- **A barrier over the render targets orders what it names, as a Mac2 GPU's does.** The Metal
+  Feature Set Tables give `MTLBarrierScopeRenderTargets` to Mac2 GPUs, not to Apple GPUs, and an
+  M3 Max (macOS 27.0.1) orders nothing with it: a draw after one that samples its own pass's color
+  attachment's texture reads the texels from before the pass, whatever the pass's load action or
+  draws wrote before the barrier. The runtime orders the draws before such a barrier ahead of the
+  next draw that reads an attachment of the pass, which reads what they rendered (the runtime's
+  README, Render encoders). The conformance cases `pass-start-barrier-*` keep the M3 Max's texels
+  and take the Mac2 answer as the one other.
+- **A draw that reads its own pass's color attachment with no barrier reads, at the pass's first
+  such draw, what the load and the draws before it rendered**: the runtime orders them ahead of
+  that draw (the runtime's README, Render encoders). Metal defines no answer here, and the Macs
+  disagree: an M3 Max (macOS 27.0.1) read the texels from before the pass at every pixel, in a
+  pass that clears too; an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 (macOS 26.7.1) read
+  the earlier draw's texels at 98.6% and 99.99% of the pixels, and at all of them after a barrier
+  over the render targets; the rest read the load's or the clear's texels.
 
 **Heaps and memory**
 
+- **The runtime answers as a Mac that keeps no texture compressed**, as a Mac with an Intel or
+  AMD GPU keeps none, where an Apple silicon Mac's GPU keeps textures losslessly compressed: a new
+  texture reads zero until written (the runtime's README, Textures), where an Apple silicon Mac's
+  new `Private` texture reads zero or the compressed texture's fixed pattern, and a GPU blit
+  through any texture keeps its bytes, where Apple's blit through a compressed texture writes some
+  formats' canonical encoding. Metal leaves a new texture's contents undefined. The conformance
+  suite's venue on the runtime presents no compression, so the answers such a Mac gives hold
+  there.
 - **The runtime's heap texture size and alignment are the device's own** (`metal2vulkan-runtime`'s
   `Device::heap_texture_size_and_align`, its README's textures): the device's own image
   requirements, not Metal's, the size rounded up to and the alignment raised to the device's

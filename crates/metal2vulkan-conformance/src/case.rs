@@ -696,9 +696,9 @@ pub struct Venue {
     pub driver: String,
     /// The API version the device runs.
     pub api: String,
-    /// Whether the device presents a Mac that keeps textures losslessly compressed
-    /// (`DeviceProperties::lossless_compression`), as the Apple silicon Mac every recording was
-    /// taken on does: what a venue's own answer (`Justification::WithoutCompression`) holds by.
+    /// Whether the device presents a Mac that keeps textures losslessly compressed, as the Apple
+    /// silicon Mac every recording was taken on does (false on the runtime, true on Metal's Apple
+    /// GPUs): what a venue's own answer (`Justification::WithoutCompression`) holds by.
     pub lossless_compression: bool,
     /// For a CPU implementation (`DeviceKind::Cpu`), the host's widest vector instruction set
     /// ([`host_vector_isa`]), which its shader compiler targets; `None` for a GPU. The device's

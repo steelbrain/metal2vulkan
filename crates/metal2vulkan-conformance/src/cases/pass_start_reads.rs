@@ -25,17 +25,14 @@
 //! it: every draw here reads, at its pixels, the texels from before its pass, the barrier or not,
 //! a draw before the barrier or not. That is recorded as Metal's answer, and every row compares
 //! against it. The rows with a barrier accept one other answer for their texels, the one a Mac2 GPU
-//! gives and the runtime orders (`fence.rs`), which the case states from what each draw writes:
-//! the clear where the barrier is the pass's first command, and the solid draw's color where that
-//! draw came before it. Its justification is `docs/API.md`'s accepted difference
+//! gives and the runtime orders (its README, Render encoders), which the case states from what
+//! each draw writes: the clear where the barrier is the pass's first command, and the solid draw's
+//! color where that draw came before it. Its justification is `docs/API.md`'s accepted difference
 //! [`MAC2_BARRIER`]. The rows that read or sample with no barrier accept the clear too: what the
 //! load and the draws before the read wrote, both x86 Macs' answer at a pass's first draw, which
-//! the runtime reads through a copy cleared to the clear before any draw of the pass, where the
-//! copy can be so (a private target: `WorkCounts::attachment_read_clears`), or through a snapshot
-//! (a target over a buffer read at its own pixels, on a device with the snapshot route:
-//! `render/snapshot.rs`): `docs/API.md`'s accepted difference [`DRAWN_WITHOUT_BARRIER`].
-//! Elsewhere it reads the copy taken before the pass, the texels from before it, as the M3 Max
-//! does (`texture/attached_reads.rs`).
+//! the runtime gives at the pass's first draw that reads the attachment, as it orders the load and
+//! the draws before that draw ahead of it: `docs/API.md`'s accepted difference
+//! [`DRAWN_WITHOUT_BARRIER`].
 //!
 //! A texture's texels are recorded as their runs of equal rows, each row's texels as their runs
 //! of equal texels (`fresh_contents::texel_runs`): a lossless encoding whose size follows how often
@@ -90,7 +87,7 @@ pub const MAC2_BARRIER: &str =
     "a-barrier-over-the-render-targets-orders-what-it-names-as-a-mac2-gpu-s-does";
 
 /// The slug of `docs/API.md`'s accepted difference the rows that read with no barrier name.
-pub const DRAWN_WITHOUT_BARRIER: &str = "a-draw-that-reads-its-own-pass-s-color-attachment-at-its-own-pixels-reads-what-the-draws-before-it-wrote-with-no-barrier-too-where-the-runtime-takes-no-copy-for-it";
+pub const DRAWN_WITHOUT_BARRIER: &str = "a-draw-that-reads-its-own-pass-s-color-attachment-with-no-barrier-reads-at-the-pass-s-first-such-draw-what-the-load-and-the-draws-before-it-rendered";
 
 /// The runs record mode takes each row over.
 const RUNS: u32 = 3;
