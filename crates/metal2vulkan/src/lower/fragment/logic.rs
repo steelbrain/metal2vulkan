@@ -27,8 +27,8 @@
 //! operation (probe `logic_operation`, an Apple M3 Max under macOS 27.0.1). Vulkan's `logicOp`
 //! takes and stores the lowest code itself ([`vulkan_differs`]). A channel the write does not
 //! store (outside the write mask, and every channel under no-op, which draws unwritten) keeps
-//! its lowest code over an input attachment, where Metal's pass stores the code above: the
-//! runtime's `snorm-minimum-kept`, as for any draw into such an attachment.
+//! its lowest code over an input attachment, where Metal's pass stores the code above:
+//! `PrecisionNote::SnormMinimumKept`, as for any draw into such an attachment.
 //!
 //! A 10-bit unorm format (`RGB10A2Unorm`, `BGR10A2Unorm`) operates on 16-bit codes: Metal widens
 //! each stored code to 16 bits (`round(d * 65535 / max)`), operates on it and the output's 16-bit

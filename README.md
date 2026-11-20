@@ -136,7 +136,6 @@ For the runtime, start at [its README](crates/metal2vulkan-runtime/README.md).
 | [docs/API.md](docs/API.md) | You use the translator's API: devices, libraries, pipelines, binding, caching, errors; and the runtime's precision notes |
 | [Runtime README](crates/metal2vulkan-runtime/README.md) | You use the Metal API on Vulkan |
 | [docs/HOWTO.md](docs/HOWTO.md) | You integrate: tools, caching, failures, isolation, the runtime's shader cache |
-| [docs/RUNTIME-PORTING.md](docs/RUNTIME-PORTING.md) | You port Metal calls (Objective-C or metal-rs) to the runtime |
 | [docs/RESOURCE-ID.md](docs/RESOURCE-ID.md) | You compute a texture's or sampler's `gpuResourceID` on the guest's side |
 | [docs/METAL-COVERAGE.md](docs/METAL-COVERAGE.md) | You ask whether a Metal API item is covered |
 | [docs/REFUSALS.md](docs/REFUSALS.md) | You ask what Metal accepts that the code refuses |

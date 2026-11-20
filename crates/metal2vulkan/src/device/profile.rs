@@ -216,19 +216,18 @@ impl DeviceProfile {
     }
 
     /// Whether this profile runs object and mesh functions as compute work: it does not enable
-    /// `VK_EXT_mesh_shader` and `meshShader`. Then a mesh function writes its primitives as
-    /// records that a synthesized vertex stage draws (`GraphicsState::mesh_records`), each stage's
-    /// threadgroups are held to the compute stage's limits, and the runtime announces each draw
-    /// (`emulated-mesh-draws`). Elsewhere they are `TaskEXT` and `MeshEXT` entries, held to the
-    /// task and mesh stages' limits, and an object function needs `taskShader` too.
+    /// `VK_EXT_mesh_shader` and `meshShader`. Then a mesh function writes its primitives as records
+    /// that a synthesized vertex stage draws (`GraphicsState::mesh_records`), each stage's
+    /// threadgroups are held to the compute stage's limits. Elsewhere they are `TaskEXT` and
+    /// `MeshEXT` entries, held to the task and mesh stages' limits, and an object function needs
+    /// `taskShader` too.
     pub fn emulates_mesh_shading(&self) -> bool {
         crate::lower::mesh::emulates(self)
     }
 
     /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
     /// the texture only so (`bind::YCbCrInPlace`): on every device. The planes read in place are
-    /// sampled by Vulkan's Y′CbCr model where the sample allows it. The runtime reads it
-    /// to state a texture's planes (`TextureFacts::ycbcr_in_place`).
+    /// sampled by Vulkan's Y′CbCr model where the sample allows it.
     pub fn reads_ycbcr_planes_in_place(&self) -> bool {
         self.fields.ycbcr_in_place
     }
@@ -1572,13 +1571,10 @@ pub enum DriverWorkaround {
     /// constant. Keyed on the driver and that GPU alone. There a storage view's slot declares
     /// `SpecKey::RangeAtBindOffset` as a uniform view's does (`lower::access`), which the binder
     /// sets where the slot is bound at offset 0, a storage view's range then starting at its bind
-    /// offset (`bind::plan::slots::range_at_bind_offset`), and the runtime keeps that key. A
+    /// offset (`bind::plan::slots::range_at_bind_offset`). A
     /// storage view's slot bound to nothing takes what a bind at offset 0 gives it, the commonest
     /// bind, so a plan made before any bind names the key of a command that binds the slot there.
-    /// The runtime's creation of a state makes that key and, beside it and at the same time, its
-    /// general form, every view read at its residual, which a command binding a storage view
-    /// elsewhere takes at once while its own key is made: otherwise one of the two would be a
-    /// second pipeline made at the state's first command. A uniform view read at its bind offset
+    /// A uniform view read at its bind offset
     /// alone is no faster there: a kernel of three storage views at offset 0 and inline bytes ran
     /// in 161.8 us a dispatch with the bytes' uniform view read so and in 142.8 us with it read at
     /// its residual, and in 102.1 us with the bytes read through a storage view at their bind
@@ -1599,9 +1595,7 @@ pub enum DriverWorkaround {
     /// many times as long as the same read of a storage buffer, while one address for every lane
     /// is read faster through the uniform buffer: a measured cost fact that chooses between two
     /// exact encodings of a `constant` slot. Never keyed on an identity: the profile takes it where
-    /// the description's `measured` set holds it,
-    /// which the runtime's view check decides on each driver (its storage view's time over its
-    /// uniform buffer's for per-lane reads below 0.3). Measured with a bare Vulkan program (256
+    /// the description's `measured` set holds it. Measured with a bare Vulkan program (256
     /// workgroups of 64 invocations, each adding 64 or 1024 `uvec4` reads of a window of 1 to
     /// 32 KiB of device-local memory; median of 15 dispatches): with each invocation reading its
     /// own word, or walking the window per invocation, the storage buffer took 0.011 to 0.16 of the
@@ -1619,25 +1613,22 @@ pub enum DriverWorkaround {
     /// Uniform-buffer reads of external memory skip a cache that the same reads through a uniform
     /// texel buffer keep: a measured cost fact that chooses between two exact encodings of a
     /// uniform view. Never keyed on an identity: the profile takes it where the description's
-    /// `measured` set holds it, which the runtime's
-    /// view check decides on each driver (a uniform texel buffer's time over a uniform buffer's
-    /// for the reads it moves, over imported host memory: below 1 in every one, below 0.7 in at
-    /// least one). ANV, Mesa 26.2.6, on the Iris Xe of RPL-P gives imported and exported memory
-    /// the memory object control state of a displayable surface, which leaves out the data port's
-    /// L1 cache a uniform buffer of the
-    /// device's own memory is given (Mesa's `isl_mocs`, Linux i915's Gen12 MOCS table; read, not
-    /// measured). Measured there (jobs m3-max-37703, m3-max-37729 and m3-max-37780): a uniform
-    /// buffer over a host allocation or a udmabuf took 2.0 to 2.5 times as long as over the
-    /// device's own memory with every invocation reading one word of a 1 KiB window, and 5.2 to
-    /// 5.5 times with each reading its own; a uniform texel buffer 0.98 to 1.04 times, and for
-    /// windows of up to 4 KiB no longer than the uniform buffer there. Where the profile takes it,
-    /// the uniform view of a slot with an indexed read (`memory::plan`'s indexed reads) whose
-    /// window is at most `memory::views::TEXEL_WINDOW_BYTES` is a uniform texel buffer of
-    /// `R32G32B32A32_UINT` texels read with `OpImageFetch` (`DescriptorView::UniformTexel`,
-    /// `lower::access::view_kind`); a slot read at constant offsets alone, whose words a driver may
-    /// load ahead into registers as no texel fetch can be, and a longer window keep the uniform
-    /// buffer. With [`UniformBufferPerLaneReadsSerialize`](Self::UniformBufferPerLaneReadsSerialize)
-    /// too, a slot with a per-lane read keeps its storage view first. It changes no answer.
+    /// `measured` set holds it. ANV, Mesa 26.2.6, on the Iris Xe of RPL-P gives imported and
+    /// exported memory the memory object control state of a displayable surface, which leaves out
+    /// the data port's L1 cache a uniform buffer of the device's own memory is given (Mesa's
+    /// `isl_mocs`, Linux i915's Gen12 MOCS table; read, not measured). Measured there (jobs
+    /// m3-max-37703, m3-max-37729 and m3-max-37780): a uniform buffer over a host allocation or a
+    /// udmabuf took 2.0 to 2.5 times as long as over the device's own memory with every invocation
+    /// reading one word of a 1 KiB window, and 5.2 to 5.5 times with each reading its own; a
+    /// uniform texel buffer 0.98 to 1.04 times, and for windows of up to 4 KiB no longer than the
+    /// uniform buffer there. Where the profile takes it, the uniform view of a slot with an indexed
+    /// read (`memory::plan`'s indexed reads) whose window is at most
+    /// `memory::views::TEXEL_WINDOW_BYTES` is a uniform texel buffer of `R32G32B32A32_UINT` texels
+    /// read with `OpImageFetch` (`DescriptorView::UniformTexel`, `lower::access::view_kind`); a
+    /// slot read at constant offsets alone, whose words a driver may load ahead into registers as
+    /// no texel fetch can be, and a longer window keep the uniform buffer. With
+    /// [`UniformBufferPerLaneReadsSerialize`](Self::UniformBufferPerLaneReadsSerialize) too, a slot
+    /// with a per-lane read keeps its storage view first. It changes no answer.
     ExternalUniformReadsSkipACache,
 }
 

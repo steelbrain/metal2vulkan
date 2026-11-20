@@ -14,17 +14,12 @@ A full rewrite: nothing of 0.1.0's API or command line remains.
   buffers run on a Vulkan device through `ash`.
 - **AIR front end** (`metal2vulkan-air`): the metallib container, the bitcode reader, a typed IR,
   AIR's metadata ABI and canonicalization, as a crate of its own.
-- **Fast by default**: off Apple's GPUs, choices that trade exactness for speed take the device's
-  native form, and each has an opt-in exact switch ([docs/FAST-PATHS.md](docs/FAST-PATHS.md)).
-- **Typed refusals and announced degradations**: input a device cannot run fails with an error that
-  names what is missing; a recorded near-equivalent or an extra cost is announced once per device
-  with a stable code.
+- **Typed refusals and static precision notes**: input a device cannot run fails with an error that
+  names what is missing; where a device's answer can differ from Metal's, the operation carries a
+  static precision note.
 - **Validation tooling** (unpublished): authored cases run on Metal and on Vulkan and compared,
   plus bounded audits over a private corpus.
 - **License**: dual-licensed `GPL-2.0-or-later OR LGPL-3.0-or-later`; 0.1.0 was `LGPL-3.0-or-later`.
-- **Known failing**: a latency test fails on some GPUs: a device's teardown can wait past 16 ms for
-  its queue-switch check (an RTX 2080), an open gap in
-  [docs/FAST-PATHS.md](docs/FAST-PATHS.md#known-gaps).
 
 ## 0.1.0
 

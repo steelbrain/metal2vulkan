@@ -945,11 +945,7 @@ where its axes are among the masks of `relief`, the kernel's unit-axes variant
 positions uniform, walked without the predication they caused, giving the same answers. Its plan
 states `UnitAxes { axes, relief: 0 }` and sends a dispatch with more than one thread along one of
 its axes back to the variant without them (`BindError::NeedsVariant`). A kernel has at most seven
-such variants per variant it runs on, one per mask. `metal2vulkan-runtime` begins the variant on
-its pipeline pool at the first dispatch it is offered to, and runs that dispatch and the next ones
-on the plain variant until the variant's translation and its regions' `VkPipeline`s are made, so
-no dispatch waits for it (`WorkCounts::unit_axes_variants_begun`, `unit_axes_meanwhile`,
-`unit_axes_dispatches`). On the Iris Xe, an authored kernel of four shuffles each way and a
+such variants per variant it runs on, one per mask. On the Iris Xe, an authored kernel of four shuffles each way and a
 simdgroup sum in a loop of 8 to 11 trips, in threadgroups of 8 x 1 x 16, ran 1.14 to 2.16 times
 the GPU time predicated (its trip count read from `thread_position_in_grid.y`) as with the same
 trip counts read from `threadgroup_position_in_grid.y`, over four sizes from 46 to 126 estimated
@@ -1002,10 +998,8 @@ assert!(stats.reachable_blocks <= stats.blocks);
 - `inert` says the module holds no loop and that no instruction of it writes memory other than an
   invocation's own and its workgroup's (`Function`, `Private` and `Workgroup` storage), writes an
   image, or emits or drops an output of its stage. Every invocation of such a module ends and
-  leaves nothing behind, so a dispatch of an inert kernel computes nothing anyone can read:
-  `metal2vulkan-runtime` records no Vulkan dispatch of it. The command buffer still uses what the
-  dispatch binds, as Metal's does: a `Managed` buffer's ranges named by `did_modify_range` are
-  copied in by that command buffer, not by the next one that reads them. An instruction the
+  leaves nothing behind, so a dispatch of an inert kernel computes nothing anyone can read. An
+  instruction the
   check does not classify as reading or computing alone (an interlock, a ray query) makes a
   module not inert.
 
@@ -2049,15 +2043,11 @@ a `device` pointer (`constant` loads and texture writes allowed), which a runtim
 square workgroups. On
 that plan a grid of whole threadgroups, of `Threads` or `Threadgroups`, takes the same regions
 unflagged (each `MultiRegion` 1, every thread live), so one `VkPipeline` of a threadgroup size runs
-all of a kernel's direct dispatches. `metal2vulkan-runtime` runs a kernel's whole grids there where
-its module holds 65,536 SPIR-V words or more and its ragged grids run there too: it observes its
-threadgroup partition (`CompiledFunction::observes_threadgroup_partition`), and for a one-row grid
-in threadgroups of one row otherwise than through its simdgroups alone
-(`observes_partition_through_simdgroups_alone`, whose such grids run flat). That is one driver
-compile of the module instead of two: on a guest's run on an RX 7900 XTX, the plain pipeline's
-compile of a kernel of 2,415,531 words was 26.9 s of a 39.8 s warm pass. Measured once on that GPU
-(RADV) over four straight-line kernels, the variant ran their whole grids at 0.997 to 1.020 times
-the plain pipeline's GPU time. Smaller kernels keep the plain pipeline for whole grids. A kernel
+all of a kernel's direct dispatches. The runtime lowers a kernel that does not observe its
+partition once, as that variant, and runs every direct dispatch of it in its tiles; a kernel that
+observes its partition runs its whole grids, threadgroup dispatches and indirect dispatches on its
+plain module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole
+number of threadgroups on its partial-threadgroups variant. A kernel
 that steps a stage-in attribute by thread position, or reads `[[grid_origin]]` or `[[grid_size]]`,
 needs the encoder's stage-in region:
 

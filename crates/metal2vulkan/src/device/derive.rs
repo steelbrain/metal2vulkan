@@ -48,8 +48,8 @@ struct DeviceInner {
     /// The description's `generated_commands`, which only the device replay reads; not a profile
     /// field, as above.
     generated_commands: Option<GeneratedCommandsProperties>,
-    /// The description's allocation sizes, which the Metal-facing `maxBufferLength` and the
-    /// runtime's heap sizes read; not a profile field, as above.
+    /// The description's allocation sizes, which the Metal-facing `maxBufferLength` reads; not a
+    /// profile field, as above.
     allocation: AllocationLimits,
 }
 

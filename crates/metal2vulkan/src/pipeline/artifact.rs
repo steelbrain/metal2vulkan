@@ -436,7 +436,7 @@ pub struct ModuleStats {
     /// writes memory other than an invocation's own and its workgroup's (`Function`, `Private`
     /// and `Workgroup` storage), writes an image, or emits or drops an output of its stage. So
     /// every invocation ends, and a dispatch of a kernel of it leaves nothing behind but the time
-    /// it took: `metal2vulkan-runtime` records none. An instruction the classification does not
+    /// it took. An instruction the classification does not
     /// name as reading or computing alone (an interlock, a ray query) makes it not inert.
     #[cfg_attr(feature = "serde", serde(default))]
     pub inert: bool,
@@ -2423,9 +2423,7 @@ pub enum PrecisionNote {
     /// may see other lanes active than Metal's. Under subgroup-uniform control flow
     /// (`shaderSubgroupUniformControlFlow`) the lanes reconverge where control flow is uniform.
     /// Static per stage: recorded for any tangled instruction in the entry, as the stage's
-    /// `reconvergence` is, on a device `Device::from_queries` made. A device `Device::new` made
-    /// records the field alone (`metal2vulkan-runtime` announces it as
-    /// `ImplementationDefinedReconvergence`).
+    /// `reconvergence` is.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
@@ -2438,10 +2436,8 @@ pub enum PrecisionNote {
     /// writes too (measured on an Apple M3 Max under macOS 27.0.1: every such code of each tile a
     /// draw reaches, none in other tiles, none in a pass that draws nothing). The device's pass
     /// keeps the bytes its draws do not write. Static per pipeline: recorded on the fragment stage
-    /// (the vertex stage where the pipeline has none) of every such pipeline on a device
-    /// `Device::from_queries` made, whatever its passes load. A device `Device::new` made records
-    /// none: `metal2vulkan-runtime` announces `snorm-minimum-kept` at each draw in a pass that loads
-    /// such an attachment, which only its encoder knows.
+    /// (the vertex stage where the pipeline has none) of every such pipeline, whatever its passes
+    /// load.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
@@ -2466,24 +2462,21 @@ pub enum PrecisionNote {
     /// negative one not below it; and RADV and ANV store a denormal a GPU write gives a depth image
     /// as a zero, where Metal keeps it. Static per operation: no pipeline stage records it;
     /// `metal2vulkan-runtime`'s depth-stencil state carries it
-    /// (`DepthStencilState::precision_note`). `metal2vulkan-runtime` announces the same
-    /// difference as its `depth-denormals` kind, which this note announces too.
+    /// (`DepthStencilState::precision_note`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DepthDenormals,
     /// `generateMipmapsForTexture:` of a filterable colour format: each level below the first is
     /// the device's linear filter of the one above, its blit (`vkCmdBlitImage` with
-    /// `VK_FILTER_LINEAR`, the level above sampled at each texel's centre scaled into it).
-    /// Apple's documentation states no filter. Metal filters bilinearly at the same scaled
-    /// centres, measured on an M3 Max and an M4, but by Apple's datapath, whose answers differ
-    /// between those GPUs by up to a unit in the last place (`metal2vulkan-runtime`'s
-    /// `device-filtered-mipmaps`). Where a level halves an even size, each sample falls between
-    /// two texels on the axis, so the filter is a box of them at the device's filter precision; an
-    /// sRGB format is filtered in linear space. Static per operation: no
-    /// pipeline stage records it; `metal2vulkan-runtime`'s blit encoder carries it
-    /// (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`). `metal2vulkan-runtime` announces the same
-    /// difference as its `device-filtered-mipmaps` kind, which this note announces too.
+    /// `VK_FILTER_LINEAR`, the level above sampled at each texel's centre scaled into it). Apple's
+    /// documentation states no filter. Metal filters bilinearly at the same scaled centres,
+    /// measured on an M3 Max and an M4, but by Apple's datapath, whose answers differ between those
+    /// GPUs by up to a unit in the last place. Where a level halves an even size, each sample falls
+    /// between two texels on the axis, so the filter is a box of them at the device's filter
+    /// precision; an sRGB format is filtered in linear space. Static per operation: no pipeline
+    /// stage records it; `metal2vulkan-runtime`'s blit encoder carries it
+    /// (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
@@ -2494,7 +2487,7 @@ pub enum PrecisionNote {
     /// tables, where a device may round a tie down and Vulkan only recommends the linear average
     /// for an sRGB format; a float channel's average may differ in its last bits, and a NaN or
     /// infinite sample's average is the device's. Measured against Metal's rules at 2 and 4
-    /// samples (`metal2vulkan-runtime`'s `device-rounded-resolve`, which this note announces too):
+    /// samples:
     /// on RADV, ANV, NVIDIA and lavapipe every unorm, snorm and packed 16-bit unorm channel within
     /// one code of Metal's, an sRGB channel within two. Static per operation: no pipeline stage
     /// records it; `metal2vulkan-runtime`'s render pass carries it for every color attachment it
@@ -2509,9 +2502,7 @@ pub enum PrecisionNote {
     /// decode), where Metal interpolates a block's endpoints with 6-bit weights. Its blocks'
     /// bytes, copies and sizes are Metal's. Static per texture, decided by its pixel format alone
     /// on every device: no pipeline stage records it; `metal2vulkan-runtime`'s texture carries it
-    /// (`Texture::precision_note`). `metal2vulkan-runtime` announces the same difference as its
-    /// `compressed-texel-decode` kind, for a BC texture on a driver not measured to decode its
-    /// format as Metal does, which this note announces too.
+    /// (`Texture::precision_note`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
@@ -2523,9 +2514,7 @@ pub enum PrecisionNote {
     /// (measured on an Apple M3 Max under macOS 27.0.1). The device's pass keeps the words its
     /// draws do not write. Static per pipeline, as [`PrecisionNote::SnormMinimumKept`] is:
     /// recorded on the fragment stage (the vertex stage where the pipeline has none) of every such
-    /// pipeline on a device `Device::from_queries` made, whatever its passes load. A device
-    /// `Device::new` made records none: `metal2vulkan-runtime` announces `shared-exponent-kept`
-    /// at each draw in a pass that loads such an attachment, which only its encoder knows.
+    /// pipeline, whatever its passes load.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.

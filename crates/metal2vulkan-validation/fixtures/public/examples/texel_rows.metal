@@ -1,5 +1,6 @@
-// Owned fixture: the kernels the metal2vulkan-runtime crate's texel rows device tests run
-// (src/tests/texel_rows_device.rs). Written from scratch for them; `scripts/regen-air-fixtures/
+// Owned fixture: kernels that move texels between a texture and a buffer. The runtime's
+// aliased-encoder device tests (crates/metal2vulkan-runtime/src/tests/aliased_encoders.rs) run
+// `rows_write` and `rows_read`. Written from scratch; `scripts/regen-air-fixtures/
 // regen-air-fixtures.sh --dir examples texel_rows` compiles it. No translator sweep reads this
 // directory.
 #include <metal_stdlib>
