@@ -500,7 +500,10 @@ thread frees its memory, which ends the import, and runs `release`, Metal's deal
 block.
 
 A texture over a buffer in a dma-buf's one import (`import_dma_buf`) is in place, as over a
-Shared block of the runtime's own (Textures), where the device's queries take it. Its image is
+Shared block of the runtime's own (Textures), on a device that offers a linear image for a
+dma-buf import without asking a dedicated allocation. Of the devices run, that is lavapipe alone
+(jobs m3-max-58579, m3-max-58583, m3-max-58587, m3-max-58589); the others' are in Known gaps of
+memory blocks. Its image is
 the device's linear image made for the dma-buf (`VkExternalMemoryImageCreateInfo`), bound in the
 import's memory at the texture's place, in the import's memory type. It needs three things. First,
 the external image query (`vkGetPhysicalDeviceImageFormatProperties2` with
@@ -887,9 +890,10 @@ the Direct3D 11 texture's payload until it is freed.
   copy of a texture over a buffer on every device (`Metrics::over_copies`,
   `Metrics::over_copies_imported`): its bytes are copied into an image of its own before the
   submissions that use it, and back after a command writes it. This is by handle type, not by
-  host. Today that means the guest pages of the Mac and Windows hosts, which import by address,
-  and on Linux any pages not folded into a dma-buf. An image bound in imported memory is made for the import's handle, so "initialLayout must
-  be `VK_IMAGE_LAYOUT_UNDEFINED`" (`VUID-VkImageCreateInfo-pNext-01443`), and a move out of the
+  host: the guest pages of the Mac and Windows hosts, which import by address, and on Linux any
+  pages not imported as a dma-buf (on the Iris Xe and the RTX 3090, all of them). An image bound
+  in imported memory is made for the import's handle, so "initialLayout must be
+  `VK_IMAGE_LAYOUT_UNDEFINED`" (`VUID-VkImageCreateInfo-pNext-01443`), and a move out of the
   undefined layout keeps no bytes. Over a dma-buf, an acquire from the other side keeps them
   (Imported blocks). Host memory has no other side to acquire from: "Importing memory from a host
   pointer shares ownership of the memory between the host and the Vulkan implementation. The
@@ -898,8 +902,22 @@ the Direct3D 11 texture's payload until it is freed.
   defined in Host Access to Device Memory Objects" (Vulkan 1.4, Host External Memory). The host
   reaches a linear image only in a host-accessible layout, which such an image cannot be made in.
   In a guest walk on an M3 Max on Mesa's Mac driver (rt at b4058db961), whose guest pages are
-  imported by address (15 steps), these copies came to 5.71 GB. On average that is 11.7% of a 1080p frame's bytes a
-  frame: under 1% in steady animation, and 24% to 152% while apps open.
+  imported by address (15 steps), these copies came to 5.71 GB. On average that is 11.7% of a
+  1080p frame's bytes a frame: under 1% in steady animation, and 24% to 152% while apps open.
+- A texture over a buffer in a dma-buf's one import is the counted copy too on a device that
+  offers no linear image for a dma-buf import without a dedicated allocation (Imported blocks).
+  On the Radeon 780M (RADV) the external image query refuses the dma-buf handle with linear
+  tiling, and each image of a DRM format modifier it offers asks a dedicated allocation, which
+  cannot be bound in the buffer's import: "If image requires a dedicated allocation (as reported
+  by vkGetImageMemoryRequirements2 in VkMemoryDedicatedRequirements::requiresDedicatedAllocation
+  for image), memory must have been created with VkMemoryDedicatedAllocateInfo::image equal to
+  image" (`VUID-vkBindImageMemory-image-01445`). On the Iris Xe (ANV) and the RTX 3090 (NVIDIA)
+  the runtime imports no guest dma-buf: the dma-buf rule imports only into the first type the
+  fd's query offers, and only where that type is host-visible and host-coherent (on NVIDIA's
+  driver one failed import into a later type broke every later allocation of that type, Imported
+  blocks), and the first type those devices offer is not. Their pages take the host-memory import
+  above. Each of these is a known gap, reopened only by a measured copied share above 5% of a
+  frame on that card.
 - A texture over a buffer in an import over several dma-bufs (`Device::import_dma_bufs`) is the
   counted copy too: the block's buffer is sparse, bound to one import per dma-buf.
 - A texture over a buffer in an exported block is the counted copy of a texture over a buffer on
