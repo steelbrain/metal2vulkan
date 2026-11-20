@@ -556,6 +556,10 @@ mod on_device {
         );
         let mut buffers = Buffers::new(device);
         let (positions, colors) = vertices(device, &mut buffers);
+        // A colour render target takes a texture index.
+        device
+            .grant_indices(IndexClass::Texture, 4096, 1)
+            .expect("a grant");
         let target = texture(
             device,
             TextureType::Type2D,
@@ -563,7 +567,7 @@ mod on_device {
             [LEVEL, LEVEL],
             1,
             TextureUsage::RENDER_TARGET,
-            None,
+            Some(4096),
         );
         let row = LEVEL as usize * 4;
         let prior = filled(&PRIOR, (LEVEL * LEVEL) as usize);
