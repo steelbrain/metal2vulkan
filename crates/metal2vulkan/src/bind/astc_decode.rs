@@ -1,5 +1,7 @@
-//! An ASTC texture's texels as Metal decodes them, from its blocks, for a device without its ASTC
-//! block: the texels a decoded twin of the texture holds (the runtime's `texture/decoded_twin.rs`).
+//! An ASTC texture's texels as Metal decodes them, from its blocks: the texels a decoded twin of
+//! the texture holds, for a consumer that keeps one on a device without its ASTC block. The
+//! runtime keeps none (it makes no texture of such a format, `Gap::TextureFormat`); the
+//! conformance suite holds Metal's recorded texels to this decode.
 //!
 //! **The decode** is the Khronos Data Format Specification's (its ASTC chapter): the block mode,
 //! the integer sequence encoding of the colour endpoints and the weights, the colour endpoint

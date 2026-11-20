@@ -1,5 +1,5 @@
 //! An ETC2 or EAC texture's texels as Metal decodes them, from its blocks: the texels the decoded
-//! twin of the texture holds on a device without the format (the runtime's `etc.rs`), which
+//! twin of the texture holds on a device without the format, for a consumer that keeps one, which
 //! [`etc_decode_module`] writes on the GPU.
 //!
 //! **The decode** is the Khronos Data Format Specification's (its ETC2 and EAC chapters), written

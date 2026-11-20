@@ -2902,7 +2902,7 @@ fn the_format_table_holds_each_format_s_entry() {
 fn every_block_extent_is_the_vulkan_blocks() {
     use PixelFormat as P;
     // The compressed Vulkan block among a format's candidates, where the registry states a
-    // footprint for one: a decoded twin's candidate is the uncompressed image the runtime fills,
+    // footprint for one: a decoded twin's candidate is the uncompressed image a consumer fills,
     // which covers one texel, and so does a PVRTC block in the pinned registry.
     let vulkan_block = |pf| match repr(pf) {
         Repr::Candidates(_, candidates) => candidates.iter().find_map(|candidate| {

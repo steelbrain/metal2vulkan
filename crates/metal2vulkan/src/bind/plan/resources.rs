@@ -1108,7 +1108,7 @@ impl ResourcePlanner<'_> {
         // storing bytes no format defines into the blocks, and reads the blocks' decode through
         // a slot that also reads them (our probe `astc_passes_writes_footprints`): the slot takes
         // its neutral, so the writes leave the texture's blocks as they were, and the plan says
-        // so (`PlanDiagnostic::AstcStorageNeutral`), which the runtime announces.
+        // so (`PlanDiagnostic::AstcStorageNeutral`).
         let astc_storage = storage
             && matches!(compat, Some(TextureShape::Texture { pixel_format, .. })
                 if AstcDecode::of(pixel_format).is_some());

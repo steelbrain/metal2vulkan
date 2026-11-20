@@ -144,10 +144,8 @@
 //!
 //! # Why a case stops at its first refusal
 //!
-//! The runtime holds **no image of 26 of the 33** (it holds `BGRA4Unorm`, in the Vulkan word of
-//! its bits, and ASTC's six 4x2 and 8x4 forms, whose blocks lie in a carrier with a decoded twin):
-//! every other one is refused `Unsupported { feature: Format, needs: NotImplemented }`, measured
-//! over every descriptor of every case of this family. A case that recorded a refusal at each site and went on — which is
+//! The runtime holds **no image of most of the 33**: it refuses them typed
+//! (`Gap::TextureFormat`). A case that recorded a refusal at each site and went on — which is
 //! what `heap_metal_sizes` does, because the runtime answers all of its descriptors — would print
 //! some 2900 `Refused` rows and need a `known-gaps-rt.tsv` row for each, which is a ledger nobody
 //! reads and therefore no ledger. So each case stops at the first site it is refused, and the

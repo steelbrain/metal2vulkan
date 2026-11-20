@@ -1,6 +1,5 @@
 //! A 4:2:2 texture's texels as Metal reads them, from its pairs: the texels the decoded twin of a
-//! `GBGR422` or `BGRG422` texture holds (the runtime's `chroma_pairs.rs`), which
-//! [`chroma_decode_module`] writes on the GPU.
+//! `GBGR422` or `BGRG422` texture holds, which [`chroma_decode_module`] writes on the GPU.
 //!
 //! **The decode.** Two texels share 4 bytes: their own green codes and one blue and one red code
 //! (`G0 B G1 R` for `GBGR422`, `B G0 R G1` for `BGRG422`), sited between the two. Metal reads

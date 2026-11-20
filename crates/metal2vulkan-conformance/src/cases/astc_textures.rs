@@ -1,34 +1,22 @@
 //! How ASTC texels decode.
 //!
-//! An ASTC texture is a texture no desktop GPU and no lavapipe holds in its own format, so the
-//! runtime keeps its blocks in a carrier image and its reads go through a **decoded twin** it fills
-//! itself, announcing `carried-decoded-twin` once per device. What a guest shader then reads is not
-//! the device's decode but **ours**, which makes every texel of such a texture a value this
-//! implementation computes rather than one a driver answers.
+//! No desktop GPU and no lavapipe holds an ASTC texture in its own format. Where a device holds a
+//! format's block, the runtime keeps the blocks in an image of it and a guest's read is the
+//! device's decode, the static note `PrecisionNote::CompressedTexelDecode`
+//! (`compressed-texel-decode`). Where it holds none, the runtime makes no texture of the format
+//! (`Gap::TextureFormat`), and the case reads as the device lacking it.
 //!
-//! **The port is the first independent check of that decoder.** `metal2vulkan::bind::AstcDecode` is
-//! today checked against its own tests and against one hand-copied measurement in the lane: the
-//! lane computes Metal's expected texels *from the decoder itself* (its own `metal_texels`) and
-//! compares our read against that, so a decoder that is wrong in the same way on both sides passes.
-//! Here record mode runs the case on this M3 Max and the recording holds **Metal's own texels**.
-//! The decoder then becomes a cross-check against the oracle (the test
-//! `every_recorded_texel_is_the_decoders`), which is the one direction in which a difference says
-//! something: either Apple's ASTC decode is not what we implement, or it moved.
+//! **The recordings hold Metal's own texels**, recorded on this M3 Max.
+//! `metal2vulkan::bind::AstcDecode`, the translator's model of Metal's decode, is a cross-check
+//! against them (the test `every_recorded_texel_is_the_decoders`): a difference says either that
+//! Apple's ASTC decode is not what the model implements, or that it moved.
 //!
 //! # The three profiles, and what each one compares
 //!
-//! Forty-two cases: the fourteen 2D footprints in each of ASTC's three profiles. On a device
-//! without a format's ASTC block (no desktop GPU and no lavapipe holds an LDR one; only MoltenVK
-//! among the committed devices holds the HDR `SFLOAT` ones) the texels a guest reads are **our**
-//! decoder's, through the texture's decoded twin.
-//!
-//! The fourteen `_HDR` ones compare two things, by venue. Where the device holds
-//! `ASTC_*_SFLOAT_BLOCK` (`textureCompressionASTC_HDR`, Vulkan 1.3 core or
-//! `VK_EXT_texture_compression_astc_hdr`), the case compares **Apple's ASTC HDR decode against the
-//! driver's**, with nothing of ours in between: on MoltenVK over this M3 Max all fourteen are
-//! exact over both rounds, every texel and every channel. Elsewhere it compares Apple's against
-//! our decoder's halves, which the twin holds exactly, so an HDR case names the twin notices as
-//! the LDR and sRGB ones do and no tolerance.
+//! Forty-two cases: the fourteen 2D footprints in each of ASTC's three profiles. Each compares
+//! Apple's decode against the device's, with nothing of ours in between, on a device whose format
+//! query holds the format's block (for the `_HDR` ones `ASTC_*_SFLOAT_BLOCK`,
+//! `textureCompressionASTC_HDR`, Vulkan 1.3 core or `VK_EXT_texture_compression_astc_hdr`).
 //!
 //! ## Which footprints the sweep can tell apart, measured
 //!
@@ -39,49 +27,30 @@
 //! **`zero-blocks` distinguishes none of them**, and that is by construction rather than by
 //! oversight: a zero block is an error block in every profile and at every footprint, so every
 //! texel of every one of the fourteen reads the same error colour and the fourteen recordings are
-//! byte-identical. The round still compares something — Metal's error-block colour against ours,
-//! which is the one value a device answers for a malformed block — but it is not what tells one
-//! footprint from another, and a sweep that had only this round would be comparing one answer
-//! fourteen times.
+//! byte-identical. The round still compares something — Metal's error-block colour against the
+//! device's, which is the one value a device answers for a malformed block — but it is not what
+//! tells one footprint from another, and a sweep that had only this round would be comparing one
+//! answer fourteen times.
 //!
 //! **One case per format**, so a venue that holds no texture of one answers its typed refusal there
-//! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature). The
-//! lanes walk their formats in one test each (the twenty-eight LDR and sRGB ones, the fourteen HDR
-//! ones), where a device missing one would take the whole lane down.
+//! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature).
 //!
 //! The footprint itself comes from [`metal2vulkan::metal::format::block_extent`], the translator's
 //! public query: the footprint is a fact about the `MTLPixelFormat` that every profile shares.
 //!
 //! Each case is two 16 x 16 textures, read whole by the owned fixture `format_scout`'s
 //! `scout_read_f`, one thread a texel: one of **zero blocks**, which are error blocks and read
-//! magenta (the lane's "fresh" read, stated as an upload so the bytes are the case's own rather
-//! than whatever a fresh texture holds), and one of the lane's own seeded xorshift blocks at the
-//! lane's own seed — mostly error blocks, the rest decoding through every mode, and every fourth an
-//! LDR **void-extent** block of a random colour. Both are loaded by `replaceRegion:` as the texture
-//! is made, which is the lane's CPU-copy write. A 16-texel side over the fourteen footprints gives
-//! sixteen blocks of a 4 x 4 format down to four of a 12 x 12 one, each level's blocks covering
-//! texels past its edge, which is the lane's shape.
+//! magenta (stated as an upload so the bytes are the case's own rather than whatever a fresh
+//! texture holds), and one of seeded xorshift blocks — mostly error blocks, the rest decoding
+//! through every mode, and every fourth an LDR **void-extent** block of a random colour. Both are
+//! loaded by `replaceRegion:` as the texture is made. A 16-texel side over the fourteen footprints
+//! gives sixteen blocks of a 4 x 4 format down to four of a 12 x 12 one, each level's blocks
+//! covering texels past its edge.
 //!
-//! **What is not ported, and why.** The lane reads each format five times — fresh, after a CPU copy,
-//! after a blit from a buffer, after a fill of one block, and after a copy from another texture —
-//! and its subject there is that **our twin is refreshed by every kind of write**, counted in
-//! `WorkCounts`. Metal has no twin and no counter: its answer is decided by the blocks alone, so
-//! four of those five reads would record the same Metal fact over four draws of one random
-//! distribution. The twin-refresh paths stay a validation lane, where the counters live; what comes
-//! here is the part Metal can answer. The lane's three other tests are left where they are: the
-//! block round trip at every level and slice is `compressed_moves`'s subject in this suite, and the
-//! second-twin view and the refusals are facts about our own objects and our own typed errors
-//! rather than about Metal's texels.
-//!
-//! **Tolerances.** Only a linear (`_LDR`) format has one. Its twin holds each channel as the 8-bit
-//! code nearest Metal's 12-bit value, which the runtime announces as `decoded-texel-precision`
-//! at a command's first read of the twin, and whose catalogue entry (docs/API.md) bounds it at
-//! **1/510**. That is the notice's own number, not a round one. The fourteen sRGB forms hold
-//! Metal's own 8-bit codes, which their slots read through the twin's sRGB view, the device's own
-//! decode (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance
-//! at all**: through Metal's own texture unit they are exact, and a value another device's decode
-//! moves is a `known-gaps-rt.tsv` row of its venue. An `_HDR` format names none: its twin holds
-//! Metal's halves exactly.
+//! **Tolerances.** Only a linear (`_LDR`) format has one: its channel is the device's decode of the
+//! block, whose `compressed-texel-decode` catalogue entry (docs/API.md) bounds an ASTC LDR channel
+//! at **1/2048**. The sRGB and `_HDR` forms name none, and a value a device's decode moves there is
+//! a `known-gaps-rt.tsv` row of its venue.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -472,9 +441,9 @@ impl Case for AstcTextures {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Where the device holds the format's block itself, `metal2vulkan-runtime` keeps the blocks in
-        // an image of it and reads the device's decode of them, the static note it announces as
-        // `compressed-texel-decode` for every block-compressed texture it makes. Here it is a
+        // Where the device holds the format's block itself, the runtime keeps the blocks in an
+        // image of it and reads the device's decode of them, the static note
+        // `compressed-texel-decode` of every block-compressed texture it makes. Here it is a
         // declaration; a linear form's texels also take the entry's bound (below), and an sRGB or
         // HDR form's compare exactly.
         let mut all = vec![crate::replay::notice_allowance(

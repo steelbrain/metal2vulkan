@@ -329,7 +329,7 @@ pub fn compare_run(
 /// site whatever is in the set, and marks only *that* allowance fired. Both halves were defects:
 ///
 /// - **One declaration excused every other notice.** Measured at `f2fc351534`: a case declaring
-///   `carried-decoded-twin` while the run announced it *plus* `device-texel-conversion` *plus*
+///   one notice while the run announced it *plus* `device-texel-conversion` *plus*
 ///   `native-division` compared with **zero** divergences. The honest rule is a subset — what we
 ///   announce is covered by what the case names — and no allowance can reach it, because a
 ///   declaration of one code must not excuse another's.

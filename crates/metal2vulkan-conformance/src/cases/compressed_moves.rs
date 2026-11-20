@@ -843,10 +843,9 @@ pub fn out_tight(
 /// The notice a BC case may name as justifying its notices site: the device's decode of the
 /// texture's blocks.
 ///
-/// A BC texture keeps no decoded twin on any venue: the device holds every BC format in its own
-/// compressed form and decodes it itself, which the runtime announces as `compressed-texel-decode`
-/// for every such texture. Every block still compares exactly: the only site it loosens is the set
-/// of notices, which Metal holds empty.
+/// On every venue the device holds every BC format in its own compressed form and decodes it
+/// itself, the runtime's static note `compressed-texel-decode` of every such texture. Every block
+/// still compares exactly: the only site it loosens is the set of notices, which Metal holds empty.
 pub fn block_allowances() -> Vec<Allowance> {
     vec![crate::replay::notice_allowance(
         Degradation::CompressedTexelDecode.code(),

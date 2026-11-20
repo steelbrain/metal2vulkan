@@ -2307,14 +2307,14 @@ pub fn unorm8_tile_value(
 /// the device's conversion under the 16-bit float controls ([`QuantizeForm::Controlled`]: the
 /// profile has `shaderFloat16`, `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
 /// for 16 bits, and a driver that keeps the conversion and its widening, not one with
-/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::quantize_form`]), that conversion
-/// and its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
+/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::quantize_form`]), that conversion and
+/// its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
 /// (conversions are correctly rounded, to nearest even under `RoundingModeRTE`, denormals kept
 /// under `DenormPreserve`, zero signs and infinities under `SignedZeroInfNanPreserve`), as the
-/// module's own `half` results round on such a profile (exact, no note). Elsewhere the integer sequence ([`f32_to_half`]), about
-/// fifty instructions, the same on every device. The two agree on every `x` but a NaN's bits,
-/// which the conversion leaves to the device: the blends clamp a NaN source to zero, and a 16-bit
-/// float blend stores every NaN as Metal's own.
+/// module's own `half` results round on such a profile (exact, no note). Elsewhere the integer
+/// sequence ([`f32_to_half`]), about fifty instructions, the same on every device. The two agree on
+/// every `x` but a NaN's bits, which the conversion leaves to the device: the blends clamp a NaN
+/// source to zero, and a 16-bit float blend stores every NaN as Metal's own.
 pub fn half_of(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     match fb.module().quantize_form() {
         QuantizeForm::Controlled => narrow::round(fb, f.with(Held::Float(FloatFmt::Half)), x),

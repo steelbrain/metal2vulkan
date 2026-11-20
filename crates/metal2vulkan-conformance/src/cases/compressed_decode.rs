@@ -24,12 +24,11 @@
 //! starts its first block with an endpoint of -128, which reads -1: the one hand-placed byte the
 //! lane uses, kept.
 //!
-//! **The device's decode is the answer.** A BC texture keeps no decoded twin: every device samples
-//! its own BC image through its own decode, announced `compressed-texel-decode`: the runtime's
-//! static note for every block-compressed texture. Each round's texels are loosened by the largest
-//! difference that notice's catalogue entry (docs/API.md) states for the format's family on any
-//! driver, justified by the notice alone (`CompressedDecode::decode_bound`): a texel past it is the
-//! note's claim failing, a divergence.
+//! **The device's decode is the answer.** Every device samples its own BC image through its own
+//! decode, the runtime's static note `compressed-texel-decode` of every block-compressed texture.
+//! Each round's texels are loosened by the largest difference that notice's catalogue entry
+//! (docs/API.md) states for the format's family on any driver, justified by the notice alone
+//! (`CompressedDecode::decode_bound`): a texel past it is the note's claim failing, a divergence.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.

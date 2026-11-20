@@ -1,5 +1,5 @@
 //! The shape every crate-owned decode module shares: a carried texture's blocks decoded into the
-//! texels of its decoded twin (the runtime's `texture/decoded_twin.rs`), an ASTC
+//! texels of its decoded twin, for a consumer that keeps one, an ASTC
 //! ([`astc_decode_module`](super::astc_decode_module)), PVRTC
 //! ([`pvrtc_decode_module`](super::pvrtc_decode_module)), ETC2 or EAC
 //! ([`etc_decode_module`](super::etc_decode_module)) texture's on a device without its format, or a
