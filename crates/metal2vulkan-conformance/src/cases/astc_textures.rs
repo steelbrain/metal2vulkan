@@ -123,6 +123,12 @@ const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
 /// rather than being re-fitted to whatever a device answers.
 const LEDGERS_COMPACT_BOUND: f64 = 1.0 / 510.0;
 
+/// The most a linear channel of the device's own decode of an ASTC LDR block may be off Metal's
+/// value, as the `compressed-texel-decode` catalogue entry states it (docs/API.md): 1/2048, the
+/// largest difference measured over the fourteen footprints' random blocks, plus the `float`
+/// rounding of both values. It is the entry's number, so a run past it is the note's claim failing.
+const DEVICE_DECODE_BOUND: f64 = 1.0 / 2048.0 + f32::EPSILON as f64 / 2.0;
+
 /// An LDR void-extent block of red, green, blue and alpha `0x4000`, `0x8000`, `0xc000` and
 /// `0xffff`: every texel of the block that colour. The lane's own, since the seeded stream puts its
 /// first eight bytes in every fourth block.
@@ -499,8 +505,9 @@ impl Case for AstcTextures {
         // a device without unified memory announces it.
         // Where the device holds the format's block itself, `metal2vulkan-rt` keeps the blocks in
         // an image of it and reads the device's decode of them, the static note it announces as
-        // `compressed-texel-decode` for every block-compressed texture it makes. A declaration
-        // and not a tolerance: no ASTC bound is stated, so every texel still compares exactly.
+        // `compressed-texel-decode` for every block-compressed texture it makes. Here it is a
+        // declaration; a linear form's texels also take the entry's bound (below), and an sRGB or
+        // HDR form's compare exactly.
         let mut all = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
@@ -522,6 +529,17 @@ impl Case for AstcTextures {
                     format!("case/{round}/texels"),
                     Loosening::Absolute(bound),
                     Justification::notice(Degradation::DecodedTexelPrecision),
+                ));
+            }
+            // `metal2vulkan-rt` keeps no twin: where the device holds the format's block, a
+            // linear channel is the device's decode of it, the static note
+            // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at
+            // 1/2048. On the old runtime's run it holds nowhere and faults nothing.
+            for round in ROUNDS {
+                all.push(Allowance::new(
+                    format!("case/{round}/texels"),
+                    Loosening::Absolute(DEVICE_DECODE_BOUND),
+                    Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
                 ));
             }
         }

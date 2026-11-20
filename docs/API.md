@@ -4123,16 +4123,19 @@ bound.
   largest differences from Metal's texels measured on random blocks of every format; a driver not
   named is unmeasured. Validation derives no tolerance from them; the conformance suite's BC1 to
   BC5 decode cases hold each texel to its family's largest bound on any driver (an sRGB form's to
-  the sRGB decode's largest step over 4/255), plus both values' rounding to `float`, justified by
-  the notice alone, on `metal2vulkan-rt`'s run; on the old runtime's they loosen nothing, and a
-  texel its device moves is that venue's known-gaps row.
+  the sRGB decode's largest step over 4/255), and its ASTC cases each linear (`_LDR`) texel to
+  1/2048, plus both values' rounding to `float`, justified by the notice alone, on
+  `metal2vulkan-rt`'s run; on the old runtime's they loosen nothing, and a texel its device moves
+  is that venue's known-gaps row.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
   form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
   to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop
   GPU; BC3's alpha 6/255), 3/255 on lavapipe, 1/255 on ANV; a BC4 or BC5 channel up to 7.4/255
   (signed 0.065) on NVIDIA, 1.3/255 (signed 0.013) on ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV
   (Mesa 26.2.4, the Radeon 780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7
-  channel a `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's. Measured
+  channel a `float` ulp on lavapipe; an ASTC LDR channel up to 1/2048 on ANV (Mesa 26.2.6, the Iris
+  Xe of Raptor Lake-P), over the fourteen footprints; its blocks' bytes, copies and sizes are
+  Metal's. Measured
   on more drivers: NVIDIA's 620.70.06 (the RTX 2080) a BC1 to BC3 channel 3/255 (BC3's alpha
   6/255) and a BC4 or BC5 channel 7.33/255 (signed 0.064); ANV (the Iris Xe of Raptor Lake-P) and
   Intel's Windows driver (the UHD 630) BC3's alpha 2/255 and a BC4 or BC5 channel 1.4/255 (signed
