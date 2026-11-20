@@ -1927,9 +1927,11 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// encoder's stage-in region (`PushField::StageInRegion`), the stride of a vertex layout whose
 /// attributes the function pulls (`PushField::VertexBufferStride`): a post-tessellation function's
 /// control points and patches, and a plain vertex function's layouts that a pulled-vertex-buffer
-/// variant or the de-indexed and private list forms pull; and the render encoder's alpha test
+/// variant or the de-indexed and private list forms pull; the render encoder's alpha test
 /// reference code a fragment function under the private alpha test compares with
-/// (`PushField::AlphaTestReference`). Its fields past the push window are a parameter block, whose
+/// (`PushField::AlphaTestReference`); and the index of the sampled-texture array's element a
+/// fragment function reads a colour attachment through (`PushField::FetchedColor`, framebuffer
+/// fetch on a device with neither ordered form). Its fields past the push window are a parameter block, whose
 /// address the window holds. Its refusal names the first form the plan holds that they do not
 /// lower ([`identity_refusal`]).
 fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
@@ -1970,6 +1972,7 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
                 | PushField::StageInRegion
                 | PushField::VertexBufferStride(_)
                 | PushField::AlphaTestReference
+                | PushField::FetchedColor { .. }
         ),
     });
     if let Some(f) = field {
