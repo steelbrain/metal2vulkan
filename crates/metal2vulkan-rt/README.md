@@ -497,10 +497,35 @@ counts against the device's allocations; `Gauges::imports` counts those live. Th
 until its last handle and its last buffer, command buffer or upload are gone; then the block-maker
 thread frees its memory, which ends the import, and runs `release`, Metal's deallocator, after it
 (at teardown, on the thread that tears down). Neither `BlockMappings` hook runs for an imported
-block. A texture over a buffer in an imported block is the counted copy of a texture over a
-buffer: an image of its own, which the device copies the buffer's bytes into before the
-submissions that use it and back after a command writes it (`Metrics::over_copies`); the buffer
-stays the import itself.
+block.
+
+A texture over a buffer in a dma-buf's one import (`import_dma_buf`) is in place, as over a
+Shared block of the runtime's own (Textures), where the device's queries take it. Its image is
+the device's linear image made for the dma-buf (`VkExternalMemoryImageCreateInfo`), bound in the
+import's memory at the texture's place, in the import's memory type. It needs three things. First,
+the external image query (`vkGetPhysicalDeviceImageFormatProperties2` with
+`VkPhysicalDeviceExternalImageFormatInfo` for the dma-buf, of the linear tiling, format, usage and
+flags) answers the handle importable, compatible and not dedicated-only, at the texture's
+extent. Second, the image meets the layout, alignment and feature tests of any texture over a
+buffer in place. Third, the device enables `VK_EXT_queue_family_foreign`. Such an image is made
+undefined, as Vulkan requires of an image for imported memory
+(`VUID-VkImageCreateInfo-pNext-01443`). Its move home, in the upload ahead of the next commit,
+is the acquire from the foreign queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`) of the image,
+preinitialized to general, and of the buffer's range under it, in one barrier. It is counted in
+`Metrics::external_acquires`. Vulkan's external resource sharing keeps the bytes through it: "To
+make the contents of the underlying memory accessible in the destination instance or API,
+applications must ... Acquire exclusive ownership in the destination instance or API", and the
+undefined layout an image is made in "is a placeholder", as "the layout specified as part of this
+transition will be the true initial layout of the image". The buffer's range is in the barrier
+because an acquire of the image alone would leave undefined "the contents of any portion of
+another resource which aliases memory that is bound to" it. From then on, the image stays in the
+general layout, a host-accessible alias of the buffer, as in place over a Shared block. A second
+texture over the same bytes acquires them again at its own move home. Anything else is the
+counted copy of a texture over a buffer: an image of its own, which the device copies the
+buffer's bytes into before the submissions that use it and back after a command writes it
+(`Metrics::over_copies`, `Metrics::over_copies_imported`). That covers a texture over host
+memory's import, over several dma-bufs, or where a query does not take it (Known gaps of memory
+blocks). In both forms the buffer stays the import itself.
 
 ### Exported blocks
 
@@ -539,7 +564,7 @@ command buffer or upload are gone; then the block-maker thread frees its memory.
 handle may outlive the block, unused. Neither `BlockMappings` hook runs for an exported block, and
 its bytes are undefined until written, as a taken block's are. No image is made in its memory,
 which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer
-in it is the counted copy, as over an imported block, and a heap texture in it is
+in it is the counted copy, as over host memory's import, and a heap texture in it is
 `Gap::HeapTexture`.
 
 Once the other API's work that accessed the block has completed (work that wrote it, or that read it
@@ -855,20 +880,37 @@ the Direct3D 11 texture's payload until it is freed.
   arguments) or of the index size (indexed draws), which documented Metal does not allow, its
   pointer being page-aligned. The consumer places every other buffer at an aligned byte. Such a
   buffer is still made and its other uses run; only the dispatch or draw is refused.
-- A texture over a buffer in an imported or exported block is the counted copy of a texture over a
-  buffer on every device (`Metrics::over_copies`): its bytes are copied into an image of its own
-  before the submissions that use it, and back after a command writes it. The runtime makes no
-  image in imported memory, nor in an exported block's, which is dedicated to its buffer. A
-  decoded picture in an exported block is then one copy a plane into the plane's image, made
-  before the first submission that uses the picture; a picture the decoder writes over before any
-  use is not copied. In the video decodes we replay (two planes a picture: 3,110,400 bytes for an
-  8-bit 1920x1080 picture, 24,883,200 for a 16-bit 3840x2160 one), that is 2 copies and about
-  8.6 MB a picture used, and a picture's copies take 0.288 ms of GPU time on the Radeon 780M,
-  0.294 ms on the RX 550, 0.520 ms on the Iris Xe (Raptor Lake) and 0.653 ms on the RTX 3090.
-  In a 336-second guest walk on an RTX 3090 (rt at 7096fa7de3), all 13,613 such copies
-  (228.6 MiB) were of textures over imported memory, 1.05 copies and 16 KB a frame on average
-  over 13,005 frames and 78 copies in the worst one; no texture over a block of the runtime's
-  own was copied.
+- A texture over a buffer in host memory's import (`Device::import_host_memory`) is the counted
+  copy of a texture over a buffer on every device (`Metrics::over_copies`,
+  `Metrics::over_copies_imported`): its bytes are copied into an image of its own before the
+  submissions that use it, and back after a command writes it. This is by handle type, not by
+  host. Today that means the guest pages of the Mac and Windows hosts, which import by address,
+  and on Linux any pages not folded into a dma-buf. An image bound in imported memory is made for the import's handle, so "initialLayout must
+  be `VK_IMAGE_LAYOUT_UNDEFINED`" (`VUID-VkImageCreateInfo-pNext-01443`), and a move out of the
+  undefined layout keeps no bytes. Over a dma-buf, an acquire from the other side keeps them
+  (Imported blocks). Host memory has no other side to acquire from: "Importing memory from a host
+  pointer shares ownership of the memory between the host and the Vulkan implementation. The
+  application can continue to access the memory through the host pointer but it is the
+  application's responsibility to synchronize device and non-device access to the payload as
+  defined in Host Access to Device Memory Objects" (Vulkan 1.4, Host External Memory). The host
+  reaches a linear image only in a host-accessible layout, which such an image cannot be made in.
+  In a guest walk on an M3 Max on Mesa's Mac driver (rt at b4058db961), whose guest pages are
+  imported by address (15 steps), these copies came to 5.71 GB. On average that is 11.7% of a 1080p frame's bytes a
+  frame: under 1% in steady animation, and 24% to 152% while apps open.
+- A texture over a buffer in an import over several dma-bufs (`Device::import_dma_bufs`) is the
+  counted copy too: the block's buffer is sparse, bound to one import per dma-buf.
+- A texture over a buffer in an exported block is the counted copy of a texture over a buffer on
+  every device (`Metrics::over_copies`). The runtime makes no image in an exported block's memory,
+  which is dedicated to its buffer. A decoded picture in an exported block is then one copy a
+  plane into the plane's image, made before the first submission that uses the picture; a
+  picture the decoder writes over before any use is not copied. In the video decodes we replay
+  (two planes a picture: 3,110,400 bytes for an 8-bit 1920x1080 picture, 24,883,200 for a 16-bit
+  3840x2160 one), that is 2 copies and about 8.6 MB a picture used, and a picture's copies take
+  0.288 ms of GPU time on the Radeon 780M, 0.294 ms on the RX 550, 0.520 ms on the Iris Xe
+  (Raptor Lake) and 0.653 ms on the RTX 3090. In a 336-second guest walk on an RTX 3090 (rt at
+  7096fa7de3, which copied a texture over any import), all 13,613 such copies (228.6 MiB) were of
+  textures over imported memory, 1.05 copies and 16 KB a frame on average over 13,005 frames and
+  78 copies in the worst one; no texture over a block of the runtime's own was copied.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
@@ -1110,7 +1152,9 @@ made, with no lock, and never rewritten for layouts.
   whole number of texels apart, an offset that is not a whole number of texels, or texels past
   the buffer are refused (`Refusal::BufferTextureLayout`). Its image is the device's own linear
   image, bound at the texture's place in the bytes shaders reach (a Managed buffer's device copy,
-  where it has one), made preinitialized so its move home keeps the bytes, and kept in the general
+  where it has one), made preinitialized so its move home keeps the bytes (in a dma-buf's import,
+  made undefined for the dma-buf and acquired preinitialized by its move home: Imported blocks),
+  and kept in the general
   layout through every use, copies included, so that it and the buffer stay host-accessible
   aliases, which Vulkan's memory aliasing says interpret their bytes alike: a write through the
   image touches only its texels' bytes, and nothing is copied that the buffer does not copy.

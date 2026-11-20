@@ -201,7 +201,7 @@ impl Device {
     ///
     /// No image is made in its memory, which is dedicated to its buffer
     /// (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer in it is copied, as over
-    /// an imported block ([`Buffer::new_texture`](crate::Buffer::new_texture)), and it is no
+    /// host memory's import ([`Buffer::new_texture`](crate::Buffer::new_texture)), and it is no
     /// heap's memory ([`Device::new_heap_texture`]).
     ///
     /// Err: [`Limit::NoExport`] where the device does not export the handle;

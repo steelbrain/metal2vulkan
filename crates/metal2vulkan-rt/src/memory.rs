@@ -292,8 +292,12 @@ pub(crate) struct Memory {
 /// What a block that is an allocation of its own is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Own {
-    /// An import of memory the consumer brought ([`import`]).
-    Import,
+    /// An import of memory the consumer brought ([`import`]): of `handle`, into the memory type
+    /// `memory_type`.
+    Import {
+        handle: crate::ImportHandle,
+        memory_type: u32,
+    },
     /// A dedicated allocation the consumer shares by a handle of this kind ([`export`]).
     Export(crate::ExportHandle),
     /// An exported surface's buffer ([`crate::Surface::buffer`]): on one more import of its
@@ -347,7 +351,7 @@ impl Memory {
     /// Whether it is memory the consumer brought: one import, or several behind one buffer.
     pub(crate) fn imported(&self) -> bool {
         match self.own {
-            Some(Own::Import) => true,
+            Some(Own::Import { .. }) => true,
             #[cfg(unix)]
             Some(Own::Sparse { .. }) => true,
             _ => false,
@@ -1746,7 +1750,7 @@ pub(crate) unsafe fn import(
     // SAFETY: the buffer has device-address usage and is bound.
     let address = unsafe { device.get_buffer_device_address(&address) };
     let class = match own {
-        Own::Import => {
+        Own::Import { .. } => {
             core.counters.imported(len);
             MemoryClass::Shared
         }

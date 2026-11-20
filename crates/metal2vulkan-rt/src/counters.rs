@@ -1662,6 +1662,9 @@ pub struct Metrics {
     /// surfaces ([`Surface::external_writes_done`](crate::Surface::external_writes_done), and an
     /// in-place surface's buffer at the [`Surface::buffer`](crate::Surface::buffer) call that
     /// makes it): one barrier each, in the upload, also counted in [`barriers`](Self::barriers).
+    /// Also one for each texture in place over a buffer in a dma-buf's import
+    /// (`Device::import_dma_buf`, on Unix), whose move home acquires its image and the buffer's
+    /// range under it from the foreign queue family, in the barrier of the upload's moves home.
     pub external_acquires: u64,
     /// Releases of exported blocks and surfaces to another API recorded
     /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external),

@@ -353,23 +353,33 @@ impl Upload {
     }
 
     /// Records `homes`, images' moves from undefined to their home layouts
-    /// ([`Image::homing`]): in one barrier, and where any is zeroed, its zeroing after that
-    /// barrier and its move home in a second, each counted in `core`'s counters; the upload holds
-    /// each image.
+    /// ([`Image::homing`]): in one barrier, with the acquires of the buffers' ranges under images
+    /// over a dma-buf's import (each such image's move counted in
+    /// [`Metrics::external_acquires`](crate::Metrics::external_acquires)), and where any is
+    /// zeroed, its zeroing after that barrier and its move home in a second, each counted in
+    /// `core`'s counters; the upload holds each image.
     fn home(&self, core: &Core, homes: &[Homing]) {
         if homes.is_empty() {
             return;
         }
         let device = &core.device;
-        let barrier = |moves: &[vk::ImageMemoryBarrier2<'static>]| {
-            let dependency = vk::DependencyInfo::default().image_memory_barriers(moves);
+        let barrier = |moves: &[vk::ImageMemoryBarrier2<'static>],
+                       buffers: &[vk::BufferMemoryBarrier2<'static>]| {
+            let dependency = vk::DependencyInfo::default()
+                .image_memory_barriers(moves)
+                .buffer_memory_barriers(buffers);
             // SAFETY: the upload's command buffer is recording, under the work lock; each image
-            // is the device's and held by the upload.
+            // is the device's and held by the upload, and holds the import whose buffer an
+            // acquire names, a dma-buf's, whose foreign family is enabled (`check_over`).
             unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
             core.counters.count(Metric::Barriers);
         };
         let firsts: Vec<_> = homes.iter().map(|home| home.first).collect();
-        barrier(firsts.as_slice());
+        let acquires: Vec<_> = homes.iter().filter_map(|home| home.buffer).collect();
+        barrier(firsts.as_slice(), acquires.as_slice());
+        for _ in &acquires {
+            core.counters.count(Metric::ExternalAcquires);
+        }
         let zeroings: Vec<&Zeroing> = homes.iter().filter_map(|home| home.zero.as_ref()).collect();
         if zeroings.is_empty() {
             return;
@@ -383,7 +393,7 @@ impl Upload {
             core.counters.texture_cleared(zeroing.bytes);
         }
         let moves: Vec<_> = zeroings.iter().map(|zeroing| zeroing.home).collect();
-        barrier(moves.as_slice());
+        barrier(moves.as_slice(), &[]);
         core.counters.count(Metric::TextureClearBarriers);
     }
 }

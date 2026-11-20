@@ -1,7 +1,7 @@
 //! Imports: the two type rules, and under a device cfg, on every device of the cfg's kind, that
 //! host memory is imported into the first host-visible, host-coherent type its query offers, that
 //! a GPU write reaches it and its release runs only once its memory is freed, that a texture over
-//! a buffer in an imported block is read and written by blits through the counted copy, that an
+//! a buffer in host memory's import is read and written by blits through the counted copy, that an
 //! ordinary Shared allocation succeeds after an import of a shared mapping of a file (which RADV
 //! refuses at the import), that an import counts against the device's allocations, and that a
 //! dma-buf is imported where its first offered type is host-visible and host-coherent and refused

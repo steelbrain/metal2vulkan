@@ -513,7 +513,11 @@ impl Device {
             .push_next(&mut import)
             .push_next(&mut flags);
         // SAFETY: an import of the dma-buf into a type its query offered and its buffers can use.
-        match unsafe { memory::import(core, &info, handle.vk(), None, Own::Import) } {
+        let own = Own::Import {
+            handle,
+            memory_type: index,
+        };
+        match unsafe { memory::import(core, &info, handle.vk(), None, own) } {
             Ok(memory) => Ok((claim(core, memory, release), index)),
             Err(ImportFailed::Before(error)) => {
                 // Nothing was imported, so the fd is still ours: closed, where it is still the
@@ -858,7 +862,10 @@ impl Device {
                 &info,
                 handle.vk(),
                 Some(Mapping::new(pointer)),
-                Own::Import,
+                Own::Import {
+                    handle,
+                    memory_type: index,
+                },
             )
         }
         .map_err(ImportFailed::error)?;

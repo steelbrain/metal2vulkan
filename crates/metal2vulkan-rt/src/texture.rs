@@ -46,12 +46,13 @@ use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
 use crate::host_bytes::HostBytes;
-use crate::memory::{self, Block, BlockId, MemoryClass};
+use crate::memory::{self, Block, BlockId, MemoryClass, Own};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
 use crate::shadow::{self, Area};
 use crate::staging::Stage;
 use crate::submit::Held;
+use crate::ImportHandle;
 use ash::vk;
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{self as formats, bicubic_texels_word, FormatEmulation};
@@ -401,8 +402,14 @@ pub(crate) struct Image {
     /// which a pass's begin holds ([`Gap::LinearPlanePass`]). False for every other image.
     linear_attachment: bool,
     /// The layout its move home starts from: undefined; preinitialized for a texture over a buffer
-    /// in place, whose move home keeps the bytes.
+    /// in place, whose move home keeps the bytes (over a dma-buf's import, the layout of the
+    /// bytes the host wrote, which the move's acquire names, `foreign`).
     first: vk::ImageLayout,
+    /// In place over a dma-buf's import (`Device::import_dma_buf`, on Unix): the import's buffer
+    /// and the range of it the image's memory is, which its move home acquires from the foreign
+    /// queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`) in one barrier with the image, so that both
+    /// keep the bytes. `None` for every other image.
+    foreign: Option<(vk::Buffer, u64, u64)>,
     /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
     /// How the move home zeroes it, for an image the runtime places for a texture of its own
@@ -511,6 +518,9 @@ pub(crate) struct Homing {
     /// The move from the layout the image is made in: to its home layout, or to the transfer
     /// destination layout where the image is zeroed first.
     pub(crate) first: vk::ImageMemoryBarrier2<'static>,
+    /// In place over a dma-buf's import: the acquire of the import's buffer's range under the
+    /// image, which goes in the barrier of `first`, the image's own acquire.
+    pub(crate) buffer: Option<vk::BufferMemoryBarrier2<'static>>,
     /// Where the image is zeroed: its zeroing, its memory's bytes, and its move home after it.
     pub(crate) zero: Option<Zeroing>,
 }
@@ -604,14 +614,41 @@ impl Image {
             .image(self.image)
             .subresource_range(whole(self.aspects));
         let Some(zero) = self.zero else {
+            let first = barrier
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                .dst_access_mask(every)
+                .old_layout(first)
+                .new_layout(self.home);
+            // Over a dma-buf's import, the acquire of the image and of the buffer's range under it
+            // from the other side, in one barrier. Vulkan makes "the contents of the underlying
+            // memory accessible" by an acquire, of which the undefined layout the image is made in
+            // is "a placeholder" ("the layout specified as part of this transition will be the
+            // true initial layout of the image"): preinitialized, the layout of linear bytes the
+            // host wrote. An acquire of one alone would leave undefined "the contents of any
+            // portion of another resource which aliases memory that is bound to" it.
+            let Some((buffer, offset, size)) = self.foreign else {
+                return Some(Homing {
+                    first,
+                    buffer: None,
+                    zero: None,
+                });
+            };
+            let family = self.core.family;
+            let acquire = vk::BufferMemoryBarrier2::default()
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                .dst_access_mask(every)
+                .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
+                .dst_queue_family_index(family)
+                .buffer(buffer)
+                .offset(offset)
+                .size(size);
             return Some(Homing {
-                first: barrier
-                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                    .src_access_mask(vk::AccessFlags2::NONE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .dst_access_mask(every)
-                    .old_layout(first)
-                    .new_layout(self.home),
+                first: first
+                    .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
+                    .dst_queue_family_index(family),
+                buffer: Some(acquire),
                 zero: None,
             });
         };
@@ -627,6 +664,7 @@ impl Image {
                 .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
                 .old_layout(first)
                 .new_layout(transfer),
+            buffer: None,
             zero: Some(Zeroing {
                 image: self.image,
                 aspects: self.aspects,
@@ -655,10 +693,10 @@ impl Image {
     }
 
     /// The layout a copy names the image in, for `transfer`, its role's transfer layout: home,
-    /// general, for an image made preinitialized (a linear image over a buffer in place), which
-    /// stays in a host-accessible layout through every use, copies included, so that it and the
-    /// buffer are aliases that interpret their bytes alike (Vulkan's memory aliasing); `transfer`
-    /// for any other image.
+    /// general, for an image whose move home starts preinitialized (a linear image over a buffer
+    /// in place), which stays in a host-accessible layout through every use, copies included, so
+    /// that it and the buffer are aliases that interpret their bytes alike (Vulkan's memory
+    /// aliasing); `transfer` for any other image.
     pub(crate) fn copy_layout(&self, transfer: vk::ImageLayout) -> vk::ImageLayout {
         match self.first == vk::ImageLayout::PREINITIALIZED || self.surface() {
             true => self.home,
@@ -720,6 +758,7 @@ impl Image {
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
             zero: None,
+            foreign: None,
             drawable: None,
             _under: None,
         });
@@ -1245,6 +1284,7 @@ impl Device {
             first: vk::ImageLayout::UNDEFINED,
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
+            foreign: None,
             zero: None,
             drawable: Some(Drawable {
                 turn: Mutex::new(Turn::New),
@@ -1318,6 +1358,8 @@ impl Device {
             Source::Heap(_, heap, _) => Some(core.heap_ids.of(core, heap.block, heap.offset)),
             _ => None,
         };
+        // Over a buffer in place, the memory its image lies in (`check_over`).
+        let mut laid = None;
         let (named, first, home) = match &source {
             Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
             Source::Managed(bytes, places) => {
@@ -1330,8 +1372,7 @@ impl Device {
                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
             }
             Source::Over(buffer, offset, bytes_per_row) => {
-                let in_place =
-                    check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
+                laid = check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
                 let named = Named {
                     buffer: Arc::clone(buffer.object()),
                     places: vec![BytesPlace {
@@ -1339,9 +1380,9 @@ impl Device {
                         bytes_per_row: *bytes_per_row,
                         bytes_per_image: 0,
                     }],
-                    form: match in_place {
-                        true => Form::InPlace,
-                        false => Form::Copied,
+                    form: match laid {
+                        Some(_) => Form::InPlace,
+                        None => Form::Copied,
                     },
                 };
                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
@@ -1351,6 +1392,8 @@ impl Device {
         // A texture the runtime places reads zero until written ([`Zero`]): not one in a heap's
         // memory or over a buffer's bytes.
         let placed = matches!(source, Source::Plain | Source::Managed(..));
+        // Over a dma-buf's import in place, the import's buffer and the image's offset in it.
+        let mut acquired = None;
         let (bind, mut block) = match source {
             Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
             Source::Heap(block, heap, offset) => {
@@ -1367,13 +1410,23 @@ impl Device {
                 (Bind::Pooled, None)
             }
             Source::Over(buffer, offset, bytes_per_row) => {
-                // The host reaches the image's memory too: general, from preinitialized.
-                first = vk::ImageLayout::PREINITIALIZED;
-                home = vk::ImageLayout::GENERAL;
                 // The bytes shaders reach: a Managed buffer's device copy, where it has one.
                 let (memory, class, at) = match buffer.held() {
                     (_, Some(copy)) => (copy.memory(), MemoryClass::Private, copy.offset()),
                     (block, None) => (&block.memory, block.memory.class, buffer.offset()),
+                };
+                // The host reaches the image's memory too: general, from preinitialized, the
+                // layout of bytes the host wrote; over a dma-buf's import, by its acquire
+                // (`Image::homing`).
+                first = vk::ImageLayout::PREINITIALIZED;
+                home = vk::ImageLayout::GENERAL;
+                let (memory_type, handle) = match laid {
+                    Some(Laid::DmaBuf { memory_type }) => {
+                        acquired = Some(memory.range(at + offset));
+                        let handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+                        (memory_type, Some(handle))
+                    }
+                    _ => (core.memory_type(class), None),
                 };
                 let rows = u64::from(d.height) * bytes_per_row;
                 let reach = (usage.contains(TextureUsage::RENDER_TARGET))
@@ -1381,7 +1434,8 @@ impl Device {
                 let bind = Bind::InPlace {
                     memory: memory.device_memory(),
                     base: memory.base(),
-                    memory_type: core.memory_type(class),
+                    memory_type,
+                    handle,
                     block_len: memory.len,
                     at: at + offset,
                     bytes_per_row,
@@ -1404,10 +1458,13 @@ impl Device {
             named.form = Form::Copied;
             (first, home) = (vk::ImageLayout::UNDEFINED, plan.home);
             block = None;
+            acquired = None;
             // SAFETY: as above.
             made = unsafe { make(core, &d, &shape, &plan, Bind::Pooled) };
         }
         let (image, backing, bytes, sampled, storage) = made?;
+        // The import's range the image's memory is: its bytes from its place.
+        let foreign = acquired.map(|(buffer, offset)| (buffer, offset, bytes));
         core.counters.rise(Gauge::Textures);
         // A clear zeroes it in its move home.
         let zero = placed.then(|| Zero::of(&plan, d.mipmap_level_count, &shape));
@@ -1441,6 +1498,7 @@ impl Device {
             cube: plan.cube,
             linear_attachment: false,
             first,
+            foreign,
             homed: AtomicBool::new(false),
             zero,
             drawable: None,
@@ -1709,9 +1767,11 @@ fn check_places(
 /// texels apart and at least a row, an offset a whole number of texels in, and every texel
 /// inside the buffer; and that the runtime makes it: 2D of one level, sample and slice, of a color
 /// format of one texel an element, its first texel a whole number of texels into the bytes
-/// shaders reach. Whether the device's linear image may hold it in place is the answer: in memory
-/// that did not spill, of a format and usage the device makes linear images of, with every format
-/// feature its optimal image has that the usage uses.
+/// shaders reach. Where the device's linear image may hold it in place, the memory it lies in is
+/// the answer: memory that did not spill, of a block of the runtime's own or a dma-buf's one
+/// import, for a format and usage the device makes linear images of (for that dma-buf, where the
+/// image binds in its memory), with every format feature its optimal image has that the usage
+/// uses. `None` where the texture is the counted copy.
 fn check_over(
     core: &Core,
     d: &TextureDescriptor,
@@ -1720,7 +1780,7 @@ fn check_over(
     buffer: &Buffer,
     offset: u64,
     bytes_per_row: u64,
-) -> Result<bool, Error> {
+) -> Result<Option<Laid>, Error> {
     let gap = || {
         Error::Unsupported(Gap::TextureOverBuffer {
             pixel_format: d.pixel_format,
@@ -1748,17 +1808,57 @@ fn check_over(
         return Err(gap());
     }
     let (block, copy) = buffer.held();
-    // Over an imported block, the copy: an image bound there would be made for the import's
-    // handle, so in the undefined layout (VUID-VkImageCreateInfo-pNext-01443), and the runtime
-    // makes no image in imported memory. Over an exported block, the copy too: its memory is
-    // dedicated to its buffer, and no image is bound in it (VUID-vkBindImageMemory-memory-10926).
-    let own = copy.is_none() && block.memory.own.is_some();
+    // An image bound in imported memory is made for the import's handle
+    // (VUID-vkBindImageMemory-memory-02989), so in the undefined layout
+    // (VUID-VkImageCreateInfo-pNext-01443), whose move keeps no bytes. Over a dma-buf's one
+    // import, in place: the move home acquires the bytes from the foreign queue family, which
+    // Vulkan's external resource sharing keeps ("To make the contents of the underlying memory
+    // accessible in the destination instance or API, applications must ... Acquire exclusive
+    // ownership"). Over host memory, the copy: Vulkan shares that memory's ownership with the host
+    // ("Importing memory from a host pointer shares ownership of the memory between the host and
+    // the Vulkan implementation"), whose accesses are host accesses, never a release that an
+    // acquire could match. Over several dma-bufs, the copy: the block's buffer is sparse, bound to
+    // many imports. Over an exported block, the copy too: its memory is dedicated to its buffer,
+    // and no image is bound in it (VUID-vkBindImageMemory-memory-10926).
+    let laid = match (copy, block.memory.own) {
+        (Some(_), _) | (None, None) => Laid::Own,
+        (
+            None,
+            Some(Own::Import {
+                handle: ImportHandle::DmaBuf,
+                memory_type,
+            }),
+        ) if core.exports.foreign => Laid::DmaBuf { memory_type },
+        (None, Some(_)) => return Ok(None),
+    };
     let spilled = copy.is_none() && block.memory.spilled();
-    let extent = linear_extent(core, shape, plan)
+    let extent = linear_extent(core, shape, plan, laid.handle())
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
-    Ok(!own && !spilled && extent && features)
+    Ok((!spilled && extent && features).then_some(laid))
+}
+
+/// The memory a texture over a buffer in place lies in ([`check_over`]).
+#[derive(Clone, Copy)]
+enum Laid {
+    /// A block of the runtime's own, or a Managed buffer's device copy: the image is made
+    /// preinitialized, and its move home keeps the bytes.
+    Own,
+    /// A dma-buf's one import (`Device::import_dma_buf`, on Unix), in its memory type: the image
+    /// is made for the dma-buf, undefined, and its move home acquires the bytes from the foreign
+    /// queue family, preinitialized ([`Image::homing`]).
+    DmaBuf { memory_type: u32 },
+}
+
+impl Laid {
+    /// The handle of the import the image is made for.
+    fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
+        match self {
+            Laid::Own => None,
+            Laid::DmaBuf { .. } => Some(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT),
+        }
+    }
 }
 
 /// The bytes of a texel of a texture over a buffer that the runtime makes: 2D of one level,
@@ -1805,8 +1905,16 @@ pub(crate) fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlag
 }
 
 /// The largest extent of a linear image of `plan`'s format and usage of `shape`'s type, where the
-/// device makes one.
-fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D> {
+/// device makes one; made for memory of the import `handle`, where the device makes one that such
+/// memory binds at any place: its external query (`VkPhysicalDeviceExternalImageFormatInfo`)
+/// answers the handle importable and compatible (`VUID-VkImageCreateInfo-pNext-00990`), and not
+/// dedicated only.
+fn linear_extent(
+    core: &Core,
+    shape: &Shape,
+    plan: &Plan,
+    handle: Option<vk::ExternalMemoryHandleTypeFlags>,
+) -> Option<vk::Extent3D> {
     let mut list = plan.format_list();
     let mut linear = vk::PhysicalDeviceImageFormatInfo2::default()
         .format(plan.format)
@@ -1817,8 +1925,32 @@ fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D
     if !plan.view_formats.is_empty() {
         linear = linear.push_next(&mut list);
     }
-    core.image_format_properties(&linear)
-        .map(|properties| properties.max_extent)
+    let Some(handle) = handle else {
+        return core
+            .image_format_properties(&linear)
+            .map(|properties| properties.max_extent);
+    };
+    let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(handle);
+    let linear = linear.push_next(&mut external);
+    let mut answer = vk::ExternalImageFormatProperties::default();
+    let mut properties = vk::ImageFormatProperties2::default().push_next(&mut answer);
+    // SAFETY: the physical device is the instance's, which is Vulkan 1.3, and the handle's
+    // extensions are enabled (the import was made).
+    unsafe {
+        (core.instance.vk()).get_physical_device_image_format_properties2(
+            core.physical,
+            &linear,
+            &mut properties,
+        )
+    }
+    .ok()?;
+    let max = properties.image_format_properties.max_extent;
+    let memory = answer.external_memory_properties;
+    let features = memory.external_memory_features;
+    let binds = features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+        && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        && memory.compatible_handle_types.contains(handle);
+    binds.then_some(max)
 }
 
 /// The smallest power of two from `texel` (a texel's bytes, rounded up to one) to 4,096 at which
@@ -1858,7 +1990,7 @@ fn linear_layout(
     shape: &Shape,
     plan: &Plan,
 ) -> Option<(u64, u64, u64)> {
-    let max = linear_extent(core, shape, plan)?;
+    let max = linear_extent(core, shape, plan, None)?;
     if d.width > max.width || d.height > max.height {
         return None;
     }
@@ -2449,14 +2581,16 @@ enum Source<'a> {
 enum Bind {
     /// A place in a texture block, or memory of its own.
     Pooled,
-    /// A linear image, made preinitialized, at `at` in a block at `base` in the allocation
-    /// `memory`, of type `memory_type` and of `block_len` bytes, where the device lays its rows
-    /// `bytes_per_row` apart from there; of a render target, where its subresource ends within
-    /// `reach` bytes of there ([`in_reach`]).
+    /// A linear image, made preinitialized (made undefined for the import `handle`, where the
+    /// memory is an import's), at `at` in a block at `base` in the allocation `memory`, of type
+    /// `memory_type` and of `block_len` bytes, where the device lays its rows `bytes_per_row`
+    /// apart from there; of a render target, where its subresource ends within `reach` bytes of
+    /// there ([`in_reach`]).
     InPlace {
         memory: vk::DeviceMemory,
         base: u64,
         memory_type: u32,
+        handle: Option<vk::ExternalMemoryHandleTypeFlags>,
         block_len: u64,
         at: u64,
         bytes_per_row: u64,
@@ -2552,11 +2686,23 @@ impl Made {
         let device = &core.device;
         let mut list = plan.format_list();
         let info = image_info(d, shape, plan, &mut list);
+        let mut external = vk::ExternalMemoryImageCreateInfo::default();
         let info = match bind {
-            Bind::InPlace { .. } => info
-                .tiling(vk::ImageTiling::LINEAR)
-                .usage(plan.linear_usage())
-                .initial_layout(vk::ImageLayout::PREINITIALIZED),
+            Bind::InPlace { handle, .. } => {
+                let info = info
+                    .tiling(vk::ImageTiling::LINEAR)
+                    .usage(plan.linear_usage());
+                match handle {
+                    // Made for the import's handle (`VUID-vkBindImageMemory-memory-02989`), so
+                    // undefined (`VUID-VkImageCreateInfo-pNext-01443`).
+                    Some(handle) => {
+                        external = external.handle_types(handle);
+                        info.initial_layout(vk::ImageLayout::UNDEFINED)
+                            .push_next(&mut external)
+                    }
+                    None => info.initial_layout(vk::ImageLayout::PREINITIALIZED),
+                }
+            }
             Bind::Pooled | Bind::Heap { .. } => info,
         };
         // SAFETY: the caller's contract: the device makes such an image.
@@ -2588,6 +2734,7 @@ impl Made {
             memory,
             base,
             memory_type,
+            handle: _,
             block_len,
             at,
             bytes_per_row,
@@ -4421,12 +4568,24 @@ impl Buffer {
     /// Managed buffer the consumer's, as Metal reads a Managed texture's CPU copy. The texture
     /// holds the buffer.
     ///
+    /// Over a buffer in a dma-buf's one import (`Device::import_dma_buf`, on Unix), the image is
+    /// so where the device's external image query takes a linear image made for the dma-buf
+    /// (importable, compatible and not dedicated-only) and the device enables
+    /// `VK_EXT_queue_family_foreign`: made undefined, as Vulkan requires of an image for imported
+    /// memory (`VUID-VkImageCreateInfo-pNext-01443`), and moved home by the acquire, from the
+    /// foreign queue family, of the image (preinitialized to general) and of the buffer's range
+    /// under it, in one barrier, which keeps the bytes (Vulkan's external resource sharing),
+    /// counted in [`Metrics::external_acquires`](crate::Metrics::external_acquires).
+    ///
     /// Where the device's linear image does not take the texture (another pitch, an offset off
     /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled, a
-    /// render target whose advertised subresource passes its rows or the buffer), over a buffer
-    /// in an imported block (a no-copy buffer's, [`Device::import_host_memory`],
-    /// `Device::import_dma_buf` on Unix), and over a buffer in an exported block
-    /// ([`Device::new_exported_block`], whose memory is dedicated to its buffer), the
+    /// render target whose advertised subresource passes its rows or the buffer, a dma-buf's
+    /// import the external query or the foreign queue family does not take), over a buffer in
+    /// host memory's import ([`Device::import_host_memory`]: Vulkan shares that memory's
+    /// ownership with the host, and an image for it is made undefined, a layout whose move keeps
+    /// no bytes), over a buffer in an import over several dma-bufs
+    /// (`Device::import_dma_bufs` on Unix, whose buffer is sparse), and over a buffer in an
+    /// exported block ([`Device::new_exported_block`], whose memory is dedicated to its buffer), the
     /// texture is an optimal image of its own, which the device copies the bytes shaders reach
     /// into and back (`crate::over`): over a Shared buffer once a submission, over a Managed
     /// buffer's device copy only at Metal's Managed events. Each copy counts in
@@ -4678,6 +4837,7 @@ impl Device {
             },
             // An image already general owes no move.
             homed: AtomicBool::new(general),
+            foreign: None,
             zero: None,
             drawable: None,
             _under: Some(Under::Surface { _block: made.block }),
