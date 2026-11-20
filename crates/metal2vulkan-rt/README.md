@@ -1209,8 +1209,8 @@ made, with no lock, and never rewritten for layouts.
   `Gap::StorageElement`. Such a format is outside Metal's read-write tiers, whose reads Metal's
   documentation defines. A read of one through an argument buffer or a resource ID is not refused,
   as no declaration tells it from a sample: it reads the texture's storage element without a
-  format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and the value is
-  the device's.
+  format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and Vulkan does
+  not define what that read returns.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor
