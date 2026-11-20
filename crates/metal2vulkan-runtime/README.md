@@ -2343,13 +2343,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   wide, and one that does not cannot tell its width. `imageblockMemoryLengthForDimensions:`
   (`imageblock_memory_length_for_dimensions`) answers 0 for a kernel that declares no imageblock, as
   Metal does. A kernel that reaches an imageblock has no state (`Gap::KernelInput` of
-  `KernelInputKind::RuntimeFact`); one that declares an imageblock it never reaches, or whose
-  compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case measures Metal's
-  length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is the descriptor's
-  size, `[0, 0, 0]` where it set none, as the M3 recordings `pipeline-facts-compute-plain` and
-  `pipeline-facts-compute-described` answer, and `supportIndirectCommandBuffers`
-  (`support_indirect_command_buffers`) is false: a descriptor that asks for indirect command buffers
-  is refused at the making (`Gap::IndirectCommandBuffers`).
+  `KernelInputKind::RuntimeFact` naming `ImageblockSize`); one that declares an imageblock it never
+  reaches, or whose compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case
+  measures Metal's length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is
+  the descriptor's size, `[0, 0, 0]` where it set none, as the M3 recordings
+  `pipeline-facts-compute-plain` and `pipeline-facts-compute-described` answer, and
+  `supportIndirectCommandBuffers` (`support_indirect_command_buffers`) is false: a descriptor that
+  asks for indirect command buffers is refused at the making (`Gap::IndirectCommandBuffers`).
 
 ### The cache directory
 
@@ -2513,12 +2513,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   is a first-use wait: on a cold play, `Metrics::first_use_waits` against
   `Metrics::made_ahead_variants` reads what the consumer's pre-pass left to the encoding threads.
 - A compute kernel with an explicit imageblock has no state (`Gap::KernelInput` of
-  `KernelInputKind::RuntimeFact`). The Metal Shading Language specification supports imageblocks on
-  macOS for Apple silicon only (sections 5.6 and 6.14), so a device that answers
-  `supportsImageBlocks` NO gives a guest no imageblock to use. Over 34 recorded guest streams, one
-  of them an arm64 macOS 27 boot, two such kernels are made, no dispatch binds one, and no stream
-  calls `setImageblockWidth:height:`; the compute encoder has no counterpart for that call. One
-  recording, the M3's, makes 10 states refused as `Gap::KernelInput`, the count of its
+  `KernelInputKind::RuntimeFact` naming `ImageblockSize`). The Metal Shading Language specification
+  supports imageblocks on macOS for Apple silicon only (sections 5.6 and 6.14), so a device that
+  answers `supportsImageBlocks` NO gives a guest no imageblock to use. Over 34 recorded guest
+  streams, one of them an arm64 macOS 27 boot, two such kernels are made, no dispatch binds one, and
+  no stream calls `setImageblockWidth:height:`; the compute encoder has no counterpart for that
+  call. One recording, the M3's, makes 10 states refused as `Gap::KernelInput`, the count of its
   explicit-imageblock makes; none is dispatched (jobs m3-max-58471, m3-max-58477, m3-max-58478 and
   m3-max-58483, and m3-max-57983 for the count).
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its

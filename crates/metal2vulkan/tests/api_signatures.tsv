@@ -8332,6 +8332,7 @@ method	metal2vulkan::pipeline::ResourceSlot::separate_sampler_use	pub fn separat
 method	metal2vulkan::pipeline::ResourceSlot::separate_texture	pub fn separate_texture(stage: Stage, texture: u32, c: CombinedSampler) -> Option<ResourceSlot>
 method	metal2vulkan::pipeline::ResourceSlot::separate_texture_of	pub fn separate_texture_of(&self) -> Option<(u32, CombinedSampler)>
 method	metal2vulkan::pipeline::RuntimeDependency::new	pub fn new(fact: RuntimeFact, mechanism: Mechanism) -> RuntimeDependency
+method	metal2vulkan::pipeline::RuntimeFact::name	pub fn name(self) -> &'static str
 method	metal2vulkan::pipeline::SampledLevels::highest_lod	pub fn highest_lod(&self) -> Option<f32>
 method	metal2vulkan::pipeline::SampledLevels::level	pub fn level(&self, s: SamplerLevels) -> Option<u32>
 method	metal2vulkan::pipeline::SampledLevels::lowest	pub fn lowest(&self, s: SamplerLevels) -> u32
@@ -10357,7 +10358,7 @@ variant	metal2vulkan-runtime::KernelInputKind::HandleTranslation	HandleTranslati
 variant	metal2vulkan-runtime::KernelInputKind::PointerTranslation	PointerTranslation
 variant	metal2vulkan-runtime::KernelInputKind::PushBytes	PushBytes
 variant	metal2vulkan-runtime::KernelInputKind::PushField	PushField
-variant	metal2vulkan-runtime::KernelInputKind::RuntimeFact	RuntimeFact
+variant	metal2vulkan-runtime::KernelInputKind::RuntimeFact	RuntimeFact { fact: &'static str }
 variant	metal2vulkan-runtime::KernelInputKind::Slot	Slot
 variant	metal2vulkan-runtime::KernelInputKind::Specialization	Specialization
 variant	metal2vulkan-runtime::KernelInputKind::StageFlags	StageFlags

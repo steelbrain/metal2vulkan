@@ -1370,9 +1370,13 @@ pub enum KernelInputKind {
     StageFlags,
     /// A fact of the module the encoder does not supply: a `RuntimeFact` the runtime does not
     /// name, such as an explicit imageblock's size (`RuntimeFact::ImageblockSize`), a resource's
-    /// presence or a sampler's coordinates. Metal's counterpart is the dispatch's state the fact
-    /// stands for: `setImageblockWidth:height:`, or the bound resource's own state.
-    RuntimeFact,
+    /// presence or a sampler's coordinates, or an address alignment of a slot that is not a
+    /// kernel's buffer or that is not a power of two. Metal's counterpart is the dispatch's state
+    /// the fact stands for: `setImageblockWidth:height:`, or the bound resource's own state.
+    RuntimeFact {
+        /// The fact's name (`RuntimeFact::name`), such as `"ImageblockSize"`.
+        fact: &'static str,
+    },
     /// An argument slot the encoder does not bind: a visible or an intersection function table
     /// at a buffer index, or a slot of another class or stage. Metal's counterparts are
     /// `setVisibleFunctionTable:atBufferIndex:` and `setIntersectionFunctionTable:atBufferIndex:`.

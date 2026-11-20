@@ -1225,8 +1225,10 @@ fn interface(
             // the device reads.
             RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one the encoder
-            // does not supply.
-            _ => return Err(KernelInputKind::RuntimeFact),
+            // does not supply, and the refusal names it.
+            fact => {
+                return Err(KernelInputKind::RuntimeFact { fact: fact.name() });
+            }
         }
     }
     let mut buffers = Vec::new();

@@ -88,16 +88,18 @@ mod on_device {
 
     /// `a4_imageblock_extent`, a kernel over an explicit imageblock: its module states the
     /// imageblock's size as a runtime fact, which the encoder does not supply (it has no
-    /// `setImageblockWidth:height:`).
+    /// `setImageblockWidth:height:`), and the refusal names that fact.
     #[test]
-    fn an_explicit_imageblock_kernel_is_refused_as_a_runtime_fact() {
+    fn an_explicit_imageblock_kernel_is_refused_as_its_named_runtime_fact() {
         let Some(descriptor) = descriptor_of("a4_imageblock_extent", "a4_imageblock_extent") else {
             return;
         };
         refused_as(
             "kernel_input_imageblock",
             &descriptor,
-            KernelInputKind::RuntimeFact,
+            KernelInputKind::RuntimeFact {
+                fact: "ImageblockSize",
+            },
         );
     }
 
