@@ -84,13 +84,10 @@ fn a_blended_32_bit_float_channel_is_the_devices() {
 /// tells from the device's conversion nowhere (no profile is measured to store an 8-bit unorm
 /// code as Metal does), so it is named the device's ([`lowered`]) and the sweep compiles the
 /// function once. Whether the attachment takes Metal's rule still follows its blend
-/// ([`takes_metal_rule`]), which link reads for the blend of one and zero. A 16-bit unorm
-/// attachment on a profile measured to store its codes as Metal does keeps Metal's rule where it
-/// stores the output as written: there the lowering reads it.
+/// ([`takes_metal_rule`]), which link reads for the blend of one and zero.
 #[test]
 fn a_blend_sweep_of_a_rule_the_device_converts_compiles_under_one_map() {
     let mut converted = 0;
-    let mut norm16 = 0;
     for (stem, dev) in crate::metal::format::tests::committed_devices() {
         let p = dev.profile();
         let metal = p
@@ -127,22 +124,6 @@ fn a_blend_sweep_of_a_rule_the_device_converts_compiles_under_one_map() {
             [!metal, !metal, false],
             "{stem}: the attachment takes Metal's rule where it stores the output as written"
         );
-        if p.takes_driver_deviation(DriverDeviation::MetalNorm16ColorWrites) {
-            let [unblended, one_zero, over] = sweep(PixelFormat::RGBA16Unorm);
-            let unorm16 = Some(&[Some(ChannelWrite::Unorm { bits: 16 }); 4]);
-            assert_eq!(unblended.0.get(&0), unorm16, "{stem}");
-            assert_eq!(one_zero.0.get(&0), unorm16, "{stem}");
-            assert_eq!(
-                over.0.get(&0),
-                Some(&[Some(ChannelWrite::Device); 4]),
-                "{stem}"
-            );
-            norm16 += 1;
-        }
     }
     assert!(converted > 0, "no committed profile converts on the device");
-    assert!(
-        norm16 > 0,
-        "no committed profile stores 16-bit unorm codes as Metal does"
-    );
 }

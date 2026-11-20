@@ -274,14 +274,11 @@ fn predication_guards_the_side_effects_after_a_site() {
 /// `if !discarded`: a store, an atomic and the store its old value indexes (two guards; the
 /// atomic's result is merged with zero for a discarded invocation), a store in a loop, a texture
 /// write, a copy. They are predicated where the profile has no demote
-/// (`lunarg-desktop-baseline-2023`), and on MoltenVK on an Apple GPU, whose store-dropping defect
-/// defers each discard past the stores: no longer stopped by the side effects, recorded
-/// `fragment.discard.deferred` and without `PrecisionNote::DiscardDropsSimdgroupStores`.
-/// `rch_guarded_simd`'s simdgroup sum still stops the deferral there (the sites demote with
-/// whole-quad exits and record the note); where the profile has no demote it is refused needing
+/// (`lunarg-desktop-baseline-2023`); `rch_guarded_simd`'s simdgroup sum is refused there needing
 /// demote, as no whole-quad exit can be placed on a profile without fragment quad operations. A
-/// device without the defect that demotes (`intel-arl-anv`) demotes each and guards nothing. Every
-/// module passes L3.
+/// device that demotes (`moltenvk-m3`, `intel-arl-anv`) demotes each and guards nothing. No module
+/// defers a discard (`fragment.discard.deferred`) or records
+/// `PrecisionNote::DiscardDropsSimdgroupStores`. Every module passes L3.
 #[test]
 fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
     use crate::spirv::ir::ValueOrigin;
@@ -307,7 +304,6 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (entry, effects) in cases {
             let what = format!("{entry} on {stem}");
-            let mvk = stem == "moltenvk-m3";
             let demotes = p.fields().fragment.demote_to_helper;
             let simd = entry == "rch_guarded_simd";
             if simd && !demotes && !fragment_quads(&p) {
@@ -325,9 +321,8 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
                 );
                 continue;
             }
-            // Predicated where the profile has no demote, or where the defect defers a discard
-            // no non-quad subgroup operation follows.
-            let predicated = !demotes || (mvk && !simd);
+            // Predicated where the profile has no demote.
+            let predicated = !demotes;
             let (plan, m) = typed_module(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let fp = &plan.families.fragment;
             let form = if predicated {
@@ -353,17 +348,12 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
                 assert!(zero_merged, "{what}: no merge of the atomic's result");
             }
             let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(
-                a.strategies.entries.contains_key(deferred),
-                mvk && predicated,
+            assert!(
+                !a.strategies.entries.contains_key(deferred),
                 "{what}: {:?}",
                 a.strategies.entries.keys().collect::<Vec<_>>()
             );
-            assert_eq!(
-                a.precision.contains(&noted),
-                mvk && simd,
-                "{what}: the note"
-            );
+            assert!(!a.precision.contains(&noted), "{what}: the note");
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         }
     }
@@ -3823,17 +3813,13 @@ fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
 }
 
 /// At 4 samples a discarding fetch that stores a color through the interlock beside a
-/// `Depth32Float_Stencil8` attachment, without early tests: a draw whose depth test writes runs the
-/// variant whose function tests depth itself, and its words validate and its plan is a fixed point.
-/// On the M3 Max and the M4, whose per-sample depth the function computes
-/// (`VkProperty::CenterFragCoordDepth`), the variant holds the stand-in as sample planes, its
-/// vertex function writes the window depth, and its fragment function reads it and records
-/// `ComputedSampleDepth`. On RADV, whose `FragCoord.z` is each sample's
-/// (`VkProperty::SampleFragCoordDepth`), it holds the stand-in as a multisampled storage image,
-/// writes no window depth and records no note. On Intel's ANV, unmeasured, the draw is refused at
-/// the depth attachment.
+/// `Depth32Float_Stencil8` attachment, without early tests: a draw whose depth test writes would run
+/// the variant whose function tests depth itself, which needs each sample's depth
+/// (`VkProperty::CenterFragCoordDepth` or `SampleFragCoordDepth`). No profile takes either, so the
+/// draw is refused at the depth attachment on every device (MoltenVK on the M3 Max, RADV, Intel's
+/// ANV).
 #[test]
-fn a_per_sample_depth_test_takes_each_sample_s_depth_where_measured() {
+fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
     use crate::bind::FragmentTests;
     use crate::error::{Attachment, Unsupported};
     let (Some(tested), Some(io)) = (fixture("tsw_fetch_discard"), fixture("stage_io")) else {
@@ -3869,102 +3855,31 @@ fn a_per_sample_depth_test_takes_each_sample_s_depth_where_measured() {
         }
         .shape()
     };
-    // (profile, each sample's depth computed, the stand-in as sample planes)
-    let measured = [("moltenvk-m3", true, true), ("amd-780m-radv", false, false)];
-    for (stem, computed, planes) in measured {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "intel-irisxe-rplp-anv"] {
         let dev = device(stem);
         let base = dev
             .compile_render_pipeline(&d, &Budget::standard())
-            .expect("the pipeline");
-        let early_variant = base
-            .dependencies
-            .iter()
-            .find_map(|x| match x.fact {
-                RuntimeFact::TestedStorageWrites {
-                    early_tests: false,
-                    early_variant,
-                } => Some(early_variant),
-                _ => None,
-            })
-            .expect("stores before the tests");
-        let plan = base
-            .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-            .expect("the plan");
-        assert!(plan.variant.shader_tests, "{stem}");
-        assert_eq!(plan.variant.window_depth_varying, computed, "{stem}");
-        let variant = dev
-            .compile_render_variant(&d, &plan.variant, &Budget::standard())
-            .expect("the in-shader depth test's variant");
-        assert!(
-            variant.dependencies.iter().any(|x| x.fact
-                == RuntimeFact::ShaderTests {
-                    formatless: false,
-                    multisampled: true,
-                    planes,
-                }),
-            "{stem}"
-        );
-        let stand_in = variant.graphics.shader_tests.expect("the stand-in").depth;
-        assert_eq!(stand_in.samples, 4, "{stem}");
-        let view = match planes {
-            true => crate::pipeline::StandInView::SamplePlanes { layers: 4 },
-            false => crate::pipeline::StandInView::Image,
-        };
-        assert_eq!(stand_in.view, view, "{stem}");
-        let notes: Vec<PrecisionNote> = variant
-            .stages
-            .iter()
-            .flat_map(|m| m.precision_notes.iter().copied())
-            .collect();
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(
-            notes.contains(&PrecisionNote::ComputedSampleDepth),
-            computed,
+            base.plan(&dev, &shape(FragmentTests::Depth { writes: true }))
+                .map(|_| ()),
+            Err(BindError::Unsupported(
+                Unsupported::not_implemented(Feature::FramebufferFetch)
+                    .at_attachment(Attachment::Depth)
+            )),
             "{stem}"
         );
-        for m in &variant.stages {
-            check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                .unwrap_or_else(|e| panic!("{stem} L3: {e}"));
-        }
-        let again = variant
-            .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-            .expect("the variant's plan");
-        assert_eq!(again.variant, plan.variant, "{stem}: a fixed point");
-        assert!(
-            again
-                .descriptors
-                .iter()
-                .any(|w| w.source == WriteSource::DepthStandIn),
-            "{stem}"
-        );
-        // A test that writes nothing keeps the early-tests variant where the function has one.
-        let read_only = base
-            .plan(&dev, &shape(FragmentTests::Depth { writes: false }))
-            .expect("the plan without writes");
-        assert_eq!(read_only.variant.read_only_tests, early_variant, "{stem}");
-        assert_eq!(read_only.variant.shader_tests, !early_variant, "{stem}");
     }
-    // Unmeasured on Intel's ANV: a draw whose depth test writes is refused at the depth
-    // attachment.
-    let anv = device("intel-irisxe-rplp-anv");
-    let base = anv
-        .compile_render_pipeline(&d, &Budget::standard())
-        .expect("ANV's pipeline");
-    assert_eq!(
-        base.plan(&anv, &shape(FragmentTests::Depth { writes: true }))
-            .map(|_| ()),
-        Err(BindError::Unsupported(
-            Unsupported::not_implemented(Feature::FramebufferFetch)
-                .at_attachment(Attachment::Depth)
-        ))
-    );
 }
 
 /// A discarding fetch that stores a color through the interlock beside a `Depth32Float_Stencil8`
 /// attachment, without early tests. A draw whose stencil test acts and whose tests write
 /// (`FragmentTests::Stencil`) runs the variant whose function runs the stencil test itself before
-/// the depth test: at one sample on MoltenVK (M3 Max, M4), RADV and Intel's ANV, and at four on
-/// RADV, the variant states `ShaderStencilTest`, holds the stencil's stand-in as an `R8_UINT` image
-/// of the pipeline's samples, validates, and plans as a fixed point that binds both stand-ins. A
+/// the depth test: at one sample on MoltenVK (M3 Max, M4), RADV and Intel's ANV, the variant states
+/// `ShaderStencilTest`, holds the stencil's stand-in as an `R8_UINT` image of the pipeline's
+/// samples, validates, and plans as a fixed point that binds both stand-ins. At four samples RADV
+/// is refused at the depth attachment: its depth test in the shader needs each sample's depth,
+/// which no profile states (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`). A
 /// draw whose stencil test drops fragments but whose tests write nothing keeps the early-tests
 /// variant. At four samples MoltenVK, whose storage images are single-sample, is refused at the
 /// stencil attachment (sample planes are not implemented), and a pass with a stencil attachment
@@ -4011,7 +3926,6 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
     let shipped = [
         ("moltenvk-m3", 1),
         ("amd-780m-radv", 1),
-        ("amd-780m-radv", 4),
         ("intel-irisxe-rplp-anv", 1),
     ];
     for (stem, samples) in shipped {
@@ -4081,6 +3995,22 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
             Err(BindError::Unsupported(
                 Unsupported::not_implemented(Feature::FramebufferFetch)
                     .at_attachment(Attachment::Stencil)
+            )),
+            "{stem}"
+        );
+    }
+    // RADV at four samples: the depth test in the shader needs each sample's depth.
+    {
+        let stem = "amd-780m-radv";
+        let dev = device(stem);
+        let base = dev
+            .compile_render_pipeline(&descriptor(4), &Budget::standard())
+            .expect("the pipeline");
+        assert_eq!(
+            base.plan(&dev, &shape(FragmentTests::Stencil)).map(|_| ()),
+            Err(BindError::Unsupported(
+                Unsupported::not_implemented(Feature::FramebufferFetch)
+                    .at_attachment(Attachment::Depth)
             )),
             "{stem}"
         );
@@ -4218,9 +4148,11 @@ fn a_returned_depth_is_tested_in_the_shader_at_every_sample_count() {
 /// the fragment's samples; a draw whose depth test alone acts, the depth test's variant. At one
 /// sample on MoltenVK (M4), RADV, Intel's ANV and NVIDIA (without stencil export, whose compiled
 /// pipeline holds a returned stencil in the shader-side stencil's shadow, and refuses a returned
-/// sample mask beside it), and at four on RADV: each variant states its tests, holds no shader-side
-/// stencil (the stencil output is stored nowhere), validates, and plans as a fixed point that binds
-/// its stand-ins.
+/// sample mask beside it): each variant states its tests, holds no shader-side stencil (the stencil
+/// output is stored nowhere), validates, and plans as a fixed point that binds its stand-ins. At
+/// four samples RADV refuses the variants at the depth attachment: the depth test in the shader
+/// needs each sample's depth, which no profile states
+/// (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`).
 #[test]
 fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
     use crate::bind::FragmentTests;
@@ -4252,7 +4184,6 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
     };
     let shipped = [
         ("amd-780m-radv", 1),
-        ("amd-780m-radv", 4),
         ("intel-irisxe-rplp-anv", 1),
         ("nvidia-rtx5080-laptop", 1),
     ];
@@ -4261,6 +4192,31 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
         "fetch_returned_mask",
         "fetch_returned_stencil_mask",
     ];
+    let radv = device("amd-780m-radv");
+    for name in functions {
+        let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
+        d.fragment = Some(function(&returned, name));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Float));
+        d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+        d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+        d.raster_sample_count = 4;
+        let base = radv
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{name} at 4x: {e:?}"));
+        for tests in [
+            FragmentTests::Stencil,
+            FragmentTests::Depth { writes: true },
+        ] {
+            assert_eq!(
+                base.plan(&radv, &shape(tests)).map(|_| ()),
+                Err(BindError::Unsupported(
+                    crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
+                        .at_attachment(crate::error::Attachment::Depth)
+                )),
+                "{name} at 4x under {tests:?}"
+            );
+        }
+    }
     for (stem, samples) in shipped {
         let dev = device(stem);
         for name in functions {
@@ -4359,93 +4315,6 @@ fn kills_after_the_interlock(stages: &[crate::pipeline::artifact::StageModule]) 
         i += ((m.spirv[i] >> 16) as usize).max(1);
     }
     matches!((end, kills.as_slice()), (Some(end), [kill]) if *kill > end)
-}
-
-/// Apple's GPU drops every image write of an early-tests fragment shader in a pass of more than one
-/// sample, so MoltenVK on it carries `DriverWorkaround::EarlyTestsDropMultisampledImageWrites`,
-/// keyed on its driver and vendor, and no other committed profile does. There the per-sample
-/// storage form refuses its writes where the module declares early tests, naming the defect. Beside
-/// a depth attachment, where the module would declare them only for its own sake, it declares none:
-/// it stores before the tests and states `TestedStorageWrites` without the early-tests variant, so
-/// the plan runs only its draws whose tests drop no fragment. Without a depth attachment, or at
-/// one sample, it compiles as before. A device of the same form without the defect (`intel-arl-anv`: sample
-/// planes too) compiles the per-sample form with early tests.
-#[test]
-fn the_per_sample_form_refuses_early_tests_writes_on_a_driver_that_drops_them() {
-    use crate::device::DriverWorkaround;
-    let Some(bc) = fixture("fragment_fetch") else {
-        return;
-    };
-    let defect = DriverWorkaround::EarlyTestsDropMultisampledImageWrites;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        assert_eq!(
-            p.fields().workarounds.contains(&defect),
-            is_moltenvk_capture(&stem),
-            "{stem}"
-        );
-    }
-    let state = |depth: bool, multisampled: bool| {
-        let mut inputs = LoweringInputs::new();
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-            [0],
-            &[Some(ColorAttachmentDescriptor::new(PixelFormat::R32Float))],
-            depth,
-            false,
-            1,
-        ));
-        inputs.multisampled = multisampled;
-        inputs
-    };
-    let early = |a: &crate::library::FunctionArtifact| {
-        a.facts.iter().find_map(|f| match f {
-            RuntimeFact::InterlockedFramebufferFetch { early_tests, .. } => Some(*early_tests),
-            _ => None,
-        })
-    };
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
-    for (depth, multisampled) in [(false, true), (true, false), (false, false)] {
-        let a = compile_with(&bc, "fetch_scalar", &mvk, &state(depth, multisampled))
-            .unwrap_or_else(|e| panic!("depth {depth} multisampled {multisampled}: {e}"));
-        assert_eq!(
-            early(&a),
-            Some(depth),
-            "depth {depth} multisampled {multisampled}"
-        );
-    }
-    let a = compile_with(&bc, "fetch_scalar", &mvk, &state(true, true)).expect("per draw");
-    link_and_validate(&a, &mvk).unwrap_or_else(|e| panic!("L3: {e}"));
-    assert_eq!(early(&a), Some(false));
-    assert!(a.facts.contains(&RuntimeFact::TestedStorageWrites {
-        early_tests: false,
-        early_variant: false,
-    }));
-    let (_, m) = typed_module_with(&bc, "fetch_scalar", &mvk, &state(true, true)).expect("module");
-    assert!(!m.entry().modes.contains(&ExecMode::EarlyFragmentTests));
-    // A function that declares `[[early_fragment_tests]]` keeps them, and the refusal.
-    if let Some(declared) = fixture("con_fetch_coverage") {
-        let mut inputs = LoweringInputs::new();
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-            [1],
-            &[
-                Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float)),
-                Some(ColorAttachmentDescriptor::new(PixelFormat::RG16Float)),
-            ],
-            true,
-            false,
-            1,
-        ));
-        inputs.multisampled = true;
-        match compile_with(&declared, "con_fetch_coverage", &mvk, &inputs) {
-            Err(Error::Unsupported(u)) => assert_eq!(
-                (u.feature, u.needs),
-                (Feature::FramebufferFetch, Needs::DriverDefect(defect))
-            ),
-            other => panic!("{:?}", other.map(|_| ())),
-        }
-    }
-    let a = compile_with(&bc, "fetch_scalar", &anv, &state(true, true)).expect("anv");
-    assert_eq!(early(&a), Some(true));
 }
 
 /// `moltenvk-m3` with `features` removed from its description.
@@ -5198,19 +5067,14 @@ fn notes_on(bc: &[u8], what: &str, note: PrecisionNote, noted: &[&str]) {
 
 /// A fragment function that reads a varying the device interpolates records
 /// `PrecisionNote::DeviceInterpolation`, whatever its sampling and perspective, on every committed
-/// profile but MoltenVK's, which take `DriverDeviation::MetalInterpolation` (Metal interpolates
-/// there): those record none and require `VkProperty::MetalInterpolation` instead. One whose
-/// varying is flat, which no interpolation touches, records neither anywhere.
+/// profile, and requires no `VkProperty::MetalInterpolation`. One whose varying is flat, which no
+/// interpolation touches, records none anywhere.
 #[test]
 fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
     use crate::device::requirements::VkProperty;
     let note = PrecisionNote::DeviceInterpolation;
     let profiles = committed_profiles().expect("profiles");
-    let devices: Vec<&str> = profiles
-        .iter()
-        .map(|(stem, _)| stem.as_str())
-        .filter(|stem| !is_moltenvk_capture(stem))
-        .collect();
+    let devices: Vec<&str> = profiles.iter().map(|(stem, _)| stem.as_str()).collect();
     assert!(devices.len() > 10, "{devices:?}");
     let body = "  %r = add i32 %x, 1";
     let cases = [
@@ -5233,54 +5097,8 @@ fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
                 .requirements
                 .properties
                 .contains(&VkProperty::MetalInterpolation);
-            let by_metal = interpolated && is_moltenvk_capture(stem);
-            assert_eq!(requires, by_metal, "{what} on {stem}");
+            assert!(!requires, "{what} on {stem}");
         }
-    }
-}
-
-/// On a driver that shades a triangle it clips as several
-/// (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`: lavapipe), a fragment function that
-/// runs a quad or simdgroup operation over the active lanes records
-/// `PrecisionNote::QuadsSplitByClipping`; one whose group operation reads a named lane (a
-/// shuffle), or that runs none, does not, and no other driver records it.
-#[test]
-fn an_operation_over_the_active_lanes_records_the_split_quads_note() {
-    let note = PrecisionNote::QuadsSplitByClipping;
-    let lavapipe = ["gate-lavapipe", "gate-lavapipe-x86_64", "lavapipe"];
-    let flat = r#"!"air.flat""#;
-    let cases = [
-        (
-            "quad mask",
-            "  %m = tail call i16 @air.quad_active_threads_mask() #1\n  %r = zext i16 %m to i32",
-            "declare i16 @air.quad_active_threads_mask() local_unnamed_addr #1",
-            &lavapipe[..],
-        ),
-        (
-            "quad sum",
-            "  %r = tail call i32 @air.quad_sum.u.i32(i32 %x) #1",
-            "declare i32 @air.quad_sum.u.i32(i32) local_unnamed_addr #1",
-            &lavapipe[..],
-        ),
-        (
-            "simd ballot",
-            "  %c = icmp ugt i32 %x, 7\n  %b = tail call i64 @air.simd_ballot.i64(i1 %c) #1\n  %r = trunc i64 %b to i32",
-            "declare i64 @air.simd_ballot.i64(i1) local_unnamed_addr #1",
-            &lavapipe[..],
-        ),
-        (
-            "quad shuffle",
-            "  %r = tail call i32 @air.quad_shuffle_xor.u.i32(i32 %x, i16 1) #1",
-            "declare i32 @air.quad_shuffle_xor.u.i32(i32, i16) local_unnamed_addr #1",
-            &[][..],
-        ),
-        ("no group operation", "  %r = add i32 %x, 1", "", &[][..]),
-    ];
-    for (what, body, decls, noted) in cases {
-        let Some(bc) = varying_fragment(what, flat, body, decls) else {
-            return;
-        };
-        notes_on(&bc, what, note, noted);
     }
 }
 
@@ -5499,115 +5317,6 @@ fn a_blended_extended_range_output_records_its_blend_note() {
     assert!(checked > 0, "no interlock profile made the storage form");
 }
 
-/// Apple's compiler drops the texture writes of every live thread of a simdgroup that holds a
-/// discarded thread, where the fragment function discards, then writes storage, samples and calls
-/// SPIRV-Cross's `optnone` arithmetic helpers, so MoltenVK on an Apple GPU carries
-/// `DriverWorkaround::DiscardDropsSimdgroupStores`, and no other committed profile does. There the
-/// owned fixture `rch_late_discard`'s function that samples and computes the color it writes in the
-/// storage form after its discard predicates it, killing once past the write: the entry kills after
-/// `End`, the body never, and its census names the discard `fragment.discard.deferred`. So is one
-/// whose buffer store after the discard runs under `if !discarded` (`rch_late_discard_store`), with
-/// no `PrecisionNote::DiscardDropsSimdgroupStores`; one that samples nothing
-/// (`rch_late_discard_store_unsampled`) and
-/// one that writes its color alone (`rch_late_discard_plain`) keep their demote and record
-/// nothing. A device without the defect (`intel-arl-anv`: the storage form too) demotes each.
-/// Every module passes L3.
-#[test]
-fn a_discard_waits_past_the_stores_on_a_driver_that_drops_a_simdgroups_stores() {
-    use crate::device::DriverWorkaround;
-    let Some(bc) = fixture("rch_late_discard") else {
-        return;
-    };
-    let defect = DriverWorkaround::DiscardDropsSimdgroupStores;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        assert_eq!(
-            p.fields().workarounds.contains(&defect),
-            is_moltenvk_capture(&stem),
-            "{stem}"
-        );
-    }
-    let fetched = || {
-        let mut inputs = LoweringInputs::new();
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-            [0],
-            &[Some(ColorAttachmentDescriptor::new(
-                PixelFormat::RGBA16Float,
-            ))],
-            false,
-            false,
-            1,
-        ));
-        inputs
-    };
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
-    let deferred = "fragment.discard.deferred";
-    let noted = PrecisionNote::DiscardDropsSimdgroupStores;
-    // (entry, reads color 0, its form and whether it records the note on `moltenvk-m3`)
-    let cases = [
-        ("rch_late_discard", true, DiscardForm::Predicate, false),
-        (
-            "rch_late_discard_store",
-            true,
-            DiscardForm::Predicate,
-            false,
-        ),
-        (
-            "rch_late_discard_store_unsampled",
-            true,
-            DiscardForm::Demote,
-            false,
-        ),
-        ("rch_late_discard_plain", false, DiscardForm::Demote, false),
-    ];
-    for (entry, fetches, form, note) in cases {
-        for (stem, p, expected, note) in [
-            ("moltenvk-m3", &mvk, form, note),
-            ("intel-arl-anv", &anv, DiscardForm::Demote, false),
-        ] {
-            let what = format!("{entry} on {stem}");
-            let inputs = if fetches {
-                fetched()
-            } else {
-                LoweringInputs::new()
-            };
-            let (plan, m) =
-                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let fp = &plan.families.fragment;
-            assert!(!fp.discards.is_empty(), "{what}");
-            assert!(
-                fp.discards.values().all(|f| *f == expected),
-                "{what}: {fp:?}"
-            );
-            let demotes = m
-                .blocks()
-                .iter()
-                .flat_map(|b| &b.insts)
-                .filter(|n| matches!(n.inst, Inst::DemoteToHelperInvocation))
-                .count();
-            assert_eq!(
-                demotes > 0,
-                expected == DiscardForm::Demote,
-                "{what}: demotes"
-            );
-            if expected == DiscardForm::Predicate {
-                let body = check_interlocked(&m, ExecMode::PixelInterlockOrdered, &what);
-                assert_eq!(exits(&m, m.entry().func).0, 1, "{what}: the entry kills");
-                assert_eq!(exits(&m, body).0, 0, "{what}: the body never kills");
-            }
-            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(
-                a.strategies.entries.contains_key(deferred),
-                expected == DiscardForm::Predicate,
-                "{what}: {:?}",
-                a.strategies.entries.keys().collect::<Vec<_>>()
-            );
-            assert_eq!(a.precision.contains(&noted), note, "{what}: the note");
-            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
-    }
-}
-
 /// The selection headers of `m` whose condition or selector asks whether the invocation is a
 /// helper, as `spirv::helper_branches` writes it: the condition or'ed with
 /// `OpIsHelperInvocationEXT`, and'ed with its negation, or a selector chosen by it.
@@ -5719,73 +5428,6 @@ fn helper_fences(m: &TypedModule) -> usize {
     fenced.len()
 }
 
-/// On MoltenVK on an Apple GPU (`DriverWorkaround::DiscardDropsSimdgroupStores`), Apple's compiler
-/// loses a simdgroup's storage writes after an `optnone` call only its helper invocations make,
-/// with no discard: the quad helpers past a primitive's edges take a branch alone. The owned
-/// fixture `rch_helper_branch`'s functions sample, blend `half` values with the high word of a
-/// product (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes as its `optnone`
-/// `spvMulExtended`) in a branch where the coverage they read is not 1, and write a buffer after
-/// it. There the branch's helper invocations take its empty arm where nothing they compute
-/// differently reaches a derivative: `rch_helper_branch` (no implicit LOD) and
-/// `rch_helper_branch_late` (an implicit-LOD sample after the branch at the pixel) are guarded,
-/// census `fragment.helper-guard`. `rch_helper_branch_gradient`, whose implicit-LOD sample reads
-/// a coordinate the branch computes, is neither guarded nor fenced: the sample reads the product
-/// after it. `rch_helper_branch_loop`, whose product is in a loop as long as the coverage, is
-/// fenced: an identity shuffle of what each `optnone` call there computes follows it, census
-/// `fragment.helper-fence`. None records `PrecisionNote::HelperBranchDropsSimdgroupStores`. One
-/// that samples nothing (`rch_helper_branch_unsampled`) is left as it is. A device without the
-/// defect (`intel-arl-anv`) guards and fences nothing. Every module passes L3.
-#[test]
-fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups_stores() {
-    let Some(bc) = fixture("rch_helper_branch") else {
-        return;
-    };
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
-    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    let census = "fragment.helper-guard";
-    let fence_census = "fragment.helper-fence";
-    // (entry, guarded on `moltenvk-m3`, fenced there)
-    let cases = [
-        ("rch_helper_branch", true, false),
-        ("rch_helper_branch_late", true, false),
-        ("rch_helper_branch_gradient", false, false),
-        ("rch_helper_branch_unsampled", false, false),
-        ("rch_helper_branch_loop", false, true),
-    ];
-    let inputs = LoweringInputs::new();
-    for (entry, guarded, fenced) in cases {
-        for (stem, p, guarded, fenced) in [
-            ("moltenvk-m3", &mvk, guarded, fenced),
-            ("intel-arl-anv", &anv, false, false),
-        ] {
-            let what = format!("{entry} on {stem}");
-            let (_, m) =
-                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let guards = helper_guards(&m);
-            let fences = helper_fences(&m);
-            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let counted = a.strategies.entries.get(census).map(|u| u.uses as usize);
-            let fences_counted = a.strategies.entries.get(fence_census).map(|u| u.uses);
-            let noted_here = a.precision.contains(&noted);
-            eprintln!(
-                "observed: {what}: guards {guards}, census {counted:?}, fences {fences} \
-                 ({fences_counted:?}), note {noted_here}"
-            );
-            assert_eq!(guards > 0, guarded, "{what}: {guards} guards");
-            assert_eq!(counted, guarded.then_some(guards), "{what}: the census");
-            assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
-            assert_eq!(
-                fences_counted.map(|c| c as usize),
-                fenced.then_some(fences),
-                "{what}: the fence census"
-            );
-            assert!(!noted_here, "{what}: the note");
-            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
-    }
-}
-
 /// A selection whose condition every invocation of a draw computes alike (a constant block's flag)
 /// holds no branch only helper invocations take, so an `optnone` call in its arm is neither guarded
 /// nor noted. The owned fixture `rch_uniform_branch` divides a coordinate by a texture's size and
@@ -5833,174 +5475,6 @@ fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
     assert_eq!(helper_guards(&m), 0, "{what}");
     assert!(!a.precision.contains(&noted), "{what}: the note");
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-}
-
-/// Apple's compiler loses nothing after an `optnone` call only helper invocations make where they
-/// make a tangled instruction (an implicit-LOD sample, a derivative, an LOD query, a simdgroup
-/// operation) after it that reads what it computes, so a call is fenced only where some path from
-/// it passes none. The owned fixture `rch_helper_tangle` takes the high words of products
-/// (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
-/// `spvMulExtended`) where only the quad helpers past a primitive's edges run more than once or at
-/// all, beside a tangled instruction, and writes a texture after it. On `moltenvk-m3` no arm is
-/// guarded; the `after` functions, whose tangled instruction reads the products (in the arm an
-/// implicit-LOD sample at them, `dfdx`, `quad_sum`, the LOD query; a sample after the branch's
-/// merge; a sample after a loop only helpers repeat), are not fenced; the `before` functions and
-/// `rch_tangle_unread`, whose tangled instruction reads none of them, are: an identity shuffle of
-/// the products' members follows the call, census `fragment.helper-fence`. None
-/// records `HelperBranchDropsSimdgroupStores`. Every module passes L3.
-#[test]
-fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
-    let Some(bc) = fixture("rch_helper_tangle") else {
-        return;
-    };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    // (entry, fenced on `moltenvk-m3`)
-    let cases = [
-        ("rch_tangle_sample_after", false),
-        ("rch_tangle_dfdx_after", false),
-        ("rch_tangle_quad_after", false),
-        ("rch_tangle_lod_after", false),
-        ("rch_tangle_merge_after", false),
-        ("rch_tangle_loop_after", false),
-        ("rch_tangle_quad_before", true),
-        ("rch_tangle_sample_before", true),
-        ("rch_tangle_unread", true),
-    ];
-    let inputs = LoweringInputs::new();
-    for (entry, fenced) in cases {
-        let what = format!("{entry} on moltenvk-m3");
-        let (_, m) =
-            typed_module_with(&bc, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-        let a = compile_with(&bc, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-        let noted_here = a.precision.contains(&noted);
-        let fences = helper_fences(&m);
-        let counted = a
-            .strategies
-            .entries
-            .get("fragment.helper-fence")
-            .map(|u| u.uses);
-        eprintln!(
-            "observed: {what}: guards {}, fences {fences} ({counted:?}), note {noted_here}",
-            helper_guards(&m)
-        );
-        assert_eq!(helper_guards(&m), 0, "{what}: guards");
-        assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
-        assert_eq!(
-            counted.map(|c| c as usize),
-            fenced.then_some(fences),
-            "{what}: the fence census"
-        );
-        assert!(!noted_here, "{what}: the note");
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-    }
-}
-
-/// A call no identity shuffle can follow stays bare and records the note: on `moltenvk-m3` with
-/// the fragment stage's shuffle taken out of its subgroup model (the `SHUFFLE` operation, or the
-/// fragment stage), `rch_tangle_sample_before` and `rch_tangle_unread`, whose tangled instruction
-/// is an implicit-LOD sample that reads none of the products, are not fenced and record
-/// `PrecisionNote::HelperBranchDropsSimdgroupStores`, as every profile with the defect and no
-/// fragment shuffle does. (`rch_tangle_quad_before`'s `quad_sum` needs the fragment shuffle
-/// itself.) Every module passes L3.
-#[test]
-fn a_helper_call_no_shuffle_can_follow_keeps_the_note() {
-    let Some(bc) = fixture("rch_helper_tangle") else {
-        return;
-    };
-    let base = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let mut no_op = base.clone();
-    no_op
-        .edit(|f| f.subgroup.fragment.ops = OpBits(f.subgroup.fragment.ops.0 & !OpBits::SHUFFLE.0));
-    let mut no_stage = base.clone();
-    no_stage.edit(|f| f.subgroup.fragment.supported = false);
-    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    let inputs = LoweringInputs::new();
-    for (form, p) in [
-        ("no fragment SHUFFLE", &no_op),
-        ("no fragment stage", &no_stage),
-    ] {
-        for entry in ["rch_tangle_sample_before", "rch_tangle_unread"] {
-            let what = format!("{entry} on moltenvk-m3 with {form}");
-            let (_, m) =
-                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(helper_fences(&m), 0, "{what}: the fences");
-            assert!(
-                !a.strategies.entries.contains_key("fragment.helper-fence"),
-                "{what}: the fence census"
-            );
-            assert!(a.precision.contains(&noted), "{what}: the note");
-            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
-    }
-}
-
-/// SPIRV-Cross moves an expression read once into what reads it, so an `optnone` call outside
-/// every branch, whose value a select picks on a condition that is not draw-uniform, runs in the
-/// `?:` arm SPIRV-Cross writes, where only helper invocations may make it. The owned fixture
-/// `rch_helper_select` (no fast math: every float operation is `NoContraction`, which SPIRV-Cross
-/// writes through its `optnone` `spvFAdd`) picks a sum, with no branch, where the coverage it reads
-/// is not 1, and writes a texture after it. On `moltenvk-m3`, `rch_select_arm` (the sum a select's
-/// value operand) and `rch_select_and` (the sum's comparison the right side of a `&&`) are
-/// fenced: an identity shuffle of the sum follows the call, census `fragment.helper-fence`.
-/// `rch_select_sampled`, whose implicit-LOD sample reads the picked sum after the call, and
-/// `rch_select_uniform`, which picks on a constant block's flag, are not. Nothing is guarded and
-/// none records `PrecisionNote::HelperBranchDropsSimdgroupStores`; with the fragment stage's
-/// `SHUFFLE` taken out of its subgroup model, the two fenced functions record it instead. A device
-/// without the defect (`intel-arl-anv`) fences nothing. Every module passes L3.
-#[test]
-fn a_helper_call_a_select_picks_is_fenced() {
-    let Some(bc) = fixture("rch_helper_select") else {
-        return;
-    };
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
-    let mut no_shuffle = mvk.clone();
-    no_shuffle
-        .edit(|f| f.subgroup.fragment.ops = OpBits(f.subgroup.fragment.ops.0 & !OpBits::SHUFFLE.0));
-    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    // (entry, fenced on `moltenvk-m3`)
-    let cases = [
-        ("rch_select_arm", true),
-        ("rch_select_and", true),
-        ("rch_select_sampled", false),
-        ("rch_select_uniform", false),
-    ];
-    let inputs = LoweringInputs::new();
-    for (entry, picked) in cases {
-        // (profile, fenced, noted)
-        for (stem, p, fenced, note) in [
-            ("moltenvk-m3", &mvk, picked, false),
-            ("moltenvk-m3 without SHUFFLE", &no_shuffle, false, picked),
-            ("intel-arl-anv", &anv, false, false),
-        ] {
-            let what = format!("{entry} on {stem}");
-            let (_, m) =
-                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let fences = helper_fences(&m);
-            let counted = a
-                .strategies
-                .entries
-                .get("fragment.helper-fence")
-                .map(|u| u.uses);
-            let noted_here = a.precision.contains(&noted);
-            eprintln!(
-                "observed: {what}: guards {}, fences {fences} ({counted:?}), note {noted_here}",
-                helper_guards(&m)
-            );
-            assert_eq!(helper_guards(&m), 0, "{what}: guards");
-            assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
-            assert_eq!(
-                counted.map(|c| c as usize),
-                fenced.then_some(fences),
-                "{what}: the fence census"
-            );
-            assert_eq!(noted_here, note, "{what}: the note");
-            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
-    }
 }
 
 /// The opcodes of every instruction in `words`, and the capabilities it declares.

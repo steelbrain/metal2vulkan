@@ -39,9 +39,7 @@ use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::requirements::{VkFeature as F, VkLimit};
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{
-    BindError, Capability, DescriptorError, DriverDeviation, Error, Feature, Needs,
-};
+use crate::error::{BindError, Capability, DescriptorError, Error, Feature, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::pipeline::descriptor::{
     FunctionDescriptor, RenderPipelineDescriptor, StageSource, TessellationDescriptor,
@@ -93,11 +91,11 @@ fn device(stem: &str) -> Device {
     Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
-/// `moltenvk-m3` with `features` removed from its description.
-fn moltenvk_without(features: &[F]) -> Device {
-    let mut desc = description("moltenvk-m3");
+/// `nvidia-rtx50-linux` with `features` removed from its description.
+fn nvidia_without(features: &[F]) -> Device {
+    let mut desc = description("nvidia-rtx50-linux");
     for f in features {
-        assert!(desc.features.remove(f), "moltenvk-m3 has {f:?}");
+        assert!(desc.features.remove(f), "nvidia-rtx50-linux has {f:?}");
     }
     Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
@@ -116,13 +114,12 @@ fn validate(a: &FunctionArtifact, p: &DeviceProfile) -> Vec<(SpecKey, u64)> {
 
 /// Every amplified entry reads `ViewIndex` for its amplification id and the specialized count,
 /// and a shared output stays an output. `amp_vertex`'s viewport index (`vid & 1`) differs among a
-/// primitive's vertices: MoltenVK, which takes the first vertex's as Metal does
-/// (`DriverDeviation::MetalFirstVertexIndices`), stores it to `ViewportIndex`; lavapipe to the
-/// selected viewport the synthesized geometry stage reads.
+/// primitive's vertices: it is stored to the selected viewport the synthesized geometry stage
+/// reads.
 #[test]
 fn amplification_builtins_are_the_view_index_and_a_specialized_count() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["nvidia-rtx50-linux", "lavapipe"] {
         let p = prof(stem);
         for (entry, count) in [
             ("amp_vertex", true),
@@ -163,27 +160,24 @@ fn amplification_builtins_are_the_view_index_and_a_specialized_count() {
         // the viewport index as written, and the fourth, behind the synthesized geometry stage,
         // the selected viewport.
         let a = compile(&bc, "amp_vertex", &p).expect("amp_vertex");
-        let first_vertex = p.takes_driver_deviation(DriverDeviation::MetalFirstVertexIndices);
         assert_eq!(
             a.interface.io.outputs.len(),
-            if first_vertex { 3 } else { 4 },
+            4,
             "{stem}: color, uv, viewport index"
         );
-        assert_eq!(
-            a.interface
+        assert!(
+            !a.interface
                 .io
                 .builtins
                 .contains(&StageBuiltin::ViewportIndex),
-            first_vertex,
             "{stem}"
         );
-        assert_eq!(
+        assert!(
             a.interface
                 .io
                 .outputs
                 .iter()
                 .any(|o| o.role == IoRole::SelectedViewport),
-            !first_vertex,
             "{stem}"
         );
     }
@@ -193,7 +187,7 @@ fn amplification_builtins_are_the_view_index_and_a_specialized_count() {
 #[test]
 fn amplification_id_needs_multiview() {
     let Some(bc) = fixture() else { return };
-    let dev = moltenvk_without(&[F::Multiview]);
+    let dev = nvidia_without(&[F::Multiview]);
     let p = dev.profile();
     for entry in ["amp_vertex", "amp_fragment", "amp_post_tessellation"] {
         match compile(&bc, entry, p) {
@@ -215,7 +209,9 @@ fn amplification_id_needs_multiview() {
 /// 0, not `ViewIndex`: SPIRV-Cross gives a vertex function that reads `ViewIndex` a second
 /// `[[render_target_array_index]]` output, which Metal refuses (authored case 013406ac failed
 /// MoltenVK pipeline creation so). Without `ViewIndex` it needs neither `MultiView` nor
-/// `multiview`, and its `moltenvk-m3` module compiles as MoltenVK's MSL.
+/// `multiview`. A slice the same at every vertex of a primitive is stored to `Layer`, and its
+/// `moltenvk-m3` module compiles as MoltenVK's MSL; one that differs among them goes to the
+/// selected slice a synthesized geometry stage reads, which `moltenvk-m3` refuses.
 #[test]
 fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
     let Some(bc) = fixture() else { return };
@@ -227,14 +223,14 @@ fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as: {why}"),
     };
-    let without = moltenvk_without(&[F::Multiview]);
+    let without = nvidia_without(&[F::Multiview]);
     let cases = [
         (&bc, "amp_vertex_layer"),
         (&public, "vertex_amplification_id_layer"),
     ];
     for (bc, entry) in cases {
         for p in [
-            prof("moltenvk-m3"),
+            prof("nvidia-rtx50-linux"),
             prof("lavapipe"),
             without.profile().clone(),
         ] {
@@ -245,14 +241,13 @@ fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
                 a.interface.io.builtins
             );
             // `amp_vertex_layer`'s slice (`slices[vid & 1]`) differs among a primitive's
-            // vertices: stored to `Layer` where the profile takes the first vertex's as Metal
-            // does, else to the selected slice; `vertex_amplification_id_layer`'s does not.
+            // vertices: stored to the selected slice; `vertex_amplification_id_layer`'s does not,
+            // and is stored to `Layer`.
             let stored = a
                 .interface
                 .io
                 .uniform_outputs
-                .contains(&VaryingKey::render_target_array_index())
-                || p.takes_driver_deviation(DriverDeviation::MetalFirstVertexIndices);
+                .contains(&VaryingKey::render_target_array_index());
             assert_eq!(
                 a.interface.io.builtins.contains(&StageBuiltin::Layer),
                 stored,
@@ -277,6 +272,20 @@ fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
             validate(&a, &p);
         }
         let p = prof("moltenvk-m3");
+        if entry == "amp_vertex_layer" {
+            match compile(bc, entry, &p) {
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(u.feature, Feature::LayeredRendering, "{entry}");
+                    assert_eq!(
+                        u.needs,
+                        Needs::AnyOf(vec![vec![Capability::Feature(F::GeometryShader)]]),
+                        "{entry}"
+                    );
+                }
+                other => panic!("{entry}: {:?}", other.map(|_| ())),
+            }
+            continue;
+        }
         let a = compile(bc, entry, &p).expect("moltenvk-m3");
         let linked = link(&[&a], &LinkInputs::standalone(), &p).expect("link");
         let words = relocate(&a, &linked.table).expect("relocate");
@@ -418,7 +427,7 @@ fn amplified_in(count: u32, mappings: &[(u32, u32)], length: u32) -> BindState {
 #[test]
 fn a_pipeline_that_does_not_amplify_takes_no_view_mapping() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["nvidia-rtx50-linux", "lavapipe"] {
         let dev = device(stem);
         let d = render(&bc, "amp_vertex", Some("amp_fragment"), 1);
         let p = dev
@@ -440,7 +449,7 @@ fn a_pipeline_that_does_not_amplify_takes_no_view_mapping() {
 #[test]
 fn an_amplified_render_pipeline_plans_its_views() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["nvidia-rtx50-linux", "lavapipe"] {
         let dev = device(stem);
         let d = render(&bc, "amp_vertex", Some("amp_fragment"), 2);
         let p = dev
@@ -605,7 +614,7 @@ fn amplified_render_pipelines_draw_what_multiview_cannot_express_one_at_a_time()
     );
     assert_eq!(planned_count(&p, &plan), 8);
 
-    let dev = device("moltenvk-m3");
+    let dev = device("nvidia-rtx50-linux");
     for (vertex, fragment) in [
         ("amp_vertex_layer", None),
         ("amp_vertex", Some("amp_fragment_layer")),
@@ -638,7 +647,7 @@ fn amplified_render_pipelines_draw_what_multiview_cannot_express_one_at_a_time()
             );
         }
     }
-    let without = moltenvk_without(&[F::Multiview]);
+    let without = nvidia_without(&[F::Multiview]);
     assert_eq!(
         refusal(without.compile_render_pipeline(&render(&bc, "amp_vertex", None, 2), &budget)),
         Needs::AnyOf(vec![vec![Capability::Feature(F::Multiview)]])
@@ -703,7 +712,7 @@ fn amplification_fields(p: &RenderPipeline) -> Vec<(Stage, PushField, u32)> {
 fn a_variant_draws_each_amplification_with_its_push_fields() {
     let Some(bc) = fixture() else { return };
     let budget = Budget::standard();
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["nvidia-rtx50-linux", "lavapipe"] {
         let dev = device(stem);
         // Each pipeline, and whether its vertex function selects a viewport itself.
         for (vertex, fragment, selects) in [
@@ -1011,12 +1020,12 @@ fn each_amplification_draw_reads_its_pushed_id() {
 }
 
 /// A multiview draw keeps its last instance index within `maxMultiviewInstanceIndex`
-/// (`VUID-vkCmdDraw-maxMultiviewInstanceIndex-02688`; `moltenvk-m3` reports 2^27 - 1), and an
+/// (`VUID-vkCmdDraw-maxMultiviewInstanceIndex-02688`; `nvidia-rtx50-linux` reports 2^27 - 1), and an
 /// indirect one asks for the CPU read of its arguments; a draw without multiview is unaffected.
 #[test]
 fn multiview_draws_keep_their_instances_within_the_limit() {
     let Some(bc) = fixture() else { return };
-    let dev = device("moltenvk-m3");
+    let dev = device("nvidia-rtx50-linux");
     let p = dev
         .compile_render_pipeline(
             &render(&bc, "amp_vertex", Some("amp_fragment"), 2),

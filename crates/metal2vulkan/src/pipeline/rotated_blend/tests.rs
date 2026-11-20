@@ -258,7 +258,7 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
     use vk::BlendFactor as B;
     use BlendFactor as F;
     use BlendOperation as O;
-    use FactorLane::{One, Output, Zero};
+    use FactorLane::{One, Output};
     let p = moltenvk();
     let state = |s, d, sa, da| BlendState {
         src_color: s,
@@ -270,8 +270,8 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
     };
     let add = |s, d| (s, d, O::Add);
     let cases = [
-        // Straight alpha, Metal's alpha alike: on MoltenVK the measured premultiplied form, the
-        // image's alpha (Metal's blue) by one over one minus the source alpha.
+        // Straight alpha, Metal's alpha alike: every lane of the image by a copy of the source's
+        // alpha in the second output.
         (
             attachment(
                 add(F::SourceAlpha, F::OneMinusSourceAlpha),
@@ -279,12 +279,12 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
             ),
             RotatedBlend::Synthesized(
                 state(
-                    B::SRC1_ALPHA,
-                    B::ONE_MINUS_SRC1_ALPHA,
-                    B::ONE,
-                    B::ONE_MINUS_SRC1_ALPHA,
+                    B::SRC1_COLOR,
+                    B::ONE_MINUS_SRC1_COLOR,
+                    B::SRC1_COLOR,
+                    B::ONE_MINUS_SRC1_COLOR,
                 ),
-                [Zero, Zero, Zero, Output(3)],
+                [Output(3); 4],
             ),
         ),
         // Straight alpha, Metal's alpha accumulated: the image's red (Metal's alpha) takes one.

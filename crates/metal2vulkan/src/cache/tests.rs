@@ -1300,7 +1300,7 @@ fn the_dropped_vertex_layer_variant_round_trips() {
     use crate::cache::VariantKey;
     use crate::pipeline::facts::RuntimeFact;
     use crate::pipeline::sym::PushField;
-    let dev = device("moltenvk-m3");
+    let dev = device("nvidia-rtx50-linux");
     let Some(bc) = fixture("vertex_amplification") else {
         return;
     };
@@ -1346,7 +1346,7 @@ fn the_amplification_draws_variant_round_trips() {
     use crate::pipeline::facts::RuntimeFact;
     use crate::pipeline::sym::PushField;
     use crate::pipeline::AmplificationDraws;
-    let dev = device("moltenvk-m3");
+    let dev = device("nvidia-rtx50-linux");
     let Some(bc) = fixture("vertex_amplification") else {
         return;
     };
