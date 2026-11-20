@@ -367,8 +367,10 @@ mod on_device {
     }
 
     /// Commits a fill of 256 MiB of device-local memory on a queue of its own, again and again
-    /// with up to 64 in flight, until `stop`: real GPU work backed up on the runtime's queue, so
-    /// that its submissions wait on the GPU. The commits made.
+    /// with up to 4 in flight, until `stop`: real GPU work backed up on the runtime's queue, so
+    /// that its submissions wait on the GPU. Work queued behind the backlog waits at most four
+    /// fills, which stays inside the 10-second waits below on a CPU device under load too; 64 in
+    /// flight did not (16 GiB of fills on lavapipe). The commits made.
     #[cfg(target_os = "linux")]
     fn backlog(device: Device, stop: Arc<AtomicBool>) -> thread::JoinHandle<u64> {
         thread::spawn(move || {
@@ -386,7 +388,7 @@ mod on_device {
                 command_buffer.commit().expect("a commit");
                 commits += 1;
                 flight.push_back(command_buffer);
-                if flight.len() > 64 {
+                if flight.len() > 4 {
                     let first = flight.pop_front().expect("one in flight");
                     finished("the backlog thread", &first);
                 }
