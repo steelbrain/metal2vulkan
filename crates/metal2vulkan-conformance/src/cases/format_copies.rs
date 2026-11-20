@@ -324,7 +324,7 @@ impl Case for FormatCopies {
         let pair = self.pair();
         if pair.from == PixelFormat::Depth32Float || pair.to == PixelFormat::Depth32Float {
             allowances.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::RestrictedDepthUpload.code(),
+                crate::degradation::Degradation::RestrictedDepthUpload.code(),
             ));
         }
         allowances

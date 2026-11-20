@@ -583,7 +583,7 @@ impl Case for DescriptorPairs {
         // says so rather than reporting Metal's number for its own image. Measured firing for all
         // four rows on llvmpipe and on the RTX 5080.
         let mut named = vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal.code(),
+            crate::degradation::Degradation::HeapTextureLargerThanMetal.code(),
         )];
         if self.name == USAGE {
             // The usage table names compressed formats, which a device with no Vulkan format for
@@ -592,12 +592,12 @@ impl Case for DescriptorPairs {
             // so a twin's precision (`decoded-texel-precision`, announced at a command's first
             // read of it) is not declared.
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
+                crate::degradation::Degradation::CarriedDecodedTwin.code(),
             ));
             // A compressed texture the device holds itself announces the device's decode of its
             // blocks (`compressed-texel-decode`), which the row never reads either.
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+                crate::degradation::Degradation::CompressedTexelDecode.code(),
             ));
         }
         if self.name == STORAGE {
@@ -627,7 +627,7 @@ impl Case for DescriptorPairs {
             });
         if memoryless_texture_buffer {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::MemorylessTextureBuffer.code(),
+                crate::degradation::Degradation::MemorylessTextureBuffer.code(),
             ));
         }
         // The new runtime's answers are the device's own, held by their property and not by
@@ -768,7 +768,7 @@ fn placed_textures() -> Vec<(&'static str, SparseTextureSpec)> {
 /// answering 2, against 2 for a texture outside a heap — and this is the same question asked of
 /// the one resource kind that family never placed.
 fn heaps() -> Vec<HeapSpec> {
-    use metal2vulkan_runtime::HazardTrackingMode;
+    use crate::values::HazardTrackingMode;
     vec![
         HeapSpec::automatic(HEAP_SIZE, Storage::Private),
         HeapSpec::automatic(HEAP_SIZE, Storage::Private).tracked(HazardTrackingMode::Tracked),
@@ -815,10 +815,10 @@ impl Case for HeapTextureGetters {
         // measured firing for this row on llvmpipe (LLVM 23.1.1, 256 bits, Mesa 26.2.4) in a
         // whole-suite replay.
         [
-            metal2vulkan_runtime::Degradation::HeapTextureLosslessLayout,
-            metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal,
-            metal2vulkan_runtime::Degradation::HeapTextureUntiledLayout,
-            metal2vulkan_runtime::Degradation::ShadowedTexture,
+            crate::degradation::Degradation::HeapTextureLosslessLayout,
+            crate::degradation::Degradation::HeapTextureLargerThanMetal,
+            crate::degradation::Degradation::HeapTextureUntiledLayout,
+            crate::degradation::Degradation::ShadowedTexture,
         ]
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
@@ -1078,7 +1078,7 @@ mod tests {
                 spec.site()
             );
             assert!(
-                matches!(spec.cache, metal2vulkan_runtime::CpuCacheMode::DefaultCache),
+                matches!(spec.cache, crate::values::CpuCacheMode::DefaultCache),
                 "{} is not the default cache mode, and a placed texture of this vocabulary is",
                 spec.site()
             );

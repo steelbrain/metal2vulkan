@@ -17,7 +17,7 @@
 use crate::allowance::Allowance;
 use crate::recording::ShaderRef;
 use crate::transcript::{Node, NodeName, Observed, Sites, Transcript, Value};
-use crate::verdict::{device_gap, device_gap_of};
+use crate::verdict::device_gap_of;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     AttributeFormat, BindingAccess, CompareFunction, IndexType, PixelFormat, RenderStages,
@@ -479,29 +479,17 @@ pub struct Failure {
     /// documentation.
     error: Value,
     /// What the venue lacks, where the typed refusal names capabilities a device could enable or
-    /// a measured driver defect ([`device_gap`]). `None` where the refusal is ours to answer for.
+    /// a measured driver defect ([`device_gap_of`]). `None` where the refusal is ours to answer for.
     pub lacks: Option<String>,
-    /// The typed runtime error's own text where the failure is one ([`Failure::of`]); `None` for
+    /// The typed runtime error's own text where the failure is one ([`Failure::of_rt`]); `None` for
     /// a failure outside the runtime's typed errors. What a run that stopped at it reports
     /// ([`Abort::stopped`]).
     refusal: Option<String>,
 }
 
 impl Failure {
-    /// The failure a typed runtime error is.
-    pub fn of(error: &metal2vulkan_runtime::Error) -> Self {
-        Self {
-            error: Value::Variant {
-                name: error_variant(error),
-                payload: Box::new(Value::Lines(vec![error.to_string()])),
-            },
-            lacks: device_gap(error),
-            refusal: Some(error.to_string()),
-        }
-    }
-
     /// The failure a typed error of the new runtime (`metal2vulkan-rt`) is. A translator refusal
-    /// that names a capability the device could enable is the venue's gap, as in [`Failure::of`].
+    /// that names a capability the device could enable is the venue's gap ([`device_gap_of`]).
     pub fn of_rt(error: &metal2vulkan_rt::Error) -> Self {
         let lacks = match error {
             metal2vulkan_rt::Error::Translation(metal2vulkan::error::Error::Unsupported(
@@ -644,7 +632,7 @@ const LACKS: &str = "lacks";
 
 /// What the venue honestly lacks at a site a [`Failure`] recorded, read back out of the recorded
 /// value: `Some` where the typed refusal names capabilities a device could enable or a driver
-/// measured to run the thing wrong ([`device_gap`]), and `None` for a refusal that is ours.
+/// measured to run the thing wrong ([`device_gap_of`]), and `None` for a refusal that is ours.
 ///
 /// The comparison's reading of [`Failure::recorded`], and the reason a case cannot lose the fact
 /// by naming its abort's site differently from the node it pushed: see that method.
@@ -2467,7 +2455,7 @@ pub trait Side {
     fn heap_purgeable_state(
         &mut self,
         heap: Handle,
-        state: metal2vulkan_runtime::PurgeableState,
+        state: crate::values::PurgeableState,
     ) -> Answer<u64> {
         let _ = (heap, state);
         Err(Failure::unavailable("heap_purgeable_state"))
@@ -2534,7 +2522,7 @@ pub trait Side {
     fn resource_purgeable_state(
         &mut self,
         of: crate::heap_query::QueriedResource,
-        state: metal2vulkan_runtime::PurgeableState,
+        state: crate::values::PurgeableState,
     ) -> Answer<u64> {
         let _ = (of, state);
         Err(Failure::unavailable("resource_purgeable_state"))

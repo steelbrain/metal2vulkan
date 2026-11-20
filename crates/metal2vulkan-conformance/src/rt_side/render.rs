@@ -13,12 +13,12 @@ use crate::render::{
     StageFunction, TargetSpec, ViewportRect,
 };
 use crate::transcript::{Negative, Value};
-use crate::work::Plane;
-use metal2vulkan_rt as rt;
-use metal2vulkan_runtime::{
+use crate::values::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction,
     StoreActionOptions, VisibilityResultMode,
 };
+use crate::work::Plane;
+use metal2vulkan_rt as rt;
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {
@@ -31,7 +31,6 @@ fn load(action: LoadAction) -> Answer<rt::LoadAction> {
         LoadAction::DontCare => rt::LoadAction::DontCare,
         LoadAction::Load => rt::LoadAction::Load,
         LoadAction::Clear => rt::LoadAction::Clear,
-        other => return Err(Failure::named("NoSuchLoadAction", format!("{other:?}"))),
     })
 }
 
@@ -44,7 +43,6 @@ fn store(action: StoreAction) -> Answer<rt::StoreAction> {
         StoreAction::StoreAndMultisampleResolve => rt::StoreAction::StoreAndMultisampleResolve,
         StoreAction::Unknown => rt::StoreAction::Unknown,
         StoreAction::CustomSampleDepthStore => rt::StoreAction::CustomSampleDepthStore,
-        other => return Err(Failure::named("NoSuchStoreAction", format!("{other:?}"))),
     })
 }
 
@@ -68,12 +66,6 @@ fn depth_filter(
         MultisampleDepthResolveFilter::Sample0 => rt::MultisampleDepthResolveFilter::Sample0,
         MultisampleDepthResolveFilter::Min => rt::MultisampleDepthResolveFilter::Min,
         MultisampleDepthResolveFilter::Max => rt::MultisampleDepthResolveFilter::Max,
-        other => {
-            return Err(Failure::named(
-                "NoSuchDepthResolveFilter",
-                format!("{other:?}"),
-            ))
-        }
     })
 }
 
@@ -85,12 +77,6 @@ fn stencil_filter(
         MultisampleStencilResolveFilter::Sample0 => rt::MultisampleStencilResolveFilter::Sample0,
         MultisampleStencilResolveFilter::DepthResolvedSample => {
             rt::MultisampleStencilResolveFilter::DepthResolvedSample
-        }
-        other => {
-            return Err(Failure::named(
-                "NoSuchStencilResolveFilter",
-                format!("{other:?}"),
-            ))
         }
     })
 }
@@ -213,7 +199,7 @@ impl RtSide<'_> {
         };
         let mut descriptor = rt::RenderPipelineDescriptor::new(stage(&spec.vertex)?);
         descriptor.fragment = spec.fragment.as_ref().map(stage).transpose()?;
-        let apart = crate::runtime_side::pipeline_fields(spec)?;
+        let apart = super::fields::pipeline_fields(spec)?;
         descriptor.color_attachments = apart.color_attachments;
         descriptor.depth_format = apart.depth_format;
         descriptor.stencil_format = apart.stencil_format;
@@ -486,7 +472,6 @@ impl RtSide<'_> {
                     VisibilityResultMode::Disabled => rt::VisibilityResultMode::Disabled,
                     VisibilityResultMode::Boolean => rt::VisibilityResultMode::Boolean,
                     VisibilityResultMode::Counting => rt::VisibilityResultMode::Counting,
-                    _ => return Err(Failure::unavailable("setVisibilityResultMode:offset:")),
                 };
                 (encoder.set_visibility_result_mode(mode, *offset)).map_err(of_rt)
             }

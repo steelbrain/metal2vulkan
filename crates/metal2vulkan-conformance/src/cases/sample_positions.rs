@@ -53,6 +53,7 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{answered, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::{ShaderRef, APPLE_M4};
 use crate::render::{
@@ -61,8 +62,8 @@ use crate::render::{
 };
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Transcript, Value};
+use crate::values::{SamplePosition, StoreAction, StoreActionOptions};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::{Degradation, SamplePosition, StoreAction, StoreActionOptions};
 
 /// The owned fixture the probe drew with: each vertex where buffer 0 holds it, and alpha 1.
 const FIXTURE: &str = "rt6_restart";

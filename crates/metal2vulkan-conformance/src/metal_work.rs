@@ -7,7 +7,7 @@
 //! public calls; what is private is `fillTexture:`, the *fill*. Two lanes lost their Metal leg to
 //! that confusion, and a case can only run on Metal if something runs the program.
 //!
-//! So the interpreter mirrors [`crate::runtime_work`] call for call, in the same order, with one
+//! So the interpreter mirrors the runtime's side's interpreter call for call, in the same order, with one
 //! blit encoder at a time.
 //!
 //! # Apple SPI is not the same thing as absent
@@ -49,7 +49,7 @@
 //! copied into every sample of a multisample depth or stencil texture clears by a pass that draws
 //! nothing, copies in, reads every sample by a dispatch and copies back out, with no private call
 //! anywhere, so it can be recorded on Metal rather than carrying a rule. They mirror
-//! [`crate::runtime_work`]'s own two call for call -- the same attachment, load and store actions,
+//! the runtime's side's interpreter's own two call for call -- the same attachment, load and store actions,
 //! the same two bound buffers, the same shape words, the same grid of one thread a sample and one
 //! thread a threadgroup, and the same narrowing of the kernel's words -- because a difference in
 //! any of those would make the two sides' kernels read different things, which is the shape of
@@ -85,7 +85,7 @@ pub type Kernel = (
 /// A read whose bytes are only there once the command buffer completed: the buffer a per-sample
 /// read-back's dispatch wrote, and how its words narrow.
 ///
-/// It mirrors [`crate::runtime_work`]'s own pending read, field for field, because the two sides
+/// It mirrors the runtime's side's interpreter's own pending read, field for field, because the two sides
 /// must narrow the kernel's words the same way or the read means two different things.
 struct Pending {
     /// The read's place among the program's reads.
@@ -138,7 +138,7 @@ enum Made {
     Heap(Retained<ProtocolObject<dyn MTLHeap>>),
     Texture(Retained<ProtocolObject<dyn MTLTexture>>),
     Fence(Retained<ProtocolObject<dyn MTLFence>>),
-    /// The resource a [`Step::Release`] dropped, as [`crate::runtime_work`] keeps one.
+    /// The resource a [`Step::Release`] dropped, as the runtime's side's interpreter keeps one.
     Released,
 }
 
@@ -215,7 +215,7 @@ fn options(storage: Storage) -> (MTLStorageMode, MTLResourceOptions) {
     crate::metal_side::storage_mode(storage)
 }
 
-/// The descriptor `spec` names, field for field as [`crate::runtime_work`] builds it: the same
+/// The descriptor `spec` names, field for field as the runtime's side's interpreter builds it: the same
 /// usage, the same array length, levels, samples and storage, so neither side can read a shape the
 /// other does not.
 fn descriptor(spec: &TextureSpec) -> Answer<Retained<MTLTextureDescriptor>> {
@@ -1040,7 +1040,7 @@ impl Run<'_> {
 
     /// Drop this side's reference to the resource at `at`.
     ///
-    /// Refused while a command buffer is open, as [`crate::runtime_work`] refuses it, and for the
+    /// Refused while a command buffer is open, as the runtime's side's interpreter refuses it, and for the
     /// same reason twice over here: Metal keeps its own reference to every resource an uncommitted
     /// command buffer refers to, so the release would free nothing.
     fn release(&mut self, at: usize) -> Answer<()> {
@@ -1113,7 +1113,7 @@ impl Run<'_> {
             let bytes = read_buffer(&read.buffer, 0, read.length)?;
             let (texel_bytes, stride) = read.samples;
             // The kernel writes whole words a sample; the read keeps the format's own bytes of
-            // each. Narrowed exactly as `crate::runtime_work` narrows it, because the two sides
+            // each. Narrowed exactly as the runtime's side's interpreter narrows it, because the two sides
             // must answer the same bytes for the same dispatch.
             self.reads[read.slot] = Some(
                 bytes
@@ -1192,7 +1192,7 @@ impl Run<'_> {
 
     /// Encode a per-sample read-back of `texture` by the program's fixture's `kernel`.
     ///
-    /// Mirrors [`crate::runtime_work`] call for call: the same two bound buffers, the same shape
+    /// Mirrors the runtime's side's interpreter call for call: the same two bound buffers, the same shape
     /// words, the same grid of one thread a sample and one thread a threadgroup. A difference in
     /// any of those would make the two sides' kernels read different things, which is the shape of
     /// harness error that looks exactly like a product bug.

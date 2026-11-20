@@ -37,9 +37,9 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::replay::notice_allowance;
 use crate::transcript::Sites;
-use metal2vulkan_runtime::Degradation;
 
 /// The case's name.
 pub const COMMAND_BUFFER_FACTS: &str = "command-buffer-facts";

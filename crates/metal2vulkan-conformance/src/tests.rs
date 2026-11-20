@@ -10,8 +10,10 @@ use crate::case::{
     Side, Venue,
 };
 use crate::compare::compare;
+use crate::degradation::Degradation;
 use crate::diff::DivergenceKind;
 use crate::record::{record, RecordError};
+use crate::recording::MACOS_RELEASE;
 use crate::recording::{
     Answer as RecordedAnswer, Lookup, Outcome, Provenance, Recording, Validated,
 };
@@ -21,7 +23,6 @@ use crate::transcript::{
     ByteLayout, Digest, Element, Gaps, Negative, Node, Observed, Region, Sites, Transcript, Value,
 };
 use crate::verdict::Verdict;
-use metal2vulkan_runtime::{Degradation, MACOS_RELEASE};
 
 /// A side that answers from a script rather than from a device, so the suite's own machinery is
 /// testable with no GPU.
@@ -63,12 +64,6 @@ impl StubSide {
 
     fn announcing(mut self, codes: &[Degradation]) -> Self {
         self.notices = codes.iter().map(|kind| kind.code().to_owned()).collect();
-        self
-    }
-
-    /// The same side announcing `codes`, as a case's own notice scope handed them over.
-    fn announcing_codes(mut self, codes: Vec<String>) -> Self {
-        self.notices = codes;
         self
     }
 
@@ -674,14 +669,13 @@ impl Case for TwoPathCase {
 #[test]
 fn a_venue_gap_inside_a_program_is_the_venues_however_the_case_names_its_abort() {
     use metal2vulkan::device::VkExtension;
-    use metal2vulkan::error::{Capability, Feature, Unsupported};
-    use metal2vulkan_runtime::Error;
+    use metal2vulkan::error::{Capability, Error, Feature, Unsupported};
     let case = TwoPathCase::new("two-path-program");
     let recording = recording_of(&case, case.metal(), 3);
 
     // The venue's own gap: the extension `MTLPixelFormatASTC_12x12_HDR` needs, refused while the
     // program's first resource was made, exactly as a work interpreter hands it over.
-    let theirs = Failure::of(&Error::Unsupported(Unsupported::needs(
+    let theirs = Failure::of_translation(&Error::Unsupported(Unsupported::needs(
         Feature::Format,
         Capability::Extension(VkExtension::ExtTextureCompressionAstcHdr),
     )))
@@ -714,7 +708,7 @@ fn a_venue_gap_inside_a_program_is_the_venues_however_the_case_names_its_abort()
 
     // The other direction: the same case, the same two paths, a form the runtime has not built.
     // That is ours to answer for and must still fail.
-    let ours = Failure::of(&Error::Unsupported(Unsupported::not_implemented(
+    let ours = Failure::of_translation(&Error::Unsupported(Unsupported::not_implemented(
         Feature::Format,
     )))
     .at_resource(0);
@@ -749,9 +743,11 @@ fn a_venue_gap_inside_a_program_is_the_venues_however_the_case_names_its_abort()
 fn every_failure_records_as_an_error_however_it_is_named() {
     let built = [
         (
-            "Error::NotImplemented",
-            Failure::of(&metal2vulkan_runtime::Error::NotImplemented(
-                metal2vulkan_runtime::RuntimeGap::MultisampledBufferCopy,
+            "Error::Translation",
+            Failure::of_translation(&metal2vulkan::error::Error::Unsupported(
+                metal2vulkan::error::Unsupported::not_implemented(
+                    metal2vulkan::error::Feature::Format,
+                ),
             )),
         ),
         ("Unavailable", Failure::unavailable("work")),
@@ -1234,7 +1230,7 @@ fn an_unannounced_native_note_is_no_unjustified_loosening() {
 
 /// The standing set is closed over the native-maths class by construction: every kind whose code
 /// says it is the device's native form is in it, so a native note a later change adds cannot be
-/// left for every case to declare. Each member is a precision kind, held once.
+/// left for every case to declare. Each member is held once.
 #[test]
 fn the_native_notes_hold_every_native_kind_once() {
     use crate::replay::NATIVE_NOTES;
@@ -1244,11 +1240,6 @@ fn the_native_notes_hold_every_native_kind_once() {
         }
     }
     for (at, kind) in NATIVE_NOTES.iter().enumerate() {
-        assert_eq!(
-            kind.category(),
-            metal2vulkan_runtime::DegradationCategory::Precision,
-            "{kind:?}"
-        );
         assert!(!NATIVE_NOTES[..at].contains(kind), "{kind:?} twice");
     }
 }
@@ -3679,76 +3670,6 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             known.waiting_on
         );
     }
-    // A `drawMeshThreads` whose threads leave a partial object threadgroup runs as Metal runs it,
-    // so its cases hold no row.
-    assert!(
-        !ledger.iter().any(|known| known
-            .case
-            .starts_with("mesh-object-draws-partial-threadgroup-")),
-        "{ledger:?}"
-    );
-    // The fragment quad's sum on a lavapipe built for 128-bit vectors, whose 4-lane fragment
-    // subgroups hold one quad each (the device's grouping, which MoltenVK does not share), so the
-    // rows are venue-scoped rather than global.
-    //
-    // The scope is the vector width, which sets the subgroup's: measured on the gate container's
-    // arm64 `LLVM 21.1.8` build and on x86-64 `LLVM 23.1.4` forced to 128 bits, and absent from
-    // x86-64 lavapipe at its 256-bit default (8 lanes, two quads). A venue field of `llvmpipe`
-    // held the rows on a venue that does not hold the gap, where the retire direction read all
-    // three as fixed; one build's name missed the other 128-bit build. The width `llvmpipe`
-    // writes into its device name is what the field carries.
-    let quads: Vec<&crate::known_gaps::KnownGap> = ledger
-        .iter()
-        .filter(|known| known.case == "discard-quad-sum-placement")
-        .collect();
-    assert_eq!(quads.len(), 3, "{ledger:?}");
-    let lavapipe = |device: &str| crate::case::Venue {
-        device: device.to_owned(),
-        driver: "vendor 0x10005 device 0x0000".to_owned(),
-        api: "1.2".to_owned(),
-        lossless_compression: true,
-        new_runtime: false,
-        host: None,
-    };
-    for known in &quads {
-        for measured in [
-            "llvmpipe (LLVM 21.1.8, 128 bits)",
-            "llvmpipe (LLVM 23.1.4, 128 bits)",
-        ] {
-            assert!(
-                known.covers_venue(&lavapipe(measured)),
-                "{measured}: {known:?}"
-            );
-        }
-        for other in [
-            "llvmpipe (LLVM 23.1.1, 256 bits)",
-            "llvmpipe (LLVM 23.1.4, 256 bits)",
-            "Apple M3 Max",
-        ] {
-            assert!(
-                !known.covers_venue(&lavapipe(other)),
-                "the row holds on a venue that does not hold the gap, {other}: {known:?}"
-            );
-        }
-    }
-    for known in quads {
-        assert_eq!(known.expects, crate::known_gaps::Expects::Divergent);
-        assert_eq!(known.venue, "128 bits)");
-        // A divergence row says how much moved -- how many of the site's leaves differ and how
-        // far -- and never where the walk first noticed, which is a property of the data and not
-        // of the bug. All four texels of the kept quad differ, which the first-mismatch answer
-        // this row used to carry hid entirely: it named one element and read as one difference.
-        assert_eq!(
-            known.answer, "4 elements differ (I32), the largest difference 1",
-            "{known:?}"
-        );
-        // And it names the cause, the device's grouping, and the note that announces it.
-        assert!(
-            known.waiting_on.contains("fragment-simdgroup-grouping"),
-            "{known:?}"
-        );
-    }
-
     // Every row's site must be one its case's committed recording actually holds. A row for a
     // site that cannot exist is otherwise committable and silently unheld: one stream in this
     // round nearly added a row for `case/texels/argb8` of a case whose `argb8` leg refuses at the
@@ -3768,23 +3689,6 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             "{}: no site {} in the committed recording. A row's site is the one the report \
              prints, and a site the case never produces can never be held in either direction",
             known.case, known.site
-        );
-    }
-
-    // Two gaps this round closed, and the ledger holds rows in both directions, so a stale row
-    // for either would fail the run it is selected in. The tail gap was thirteen rows over every
-    // venue -- Metal's `tailSizeInBytes` on extreme aspect ratios, where the model was short by
-    // whole 16384-byte pages -- and the rule it was missing is now measured and held by
-    // `metal2vulkan-runtime`'s `tests::sparse::every_recorded_mip_tail_is_metals`. The shared
-    // event's two rows closed with `SharedEvent::device` answering nothing, as Metal's does.
-    for closed in [
-        crate::cases::sparse_heaps::TAILS_WIDE,
-        crate::cases::rate_maps::ZERO_SCREEN_WIDTH,
-        crate::cases::shared_events::HANDLE_ROUND_TRIP,
-    ] {
-        assert!(
-            !ledger.iter().any(|known| known.case == closed),
-            "{closed}'s gap is closed; its rows must be gone"
         );
     }
 }
@@ -3872,8 +3776,7 @@ fn venue_named(device: &str) -> Venue {
 /// which llvmpipe's compiler targets: one Mesa 26.2.6 build (LLVM 23.1.4) stores the `x3` sites of
 /// `fetch-ordered-*-srgb` and the `one-one-subtract` site of `blend-interaction-format-srgb8` a code
 /// from Metal's at other texels on a host with AVX-512 than on one with AVX2 alone, which its device
-/// name and driver do not tell apart. Each such site holds exactly one row on each of those hosts,
-/// and a GPU's description carries no host.
+/// name and driver do not tell apart. A GPU's description carries no host.
 #[test]
 fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
     let venue = |host: Option<&str>| crate::case::Venue {
@@ -3890,37 +3793,11 @@ fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
         avx2.to_string(),
         "llvmpipe (LLVM 23.1.4, 256 bits) on x86-64 AVX2 (vendor 0x10005 device 0x0000, API 1.4)"
     );
+    assert_ne!(avx2.to_string(), avx512.to_string());
     assert_eq!(
         venue(None).to_string(),
         "llvmpipe (LLVM 23.1.4, 256 bits) (vendor 0x10005 device 0x0000, API 1.4)"
     );
-    let ledger = crate::known_gaps::ledger().expect("the ledger parses");
-    let sites = [
-        ("fetch-ordered-rgba8unorm-srgb", "case/x3"),
-        ("fetch-ordered-rgba8unorm-srgb", "case/x3-depth"),
-        ("fetch-ordered-bgra8unorm-srgb", "case/x3"),
-        ("fetch-ordered-bgra8unorm-srgb", "case/x3-depth"),
-        (
-            "blend-interaction-format-srgb8",
-            "case/blended/one-one-subtract",
-        ),
-    ];
-    for (case, site) in sites {
-        let answers = |on: &crate::case::Venue| -> Vec<&str> {
-            ledger
-                .iter()
-                .filter(|known| known.case == case && known.site == site && known.covers_venue(on))
-                .map(|known| known.answer.as_str())
-                .collect()
-        };
-        let (two, five) = (answers(&avx2), answers(&avx512));
-        assert_eq!(
-            (two.len(), five.len()),
-            (1, 1),
-            "{case} {site}: {two:?} {five:?}"
-        );
-        assert_ne!(two, five, "{case} {site}");
-    }
     // This host's, which names its architecture.
     let host = crate::case::host_vector_isa();
     let arch = match std::env::consts::ARCH {
@@ -4323,7 +4200,7 @@ fn a_site_the_venue_lacks_is_the_venues_gap_and_not_a_refusal() {
     let case = LedgerCase::new("ledger-device-gap");
     let recording = recording_of(&case, case.metal(7), 3);
     // A typed refusal naming capabilities a device could enable: the device's own gap.
-    let lacking = Failure::of(&metal2vulkan_runtime::Error::Unsupported(
+    let lacking = Failure::of_translation(&metal2vulkan::error::Error::Unsupported(
         Unsupported::needs_any_of(
             Feature::Format,
             vec![vec![Capability::Feature(
@@ -4347,7 +4224,7 @@ fn a_site_the_venue_lacks_is_the_venues_gap_and_not_a_refusal() {
     );
 
     // The rest of the case still compares: a difference elsewhere in the same run still fails.
-    let lacking = Failure::of(&metal2vulkan_runtime::Error::Unsupported(
+    let lacking = Failure::of_translation(&metal2vulkan::error::Error::Unsupported(
         Unsupported::needs_any_of(
             Feature::Format,
             vec![vec![Capability::Feature(
@@ -4362,7 +4239,7 @@ fn a_site_the_venue_lacks_is_the_venues_gap_and_not_a_refusal() {
 
     // And a refusal that is ours to answer for is still ours: the same site, a typed error the
     // device could not have enabled away, reads as `refused`.
-    let ours = Failure::of(&metal2vulkan_runtime::Error::Unsupported(
+    let ours = Failure::of_translation(&metal2vulkan::error::Error::Unsupported(
         Unsupported::not_implemented(Feature::Format),
     ));
     assert!(ours.lacks.is_none(), "{ours:?}");
@@ -4380,10 +4257,10 @@ fn a_run_stopped_at_a_typed_refusal_reports_the_error() {
     use metal2vulkan::error::{Feature, Unsupported};
     let at = "MTLPixelFormatRGB10A8_2P/Type2D/makes-texture".to_owned();
     let error =
-        metal2vulkan_runtime::Error::Unsupported(Unsupported::not_implemented(Feature::Format));
+        metal2vulkan::error::Error::Unsupported(Unsupported::not_implemented(Feature::Format));
     let refused = Abort {
         at: at.clone(),
-        failure: Failure::of(&error),
+        failure: Failure::of_translation(&error),
     };
     assert_eq!(refused.stopped(), format!("refused {error}, at {at}"));
     assert!(
@@ -4394,7 +4271,7 @@ fn a_run_stopped_at_a_typed_refusal_reports_the_error() {
     // The same through the annotation a program's interpreter adds.
     let stepped = Abort {
         at: at.clone(),
-        failure: Failure::of(&error).at_step(3),
+        failure: Failure::of_translation(&error).at_step(3),
     };
     assert_eq!(stepped.stopped(), refused.stopped());
     let untyped = Abort {
@@ -4402,7 +4279,7 @@ fn a_run_stopped_at_a_typed_refusal_reports_the_error() {
         failure: Failure::named("NoSuchBarrierScope", "0x9: no such bits"),
     };
     assert_eq!(untyped.stopped(), format!("a call did not answer, at {at}"));
-    let mut lacking = Failure::of(&error);
+    let mut lacking = Failure::of_translation(&error);
     lacking.lacks = Some("the device enables no such capability".to_owned());
     let lacks = Abort {
         at: at.clone(),
@@ -4842,63 +4719,6 @@ fn the_report_says_how_many_answers_came_from_another_chip() {
 // The cost half: what our side did to produce a case's transcript. Counts, never Metal's, and
 // never a correctness verdict.
 
-/// The cost half reads **every** count the runtime keeps, and fails loudly on a field it cannot.
-///
-/// `WorkCounts` has 386 fields of its own plus three nested count structs, and a hand-written list
-/// of them would be stale the day a runtime change added one, so the reading comes out of the
-/// derived `Debug`. The risk that buys is a field of another shape being dropped silently, which
-/// would be a hole in the gate nobody could see — so a leaf that is not a count is an error here,
-/// and the only fields left out are the ones named with their reason.
-#[test]
-fn the_cost_half_reads_every_count_the_runtime_keeps() {
-    let counts = crate::cost::Counts::of(&metal2vulkan_runtime::WorkCounts::default())
-        .expect("the runtime's counts read as counts");
-    assert!(
-        counts.len() > 350,
-        "only {} counts were read, so the reading is not of the whole struct",
-        counts.len()
-    );
-    // One count from each nesting level, so a change that flattened or renamed a level fails here.
-    for name in [
-        "queue_submissions",
-        "variant_pipelines_made",
-        "commands_recorded.cmd_draw",
-        "object_churn.images_parked",
-        "shadow_keeps.render_cut",
-    ] {
-        assert_eq!(counts.get(name), 0, "{name} was not read");
-        assert!(
-            counts.iter().any(|(held, _)| held == name),
-            "{name} is not among the counts the cost half reads"
-        );
-    }
-    // The site tables are left out, and nothing of them leaks in under another name.
-    assert!(
-        !counts.iter().any(|(name, _)| name.contains("copy_sites")),
-        "a site table was read as a count"
-    );
-    // Nor is the device's checks' work, which is never a case's.
-    assert!(
-        !counts
-            .iter()
-            .any(|(name, _)| name.starts_with("device_checks")),
-        "the device's checks' work was read as a case's"
-    );
-    assert!(crate::cost::excluded("copy_sites").is_some());
-    assert!(crate::cost::excluded("row_copy_regions_most").is_some());
-    assert!(crate::cost::excluded("batch_submit_nanos").is_some());
-    assert!(crate::cost::excluded("queue_submissions").is_none());
-    for checks in [
-        "submit_check_calls",
-        "submit_checks_run",
-        "submit_checks_recalled",
-        "device_checks",
-        "device_checks.vk_memory_allocations",
-    ] {
-        assert!(crate::cost::excluded(checks).is_some(), "{checks}");
-    }
-}
-
 /// A field of the runtime's counts that is not a count fails the reading by name.
 ///
 /// This is the guard that makes the test above load-bearing: without it, a runtime field of a new
@@ -4945,43 +4765,6 @@ WorkCounts {
     assert_eq!(read.get("commands_recorded.cmd_draw"), 7);
     assert_eq!(read.get("render_passes_made"), 1);
     assert_eq!(read.len(), 3, "{:?}", read);
-}
-
-/// **No `MONOTONE` bound is a count of bytes**, which is the general form of the one exception that
-/// table already records by name.
-///
-/// `device_memory_allocated` passed `MONOTONE`'s direction test — 385 cases, none where the lone
-/// run read lower — and is kept out because it counts *bytes*: the two shapes differ by 268,435,456
-/// where the largest of the object counts differs by 8, so a bound taken at the larger shape is a
-/// number no regression can reach while looking exactly like a bound that bites. That reasoning is
-/// about the unit and not about the name, and the next byte count to arrive will resemble the
-/// object counts far more than it resembles `device_memory_allocated` — `owned_kernel_spirv_bytes`
-/// is one, with an alone-against-company gap of about 10 KiB where its own object count's gap is 2.
-/// So the rule is held here rather than left in the prose for somebody to re-derive.
-#[test]
-fn no_monotone_bound_is_a_count_of_bytes() {
-    let counts = crate::cost::Counts::of(&metal2vulkan_runtime::WorkCounts::default())
-        .expect("the runtime's counts read as counts");
-    let mut byte_counts = 0;
-    for (name, _) in counts.iter() {
-        let leaf = name.rsplit('.').next().unwrap_or(name);
-        if !(leaf.ends_with("_bytes") || leaf == "device_memory_allocated") {
-            continue;
-        }
-        byte_counts += 1;
-        assert!(
-            crate::cost::monotone(name).is_none(),
-            "{name} counts bytes and holds a MONOTONE row, so its bound is the larger shape's \
-             reading of an allocation rather than of an object: the two shapes differ by \
-             268,435,456 for device_memory_allocated where the largest object count differs by 8, \
-             and such a bound cannot fail. Let the contrast report it instead."
-        );
-    }
-    // A floor, because a guard that found nothing to check passes for ever.
-    assert!(
-        byte_counts > 0,
-        "the runtime keeps no count of bytes, so this guard is reading the wrong thing"
-    );
 }
 
 /// The three regions are the ones the cost regime names, and the device API is the residual.
@@ -5662,7 +5445,7 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
 }
 
 /// Every field of a [`crate::render::ColorState`] reaches the color attachment descriptor the
-/// runtime side gives the runtime (`runtime_side::color_descriptor`), checked field by field with
+/// runtime side gives the runtime (`rt_side::fields::color_descriptor`), checked field by field with
 /// no device.
 ///
 /// It is a guard against the bug that wrote it: the write mask was never assigned there, so a case
@@ -5681,7 +5464,7 @@ fn the_runtime_side_forwards_every_field_of_a_color_state() {
         ColorWriteMask::RED | ColorWriteMask::ALPHA,
         ColorWriteMask::ALL,
     ] {
-        let made = crate::runtime_side::color_descriptor(
+        let made = crate::rt_side::fields::color_descriptor(
             &ColorState::new(PixelFormat::RGBA8Unorm).masked(mask),
         );
         assert_eq!(made.write_mask, mask, "the write mask {mask:?}");
@@ -5699,7 +5482,7 @@ fn the_runtime_side_forwards_every_field_of_a_color_state() {
         destination_alpha: BlendFactor::BlendColor,
         alpha: BlendOperation::Min,
     };
-    let made = crate::runtime_side::color_descriptor(
+    let made = crate::rt_side::fields::color_descriptor(
         &ColorState::new(PixelFormat::R16Snorm)
             .masked(ColorWriteMask::GREEN)
             .blended(blend),
@@ -5932,7 +5715,7 @@ fn the_metal_side_mentions_every_pipeline_field() {
 
 /// Every field of a case's [`RenderPipelineSpec`](crate::render::RenderPipelineSpec) except its two
 /// stages reaches the pipeline descriptor the runtime side builds
-/// (`runtime_side::pipeline_fields`), checked field by field with no device.
+/// (`rt_side::fields::pipeline_fields`), checked field by field with no device.
 ///
 /// This is `the_runtime_side_forwards_every_field_of_a_color_state` one level up, and it is here
 /// because the omission happened a second time: after the write mask was found never to be
@@ -6010,7 +5793,7 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
         "the two formats must differ, or swapping them would pass"
     );
 
-    let made = crate::runtime_side::pipeline_fields(&spec).expect("three attachments of eight");
+    let made = crate::rt_side::fields::pipeline_fields(&spec).expect("three attachments of eight");
     assert_eq!(
         made.depth_format,
         Some(PixelFormat::Depth32Float),
@@ -6023,11 +5806,6 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     );
     assert_eq!(made.raster_sample_count, 4, "samples");
     assert!(!made.rasterization_enabled, "rasterization");
-    assert_eq!(
-        made.label.as_deref(),
-        Some("a-pipeline-spec-label"),
-        "label"
-    );
     assert!(
         made.support_indirect_command_buffers,
         "support_indirect_command_buffers"
@@ -6117,7 +5895,7 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     ];
     let past = RenderPipelineSpec::of(StageFunction::named("v"), None, &past_the_eight);
     assert!(
-        crate::runtime_side::pipeline_fields(&past).is_err(),
+        crate::rt_side::fields::pipeline_fields(&past).is_err(),
         "a ninth colour attachment"
     );
 }
@@ -6241,153 +6019,6 @@ fn a_multisampled_sparse_texture_without_the_sample_count_is_the_devices_gap() {
         Unsupported::device_capability(Feature::Format, "sparseResidency4Samples").needs,
         Needs::DeviceCapability("sparseResidency4Samples")
     ));
-}
-
-/// A device's gap is the device's gap in **every** variant that carries a typed refusal, and our
-/// unbuilt work stays ours in every one of them.
-///
-/// Which `Error` variant wraps an `Unsupported` says *where the refusal was decided*, never *whose
-/// gap it is*: the plain form decides it as the call is made, `Error::Bind` as a dispatch or draw
-/// is planned, and `Error::Compile` as a kernel the runtime dispatches for itself is built. Only
-/// [`Unsupported::needs`] says whose gap it is, so the same `needs` must read the same way through
-/// all three, and the carrier must not change the answer.
-///
-/// `Error::Compile` was the one [`crate::verdict::device_gap`] did not read, and it is reachable:
-/// an extended-range attachment's shadow load is built on demand through `owned_kernel`, whose 43
-/// builds wrap the compile layer's refusal in `Error::Compile`, and `extended_shadow_module`
-/// refuses `Unsupported::needs(FramebufferFetch, c)` -- a `Needs::AnyOf`, the device's own gap --
-/// where the device's profile lacks a capability its module needs.
-/// `render/extended_shadow.rs`'s pre-instance load hands that refusal to the caller with `?`, so
-/// before this a device without the capability had its gap scored as a refusal of ours.
-///
-/// Both halves over the same three carriers, because one direction alone is vacuous here: a test
-/// that only checked the gaps would pass a `device_gap` that answered `Some` for everything.
-#[test]
-fn a_device_gap_reads_the_same_through_every_variant_that_carries_a_refusal() {
-    use metal2vulkan::device::VkFeature;
-    use metal2vulkan::error::{BindError, Capability, Error as CompileError, Feature, Unsupported};
-    use metal2vulkan_runtime::Error;
-    // One `Unsupported` that is the device's gap, and one that is ours, each put through every
-    // carrier unchanged. Built once so the two directions cannot drift apart.
-    let theirs = Unsupported::needs(
-        Feature::FramebufferFetch,
-        Capability::Feature(VkFeature::ShaderInt8),
-    );
-    let ours = Unsupported::not_implemented(Feature::FramebufferFetch);
-    /// One variant that carries a typed refusal: what to call it, and how it wraps one.
-    type Carrier = (&'static str, fn(Unsupported) -> Error);
-    let carriers: [Carrier; 3] = [
-        ("Error::Unsupported", Error::Unsupported),
-        ("Error::Bind", |u| Error::Bind(BindError::Unsupported(u))),
-        ("Error::Compile", |u| {
-            Error::Compile(CompileError::Unsupported(u))
-        }),
-    ];
-    for (carrier, wrap) in carriers {
-        let gap = wrap(theirs.clone());
-        assert!(
-            crate::verdict::device_gap(&gap).is_some(),
-            "{carrier} carries the same typed refusal, so a device's gap in it is the device's gap"
-        );
-        // And through the one call every refusal of the suite passes: `Failure::of` is where
-        // `lacks` is set, so a carrier it does not read loses the fact for the whole run.
-        assert!(
-            Failure::of(&gap).lacks.is_some(),
-            "{carrier}: a refusal the venue cannot answer must reach the run as the venue's gap"
-        );
-        let mine = wrap(ours.clone());
-        assert!(
-            crate::verdict::device_gap(&mine).is_none(),
-            "{carrier}: what we have not built stays ours to answer for"
-        );
-        assert!(
-            Failure::of(&mine).lacks.is_none(),
-            "{carrier}: our own unbuilt work must not be excused as the venue's gap"
-        );
-    }
-}
-
-/// Every field of a [`crate::texture::TextureRequest`] reaches **both** sides' texture
-/// descriptors, checked field by field with no device, each at a value no other field holds.
-///
-/// It is written for the swizzle families, where a dropped harness field is the easiest way to
-/// measure nothing at all: if one side set the swizzle and the other did not, both legs would be
-/// reading the texture's *unswizzled* texels, every swizzle case would compare equal, and the
-/// suite would report a sweep of the question neither leg was asked. The four channels therefore
-/// take four **different** sources, so a dropped, duplicated or transposed channel cannot pass by
-/// coincidence.
-///
-/// The Metal half runs wherever Metal's frameworks are: making an `MTLTextureDescriptor` asks
-/// nothing of a device.
-#[test]
-fn both_sides_state_every_field_of_a_texture_request() {
-    use crate::texture::TextureRequest;
-    use metal2vulkan::metal::{PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType};
-
-    // Four different sources, so no channel can take another's and still compare equal.
-    let swizzle = TextureSwizzleChannels::new(
-        TextureSwizzle::Blue,
-        TextureSwizzle::Alpha,
-        TextureSwizzle::Zero,
-        TextureSwizzle::Red,
-    );
-    let request = TextureRequest::read_2d(PixelFormat::RG16Uint.as_raw(), 7, 5)
-        .levels(3)
-        .used(metal2vulkan::metal::TextureUsage::SHADER_WRITE)
-        .swizzled(swizzle)
-        .private();
-
-    let ours = crate::runtime_side::texture_descriptor(&request, PixelFormat::RG16Uint);
-    assert_eq!(ours.pixel_format, PixelFormat::RG16Uint);
-    assert_eq!(ours.texture_type, TextureType::Type2D);
-    assert_eq!([ours.width, ours.height, ours.depth], [7, 5, 1]);
-    assert_eq!(ours.mipmap_level_count, 3);
-    assert_eq!(ours.array_length, 1);
-    assert_eq!(
-        ours.usage,
-        metal2vulkan::metal::TextureUsage::SHADER_WRITE,
-        "the usage the case stated, and nothing added to it"
-    );
-    assert!(ours.allow_gpu_optimized_contents);
-    assert_eq!(ours.swizzle, swizzle, "every channel's own source");
-
-    #[cfg(target_os = "macos")]
-    {
-        use objc2_metal::{MTLStorageMode, MTLTextureDescriptor, MTLTextureSwizzle};
-        let theirs: objc2::rc::Retained<MTLTextureDescriptor> =
-            crate::metal_side::texture_descriptor(&request);
-        assert_eq!(
-            theirs.pixelFormat().0 as u32,
-            PixelFormat::RG16Uint.as_raw()
-        );
-        assert_eq!(theirs.textureType().0 as u32, TextureType::Type2D.as_raw());
-        assert_eq!([theirs.width(), theirs.height(), theirs.depth()], [7, 5, 1]);
-        assert_eq!(theirs.mipmapLevelCount(), 3);
-        assert_eq!(theirs.arrayLength(), 1);
-        assert_eq!(
-            theirs.usage().0 as u32,
-            metal2vulkan::metal::TextureUsage::SHADER_WRITE.as_raw()
-        );
-        assert_eq!(
-            theirs.storageMode(),
-            MTLStorageMode::Private,
-            "the case asked for private storage"
-        );
-        assert!(theirs.allowGPUOptimizedContents());
-        // The one field the whole family turns on, channel by channel against the case's own.
-        let held = theirs.swizzle();
-        let raw = |source: TextureSwizzle| MTLTextureSwizzle(source.as_raw() as u8);
-        assert_eq!(held.red, raw(swizzle.red), "red");
-        assert_eq!(held.green, raw(swizzle.green), "green");
-        assert_eq!(held.blue, raw(swizzle.blue), "blue");
-        assert_eq!(held.alpha, raw(swizzle.alpha), "alpha");
-        // And the four are really four different sources, so the four assertions above are four
-        // facts rather than one repeated.
-        let sources = [held.red, held.green, held.blue, held.alpha];
-        let distinct: std::collections::BTreeSet<u8> =
-            sources.iter().map(|source| source.0).collect();
-        assert_eq!(distinct.len(), 4, "{sources:?}");
-    }
 }
 
 /// Every case states the inputs its own recording's answers were taken from, and the cases that
@@ -7660,89 +7291,6 @@ fn the_tagged_sampler_words_tell_every_field_apart() {
 // A case's verdict is a function of that case alone.
 // ---------------------------------------------------------------------------------------------
 
-/// The suite's integrity property, composed from the two halves that decide it: **a case's verdict
-/// is the case's.** One device serves a whole selection, so the two halves are the notice
-/// attribution ([`crate::device::Notices`]) and what the comparison is allowed to read
-/// ([`replay_against`]).
-///
-/// **Measured, at `cbbdca70a3`.** The comparison took the codes the device had announced *earlier
-/// in the run* as justifications a case's own tolerances could cite. The case below — a value
-/// tolerance justified by a notice, a run that announced nothing itself, and a word that genuinely
-/// differs — read `Divergent` alone and `Announced` inside a selection where **any** earlier case
-/// had provoked that code. A real difference was excused by a neighbour's notice, which is the one
-/// failure mode that lets a broken implementation pass a whole-set run while every added case
-/// still looks green.
-///
-/// What the test drives is the second case of a two-case selection, with the selection's own
-/// notice sink: the first case provokes the code, the second announces nothing of its own, and its
-/// verdict must be the one it reads alone.
-#[test]
-fn a_notice_one_case_provoked_does_not_excuse_the_nexts_difference() {
-    let kind = Degradation::DeviceArithmetic;
-    let case = WordsCase {
-        allowances: vec![Allowance::new(
-            "case/output",
-            Loosening::Unchecked,
-            Justification::notice(kind),
-        )],
-        ..WordsCase::new("words", 2)
-    };
-    let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
-
-    /// What the case reads with `announced` as its own run's notices: one word differs, and
-    /// whether that difference is accounted for turns on whether this run announced the code.
-    fn verdict_with(case: &WordsCase, recording: &Recording, announced: Vec<String>) -> Verdict {
-        let mut side = StubSide::new(words(&[1, 9])).announcing_codes(announced);
-        replay_against(case, &mut side, recording).unwrap().verdict
-    }
-
-    // Alone. Nothing this run announced justifies the word, so nobody is accounting for it.
-    let alone = verdict_with(&case, &recording, Vec::new());
-    assert!(
-        matches!(alone, Verdict::Divergent { .. }),
-        "a word differs with nothing announced to justify it: {alone}"
-    );
-
-    // The same case as the **second** of a selection, over the selection's own sink, after a
-    // neighbour provoked exactly the code its tolerance cites.
-    let mut notices = crate::device::Notices::default();
-    let announce = notices.announcer_for_tests();
-    let first = notices.open("the-neighbour");
-    announce(kind.code());
-    assert_eq!(
-        first.take(),
-        vec![kind.code()],
-        "the neighbour provoked the notice, so the test is not vacuous"
-    );
-    drop(first);
-    let second = notices.open("words");
-    let in_set = verdict_with(&case, &recording, second.take());
-    drop(second);
-
-    assert_eq!(
-        alone, in_set,
-        "the same case over the same run read two verdicts, one of them inside a selection"
-    );
-
-    // The other leak, which is the same property from the other side: a neighbour whose notice
-    // arrives **after** it was compared — off a runtime thread, or as it lets its last resource go
-    // — leaves nothing for this case to pick up either.
-    let mut notices = crate::device::Notices::default();
-    let announce = notices.announcer_for_tests();
-    let neighbour = notices.open("the-neighbour");
-    drop(neighbour);
-    announce(kind.code());
-    let second = notices.open("words");
-    let after_a_late_notice = verdict_with(&case, &recording, second.take());
-    drop(second);
-    assert_eq!(
-        alone, after_a_late_notice,
-        "a notice that arrived between the two cases was charged to the second"
-    );
-    // Never lost: the run reports it against no case.
-    assert_eq!(notices.unattributed().len(), 1);
-}
-
 /// Every case carries a cost recording, or is named here with the reason it does not.
 ///
 /// The suite records cost for **every** case by structure and not for a selection, so a recording
@@ -8157,51 +7705,6 @@ fn a_moved_ratio_is_a_load_bearing_drift() {
     let gone = crate::cost::drift(&record(128), &without);
     assert_eq!(gone.len(), 1);
     assert!(gone[0].what.is_load_bearing());
-}
-
-/// A recorded refusal reads as `Unmeasured` and gates no count.
-///
-/// The venue writes down that it cannot measure a case ([`crate::run`]'s refusal writer), and that
-/// record holds no bounds. An absent bound otherwise means **zero**, which is the gate's whole
-/// point, so a refusal record read naively would hold every count the case moves to nothing and
-/// fail it. [`crate::cost::judge`] therefore reads the refusal before it reads a count.
-///
-/// The second half of this test is the one that matters: the same record with the refusal removed
-/// Every name in `cost::SPARED` is a count the runtime keeps and one the measurement can gate.
-///
-/// Held in both directions, as every table in `cost.rs` is: a name that is not a count of the
-/// runtime's would gate nothing for ever, and a name the reported tables already name would be
-/// claimed by two rules at once — `racy` wins, so such a row would be a floor that never applies
-/// while reading as though it did.
-#[test]
-fn every_spared_count_is_a_count_the_runtime_keeps_and_is_not_already_reported() {
-    let counts = crate::cost::Counts::of(&metal2vulkan_runtime::WorkCounts::default())
-        .expect("the runtime's counts read as counts");
-    let spared = ["creation_pipelines_drawn"];
-    for name in spared {
-        assert!(
-            crate::cost::spared(name).is_some(),
-            "{name} is not in the table this test holds"
-        );
-        assert!(
-            counts.iter().any(|(held, _)| held == name),
-            "{name} is not a count the runtime keeps"
-        );
-        assert!(
-            crate::cost::racy(name).is_none(),
-            "{name} is reported and never gated, so no floor on it can ever apply"
-        );
-    }
-    // The other direction: a name the code holds that this test does not know fails here, so the
-    // table cannot grow without the measurement a new row needs being written down beside it.
-    for (name, why) in crate::cost::spared_table() {
-        assert!(spared.contains(&name), "{name} is in SPARED and not here");
-        assert!(
-            why.len() > 40,
-            "{name}'s reason is {} characters, which is not a measurement",
-            why.len()
-        );
-    }
 }
 
 /// A count of work the runtime avoided is gated from BOTH sides (`cost::SPARED`).

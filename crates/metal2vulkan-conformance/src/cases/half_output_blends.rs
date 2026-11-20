@@ -94,6 +94,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, BlendColorChannels, ColorState, PassColor, Plane, ReadAt, RenderPass,
@@ -101,7 +102,6 @@ use crate::render::{
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, FILLS, FILL_HALF, VERTEX,

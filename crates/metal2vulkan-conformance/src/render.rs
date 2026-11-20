@@ -58,16 +58,16 @@
 
 use crate::case::Failure;
 use crate::case::Handle;
+use crate::values::{
+    LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, SamplePosition,
+    StoreAction, StoreActionOptions, VisibilityResultMode, VisibilityResultType,
+};
 use metal2vulkan::metal::{
     BarrierScope, BlendFactor, BlendOperation, ColorWriteMask, CullMode, DepthClipMode, IndexType,
     PixelFormat, PrimitiveTopologyClass, PrimitiveType, RenderStages, ResourceUsage,
     TessellationControlPointIndexType, TessellationFactorFormat, TessellationFactorStepFunction,
     TessellationPartitionMode, TextureType, TriangleFillMode, VertexFormat, VertexStepFunction,
     Winding,
-};
-use metal2vulkan_runtime::{
-    LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, SamplePosition,
-    StoreAction, StoreActionOptions, VisibilityResultMode, VisibilityResultType,
 };
 
 /// The `MTLBlitOption` a texture read takes, which the suite states in one place

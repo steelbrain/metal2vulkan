@@ -636,10 +636,10 @@ impl Case for PatchDraws {
 /// named because a notice our run announces that no case names is a divergence.
 fn tessellation_notices() -> Vec<Allowance> {
     [
-        metal2vulkan_runtime::Degradation::TessellationWinding,
-        metal2vulkan_runtime::Degradation::TessellationFactorEdgeCases,
-        metal2vulkan_runtime::Degradation::TessellationTriangleOrder,
-        metal2vulkan_runtime::Degradation::EmulatedTessellationDraws,
+        crate::degradation::Degradation::TessellationWinding,
+        crate::degradation::Degradation::TessellationFactorEdgeCases,
+        crate::degradation::Degradation::TessellationTriangleOrder,
+        crate::degradation::Degradation::EmulatedTessellationDraws,
     ]
     .into_iter()
     .map(|notice| crate::replay::notice_allowance(notice.code()))

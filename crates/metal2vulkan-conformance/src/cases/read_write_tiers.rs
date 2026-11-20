@@ -452,10 +452,10 @@ impl Case for ReadWriteDescriptors {
         // (`compressed-texel-decode`), at the notices site alone too: the tables read no texel.
         vec![
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
+                crate::degradation::Degradation::CarriedDecodedTwin.code(),
             ),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+                crate::degradation::Degradation::CompressedTexelDecode.code(),
             ),
         ]
     }
@@ -902,7 +902,7 @@ impl Case for HeldReadWrite {
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::UnnamedTextureUnviewable.code(),
+                crate::degradation::Degradation::UnnamedTextureUnviewable.code(),
             ),
             crate::replay::set_past_layout_notice(),
         ]

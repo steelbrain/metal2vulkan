@@ -128,6 +128,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -137,11 +138,9 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::{MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, StencilOperation};
-use metal2vulkan_runtime::{
-    Degradation, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction,
-};
 
 /// The case's name: its recording's file name and its row in the report.
 const NAME: &str = "resolve-stencil-depth-resolved-sample";
@@ -498,7 +497,6 @@ fn depth_filter_name(filter: MultisampleDepthResolveFilter) -> &'static str {
         MultisampleDepthResolveFilter::Sample0 => "MTLMultisampleDepthResolveFilterSample0",
         MultisampleDepthResolveFilter::Min => "MTLMultisampleDepthResolveFilterMin",
         MultisampleDepthResolveFilter::Max => "MTLMultisampleDepthResolveFilterMax",
-        _ => "MTLMultisampleDepthResolveFilterUnknown",
     }
 }
 
@@ -509,7 +507,6 @@ fn stencil_filter_name(filter: MultisampleStencilResolveFilter) -> &'static str 
         MultisampleStencilResolveFilter::DepthResolvedSample => {
             "MTLMultisampleStencilResolveFilterDepthResolvedSample"
         }
-        _ => "MTLMultisampleStencilResolveFilterUnknown",
     }
 }
 

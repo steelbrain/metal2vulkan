@@ -63,6 +63,7 @@ use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, PlaneTexture, Side,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -72,7 +73,6 @@ use crate::render::{
 use crate::replay::notice_allowance;
 use crate::transcript::{Digest, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages};
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture of the rectangle and the reads.
 const FIXTURE: &str = "psb_reads";

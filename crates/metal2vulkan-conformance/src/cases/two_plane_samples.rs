@@ -391,7 +391,7 @@ impl Case for TwoPlaneSamples {
         let mut named = vec![crate::replay::shared_memory_notice()];
         if self.state.starts_with('l') {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::BicubicFilterArithmetic.code(),
+                crate::degradation::Degradation::BicubicFilterArithmetic.code(),
             ));
         }
         named

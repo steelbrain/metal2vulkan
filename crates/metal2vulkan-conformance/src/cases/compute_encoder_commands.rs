@@ -1001,7 +1001,7 @@ mod tests {
     /// sampler slot, `pixel-sampler-scaling`.
     #[test]
     fn every_case_states_its_inputs_and_loosens_nothing() {
-        use metal2vulkan_runtime::Degradation as D;
+        use crate::degradation::Degradation as D;
         let cases = [
             threadgroup_memory_and_grid(),
             plural_buffer_binding(),

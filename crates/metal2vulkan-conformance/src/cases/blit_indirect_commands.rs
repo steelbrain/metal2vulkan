@@ -71,13 +71,13 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::indirect_commands::{ComputeCommandStep, EncodedCommand, IcbDescriptor};
 use crate::recording::ShaderRef;
 use crate::render::RenderWork;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites};
 use metal2vulkan::metal::IndirectCommandType;
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture whose kernel writes `params[0] * (tid + 1) + params[1]` to `out[tid]`.
 const FIXTURE: &str = "icb_replay_template";

@@ -38,13 +38,13 @@ use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side, TARGET_TEXEL,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, Loaded, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture every case of the family runs.
 const FIXTURE: &str = "mesh_draws";

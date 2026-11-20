@@ -20,10 +20,10 @@
 
 use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::empty_command_buffers::{EMPTY, FILL, FILL_BYTES};
 use crate::replay::notice_allowance;
 use crate::transcript::{Node, Observed, Sites};
-use metal2vulkan_runtime::Degradation;
 
 /// The case's name.
 pub const EMPTY_COMMAND_BUFFERS: &str = "empty-command-buffers";

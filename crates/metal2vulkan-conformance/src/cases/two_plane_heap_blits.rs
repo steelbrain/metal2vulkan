@@ -584,8 +584,8 @@ impl Case for HeapBlits {
         // image that is a shadow of its two planes in the heap's bytes, where Metal lays them out.
         // Declaring it loosens no byte -- every heap byte the case reads compares exactly.
         [
-            metal2vulkan_runtime::Degradation::TwoPlaneTextureCopy,
-            metal2vulkan_runtime::Degradation::ShadowedTexture,
+            crate::degradation::Degradation::TwoPlaneTextureCopy,
+            crate::degradation::Degradation::ShadowedTexture,
         ]
         .into_iter()
         .map(|kind| notice_allowance(kind.code()))

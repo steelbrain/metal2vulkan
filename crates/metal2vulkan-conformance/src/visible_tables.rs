@@ -33,8 +33,8 @@
 //! Two of these end a process and the third is recorded in the runtime's own documentation. No
 //! case here may reach any of them:
 //!
-//! - **A render table of no stage faults.** `metal2vulkan_runtime`'s `function_table.rs` records
-//!   `newVisibleFunctionTableWithDescriptor:stage:` with an empty `MTLRenderStages` faulting on an
+//! - **A render table of no stage faults.** Measured:
+//!   `newVisibleFunctionTableWithDescriptor:stage:` with an empty `MTLRenderStages` faults on an
 //!   M4 under macOS 27.0.1. [`StageAsked`] therefore has no value for it and
 //!   [`crate::cases::visible_tables`] names it unexercised by choice.
 //! - **The device's maximum table size ends the process.** A table's allocation is one word an
@@ -48,10 +48,9 @@
 //! # What our side folds, and why that is exact
 //!
 //! Metal answers **nil** from `functionHandleWithFunction:` for a function the state's stage does
-//! not link, and from the `:stage:` pair for a `stage` that is more than one stage. The runtime
-//! answers the first as `Ok(None)` and the second as `Err(Error::Nil)`, whose documented meaning
-//! is "plain Metal answers nil here" — so [`Asked::of`] folds `Error::Nil` to the same `None`
-//! Metal's nil records as, and records every other error as a refusal. The fold is the same one
+//! not link, and from the `:stage:` pair for a `stage` that is more than one stage. A side folds an
+//! answer of nil to the same [`Asked::Nil`] Metal's nil records as, and records every other error
+//! as a refusal. The fold is the same one
 //! [`crate::pipeline_functions`] applies to a nil array, for the same reason: a shape one side
 //! cannot hold is not a difference to compare. A side that answered a handle where Metal answered
 //! nil, or refused with any other error, still reads differently.
@@ -359,34 +358,7 @@ fn named(name: &'static str, raw: u32) -> Value {
     ])
 }
 
-/// The fold this module's header states, in the one place both answers go through:
-/// `Error::Nil`'s documented meaning in the runtime is "plain Metal answers nil (no object, no
-/// error), and the process goes on", so it records as the nil Metal's own answer records as. Any
-/// other error is a refusal, which reads divergent against Metal's object or nil.
-///
-/// `metal_nil` is what the folded answer is: a side's own nil for a call it made and that
-/// answered nothing.
-fn folded<T, N: Fn() -> T, H: Fn(F) -> T, F>(
-    answer: Result<Option<F>, metal2vulkan_runtime::Error>,
-    metal_nil: N,
-    held: H,
-    refused: impl Fn(crate::case::Failure) -> T,
-) -> T {
-    match answer {
-        Ok(Some(facts)) => held(facts),
-        Ok(None) => metal_nil(),
-        Err(metal2vulkan_runtime::Error::Nil(_)) => metal_nil(),
-        Err(error) => refused(crate::case::Failure::of(&error)),
-    }
-}
-
 impl Asked {
-    /// The answer of a side whose call gives `Option` and whose `Error::Nil` is Metal's nil
-    /// (the `folded` helper below is the one place the rule lives).
-    pub fn of(answer: Result<Option<HandleFacts>, metal2vulkan_runtime::Error>) -> Self {
-        folded(answer, || Asked::Nil, Asked::Handle, Asked::Refused)
-    }
-
     /// The answer of a side whose call answers Metal's nil-able object and no error, which is
     /// Metal's own leg.
     pub fn answered(facts: Option<HandleFacts>) -> Self {
@@ -442,12 +414,6 @@ pub enum Made {
 }
 
 impl Made {
-    /// The answer of a side whose creation gives a `Result` and whose `Error::Nil` is Metal's nil,
-    /// folded as [`Asked::of`] folds a handle's, through the same `folded` helper.
-    pub fn of(answer: Result<Option<TableFacts>, metal2vulkan_runtime::Error>) -> Self {
-        folded(answer, || Made::Nil, Made::Table, Made::Refused)
-    }
-
     /// The answer of Metal's own leg, whose creation answers a nil-able object and no error.
     pub fn answered(facts: Option<TableFacts>) -> Self {
         facts.map_or(Made::Nil, Made::Table)

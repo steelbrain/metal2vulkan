@@ -19,8 +19,11 @@
 
 use crate::cost::CostRecord;
 use crate::transcript::Transcript;
-use metal2vulkan_runtime::MACOS_RELEASE;
 use serde::{Deserialize, Serialize};
+
+/// The macOS release whose Metal the runtime answers as, on every host, as macOS names it: the
+/// release every recording's answer is of, where Metal's answers differ by release.
+pub const MACOS_RELEASE: &str = "27.0.1";
 
 /// The recording file's format. Bump it when a stored field changes meaning; a recording of another
 /// format is not read.
@@ -283,7 +286,7 @@ pub struct Recording {
     pub shaders: Vec<ShaderRef>,
     pub answers: Vec<Answer>,
     /// What **our** side cost to produce the case's transcript, per venue
-    /// ([`crate::cost`]): the counts the runtime's own [`metal2vulkan_runtime::WorkCounts`] moved,
+    /// ([`crate::cost`]): the counts the old runtime's `WorkCounts` moved,
     /// each with the most the measurement saw.
     ///
     /// It lives here, beside the Metal answers and in the same file, so a host with no Metal

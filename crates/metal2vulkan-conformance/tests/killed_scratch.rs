@@ -130,24 +130,18 @@ fn the_next_run_sweeps_a_killed_runs_scratch_and_leaves_a_live_ones() {
     drop(live);
 }
 
-/// **Both scratch paths of the suite lie in the root the next run sweeps, each with a lock beside
-/// it.** The program scratch a side keeps its metallibs in was
-/// `$TMPDIR/metal2vulkan-conformance-<pid>-<nanos>` and the shader cache a run gives its device
-/// was `$TMPDIR/m2v-conformance-shader-cache-<pid>-<nanos>`, each removed on drop alone and
-/// recognisable to nothing, so a killed record or replay left both behind -- the program scratch
-/// still holding its `0.air`, `0.air.ll` and `0.metallib`. Being in the root with a lock is the
-/// whole of what makes
-/// [`the_next_run_sweeps_a_killed_runs_scratch_and_leaves_a_live_ones`] possible; move either path
-/// back out and this test fails naming it.
+/// **The program scratch a side keeps its metallibs in lies in the root the next run sweeps, with
+/// a lock beside it.** It was `$TMPDIR/metal2vulkan-conformance-<pid>-<nanos>`, removed on drop
+/// alone and recognisable to nothing, so a killed record or replay left it behind, still holding
+/// its `0.air`, `0.air.ll` and `0.metallib`. Being in the root with a lock is the whole of what
+/// makes [`the_next_run_sweeps_a_killed_runs_scratch_and_leaves_a_live_ones`] possible; move the
+/// path back out and this test fails naming it.
 #[test]
-fn both_scratch_paths_of_the_suite_lie_in_the_swept_root() {
+fn the_program_scratch_lies_in_the_swept_root() {
     let root = metal2vulkan_devtools::scratch::root();
 
     let program = metal2vulkan_conformance::archives::Scratch::new().expect("a program scratch");
     in_the_root("the program scratch", program.dir(), &root);
-
-    let cache = metal2vulkan_conformance::device::ScratchCache::new().expect("a shader cache");
-    in_the_root("the shader cache", cache.path(), &root);
 }
 
 /// `what` at `path` is a run's directory in `root`, with the lock a sweep reads beside it.

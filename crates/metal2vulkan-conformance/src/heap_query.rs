@@ -60,7 +60,7 @@
 use crate::case::Handle;
 use crate::texture_query::Storage;
 use crate::transcript::{Node, NodeName, Observed, Value};
-use metal2vulkan_runtime::{CpuCacheMode, HazardTrackingMode, HeapType, PurgeableState};
+use crate::values::{CpuCacheMode, HazardTrackingMode, HeapType, PurgeableState};
 
 /// The CPU cache modes a case of this module names, by Metal's own enumeration.
 ///
@@ -88,7 +88,6 @@ pub fn cache_word(mode: CpuCacheMode) -> String {
     match mode {
         CpuCacheMode::DefaultCache => "default-cache".to_owned(),
         CpuCacheMode::WriteCombined => "write-combined".to_owned(),
-        mode => format!("cache-{}", mode.raw()),
     }
 }
 
@@ -98,7 +97,6 @@ pub fn hazard_word(mode: HazardTrackingMode) -> String {
         HazardTrackingMode::Default => "hazard-default".to_owned(),
         HazardTrackingMode::Untracked => "untracked".to_owned(),
         HazardTrackingMode::Tracked => "tracked".to_owned(),
-        mode => format!("hazard-{}", mode.raw()),
     }
 }
 
@@ -108,7 +106,6 @@ pub fn heap_type_word(heap_type: HeapType) -> String {
         HeapType::Automatic => "automatic".to_owned(),
         HeapType::Placement => "placement".to_owned(),
         HeapType::Sparse => "sparse".to_owned(),
-        heap_type => format!("heap-type-{}", heap_type.raw()),
     }
 }
 
@@ -119,7 +116,6 @@ pub fn purgeable_word(state: PurgeableState) -> String {
         PurgeableState::NonVolatile => "non-volatile".to_owned(),
         PurgeableState::Volatile => "volatile".to_owned(),
         PurgeableState::Empty => "empty".to_owned(),
-        state => format!("purgeable-{}", state.raw()),
     }
 }
 

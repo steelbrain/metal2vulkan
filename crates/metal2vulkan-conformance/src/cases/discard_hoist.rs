@@ -42,6 +42,7 @@ use crate::case::{
     call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec,
     Side, TextureRole, TextureSpec,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -52,7 +53,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture every function of the case lives in.
 const FIXTURE: &str = "fragment_discard_hoist";

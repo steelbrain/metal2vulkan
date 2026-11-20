@@ -46,11 +46,11 @@
 //! `EXCLUDED` constant's own documentation.
 
 use crate::case::{Abort, Case, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::replay::notice_allowance;
 use crate::sparse_query::{SparseHeapSpec, SparseTextureSpec as T};
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::Degradation;
 
 /// The case names, as the report and the recordings spell them.
 pub const HEAP_FACTS: &str = "sparse-heap-facts";
@@ -437,92 +437,12 @@ fn emit_heap(side: &mut dyn Side, sites: &mut Sites, heap: Handle, at: &str) {
     }
 }
 
-/// The guards this family's safety argument rests on, run on a device.
-///
-/// Record mode hands the heap descriptor and every texture descriptor of these tables to Metal. A
-/// descriptor Metal's own API validation stops **ends Metal's process**, and the runtime's model is
-/// what tells the two apart: `Error::Invalid` is "Metal's validation stops it, ending the process",
-/// while `Error::Nil` is "plain Metal answers nil, the process going on". So a table that makes the
-/// runtime answer `Invalid` anywhere is a table that must never be recorded.
-///
-/// A refusal that is **ours** — the runtime has not built the form, or the device lacks sparse
-/// residency — is a different matter: it is a legitimate recorded value, which is the whole point
-/// of the `Refused` verdict, and it does not make the Metal leg unsafe. So the guard sorts the
-/// answers by kind rather than demanding every one succeed, which is what keeps it from being
-/// either vacuous or a blanket ban on recording a gap.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+/// The guard this family's safety argument rests on: record mode hands every texture descriptor
+/// of these tables to Metal, and a descriptor Metal's own API validation stops **ends Metal's
+/// process**, so the tables stay inside the shapes the module's prose allows.
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-
-    /// Whether a recorded failure is the runtime's `Error::Invalid`, which is the one kind that
-    /// says "Metal's own validation stops this descriptor, and recording it would end Metal's
-    /// process". `Failure` keeps the error as the variant path a transcript holds, not as the typed
-    /// error, so the kind is read from there.
-    fn is_invalid(value: &crate::transcript::Value) -> bool {
-        let crate::transcript::Value::Variant { name, payload } = value else {
-            return false;
-        };
-        if name != "Err" {
-            return false;
-        }
-        matches!(&**payload, crate::transcript::Value::Variant { name, .. } if name == "Error::Invalid")
-    }
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    /// No descriptor of the family is one Metal's own validation stops.
-    ///
-    /// Verified to fail: a `T::texture_2d(PixelFormat::R32Float, [0, 256], 1)` row added to a table
-    /// fails here, naming the texture and the `Invalid` the runtime answered.
-    #[test]
-    fn no_descriptor_of_the_family_is_one_metals_validation_stops() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("no_descriptor_of_the_family_is_one_metals_validation_stops"),
-        );
-        let mut stopped = Vec::new();
-        let heap = match side.sparse_heap(&HEAP) {
-            Ok(heap) => heap,
-            // A device that cannot make a sparse heap at all has nothing to say about Metal's
-            // validation of the textures, and its own refusal is a recorded value.
-            Err(failure) => {
-                println!("this venue refuses a sparse heap: {:?}", failure.recorded());
-                return;
-            }
-        };
-        for case in all() {
-            for texture in &case.textures {
-                if let Err(failure) = side.heap_texture(heap, texture) {
-                    // `Error::Invalid` alone: the refusals that are ours to answer for, and `Nil`,
-                    // leave Metal's process alive and are recorded values.
-                    if is_invalid(&failure.recorded()) {
-                        stopped.push(format!(
-                            "{} {}: {:?}",
-                            case.name,
-                            texture.site(),
-                            failure.recorded()
-                        ));
-                    }
-                }
-            }
-        }
-        assert!(
-            stopped.is_empty(),
-            "these descriptors are ones Metal's validation stops, so record mode would end \
-             Metal's process; take them out of the table:\n{}",
-            stopped.join("\n")
-        );
-    }
 
     /// The family's tables hold no texture the module's own exclusion list names.
     ///

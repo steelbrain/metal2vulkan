@@ -984,7 +984,7 @@ impl Case for SamplerCrossings {
             allowances.push(crate::replay::swizzled_border_notice());
         }
         if matches!(self.family, Family::CompareFilters) {
-            use metal2vulkan_runtime::Degradation as D;
+            use crate::degradation::Degradation as D;
             for kind in [D::RestrictedDepthUpload, D::RestrictedDepthRange] {
                 allowances.push(crate::replay::notice_allowance(kind.code()));
             }

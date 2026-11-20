@@ -128,7 +128,7 @@ impl Case for RisingValue {
 /// events the same question finds it.
 ///
 /// The runtime answered the device for both until this case said so; it now answers `None`
-/// ([`metal2vulkan_runtime::SharedEvent::device`]), which is what Metal answers, and these two
+/// (`SharedEvent::device`), which is what Metal answers, and these two
 /// sites compare exactly like the rest of the pair.
 ///
 /// # Why it is safe

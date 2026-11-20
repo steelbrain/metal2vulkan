@@ -415,7 +415,7 @@ impl Case for ExtendedSwizzles {
                 | PixelFormat::RG10UnormX12SRGB
         ) {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::BicubicFilterArithmetic.code(),
+                crate::degradation::Degradation::BicubicFilterArithmetic.code(),
             ));
         }
         named

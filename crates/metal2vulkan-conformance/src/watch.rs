@@ -4,7 +4,7 @@
 //! does: [`crate::validated`] announces the call's name so the parent process can attribute
 //! Metal's own output to it, and [`crate::times`] measures what the call cost. Both want the same
 //! narrow span — around the Metal or Vulkan call and nothing else — and neither wants to reach
-//! inside `metal_side::MetalSide` or [`crate::runtime_side::RuntimeSide`], because a span
+//! inside `metal_side::MetalSide` or a runtime's side, because a span
 //! placed separately in each of them is two spans that can drift apart, and a cost comparison of
 //! two legs measured in different places is not a comparison.
 //!
@@ -982,7 +982,7 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
     fn heap_purgeable_state(
         &mut self,
         heap: Handle,
-        state: metal2vulkan_runtime::PurgeableState,
+        state: crate::values::PurgeableState,
     ) -> Answer<u64> {
         let _span = self.watch("heap_purgeable_state");
         self.inner.heap_purgeable_state(heap, state)
@@ -1028,7 +1028,7 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
     fn resource_purgeable_state(
         &mut self,
         of: crate::heap_query::QueriedResource,
-        state: metal2vulkan_runtime::PurgeableState,
+        state: crate::values::PurgeableState,
     ) -> Answer<u64> {
         let _span = self.watch("resource_purgeable_state");
         self.inner.resource_purgeable_state(of, state)

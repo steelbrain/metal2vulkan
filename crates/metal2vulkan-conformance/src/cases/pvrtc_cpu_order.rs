@@ -49,10 +49,10 @@
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::cases::pvrtc_rows::{blocks, Linear, BEFORE, BLOCK};
+use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// One PVRTC format the lane walks in this test: the case's name, the raw `MTLPixelFormat`
 /// (stated as `PixelFormat::<name>.as_raw()`, so the value is named in the case's own text and

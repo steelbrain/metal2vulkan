@@ -724,7 +724,7 @@ impl Case for TextureFills {
                 format!("case/{}", site(self.raw)),
                 Loosening::Unchecked,
                 Justification::Degradation(
-                    metal2vulkan_runtime::Degradation::RestrictedDepthUpload
+                    crate::degradation::Degradation::RestrictedDepthUpload
                         .code()
                         .to_owned(),
                 ),
@@ -743,7 +743,7 @@ impl Case for TextureFills {
         // depth's denormals are the device's own answer, which the suite declares for every case
         // (`crate::replay::NATIVE_NOTES`). The format's own digest still compares, and only the
         // 32-bit float depth formats' go unchecked, above.
-        use metal2vulkan_runtime::Degradation as D;
+        use crate::degradation::Degradation as D;
         for kind in [
             D::UnpackedFillColor,
             D::ShadowedTexture,
@@ -892,7 +892,7 @@ impl Case for TwoPlaneHeapFill {
         // through is `Shared`, which a device with no unified memory keeps in system memory
         // because that is the only memory both sides can reach.
         vec![
-            notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+            notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
             crate::replay::shared_memory_notice(),
         ]
     }

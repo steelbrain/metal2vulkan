@@ -146,6 +146,7 @@ use crate::case::{
     call, drawn_or_refused, made, pipeline_or_refused, refused_leg, Abort, Case, Failure, Handle,
     Input, MetalSource, Side,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -157,7 +158,6 @@ use metal2vulkan::metal::{
     TessellationControlPointIndexType as IndexType, TessellationFactorStepFunction as Step,
     TessellationPartitionMode as Partition, VertexFormat, VertexStepFunction,
 };
-use metal2vulkan_runtime::Degradation;
 
 // ---- The domain fixtures ----------------------------------------------------------------------
 

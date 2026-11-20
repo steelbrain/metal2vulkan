@@ -25,11 +25,11 @@ use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side, StageInAttribute,
     StageInLayout, StageInRegion, StageInput,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{AttributeFormat, StepFunction};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture both entry points live in.
 const FIXTURE: &str = "stage_in_regions";

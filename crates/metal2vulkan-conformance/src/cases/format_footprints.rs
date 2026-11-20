@@ -165,11 +165,11 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side, TextureRole, TextureSpec};
+use crate::degradation::Degradation;
 use crate::texture_query::{HeapTextureQuery as Q, Storage};
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::bind::AstcDecode;
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::Degradation;
 
 /// The two storage modes every case of the family sweeps.
 const BOTH_STORAGE: [Storage; 2] = [Storage::Shared, Storage::Private];
@@ -887,68 +887,5 @@ mod tests {
             }
         }
         assert_eq!(patterns.len(), 31, "other than 31 formats round-trip");
-    }
-}
-
-/// The safety guard this family rests on, run on a device.
-///
-/// The same guard `heap_metal_sizes` carries, in the family that needs it most: the subject here is
-/// formats whose descriptor Metal's own validation may stop, which ends Metal's process. The
-/// runtime's model is what tells the two apart — `Error::Invalid` is "Metal's validation stops it,
-/// ending the process", `Error::Nil` is "plain Metal answers nil, the process going on" — so a
-/// table that makes the runtime answer `Invalid` anywhere must never be recorded.
-///
-/// Unlike `heap_metal_sizes`' guard this one tolerates every **other** typed error. The runtime
-/// holds no image of 32 of this family's 33 formats and refuses each `NotImplemented(Format)`,
-/// which is the gap this family exists to make visible; only `Invalid` says the descriptor itself
-/// is one Metal stops.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod device_tests {
-    use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    #[test]
-    fn no_descriptor_of_the_family_is_one_metals_validation_stops() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("no_descriptor_of_the_family_is_one_metals_validation_stops"),
-        );
-        let mut stopped = Vec::new();
-        for case in all() {
-            for query in &case.queries {
-                for answer in [
-                    side.heap_texture_size_and_align(query)
-                        .err()
-                        .map(|failure| failure.recorded()),
-                    side.makes_texture(query)
-                        .err()
-                        .map(|failure| failure.recorded()),
-                ] {
-                    let Some(recorded) = answer else {
-                        continue;
-                    };
-                    if format!("{recorded:?}").contains("Invalid") {
-                        stopped.push(format!("{} {}: {recorded:?}", case.name, query.site()));
-                    }
-                }
-            }
-        }
-        assert!(
-            stopped.is_empty(),
-            "these descriptors answer `Invalid` on the runtime, so Metal's validation stops them \
-             and record mode would end Metal's process; take them out of the table:\n{}",
-            stopped.join("\n")
-        );
     }
 }

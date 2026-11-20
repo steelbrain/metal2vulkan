@@ -1,11 +1,10 @@
-//! The new runtime's side: the case vocabulary on `metal2vulkan-rt`'s public API.
+//! The runtime's side: the case vocabulary on `metal2vulkan-rt`'s public API.
 //!
-//! The vocabulary is ported one family at a time, as the old runtime's side was. A call this side
-//! does not answer yet answers [`Failure::unavailable`] with its name, so a case that needs it
-//! ends refused, its row naming the call: nothing is skipped, and nothing is answered for it. The
-//! rows it refuses are held to their own ledger, `known-gaps-rt.tsv`
-//! ([`crate::known_gaps::rt_ledger`]). The old runtime's side ([`crate::runtime_side`]) is
-//! untouched by this one. A translator refusal that names capabilities the device offers is the
+//! The vocabulary is ported one family at a time. A call this side does not answer yet answers
+//! [`Failure::unavailable`] with its name, so a case that needs it ends refused, its row naming
+//! the call: nothing is skipped, and nothing is answered for it. The rows it refuses are held to
+//! the ledger, `known-gaps-rt.tsv` ([`crate::known_gaps::ledger`]). A translator refusal that
+//! names capabilities the device offers is the
 //! runtime's refusal and not the venue's lack: the runtime's floor leaves them off
 //! (`RtDevice::failure`).
 //!
@@ -48,6 +47,7 @@ mod compute;
 mod descriptors;
 mod events;
 mod fences;
+pub(crate) mod fields;
 mod functions;
 mod heap_sizes;
 mod render;
@@ -870,7 +870,7 @@ impl Side for RtSide<'_> {
             return Err(Failure::named("WouldEndMetalsProcess", why));
         }
         let (block, range) = work::heap_of(self.on, spec.size, spec.storage)?;
-        let placement = matches!(spec.heap_type, metal2vulkan_runtime::HeapType::Placement);
+        let placement = matches!(spec.heap_type, crate::values::HeapType::Placement);
         Ok(keep(
             &mut self.heaps,
             RtHeap {
@@ -959,7 +959,7 @@ impl Side for RtSide<'_> {
     fn heap_purgeable_state(
         &mut self,
         _heap: Handle,
-        _state: metal2vulkan_runtime::PurgeableState,
+        _state: crate::values::PurgeableState,
     ) -> Answer<u64> {
         Err(heap_is_the_consumers())
     }
@@ -1171,7 +1171,7 @@ impl Side for RtSide<'_> {
             .flat_map(rt::RenderPipelineState::precision_notes);
         let encoder = self.encoder_notes.iter().copied();
         let codes: BTreeSet<&'static str> = (dispatched.chain(drawn).chain(encoder))
-            .map(|note| metal2vulkan_runtime::Degradation::from_precision_note(note).code())
+            .map(|note| crate::degradation::Degradation::from_precision_note(note).code())
             .collect();
         self.dispatched.clear();
         self.drawn.clear();
@@ -1192,7 +1192,7 @@ impl Side for RtSide<'_> {
         let mut descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
             rt::FunctionDescriptor::new(function),
         ));
-        descriptor.stage_input = Some(crate::runtime_side::stage_input_descriptor(stage_input));
+        descriptor.stage_input = Some(fields::stage_input_descriptor(stage_input));
         let on = self.on;
         let state = (on.device)
             .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
@@ -1209,7 +1209,7 @@ impl Side for RtSide<'_> {
             spec.size[0],
             spec.size[1],
         );
-        descriptor.usage = crate::runtime_side::usage_of(spec.role);
+        descriptor.usage = fields::usage_of(spec.role);
         descriptor.storage_mode = rt::StorageMode::Shared;
         let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let of_rt = |error: rt::Error| Failure::of_rt(&error);

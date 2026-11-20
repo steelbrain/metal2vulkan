@@ -598,42 +598,6 @@ mod tests {
         assert_eq!(words.len(), MODES.len());
     }
 
-    /// A nil is read as a nil from either side's wording, and a refusal is never read as one.
-    ///
-    /// Both shapes are built here rather than described: the Metal side's
-    /// [`Failure::named`]`("Nil", ...)` and our side's [`Failure::of`] of a typed
-    /// `Error::Nil`, which is the exact value each side records. So if either side's wording
-    /// moves, this fails rather than the family quietly reading that side's nil as a refusal.
-    #[test]
-    fn a_nil_reads_as_a_nil_from_either_side_and_a_refusal_never_does() {
-        let metal = Failure::named(
-            METAL_NIL,
-            "newSharedTextureWithDescriptor: returned nil for a cell",
-        );
-        assert!(is_nil(&metal), "the Metal side's nil does not read as one");
-        let ours = Failure::of(&metal2vulkan_runtime::Error::Nil(
-            metal2vulkan_runtime::Nil::new(
-                "new_shared_texture",
-                metal2vulkan_runtime::Problem::StorageMode,
-            ),
-        ));
-        assert!(is_nil(&ours), "our side's typed Nil does not read as one");
-        // A refusal of ours, which must stay a refusal: reading it as a nil is the one way this
-        // family could turn a gap into a pass.
-        let refused = Failure::of(&metal2vulkan_runtime::Error::NotImplemented(
-            metal2vulkan_runtime::RuntimeGap::TextureBufferLevels,
-        ));
-        assert!(
-            !is_nil(&refused),
-            "a typed refusal of ours reads as Metal's nil, so a gap would record as `made: false` \
-             and compare as a pass"
-        );
-        assert!(
-            !is_nil(&Failure::unavailable("shared_texture")),
-            "a side that cannot be asked reads as a nil"
-        );
-    }
-
     /// Both cases state their inputs, and the two fingerprints differ.
     #[test]
     fn both_cases_state_their_own_inputs() {

@@ -69,7 +69,7 @@ impl RtSide<'_> {
     ) -> Answer<Handle> {
         let mut descriptor = rt::ComputePipelineDescriptor::new(self.kernel(library, entry)?);
         descriptor.support_indirect_command_buffers = true;
-        descriptor.stage_input = stage_input.map(crate::runtime_side::stage_input_descriptor);
+        descriptor.stage_input = stage_input.map(super::fields::stage_input_descriptor);
         let on = self.on;
         let state = (on.device)
             .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))

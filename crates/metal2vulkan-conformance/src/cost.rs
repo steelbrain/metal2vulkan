@@ -22,7 +22,7 @@
 //!
 //! # The mechanism is the runtime's own
 //!
-//! [`metal2vulkan_runtime::WorkCounts`] already counts what the runtime did; nothing here invents a
+//! the old runtime's `WorkCounts` already counts what the runtime did; nothing here invents a
 //! parallel mechanism. It is read twice around each case, and the difference is that case's cost.
 //! The read is cheap and always on, because product behaviour may not branch on the environment:
 //! the suite never asks the runtime to count *more* for a cost run than for an ordinary one.
@@ -46,11 +46,10 @@
 //! the measurement that justified it; a venue the record does not hold is `Unmeasured`, never a
 //! pass.
 
-use metal2vulkan_runtime::WorkCounts;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// A field of [`WorkCounts`] the cost half does not read, and why.
+/// A field of `WorkCounts` the cost half does not read, and why.
 ///
 /// A `*_sites` field is a table of the runtime's own source positions — a file, a line and what
 /// was recorded there — rather than a count, so the difference of two readings of it is not a
@@ -206,13 +205,13 @@ const SPARED: &[(&str, &str)] = &[(
 )];
 
 /// The name the gate's **derived** row carries, which is not a field of
-/// [`metal2vulkan_runtime::WorkCounts`] and never comes out of [`Counts`].
+/// the old runtime's `WorkCounts` and never comes out of [`Counts`].
 ///
 /// A breach of the pipelines-per-state ratio is reported as an [`Overrun`] like any other, because
 /// that is what it is — this case made more pipelines than its bound allows — and a reader should
 /// not have to learn a second shape to read it. It is named apart so nobody greps the runtime for
 /// it: the two counts it is derived from are `creation_pipelines_made` and
-/// `variant_pipelines_made`, and the denominator is the suite's own ([`crate::states`]).
+/// `variant_pipelines_made`, and the denominator is the suite's own (the old runtime's side's count).
 pub const PER_STATE: &str = "pipelines_per_pipeline_state";
 
 /// The `VkPipeline`s our leg made over the Metal pipeline states the case created: **the ratio**,
@@ -249,7 +248,7 @@ pub struct PipelinesPerState {
     /// The `VkPipeline`s the measurement saw made: `creation_pipelines_made` plus
     /// `variant_pipelines_made`.
     pub pipelines: u64,
-    /// The Metal pipeline states the case created in the same run ([`crate::states`]). Never zero
+    /// The Metal pipeline states the case created in the same run (the old runtime's side's count). Never zero
     /// in a record: a case that creates none has no ratio and carries no bound.
     pub states: u64,
 }
@@ -1026,7 +1025,7 @@ pub fn region_of(name: &str) -> Region {
     }
 }
 
-/// The counts one run moved, by name: the cost half's reading of [`WorkCounts`].
+/// The counts one run moved, by name: the cost half's reading of `WorkCounts`.
 ///
 /// The names are the runtime's own field names, nested ones joined with a dot
 /// (`commands_recorded.cmd_draw`), so a failure names the counter a reader can grep for.
@@ -1034,20 +1033,8 @@ pub fn region_of(name: &str) -> Region {
 pub struct Counts(BTreeMap<String, u64>);
 
 impl Counts {
-    /// The counts `counts` holds, flattened.
-    ///
-    /// Read out of the derived `Debug`, which is the one complete view of the struct a sibling
-    /// crate has: [`WorkCounts`] carries several hundred fields of its own plus its nested count
-    /// structs, and a hand-written list of them would be stale the day a runtime change added one
-    /// -- as a count written here is, which is why this says no number. A field whose
-    /// value is not a count fails here by name rather than being dropped, so a new field of
-    /// another shape is a loud failure in this crate's own tests instead of a silent hole in the
-    /// gate.
-    pub fn of(counts: &WorkCounts) -> Result<Self, String> {
-        Self::read(&format!("{counts:#?}"))
-    }
-
-    /// [`Counts::of`]'s parse, over the `Debug` text itself, so a test can feed it a shape.
+    /// The counts a runtime's derived `Debug` of its work counts holds, flattened, so a test can
+    /// feed it a shape.
     pub fn read(debug: &str) -> Result<Self, String> {
         let mut read: BTreeMap<String, u64> = BTreeMap::new();
         let mut path: Vec<String> = Vec::new();
@@ -2008,7 +1995,7 @@ pub struct CaseCost {
     pub least: Counts,
     /// The runs taken.
     pub runs: u32,
-    /// The **most** Metal pipeline states any run of the case created ([`crate::states`]): the
+    /// The **most** Metal pipeline states any run of the case created (the old runtime's side's count): the
     /// denominator of the pipelines-per-state ratio.
     ///
     /// The most rather than the least, to match `counts`: both halves of the ratio come from the
@@ -2497,7 +2484,7 @@ mod the_ratio {
     /// `binary-archive-serializing` move `creation_pipelines_made` from inside
     /// `addComputePipelineFunctionsWithDescriptor:` and the archive's step replay, where **Metal
     /// creates no pipeline state at all** — so the denominator is honestly zero and the suite's own
-    /// door ([`crate::states::making_a_state`]) is right not to count one. Their numerator is
+    /// door (the old runtime's side's `making_a_state`) is right not to count one. Their numerator is
     /// therefore bounded by `creation_pipelines_made` alone and by no ratio, which is the open
     /// shape here: a `VkPipeline` we make for no Metal pipeline state is the worst row this project
     /// has and the ratio cannot express it.

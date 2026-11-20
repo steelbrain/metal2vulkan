@@ -172,7 +172,7 @@ impl Case for Lockstep {
             ),
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::ImplementationDefinedReconvergence.code(),
+                crate::degradation::Degradation::ImplementationDefinedReconvergence.code(),
             ),
         ]
     }

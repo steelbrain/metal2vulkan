@@ -247,7 +247,7 @@ jobs:
       # The conformance suite's replay leg on lavapipe: it reads the committed recordings, runs the
       # runtime side and compares, with no Metal present. Its exit status is 0 only where the run
       # holds no surprise: no unrecorded case, no stale recording, and exactly the gaps
-      # crates/metal2vulkan-conformance/known-gaps.tsv expects on this venue. A refusal or a
+      # crates/metal2vulkan-conformance/known-gaps-rt.tsv expects on this venue. A refusal or a
       # divergence that ledger does not list fails here, and so does a row it lists that the run no
       # longer holds, so closing a gap forces the ledger edit. A venue that lacks a feature a case
       # needs does not spoil it.

@@ -331,10 +331,10 @@ mod tests {
 
     use super::*;
     use crate::allowance::Justification;
+    use crate::degradation::Degradation;
     use crate::recording::Recording;
     use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
-    use metal2vulkan_runtime::Degradation;
 
     /// The texel Metal leaves under `mask`: `0xff` in each channel it names, the prefill byte in
     /// each it does not.

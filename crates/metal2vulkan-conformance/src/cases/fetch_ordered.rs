@@ -46,6 +46,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -56,7 +57,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture the vertex function comes from, and the function: Metal's fullscreen triangle at a
 /// depth its vertex buffer holds.

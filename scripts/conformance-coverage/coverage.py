@@ -550,7 +550,7 @@ def recordings(families: dict[str, dict]) -> list[dict]:
 def known_gaps() -> list[tuple[str, str]]:
     """The ledger's rows, as `(case, what it is waiting on)`."""
     out = []
-    for name in ("known-gaps.tsv", "known-refusals.tsv"):
+    for name in ("known-gaps-rt.tsv",):
         path = SUITE / name
         if not path.exists():
             continue

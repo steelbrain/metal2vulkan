@@ -1108,7 +1108,7 @@ impl Case for FreshTexture {
         if self.row.shape.format == DEPTH32FLOAT.format {
             allowances.extend(zeroed_depth_pattern());
             allowances.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::RestrictedDepthUpload.code(),
+                crate::degradation::Degradation::RestrictedDepthUpload.code(),
             ));
         }
         // A shape of blocks more than one texel square (`BC1_RGBA`) is a block-compressed
@@ -1116,7 +1116,7 @@ impl Case for FreshTexture {
         // (`compressed-texel-decode`). At the notices site alone: the case reads bytes.
         if self.row.shape.block.1 > 1 {
             allowances.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+                crate::degradation::Degradation::CompressedTexelDecode.code(),
             ));
         }
         allowances
@@ -1354,7 +1354,7 @@ impl Pattern {
 /// justification, and the notice is declared; measured on the M3 Max (MoltenVK), the zeroed
 /// texel is the whole of the difference beside the notices.
 fn zeroed_depth_pattern() -> [Allowance; 2] {
-    let zeroed = metal2vulkan_runtime::Degradation::FreshPatternZeroed.code();
+    let zeroed = crate::degradation::Degradation::FreshPatternZeroed.code();
     [
         Allowance::new(
             "case/fresh/*",
@@ -2114,7 +2114,7 @@ mod tests {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
         let fresh = crate::replay::without_compression("fresh");
         let [zeroed, _] = zeroed_depth_pattern();
-        let shared = metal2vulkan_runtime::Degradation::SharedInSystemMemory
+        let shared = crate::degradation::Degradation::SharedInSystemMemory
             .code()
             .to_owned();
         for case in all() {
@@ -2148,7 +2148,7 @@ mod tests {
             );
             assert_eq!(
                 allowances.contains(&crate::replay::notice_allowance(
-                    metal2vulkan_runtime::Degradation::CompressedTexelDecode.code()
+                    crate::degradation::Degradation::CompressedTexelDecode.code()
                 )),
                 compressed,
                 "{}",

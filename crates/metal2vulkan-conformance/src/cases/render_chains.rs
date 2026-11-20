@@ -90,6 +90,7 @@ use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -100,7 +101,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMinMagFilter};
-use metal2vulkan_runtime::Degradation;
 
 /// The format both targets of every row carry. Its codes survive a store unchanged, so every texel
 /// of every row is exact.

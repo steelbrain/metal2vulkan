@@ -93,7 +93,7 @@ fn allowances() -> Vec<Allowance> {
     // memory announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`).
     vec![
         crate::replay::shared_memory_notice(),
-        crate::replay::notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+        crate::replay::notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
     ]
 }
 

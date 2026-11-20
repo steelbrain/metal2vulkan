@@ -91,9 +91,9 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::pipeline_options::OptionValue;
 use crate::recording::ShaderRef;
 use crate::transcript::{Digest, Node, Observed, Sites};
+use crate::values::PipelineOption;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
-use metal2vulkan_runtime::PipelineOption;
 
 /// The site the library's make sits at.
 const LIBRARY: &str = "library";

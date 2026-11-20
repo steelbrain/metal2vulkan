@@ -42,10 +42,10 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Observed, Region, Sites, Value};
 use crate::work::{Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The textures' width, and the height of all but the short one: the lane's, and at least the 16
 /// texels Metal needs on the shorter side to keep a texture compressed.

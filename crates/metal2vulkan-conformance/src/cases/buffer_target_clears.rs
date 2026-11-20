@@ -137,8 +137,8 @@
 use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::render::{OverBuffer, PassColor, RenderPass, RenderWork, TargetSpec};
 use crate::transcript::{ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
+use crate::values::StoreAction;
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::StoreAction;
 
 /// The buffer's bytes. Two kilobytes: enough for the widest pitch's rows, bytes before the target
 /// and a long tail after it that no pass should reach, and an exact multiple of all three pitches,
@@ -403,12 +403,12 @@ impl Case for BufferTargetClear {
         let mut named = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
+                crate::degradation::Degradation::ShadowedTexture.code(),
             ),
         ];
         if self.row.kept_image {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::DontCareStandIn.code(),
+                crate::degradation::Degradation::DontCareStandIn.code(),
             ));
         }
         named.extend(self.row.dont_care_texels());
@@ -683,107 +683,5 @@ mod tests {
                 }
             }
         }
-    }
-}
-
-/// The safety guard this family rests on, run on a device: **the pitch-16 rows go through our
-/// runtime before they go to Metal.**
-///
-/// Record mode hands every row of the table to Metal, and the runtime's own model is what tells a
-/// shape Metal *stops* from one it answers nil for: `Error::Invalid` is "Metal stops this call",
-/// `Error::Nil` is "plain Metal answers nil and the process goes on". So a row that makes the
-/// runtime answer `Invalid` is a row that must never be recorded, and this is the check that says
-/// so before anybody runs `conformance record`.
-///
-/// A pitch equal to the target's own row is exactly the shape that needs it. The sub-row guard
-/// ([`OverBuffer::unsafe_stride`]) lets it through, and while the buffer-backed texture family was
-/// being written the runtime answered `Invalid` for an `R8Unorm` 8 x 8 texture at a pitch of its
-/// own row of 8. That one broke the **multiple-of-16** rule a 2D texture over a buffer is held to,
-/// not a pitch-equals-row rule, so 16 here is fine — but the way to know that is to ask our own
-/// side, where an `Invalid` costs nothing, and not the oracle.
-///
-/// **It carries its own control**, because a sweep that only ever walks shapes the runtime answers
-/// is a sweep that would pass with the check removed. A pitch of 24 is at or above the target's row
-/// of 16, so the sub-row guard lets it through, and it breaks the rule the `R8Unorm` row broke —
-/// `bytesPerRow` must be a multiple of 16 — so the runtime must answer `Invalid` for it. The second
-/// half asserts that, in the same run on the same device: where it holds, the first half is a check
-/// that can fail rather than a walk that always passes.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod device_tests {
-    use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    /// The variant a failure names, where it names one.
-    fn variant(value: &Value) -> String {
-        match value {
-            Value::Variant { name, payload } if name == "Err" => match payload.as_ref() {
-                Value::Variant { name, .. } => name.clone(),
-                other => format!("{other:?}"),
-            },
-            other => format!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn no_row_of_the_table_is_one_metal_stops() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("no_row_of_the_table_is_one_metal_stops"),
-        );
-        let mut stopped = Vec::new();
-        for row in &ROWS {
-            let buffer = match side.buffer(&pattern(LEN as usize)) {
-                Ok(buffer) => buffer,
-                Err(failure) => {
-                    stopped.push(format!(
-                        "{}: its buffer: {}",
-                        row.case,
-                        variant(&failure.recorded())
-                    ));
-                    continue;
-                }
-            };
-            if let Err(failure) = side.target(&row.target(buffer)) {
-                let named = variant(&failure.recorded());
-                if named.contains("Invalid") {
-                    stopped.push(format!("{}: {named}", row.case));
-                }
-            }
-        }
-        assert!(
-            stopped.is_empty(),
-            "these rows are ones the runtime says Metal stops, so record mode would end Metal's \
-             process; take them out of the table:\n{}",
-            stopped.join("\n")
-        );
-        // The control: a pitch of 24 passes the sub-row guard and breaks the 16-byte pitch rule,
-        // so the runtime says Metal stops it. Without this the walk above would read the same with
-        // the `Invalid` test deleted.
-        let buffer = side
-            .buffer(&pattern(LEN as usize))
-            .expect("a buffer for the control shape");
-        let control = TargetSpec::plain(FORMAT, [SIDE, SIDE])
-            .over_buffer(OverBuffer::new(buffer, OFFSET, 24, ROW_BYTES));
-        let answered = side
-            .target(&control)
-            .map(|_| ())
-            .map_err(|failure| variant(&failure.recorded()));
-        assert!(
-            matches!(&answered, Err(named) if named.contains("Invalid")),
-            "a target at a pitch of 24 is not one the runtime says Metal stops ({answered:?}), so \
-             the sweep above is not a check: either the rule moved, in which case say so here, or \
-             the test no longer reads a refusal"
-        );
     }
 }

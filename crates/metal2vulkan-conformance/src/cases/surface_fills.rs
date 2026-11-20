@@ -28,12 +28,12 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Fill, Input, MetalSource, PlaneTexture, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Transcript, Value,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The case's name.
 pub const SURFACE_FILLS: &str = "surface-fills-over-planes-and-buffers";

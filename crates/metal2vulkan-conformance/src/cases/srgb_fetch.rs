@@ -36,6 +36,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -45,9 +46,9 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::StoreAction;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat};
-use metal2vulkan_runtime::{Degradation, StoreAction};
 
 /// The fixture the vertex function comes from, and the function.
 const VERTEX_FIXTURE: &str = "rt6_resolves";
@@ -388,9 +389,9 @@ impl Case for SrgbFetch {
                         .with_stencil(PassStencil::cleared(depth, STENCIL_CLEAR)),
                 ));
                 let mut loaded = PassDepth::cleared(depth, DEPTH_CLEAR);
-                loaded.load = metal2vulkan_runtime::LoadAction::Load;
+                loaded.load = crate::values::LoadAction::Load;
                 let mut stencil = PassStencil::cleared(depth, STENCIL_CLEAR);
-                stencil.load = metal2vulkan_runtime::LoadAction::Load;
+                stencil.load = crate::values::LoadAction::Load;
                 pass = pass
                     .with_depth(loaded.stored(StoreAction::DontCare))
                     .with_stencil(stencil.stored(StoreAction::DontCare));

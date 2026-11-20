@@ -14,7 +14,7 @@
 //! **Lengths and names, with Metal's nil folded to a length of zero.** Metal's getters answer nil
 //! for a property no program wrote, and an empty array for one written with one; the runtime has
 //! no descriptor **object** at all — a program hands it a
-//! [`RenderPipelineFunctionsDescriptor`](metal2vulkan_runtime::RenderPipelineFunctionsDescriptor)
+//! `RenderPipelineFunctionsDescriptor`
 //! whose three fields are `Vec`s — so nil and empty are one answer on our side and there is
 //! nothing there to observe the difference with. That is the same fold, for the same reason,
 //! that [`crate::compute_descriptors::SuppliedLists`] applies to `preloadedLibraries` and

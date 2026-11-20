@@ -86,6 +86,7 @@ use crate::tile_descriptors::{
     AWAY as TILE_AWAY,
 };
 use crate::transcript::Value;
+use crate::values::{PurgeableState, SparsePageSize, VisibilityResultType};
 use crate::visible_tables::{
     Asked, Binding, Entry, HandleFacts, LinkedList as SpecLinkedList, Made as MadeTable, Maker,
     TableFacts, TableOutcome, TableSpec, Writes,
@@ -96,7 +97,6 @@ use metal2vulkan::metal::{
     ArgumentBuffersTier, BindingAccess, BindingType, FunctionOptions, FunctionType, PatchType,
     PixelFormat, ReadWriteTextureTier, RenderStages,
 };
-use metal2vulkan_runtime::{PurgeableState, SparsePageSize, VisibilityResultType};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, ClassType};
@@ -3972,9 +3972,9 @@ impl Side for MetalSide {
             descriptor.setThreadgroupMemoryLength(numbers.0[7] as usize);
         }
         if let Some(stated) = spec.positions {
-            let positions: Vec<metal2vulkan_runtime::SamplePosition> = stated
+            let positions: Vec<crate::values::SamplePosition> = stated
                 .iter()
-                .map(|(x, y)| metal2vulkan_runtime::SamplePosition::new(*x, *y))
+                .map(|(x, y)| crate::values::SamplePosition::new(*x, *y))
                 .collect();
             // The suite's one guard for the shapes Metal asserts on, which every family that sets
             // sample positions goes through. The count is held against the row's own length: this
@@ -7508,7 +7508,7 @@ impl Side for MetalSide {
 
 /// Metal's `MTLHeapType` for a case's heap type, by its raw value, so the two spellings cannot
 /// drift apart.
-fn metal_heap_type(heap_type: metal2vulkan_runtime::HeapType) -> MTLHeapType {
+fn metal_heap_type(heap_type: crate::values::HeapType) -> MTLHeapType {
     MTLHeapType(heap_type.raw() as isize)
 }
 

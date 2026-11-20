@@ -45,6 +45,7 @@ use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side, TextureRole,
     TextureSpec,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -57,7 +58,6 @@ use crate::transcript::{
 use metal2vulkan::metal::{
     CullMode, PixelFormat, PrimitiveType, SamplerAddressMode, TriangleFillMode, Winding,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The format every target here carries: a `float` stored as it is, so the whole expectation is
 /// arithmetic rather than a rounding rule.

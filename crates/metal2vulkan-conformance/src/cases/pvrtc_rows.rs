@@ -39,10 +39,10 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The bytes one PVRTC block takes, 2-bit and 4-bit alike.
 pub const BLOCK: u64 = 8;

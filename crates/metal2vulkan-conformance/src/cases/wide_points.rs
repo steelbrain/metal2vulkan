@@ -40,6 +40,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, drawn_or_refused, made, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -48,7 +49,6 @@ use crate::render::{
 };
 use crate::transcript::{Digest, Negative, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture the vertex function lives in.
 const POSITIONS: Fixture = Fixture {

@@ -130,8 +130,8 @@ use crate::render::{
     TargetSpec,
 };
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
+use crate::values::VisibilityResultMode;
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::VisibilityResultMode;
 
 /// How many times record mode runs each case.
 ///
@@ -462,7 +462,7 @@ impl Case for HostPageWrite {
         let mut named = vec![crate::replay::shared_memory_notice()];
         if self.row.read_only {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::CopiedHostPages.code(),
+                crate::degradation::Degradation::CopiedHostPages.code(),
             ));
         }
         named

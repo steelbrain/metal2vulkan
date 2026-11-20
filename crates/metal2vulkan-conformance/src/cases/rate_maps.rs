@@ -41,9 +41,9 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{made, Abort, Case, Input, MetalSource, RateMapLayer, RateMapRequest, Side};
+use crate::degradation::Degradation;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Element, Gaps, Node, Observed, Region, Sites};
-use metal2vulkan_runtime::Degradation;
 
 /// The case of a descriptor Metal counts as having no layers.
 pub const NO_LAYERS: &str = "rate-map-no-layers";

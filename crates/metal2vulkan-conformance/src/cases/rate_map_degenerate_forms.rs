@@ -62,9 +62,9 @@ use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     made, Abort, Case, Input, MetalSource, RateMapForm, RateMapLayer, RateMapRequest, Side,
 };
+use crate::degradation::Degradation;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Element, Gaps, Node, Observed, Region, Sites};
-use metal2vulkan_runtime::Degradation;
 
 /// The screen every case here states: `rate-map-zero-screen-width`'s, whose compiled answer on this
 /// family's oracle is `0` by `33` physical pixels.

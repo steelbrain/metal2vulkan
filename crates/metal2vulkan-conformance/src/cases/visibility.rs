@@ -68,6 +68,7 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -76,9 +77,9 @@ use crate::render::{
 };
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Value};
+use crate::values::{StoreAction, VisibilityResultMode, VisibilityResultType};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{Degradation, StoreAction, VisibilityResultMode, VisibilityResultType};
 use std::collections::BTreeSet;
 
 /// The owned fixture the lane draws with: `rt6_full` takes a depth and a slope as one `float2` at

@@ -7,9 +7,9 @@
 //! into "we match except where we don't": the degrade catalogue and the accepted-difference list
 //! are checked by execution, not by discipline.
 
+use crate::degradation::Degradation;
 use crate::recording::Validated;
 use crate::transcript::{FloatWidth, Value};
-use metal2vulkan_runtime::Degradation;
 use serde::{Deserialize, Serialize};
 
 /// `docs/API.md`, compiled in: the accepted-difference entries are read from the document itself,

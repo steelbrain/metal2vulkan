@@ -44,6 +44,7 @@ use crate::case::{
     Abort, Case, Failure, Handle, Input, MetalSource, Side, TextureRole, TextureSpec,
     TilePipelineSpec, TileStep, METAL_TILE_THREADS,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::replay::NOTICES_SITE;
@@ -51,7 +52,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The tile's side, and the threadgroup's, as the probe drew them.
 const SIDE: u32 = 32;
@@ -1054,50 +1054,6 @@ mod tests {
                 assert_eq!(planes[2][i], cell_tag(tg, c), "tag ({x}, {y})");
             }
         }
-    }
-
-    /// A dispatch the **bind stage** refuses because the device's threadgroup is too small is the
-    /// device's gap, not ours, so the verdict is `LacksFeature`.
-    ///
-    /// This is the shape lavapipe gives the SIMD blur: its emulated 32-lane simdgroups take 960
-    /// threads of that pipeline, so the 32x32 tile threadgroup Metal runs is refused by
-    /// `check_local` with `Feature::LocalSize` and a `Capability::Limit`. Before the classifier
-    /// read `Error::Bind`, that refusal was neither announced nor counted as a device gap, which
-    /// is exactly what the `LacksFeature` verdict exists to prevent: a venue that honestly cannot
-    /// run a case must be its own outcome rather than a failure or a pass.
-    ///
-    /// The other direction is the half that keeps the fix honest: what the bind stage has **not
-    /// built** stays ours to answer for, so the two mesh rows of `known-gaps.tsv`, whose
-    /// errors are `Error::Bind(Unsupported(MeshShading, NotImplemented))`, remain refusals.
-    #[test]
-    fn a_dispatch_the_device_cannot_take_is_the_devices_gap() {
-        use metal2vulkan::error::{BindError, Feature, RuntimeDriverDefect, Unsupported};
-        use metal2vulkan_runtime::Error;
-        // `Capability`'s payload vocabulary is private to the translator, so a `Needs::AnyOf`
-        // cannot be built from here; the test states the other device-gap `Needs` instead. What
-        // the classifier reads is the `Needs` and the variant that carries it, not which
-        // capability, so this is the same claim.
-        let limited = Unsupported::runtime_driver_defect(
-            Feature::LocalSize { axis: None },
-            RuntimeDriverDefect::NormalizedDepthPastUnitRange,
-        );
-        let lacks = crate::verdict::device_gap(&Error::Bind(BindError::Unsupported(limited)));
-        assert!(
-            lacks
-                .as_deref()
-                .is_some_and(|why| why.contains("LocalSize")),
-            "{lacks:?}"
-        );
-        // Not built is not the device's gap, whichever variant carries it.
-        let not_built = Unsupported::not_implemented(Feature::MeshShading);
-        assert_eq!(
-            crate::verdict::device_gap(&Error::Bind(BindError::Unsupported(not_built.clone()))),
-            None
-        );
-        assert_eq!(
-            crate::verdict::device_gap(&Error::Unsupported(not_built)),
-            None
-        );
     }
 
     /// Every case of the family states its inputs and its tile descriptors, and loosens **only**

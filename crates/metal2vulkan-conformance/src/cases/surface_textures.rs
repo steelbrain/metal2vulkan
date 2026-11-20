@@ -243,7 +243,7 @@ impl Case for SurfaceTextures {
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
+                crate::degradation::Degradation::ShadowedTexture.code(),
             ),
         ]
     }

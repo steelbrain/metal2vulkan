@@ -437,7 +437,7 @@ impl Case for RowBlits {
             // nothing, so the notices site differs and that notice is what justifies it. Every
             // word still compares exactly.
             return vec![
-                notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+                notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
                 shared,
             ];
         }
@@ -445,8 +445,8 @@ impl Case for RowBlits {
         // device says which row's bytes it kept. Metal announces nothing, so the notices site
         // differs; the two notices are what justify it. The words still compare exactly.
         vec![
-            notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit.code()),
-            notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlitOrder.code()),
+            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlit.code()),
+            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlitOrder.code()),
             shared,
         ]
     }
@@ -679,7 +679,7 @@ impl Case for PadFills {
         // name this notice for the same reason, and the order notice besides, which a fill of
         // whole rows never meets.
         vec![
-            notice_allowance(metal2vulkan_runtime::Degradation::TwoPlaneBufferBlit.code()),
+            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlit.code()),
             // The venue's own, for the `Shared` read-back buffer, as the row blits state.
             crate::replay::shared_memory_notice(),
         ]

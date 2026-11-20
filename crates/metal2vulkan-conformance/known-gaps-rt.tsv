@@ -1,8 +1,6 @@
-# Known gaps of the new runtime's side (`conformance replay --rt`): the rows `known-gaps.tsv` holds
-# for the old runtime's, in its format and under its rules, held to a replay of the new runtime
-# (`metal2vulkan-rt`) in both directions, per venue. A call the side does not answer yet is a
-# refusal of `Unavailable` naming the call ([`rt_side`](src/rt_side.rs)), and a row here until the
-# side answers it. The old runtime's rows stay in `known-gaps.tsv` and are not held to this side.
+# Known gaps of the runtime's side (`conformance replay`), held to a replay of `metal2vulkan-rt` in
+# both directions, per venue. A call the side does not answer yet is a refusal of `Unavailable`
+# naming the call ([`rt_side`](src/rt_side.rs)), and a row here until the side answers it.
 #
 # case	venue	expects	site	our answer	waiting on
 a2c-on-1-alpha-50	llvmpipe	divergent	case/drawn/texel	4 elements differ (U8), the largest difference 191	The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the destination stays (Metal 255); lavapipe's covers it, by a 2x2 ordered dither, and stores the fragment (ours 64, its 0.25 as a code). Vulkan specifies no algorithm for converting alpha to coverage. Note `device-alpha-coverage`.

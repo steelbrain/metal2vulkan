@@ -45,9 +45,9 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Negative, Node, Observed, Sites, Value};
 use crate::work::{Resource, Step, Storage, Work};
-use metal2vulkan_runtime::Degradation;
 
 /// The byte a private destination is filled with before a row's own commands, so every byte the
 /// row compares is a byte something wrote.

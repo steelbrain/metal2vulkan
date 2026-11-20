@@ -119,7 +119,7 @@ use crate::pass_descriptors::{
     INDEX_VALUES, NUMBER_SWEEPS, POSITION_ROWS, STATED_NUMBERS, STATED_POSITIONS,
 };
 use crate::transcript::{Node, Observed, Sites};
-use metal2vulkan_runtime::{
+use crate::values::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction,
 };
 
@@ -142,62 +142,42 @@ const FACTS: &str = "facts";
 
 /// The SDK enumerator of `MTLLoadAction`'s raw value `raw`.
 fn load_action_name(raw: u64) -> Result<&'static str, String> {
-    Ok(
-        match LoadAction::from_raw(raw).map_err(|e| e.to_string())? {
-            LoadAction::DontCare => "MTLLoadActionDontCare",
-            LoadAction::Load => "MTLLoadActionLoad",
-            LoadAction::Clear => "MTLLoadActionClear",
-            held => return Err(format!("MTLLoadAction {raw} ({held:?}) has no name here")),
-        },
-    )
+    Ok(match LoadAction::from_raw(raw)? {
+        LoadAction::DontCare => "MTLLoadActionDontCare",
+        LoadAction::Load => "MTLLoadActionLoad",
+        LoadAction::Clear => "MTLLoadActionClear",
+    })
 }
 
 /// The SDK enumerator of `MTLStoreAction`'s raw value `raw`.
 fn store_action_name(raw: u64) -> Result<&'static str, String> {
-    Ok(
-        match StoreAction::from_raw(raw).map_err(|e| e.to_string())? {
-            StoreAction::DontCare => "MTLStoreActionDontCare",
-            StoreAction::Store => "MTLStoreActionStore",
-            StoreAction::MultisampleResolve => "MTLStoreActionMultisampleResolve",
-            StoreAction::StoreAndMultisampleResolve => "MTLStoreActionStoreAndMultisampleResolve",
-            StoreAction::Unknown => "MTLStoreActionUnknown",
-            StoreAction::CustomSampleDepthStore => "MTLStoreActionCustomSampleDepthStore",
-            held => return Err(format!("MTLStoreAction {raw} ({held:?}) has no name here")),
-        },
-    )
+    Ok(match StoreAction::from_raw(raw)? {
+        StoreAction::DontCare => "MTLStoreActionDontCare",
+        StoreAction::Store => "MTLStoreActionStore",
+        StoreAction::MultisampleResolve => "MTLStoreActionMultisampleResolve",
+        StoreAction::StoreAndMultisampleResolve => "MTLStoreActionStoreAndMultisampleResolve",
+        StoreAction::Unknown => "MTLStoreActionUnknown",
+        StoreAction::CustomSampleDepthStore => "MTLStoreActionCustomSampleDepthStore",
+    })
 }
 
 /// The SDK enumerator of `MTLMultisampleDepthResolveFilter`'s raw value `raw`.
 fn depth_filter_name(raw: u64) -> Result<&'static str, String> {
-    Ok(
-        match MultisampleDepthResolveFilter::from_raw(raw).map_err(|e| e.to_string())? {
-            MultisampleDepthResolveFilter::Sample0 => "MTLMultisampleDepthResolveFilterSample0",
-            MultisampleDepthResolveFilter::Min => "MTLMultisampleDepthResolveFilterMin",
-            MultisampleDepthResolveFilter::Max => "MTLMultisampleDepthResolveFilterMax",
-            held => {
-                return Err(format!(
-                    "MTLMultisampleDepthResolveFilter {raw} ({held:?}) has no name here"
-                ))
-            }
-        },
-    )
+    Ok(match MultisampleDepthResolveFilter::from_raw(raw)? {
+        MultisampleDepthResolveFilter::Sample0 => "MTLMultisampleDepthResolveFilterSample0",
+        MultisampleDepthResolveFilter::Min => "MTLMultisampleDepthResolveFilterMin",
+        MultisampleDepthResolveFilter::Max => "MTLMultisampleDepthResolveFilterMax",
+    })
 }
 
 /// The SDK enumerator of `MTLMultisampleStencilResolveFilter`'s raw value `raw`.
 fn stencil_filter_name(raw: u64) -> Result<&'static str, String> {
-    Ok(
-        match MultisampleStencilResolveFilter::from_raw(raw).map_err(|e| e.to_string())? {
-            MultisampleStencilResolveFilter::Sample0 => "MTLMultisampleStencilResolveFilterSample0",
-            MultisampleStencilResolveFilter::DepthResolvedSample => {
-                "MTLMultisampleStencilResolveFilterDepthResolvedSample"
-            }
-            held => {
-                return Err(format!(
-                    "MTLMultisampleStencilResolveFilter {raw} ({held:?}) has no name here"
-                ))
-            }
-        },
-    )
+    Ok(match MultisampleStencilResolveFilter::from_raw(raw)? {
+        MultisampleStencilResolveFilter::Sample0 => "MTLMultisampleStencilResolveFilterSample0",
+        MultisampleStencilResolveFilter::DepthResolvedSample => {
+            "MTLMultisampleStencilResolveFilterDepthResolvedSample"
+        }
+    })
 }
 
 /// The site a row of the action sweep is emitted at: the two SDK enumerators **colour

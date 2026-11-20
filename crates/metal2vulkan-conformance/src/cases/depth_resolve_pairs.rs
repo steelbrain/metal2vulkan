@@ -106,6 +106,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -115,9 +116,9 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::{MultisampleDepthResolveFilter, StoreAction};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{Degradation, MultisampleDepthResolveFilter, StoreAction};
 
 /// The owned fixture: the fullscreen triangle at buffer 0's depth, and the fragment whose sample
 /// mask is buffer 0's.
@@ -331,7 +332,6 @@ fn filter_name(filter: MultisampleDepthResolveFilter) -> &'static str {
         MultisampleDepthResolveFilter::Sample0 => "MTLMultisampleDepthResolveFilterSample0",
         MultisampleDepthResolveFilter::Min => "MTLMultisampleDepthResolveFilterMin",
         MultisampleDepthResolveFilter::Max => "MTLMultisampleDepthResolveFilterMax",
-        _ => "MTLMultisampleDepthResolveFilterUnknown",
     }
 }
 

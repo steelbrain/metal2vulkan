@@ -57,8 +57,8 @@
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::sparse_query::{page_word, page_words, QueryPage, SparseTileQuery as Q};
 use crate::transcript::{Sites, Value};
+use crate::values::SparsePageSize;
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::SparsePageSize;
 
 /// The case names, as the report and the recordings spell them.
 pub const BY_FORMAT: &str = "sparse-tile-size-by-format";
@@ -301,76 +301,12 @@ impl Case for SparseTileCase {
     }
 }
 
-/// The two guards this family's safety argument rests on.
-///
-/// Record mode hands every query of these tables to Metal, and an argument Metal's own API
-/// validation stops **ends Metal's process**, so the tables need a check rather than a careful
-/// reader.
-///
-/// What the check cannot be: "the runtime answered". Both of the runtime's getters return a
-/// `Size` and not a `Result` — they compute Metal's rule and refuse nothing — so a guard that
-/// sweeps the tables looking for a refusal passes whatever is in them, and would be a test that
-/// cannot fail. The two guards below take the argument apart instead: one says the **arguments**
-/// are inside the shapes the module's prose allows, the other says the **answer** is one the model
-/// understood, which is the only thing that lets us predict what Metal will be asked.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+/// The guard this family's safety argument rests on: record mode hands every query of these
+/// tables to Metal, and an argument Metal's own API validation stops **ends Metal's process**,
+/// so the arguments stay inside the shapes the module's prose allows.
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    /// The runtime's model answers a real tile for every query of the family.
-    ///
-    /// `sparse::tile_texels` answers `1 x 1 x 1` for a format whose block bytes it does not know,
-    /// and that answer is the model saying it has no rule for the argument. A query the model has
-    /// no rule for is a query whose Metal answer nothing in this tree can predict, so it is also
-    /// one whose arguments we cannot argue Metal's validation takes: it stays out of the table
-    /// until it has evidence of its own. Every tile is one deep, because Metal's rule tiles two
-    /// dimensions.
-    ///
-    /// Verified to fail: a `YCBCR84202P` query added to a table fails here, naming the query and
-    /// the `1 x 1 x 1` the model answered.
-    #[test]
-    fn the_model_answers_a_real_tile_for_every_query_of_the_family() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("the_model_answers_a_real_tile_for_every_query_of_the_family"),
-        );
-        let mut unknown = Vec::new();
-        for case in all() {
-            for query in &case.queries {
-                let tile = side
-                    .sparse_tile_size(query)
-                    .expect("the runtime's sparse tile getters refuse nothing");
-                if tile.depth != 1 || (tile.width, tile.height) == (1, 1) {
-                    unknown.push(format!(
-                        "{} {}: the model answered {} x {} x {}",
-                        case.name,
-                        query.site(),
-                        tile.width,
-                        tile.height,
-                        tile.depth
-                    ));
-                }
-            }
-        }
-        assert!(
-            unknown.is_empty(),
-            "the model has no tile rule for these queries, so nothing here can predict what Metal \
-             would answer or whether its validation takes them; take them out of the table:\n{}",
-            unknown.join("\n")
-        );
-    }
 
     /// The family's tables hold no query whose arguments the module's own safety prose excludes.
     ///

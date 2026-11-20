@@ -342,7 +342,7 @@ pub fn notice_allowance(code: &str) -> crate::allowance::Allowance {
 /// The declaration a case needs for the one notice a **venue's memory model** provokes and no
 /// recording of this suite could have declared: `shared-in-system-memory`, which the runtime
 /// announces for a `Shared` buffer or heap on a device whose GPU does not share the CPU's memory
-/// ([`metal2vulkan_runtime::Degradation::SharedInSystemMemory`]).
+/// ([`crate::degradation::Degradation::SharedInSystemMemory`]).
 ///
 /// **Why it is the venue's and not ours.** Every recording here was taken on an Apple chip, where
 /// the GPU and the CPU hold one memory, so a `Shared` resource is in device memory by construction
@@ -363,11 +363,11 @@ pub fn notice_allowance(code: &str) -> crate::allowance::Allowance {
 /// ([`crate::report::Report::unchecked_everywhere`]), and the case that names it says in a comment
 /// which run it rests on.
 pub fn shared_memory_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
+    notice_allowance(crate::degradation::Degradation::SharedInSystemMemory.code())
 }
 
 /// The declaration a case that samples through a runtime sampler slot needs on the new runtime:
-/// `pixel-sampler-scaling` ([`metal2vulkan_runtime::Degradation::PixelSamplerScaling`]), the
+/// `pixel-sampler-scaling` ([`crate::degradation::Degradation::PixelSamplerScaling`]), the
 /// static note of a sample whose sampler may state pixel coordinates, which the translator then
 /// divides by the texture's size for the device's normalized sampler. The function does not know
 /// the bound state, and under the identity domains of `metal2vulkan-rt` no binder specializes the
@@ -382,7 +382,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// cases, multi-draw-state-changes, frame-length-chain and kernel-writes-then-fragment-samples,
 /// each divergent at the notices site and at no value the old runtime's ledger does not list.
 pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::PixelSamplerScaling.code())
+    notice_allowance(crate::degradation::Degradation::PixelSamplerScaling.code())
 }
 
 /// The declaration a case needs for the second notice a **venue's memory model** provokes:
@@ -390,7 +390,7 @@ pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
 /// places an indirect command buffer's records by their first use, where a GPU write was the first
 /// use, so the records lie in device-local memory, and a host step then reads them while the
 /// command buffer that wrote them holds them, through the device's staging queue
-/// ([`metal2vulkan_runtime::Degradation::StagedIndirectRecords`]).
+/// ([`crate::degradation::Degradation::StagedIndirectRecords`]).
 ///
 /// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: every recording here
 /// was taken on an Apple chip, whose GPU and CPU hold one memory, so there is no device-local
@@ -405,7 +405,7 @@ pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
 /// run, and which counts showed the staged accesses were its host steps' reads of GPU-written
 /// records; a staged access of records the GPU never wrote is a runtime defect, not this.
 pub fn staged_records_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::StagedIndirectRecords.code())
+    notice_allowance(crate::degradation::Degradation::StagedIndirectRecords.code())
 }
 
 /// The declaration a case needs for the split a **venue's driver** makes the runtime take between
@@ -425,7 +425,7 @@ pub fn staged_records_notice() -> crate::allowance::Allowance {
 /// of `fetch-ordered-*` (its sRGB rows among them), `xr-gamut-*`, `xr-masked-*` whose second draw blends or writes a
 /// `BGR10_XR` word under a mask, and `xr-gradient-*-blended-*`, the families that name it.
 pub fn interlocked_split_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::RenderPassSplit.code())
+    notice_allowance(crate::degradation::Degradation::RenderPassSplit.code())
 }
 
 /// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
@@ -465,7 +465,7 @@ pub fn without_compression(site: &str) -> crate::allowance::Allowance {
 /// The declaration a case needs where its kernel reaches a texture or a sampler through an
 /// **argument buffer**: `set-past-layout-support`, which the runtime announces where it makes a
 /// descriptor set layout its driver's `vkGetDescriptorSetLayoutSupport` refuses though the driver
-/// runs it ([`metal2vulkan_runtime::Degradation::SetPastLayoutSupport`]).
+/// runs it ([`crate::degradation::Degradation::SetPastLayoutSupport`]).
 ///
 /// **Why it is the venue's and the case's shape.** Such a kernel takes the handle heap, set 1,
 /// whose arrays hold the device's update-after-bind capacity (65536 descriptors each on the M3
@@ -481,12 +481,12 @@ pub fn without_compression(site: &str) -> crate::allowance::Allowance {
 /// it from its own shape (a texture or sampler in an argument buffer that a dispatch reads), never
 /// from the venue, and says in a comment which run it rests on.
 pub fn set_past_layout_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::SetPastLayoutSupport.code())
+    notice_allowance(crate::degradation::Degradation::SetPastLayoutSupport.code())
 }
 
 /// The declaration a case needs where it samples through a sampler that reads an opaque-black
 /// border ([`reads_opaque_black_border`]): `swizzled-opaque-black-border`
-/// ([`metal2vulkan_runtime::Degradation::SwizzledOpaqueBlackBorder`]), the static note the new
+/// ([`crate::degradation::Degradation::SwizzledOpaqueBlackBorder`]), the static note the new
 /// runtime records for such a sampler state, and for a pipeline whose function samples through
 /// such a constexpr sampler, on every device. Through a view whose component mapping is not the
 /// identity, the border texel is the device's answer where the device does not report
@@ -497,7 +497,7 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 /// value still compares exactly. A border texel the device answers otherwise than Metal is a row
 /// of `known-gaps-rt.tsv`. A case names it from its own samplers, never from the venue.
 pub fn swizzled_border_notice() -> crate::allowance::Allowance {
-    notice_allowance(metal2vulkan_runtime::Degradation::SwizzledOpaqueBlackBorder.code())
+    notice_allowance(crate::degradation::Degradation::SwizzledOpaqueBlackBorder.code())
 }
 
 /// Whether a sampler of `spec` reads an opaque-black border: an address mode of `ClampToZero` or
@@ -579,8 +579,8 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// site: where the note says validation derives no tolerance from it, as nearly every one of these
 /// does, the suite loosens no value by it either, and the site is a `known-gaps.tsv` row that says
 /// what differs and whose answer it is.
-pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
-    use metal2vulkan_runtime::Degradation as D;
+pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
+    use crate::degradation::Degradation as D;
     &[
         D::NativeTranscendentals,
         D::NativeDivision,

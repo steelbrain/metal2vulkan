@@ -36,6 +36,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
@@ -43,7 +44,6 @@ use crate::render::{
 };
 use crate::transcript::{Element, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, float_bytes, half_bytes, not_read, program, shader_refs, shape,

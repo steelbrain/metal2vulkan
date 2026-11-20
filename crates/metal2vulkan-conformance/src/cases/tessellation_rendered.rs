@@ -49,6 +49,7 @@ use super::indirect_commands::{fixture_inputs, shaders_of};
 use super::tessellation_sweeps::{tessellation_notices, Domain};
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::Fixture;
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -61,7 +62,6 @@ use metal2vulkan::metal::{
     CullMode, PixelFormat, TessellationFactorStepFunction, TessellationPartitionMode, VertexFormat,
     VertexStepFunction, Winding,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture, whose post-tessellation vertex function is its own name.
 const FIXTURE: &str = "tess_rendered_patches";

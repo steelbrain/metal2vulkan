@@ -71,6 +71,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -81,7 +82,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::Degradation;
 
 /// The target's format: four `uint`s a texel, which is the `uint4` the fragment function returns,
 /// stored as it is. The whole expectation is integer arithmetic.

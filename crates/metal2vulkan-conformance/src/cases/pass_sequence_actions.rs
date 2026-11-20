@@ -112,6 +112,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -121,9 +122,9 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::{LoadAction, StoreAction};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, StencilOperation};
-use metal2vulkan_runtime::{Degradation, LoadAction, StoreAction};
 
 /// The colour fixture: the fullscreen triangle, and the fragment that returns its own texel's
 /// `float4` of a buffer times its own texel's entry of a second one.
@@ -341,7 +342,6 @@ fn load_name(load: LoadAction) -> &'static str {
         LoadAction::DontCare => "MTLLoadActionDontCare",
         LoadAction::Load => "MTLLoadActionLoad",
         LoadAction::Clear => "MTLLoadActionClear",
-        _ => "MTLLoadActionUnknown",
     }
 }
 

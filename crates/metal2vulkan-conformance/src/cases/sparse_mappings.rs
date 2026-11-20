@@ -90,12 +90,12 @@
 
 use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::replay::notice_allowance;
 use crate::sparse_mapping::{MappingMode, MappingStep, SparseMappingProgram, TileGrid, TileRect};
 use crate::sparse_query::{SparseHeapSpec, SparseTextureSpec};
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites};
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::Degradation;
 
 /// The sparse heap every case of the family makes: 4 MiB in 16-KiB pages, which is 256 pages — far
 /// more than the few dozen tiles any row maps.

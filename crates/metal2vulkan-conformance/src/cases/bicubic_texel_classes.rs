@@ -35,12 +35,12 @@ use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side, TextureRole,
     TextureSpec,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::replay::notice_allowance;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The case.
 pub struct BicubicTexelClasses;

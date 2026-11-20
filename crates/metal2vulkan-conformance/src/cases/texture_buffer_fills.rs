@@ -531,7 +531,7 @@ impl Case for ByteFills {
         // nothing, so the notices site differs, and the notice is what justifies it.
         vec![
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::TextureBufferFillLeftover.code(),
+                crate::degradation::Degradation::TextureBufferFillLeftover.code(),
             ),
             // The texture buffer these fills write into is backed by a `Shared` buffer
             // ([`crate::replay::shared_memory_notice`]).
@@ -670,7 +670,7 @@ impl Case for LongFills {
         // nothing, so the notices site differs, and the notice is what justifies it.
         vec![
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::TextureBufferFillLeftover.code(),
+                crate::degradation::Degradation::TextureBufferFillLeftover.code(),
             ),
             // The texture buffer these fills write into is backed by a `Shared` buffer
             // ([`crate::replay::shared_memory_notice`]).

@@ -70,7 +70,7 @@ pub struct Refusal {
 }
 
 /// A site where plain Metal answered a call and we returned a typed error that is the **venue's**
-/// honest gap rather than ours ([`crate::verdict::device_gap`]), or a getter answered a limit the
+/// honest gap rather than ours ([`crate::verdict::device_gap_of`]), or a getter answered a limit the
 /// device holds below Metal's where our side states it is the device's
 /// ([`crate::transcript::Sites::device_gap`]).
 ///

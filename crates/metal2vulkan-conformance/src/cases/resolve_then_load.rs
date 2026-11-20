@@ -75,8 +75,8 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::StoreAction;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::StoreAction;
 
 /// The case's name: its recording's file name and its row in the report.
 const NAME: &str = "resolve-store-then-load";

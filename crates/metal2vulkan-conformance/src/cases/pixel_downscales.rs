@@ -41,12 +41,12 @@ use crate::case::{
     made, Abort, ArgumentSlot, Bindings, Case, Failure, Handle, Input, MetalSource, SamplerSpec,
     Side, TextureRole, TextureSpec,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::replay::notice_allowance;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose kernel samples a texture slot through the runtime sampler at slot 0.
 const SLOT_FIXTURE: &str = "xr_samples";

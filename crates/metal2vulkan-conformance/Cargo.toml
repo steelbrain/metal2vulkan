@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "The Metal conformance suite: one case run on Metal and on metal2vulkan-runtime, recorded and compared"
+description = "The Metal conformance suite: one case run on Metal and on metal2vulkan-rt, recorded and compared"
 # Never publish this workspace member to crates.io.
 publish = false
 readme = "README.md"
@@ -15,7 +15,6 @@ readme = "README.md"
 # builds, so one target directory builds the product (and the runtime on it) once for every suite
 # rather than once per feature set.
 metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
-metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 # The new runtime, which the suite replays through its public API alone (`src/rt_side.rs`).
 metal2vulkan-rt = { path = "../metal2vulkan-rt" }
 # Fixture paths, `llvm_assemble` and the scratch root: the suite's shaders are the owned public
@@ -69,14 +68,6 @@ test = false
 [[bin]]
 name = "scratch-holder"
 path = "src/bin/scratch-holder.rs"
-test = false
-
-# A reading of which side holds a `compute_pipeline_with_stage_input` call's cost: our translation,
-# the driver's compile, or the rest of the call. A probe rather than a test -- it wants one process
-# per cache arrangement and prints a table -- so `test = false`.
-[[bin]]
-name = "stage-input-split"
-path = "src/bin/stage-input-split.rs"
 test = false
 
 # Device-executing tests are gated on non-default cfgs rather than features, because the ordinary

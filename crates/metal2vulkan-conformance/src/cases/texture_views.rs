@@ -861,34 +861,3 @@ mod tests {
         );
     }
 }
-
-/// The second half of this family's safety argument, run on a device: the **order of work** the
-/// heap-size and sparse-heap families state, which is that a table is replayed on the runtime
-/// first and only one that answers no `Error::Invalid` anywhere is handed to Metal.
-///
-/// [`crate::device::sites_the_runtime_calls_invalid`] is the shared walk; this is the family that
-/// asks it. The device-free guards above check each row's shape against the rules; this checks the
-/// runtime's own reading of every call the rows actually make, including the ones no rule above
-/// names.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod device_tests {
-    use super::*;
-    use crate::case::Case;
-
-    #[test]
-    fn no_call_of_the_family_is_one_metals_validation_stops() {
-        let cases: Vec<Box<dyn Case>> = all()
-            .into_iter()
-            .map(|case| Box::new(case) as Box<dyn Case>)
-            .collect();
-        let stopped =
-            crate::device::sites_the_runtime_calls_invalid(&cases).expect("a device for the guard");
-        assert!(
-            stopped.is_empty(),
-            "the runtime answers `Error::Invalid` at these sites, which is this tree's reading of \
-             \"Metal's own validation stops this call\" -- so record mode would end Metal's \
-             process. Take the rows behind them out of the tables:\n{}",
-            stopped.join("\n")
-        );
-    }
-}

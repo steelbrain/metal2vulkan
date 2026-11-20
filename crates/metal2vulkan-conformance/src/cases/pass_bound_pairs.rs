@@ -153,8 +153,8 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::{LoadAction, StoreAction};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{LoadAction, StoreAction};
 
 /// The owned fixture: the fullscreen triangle at buffer 0's depth, and the fragment that returns
 /// white.
@@ -431,7 +431,6 @@ fn load_name(load: LoadAction) -> &'static str {
         LoadAction::DontCare => "MTLLoadActionDontCare",
         LoadAction::Load => "MTLLoadActionLoad",
         LoadAction::Clear => "MTLLoadActionClear",
-        _ => "MTLLoadActionUnknown",
     }
 }
 

@@ -19,8 +19,8 @@
 //! a case writes reaches `MTLTextureType`, `MTLPixelFormat` and `MTLSparsePageSize` by its raw
 //! ordinal and reaches the runtime's call unchanged.
 
+use crate::values::SparsePageSize;
 use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan_runtime::SparsePageSize;
 
 /// The page a query asks in: one of Metal's three, or none, which is the getter without a page
 /// argument (whose answer Metal documents as the 16-KiB page's).
@@ -37,14 +37,6 @@ pub fn page_word(page: QueryPage) -> &'static str {
         Some(SparsePageSize::Size16) => "page-16",
         Some(SparsePageSize::Size64) => "page-64",
         Some(SparsePageSize::Size256) => "page-256",
-        // `SparsePageSize` is `#[non_exhaustive]`: a page Metal gains is named by its raw value
-        // rather than silently sharing a site with one of these.
-        Some(page) => match page.raw() {
-            101 => "page-16",
-            102 => "page-64",
-            103 => "page-256",
-            _ => "page-unknown",
-        },
     }
 }
 

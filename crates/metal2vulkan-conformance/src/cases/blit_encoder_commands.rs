@@ -69,10 +69,10 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Negative, Node, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, Storage, TextureSpec, Work};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan_runtime::Degradation;
 
 /// The byte every read-back buffer is made holding, so the bytes no copy wrote are a value the
 /// case put there rather than whatever the allocator left.

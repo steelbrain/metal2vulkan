@@ -89,13 +89,13 @@ use crate::case::{
     call, drawn_or_refused, made, pipeline_or_refused, refused_leg, Abort, Case, Handle, Input,
     MetalSource, Side,
 };
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{RenderPass, RenderStep, RenderWork, TessellationState};
 use crate::transcript::{Node, Observed, Sites};
 use metal2vulkan::metal::{
     PatchType, TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition,
 };
-use metal2vulkan_runtime::Degradation;
 
 use super::tessellation_sweeps::{
     air_inputs, domain_pipeline, grid_record, load, medium_layout, quad_factors, raw_quad_factors,

@@ -56,6 +56,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{Abort, Answer, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -65,7 +66,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType};
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture of the render-state lane: its `rt6_point` writes `[[point_size]]`, its
 /// `rt6_full` is the fullscreen triangle and writes none, and both take their depth from buffer 0.

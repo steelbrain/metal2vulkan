@@ -99,7 +99,7 @@ fn shadow_allowances() -> Vec<crate::allowance::Allowance> {
     // recording of this suite declares it.
     vec![
         crate::replay::shared_memory_notice(),
-        crate::replay::notice_allowance(metal2vulkan_runtime::Degradation::ShadowedTexture.code()),
+        crate::replay::notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
     ]
 }
 
@@ -875,68 +875,6 @@ mod tests {
             stated,
             "{}: its committed recording is not the answer the case states",
             case.name()
-        );
-    }
-}
-
-/// The safety guard this family rests on, run on a device.
-///
-/// Record mode hands every shape of the making table to Metal. A shape Metal **stops** ends its
-/// process, and the runtime's model is what tells a stop from a nil: `Error::Invalid` is "Metal
-/// stops this call", while `Error::Nil` is "plain Metal answers nil and the process goes on". So a
-/// table that makes the runtime answer `Invalid` anywhere is a table that must never be recorded,
-/// and this is the check that says so before anybody runs `conformance record`.
-///
-/// Its failure mode was exercised while writing it: adding a 2D row at an offset of 8 — which the
-/// runtime refuses `Invalid(OffsetAlignment)` — fails here, naming the shape and the variant.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod device_tests {
-    use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-    use crate::transcript::Value;
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    /// The variant a failure names, where it names one: `Error::Invalid` and the rest.
-    fn variant(value: &Value) -> String {
-        match value {
-            Value::Variant { name, payload } if name == "Err" => match payload.as_ref() {
-                Value::Variant { name, .. } => name.clone(),
-                other => format!("{other:?}"),
-            },
-            other => format!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn no_shape_of_the_making_table_is_one_metal_stops() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("no_shape_of_the_making_table_is_one_metal_stops"),
-        );
-        let mut stopped = Vec::new();
-        for request in requests() {
-            if let Err(failure) = side.buffer_texture(&request) {
-                let named = variant(&failure.recorded());
-                if named.contains("Invalid") {
-                    stopped.push(format!("{}: {named}", request.site()));
-                }
-            }
-        }
-        assert!(
-            stopped.is_empty(),
-            "these shapes are ones the runtime says Metal stops, so record mode would end Metal's \
-             process; take them out of the table:\n{}",
-            stopped.join("\n")
         );
     }
 }

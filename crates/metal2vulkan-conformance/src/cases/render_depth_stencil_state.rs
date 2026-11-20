@@ -43,6 +43,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -52,11 +53,11 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::StoreAction;
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     ColorWriteMask, CompareFunction, DepthClipMode, PixelFormat, PrimitiveType, StencilOperation,
 };
-use metal2vulkan_runtime::{Degradation, StoreAction};
 
 /// The colour target's format: four ones or the clear, nothing in between.
 const FORMAT: PixelFormat = PixelFormat::RGBA32Float;

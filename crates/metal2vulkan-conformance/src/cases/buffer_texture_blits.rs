@@ -538,12 +538,12 @@ impl Case for Blits {
         let mut named = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
+                crate::degradation::Degradation::ShadowedTexture.code(),
             ),
         ];
         if self.rows.iter().any(Row::copies_shared_bytes) {
             named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::OverlappingTexelCopy.code(),
+                crate::degradation::Degradation::OverlappingTexelCopy.code(),
             ));
         }
         named
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn each_case_declares_exactly_the_notices_a_row_of_it_can_announce() {
         use crate::allowance::Justification;
-        use metal2vulkan_runtime::Degradation;
+        use crate::degradation::Degradation;
         for case in table() {
             let codes: Vec<String> = case
                 .allowances()

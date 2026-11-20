@@ -23,14 +23,15 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
     RenderWork, TargetSpec,
 };
 use crate::transcript::{Node, Observed, Sites, Value};
+use crate::values::StoreAction;
 use metal2vulkan::metal::BlendFactor as F;
-use metal2vulkan_runtime::{Degradation, StoreAction};
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, texel_layout, Format, FORMATS,

@@ -828,9 +828,9 @@ mod tests {
                     }
                 })
                 .collect();
-            let mut wanted = vec![metal2vulkan_runtime::Degradation::SharedInSystemMemory.code()];
+            let mut wanted = vec![crate::degradation::Degradation::SharedInSystemMemory.code()];
             if case.subject.crossing == Crossing::KernelToFragment {
-                wanted.push(metal2vulkan_runtime::Degradation::PixelSamplerScaling.code());
+                wanted.push(crate::degradation::Degradation::PixelSamplerScaling.code());
             }
             assert_eq!(codes, wanted, "{}", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);

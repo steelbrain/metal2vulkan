@@ -542,7 +542,7 @@ impl Element {
 pub struct Transcript {
     pub root: Node,
     /// The sites where the **venue honestly lacks** what the call needed, by their paths from the
-    /// root, each with what it lacks ([`crate::verdict::device_gap`]). A refused call's site, and
+    /// root, each with what it lacks ([`crate::verdict::device_gap_of`]). A refused call's site, and
     /// a getter's whose answer is a limit the device holds below Metal's, where the device refused
     /// the work of Metal's size as its gap (a tile state's `maxTotalThreadsPerThreadgroup`,
     /// [`crate::cases::tile_threadgroups`]): either differs from Metal's as the venue's gap.

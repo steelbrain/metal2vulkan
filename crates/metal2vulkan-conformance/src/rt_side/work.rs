@@ -1,6 +1,5 @@
-//! Running a [`Work`] program on `metal2vulkan-rt`, as [`crate::runtime_work`] runs it on the old
-//! runtime: its resources made in order, its steps encoded into one blit encoder at a time, its
-//! reads answered, each wait bounded.
+//! Running a [`Work`] program on `metal2vulkan-rt`: its resources made in order, its steps encoded
+//! into one blit encoder at a time, its reads answered, each wait bounded.
 //!
 //! The runtime places memory where its consumer says, and this side is the consumer: a buffer
 //! takes a block of its own, a Managed buffer a Shared block for its bytes and, where the device
@@ -766,8 +765,8 @@ impl Run<'_> {
         }
     }
 
-    /// Drop the side's handles of the resource at `at`, refused while a command buffer is open, as
-    /// [`crate::runtime_work`] refuses it: a resource an uncommitted command buffer names is not
+    /// Drop the side's handles of the resource at `at`, refused while a command buffer is open: a
+    /// resource an uncommitted command buffer names is not
     /// freed by the release.
     fn release(&mut self, at: usize) -> Answer<()> {
         if self.command_buffer.is_some() || self.encoder.is_some() {

@@ -75,10 +75,10 @@ use crate::case::{
     made, Abort, Case, CoordinateProbe, Input, MappedCoordinates, MetalSource, RateMapForm,
     RateMapLayer, RateMapRequest, Side,
 };
+use crate::degradation::Degradation;
 use crate::rate_map_space as space;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{Node, Observed, Sites, Value};
-use metal2vulkan_runtime::Degradation;
 
 /// The quality sweep: one layer at [`space::SWEEP_EXTENT`], over every quality of
 /// [`space::qualities`].

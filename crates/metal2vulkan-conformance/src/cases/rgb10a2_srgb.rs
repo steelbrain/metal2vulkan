@@ -742,7 +742,7 @@ impl Case for Rgb10A2Srgb {
     /// pipeline announced on every venue run, its module's filter of the decoded taps. The read and write
     /// cases name no notice of their own.
     fn allowances(&self) -> Vec<Allowance> {
-        use metal2vulkan_runtime::Degradation as D;
+        use crate::degradation::Degradation as D;
         // Every question reads its answer back through a `Shared` buffer, and a device with no
         // unified memory keeps a `Shared` allocation in system memory because that is the only
         // memory both sides can reach: the venue's memory model rather than this format's answer.

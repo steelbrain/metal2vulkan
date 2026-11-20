@@ -84,6 +84,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -93,8 +94,8 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::{LoadAction, StoreAction};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::{Degradation, LoadAction, StoreAction};
 
 /// The owned fixture: the fullscreen triangle, the fragment that writes both colour attachments
 /// from two buffers, and the one that writes colour 1 alone.
@@ -388,7 +389,6 @@ fn load_name(load: LoadAction) -> &'static str {
         LoadAction::DontCare => "MTLLoadActionDontCare",
         LoadAction::Load => "MTLLoadActionLoad",
         LoadAction::Clear => "MTLLoadActionClear",
-        _ => "MTLLoadActionUnknown",
     }
 }
 

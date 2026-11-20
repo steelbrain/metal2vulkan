@@ -121,11 +121,11 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{ColorState, PassColor, Plane, ReadAt, RenderPass, RenderStep, RenderWork};
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{IndexType, PrimitiveType};
-use metal2vulkan_runtime::Degradation;
 
 use super::render_draw_forms::{
     fixture_inputs, layout, library, pipeline, plane, positions_buffer, shader_refs, target_spec,

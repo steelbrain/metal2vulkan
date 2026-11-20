@@ -28,6 +28,7 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -38,7 +39,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture whose vertex function is Metal's fullscreen triangle at the depth a vertex
 /// buffer holds, and whose fragment function returns white.

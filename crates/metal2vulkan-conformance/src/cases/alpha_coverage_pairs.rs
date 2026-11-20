@@ -118,6 +118,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -128,7 +129,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture written for this family: a fullscreen triangle, a fragment whose colour comes
 /// from a buffer, one that reports the coverage it was given beside that colour, one that reports

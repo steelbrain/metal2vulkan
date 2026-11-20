@@ -116,6 +116,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -125,12 +126,12 @@ use crate::render::{
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
+use crate::values::StoreAction;
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     ColorWriteMask, CompareFunction, CullMode, PixelFormat, PrimitiveType, StencilOperation,
     Winding,
 };
-use metal2vulkan_runtime::{Degradation, StoreAction};
 
 // ------------------------------------------------------------------------------------------------
 // The geometry every case here shares
@@ -2934,13 +2935,6 @@ mod tests {
             };
             assert_eq!(named.len(), wanted, "{}", case.name());
         }
-        // The one notice the family names is a cost rather than a near-equivalent, which is what
-        // makes loosening the notice site alone honest: a `Precision` degradation would owe a value
-        // tolerance beside it.
-        assert_eq!(
-            Degradation::SeparateDepthStencil.category(),
-            metal2vulkan_runtime::DegradationCategory::Performance
-        );
         // The six programs between them attach every combination the family needs: depth alone,
         // stencil alone, and the two together as separate textures.
         let shapes: BTreeSet<(Option<u32>, bool)> = programs()

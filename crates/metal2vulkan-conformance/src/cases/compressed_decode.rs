@@ -40,6 +40,7 @@
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::texture::{TextureRequest, Upload};
@@ -47,7 +48,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose kernel reads a texture's texels as floats.
 const FIXTURE: &str = "format_scout";

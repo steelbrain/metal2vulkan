@@ -446,7 +446,7 @@ impl Case for SampleFills {
                 format!("case/{}", site(self.row.name)),
                 Loosening::Unchecked,
                 Justification::Degradation(
-                    metal2vulkan_runtime::Degradation::DrawnDepthCopy
+                    crate::degradation::Degradation::DrawnDepthCopy
                         .code()
                         .to_owned(),
                 ),
@@ -459,7 +459,7 @@ impl Case for SampleFills {
         // `Depth32Float` target's signed test (`depth-denormals`, `signed-depth-test`) are the
         // device's own answers, which the suite declares for every case
         // (`crate::replay::NATIVE_NOTES`); every depth word still compares exactly.
-        use metal2vulkan_runtime::Degradation as D;
+        use crate::degradation::Degradation as D;
         for kind in [
             D::DrawnDepthCopy,
             D::SharedInSystemMemory,

@@ -1861,8 +1861,8 @@ pub struct DrawnCommands;
 ///
 /// The other five rows were measured announcing **nothing** on either venue, and **declare
 /// nothing**: a declaration no run was measured provoking is a declaration nobody checked.
-const DRAWN_NOTICES: [metal2vulkan_runtime::Degradation; 1] =
-    [metal2vulkan_runtime::Degradation::RenderPassSplit];
+const DRAWN_NOTICES: [crate::degradation::Degradation; 1] =
+    [crate::degradation::Degradation::RenderPassSplit];
 
 impl Case for DrawnCommands {
     fn name(&self) -> &'static str {

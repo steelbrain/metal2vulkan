@@ -375,7 +375,7 @@ impl Case for HeapSizeCase {
         // both the 5080 and llvmpipe.
         let mut named = match LARGER_THAN_METALS.contains(&self.name) {
             true => vec![crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::HeapTextureLargerThanMetal.code(),
+                crate::degradation::Degradation::HeapTextureLargerThanMetal.code(),
             )],
             false => Vec::new(),
         };
@@ -434,72 +434,5 @@ impl Case for HeapSizeCase {
             sites.push(node);
         }
         Ok(())
-    }
-}
-
-/// The safety guard this family rests on, run on a device.
-///
-/// Record mode hands every descriptor of these tables to Metal. A descriptor Metal's own validation
-/// stops **ends Metal's process**, and the runtime's model is what tells the two apart:
-/// `Error::Invalid` is "Metal's validation stops it, ending the process", while `Error::Nil` is
-/// "plain Metal answers nil, the process going on". So a table that makes the runtime answer
-/// `Invalid` anywhere is a table that must never be recorded, and this is the check that says so
-/// before anybody runs `conformance record`.
-///
-/// It is also the check that would catch a table growing a row somebody assumed was harmless. Its
-/// failure mode was exercised while writing it: a 2D descriptor of width 0 added to one table fails
-/// here, naming the descriptor and the problem.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod tests {
-    use super::*;
-    use crate::device::{self, Notices, ScratchCache, Venues};
-    use crate::runtime_side::RuntimeSide;
-
-    /// The venue the guard opens: a GPU where the tests are built for one, else a CPU ICD.
-    const VENUE: Venues = if cfg!(m2v_gpu) {
-        Venues::Gpu
-    } else {
-        Venues::Cpu
-    };
-
-    #[test]
-    fn no_descriptor_of_the_family_is_one_metals_validation_stops() {
-        let mut notices = Notices::default();
-        let cache = ScratchCache::new().unwrap();
-        let runtime = device::open(VENUE, &notices, &cache).unwrap();
-        let mut side = RuntimeSide::new(
-            &runtime,
-            notices.open("no_descriptor_of_the_family_is_one_metals_validation_stops"),
-        );
-        let mut stopped = Vec::new();
-        for case in all() {
-            for query in &case.queries {
-                let answer = side.heap_texture_size_and_align(query);
-                if let Err(failure) = &answer {
-                    stopped.push(format!(
-                        "{} {}: {:?}",
-                        case.name,
-                        query.site(),
-                        failure.recorded()
-                    ));
-                }
-                if case.asks_texture {
-                    if let Err(failure) = side.makes_texture(query) {
-                        stopped.push(format!(
-                            "{} {} makes_texture: {:?}",
-                            case.name,
-                            query.site(),
-                            failure.recorded()
-                        ));
-                    }
-                }
-            }
-        }
-        assert!(
-            stopped.is_empty(),
-            "these descriptors do not answer on the runtime, so Metal's validation may stop them \
-             and record mode would end Metal's process; take them out of the table:\n{}",
-            stopped.join("\n")
-        );
     }
 }

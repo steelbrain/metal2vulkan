@@ -369,7 +369,7 @@ impl Case for NanIntegerConversions {
         // m3-max-55436), as `rgb10a2_srgb`'s fills do.
         let mut allowances = vec![
             crate::replay::shared_memory_notice(),
-            notice_allowance(metal2vulkan_runtime::Degradation::DontCareLoadTiles.code()),
+            notice_allowance(crate::degradation::Degradation::DontCareLoadTiles.code()),
         ];
         // A `long` of either infinity, the one answer past a range where Metal on the M3 Max
         // (job m3-max-55436) does not saturate: it answers 0, and the translator the bound. MSL

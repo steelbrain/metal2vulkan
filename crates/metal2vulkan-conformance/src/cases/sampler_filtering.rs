@@ -151,6 +151,7 @@ use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side,
     TextureRole, TextureSpec,
 };
+use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::replay::notice_allowance;
@@ -160,7 +161,6 @@ use metal2vulkan::metal::{
     CompareFunction, PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
     SamplerMipFilter, SamplerReductionMode, TextureType, TextureUsage,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose slot kernels sample through the runtime sampler at `[[sampler(0)]]` beside a
 /// constexpr sampler of their own.

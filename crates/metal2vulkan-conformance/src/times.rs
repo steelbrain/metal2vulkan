@@ -3,7 +3,7 @@
 //!
 //! The suite is the right place for this because **a case is one write and both legs run it from
 //! the identical transcript**: `metal_side::MetalSide` drives native Metal and
-//! [`crate::runtime_side::RuntimeSide`] drives ours, from the same [`crate::case::Case`], on one
+//! a runtime's side drives ours, from the same [`crate::case::Case`], on one
 //! machine, back to back. Nothing else in the project compares the two over the same work.
 //!
 //! # What a difference here is, and what it is not
