@@ -1,13 +1,19 @@
-//! The push window, under a device cfg on every device of the cfg's kind: a kernel that reads its
-//! grid position and 24 buffers (a dispatch region and 24 addresses, 224 bytes) passes every
-//! address in push constants and writes nothing into the parameter ring, and one of 30 buffers
-//! (272 bytes) writes one parameter block per dispatch. Both answer the fold of their inputs; the
-//! first's dispatches after the first push nothing, their bytes held, and the second's each push.
+//! The push window, under a device cfg on every device of the cfg's kind. Each kernel reads its
+//! grid position and its buffers at a run-time offset, so it pushes a dispatch region, each
+//! buffer's address, and the containment check's fields: the zero range's address and each
+//! buffer's length, which come last in the order, so they are the first to go to a parameter
+//! block. A kernel of 12 buffers (232 bytes) pushes them all and writes nothing into the parameter
+//! ring, and its dispatches after the first push nothing, their bytes held. One of 24 buffers
+//! pushes its block's address, every buffer's address, the zero range's and two lengths, and its
+//! other 22 lengths go to a block; one of 30 pushes 26 addresses, and the other 4, the zero
+//! range's and the 30 lengths go to a block. Each of those two writes one block a dispatch, whose
+//! new address each dispatch pushes. All answer the fold of their inputs.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::pipeline::{FieldValue, Place};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         ComputePipelineDescriptor, DispatchType, FunctionDescriptor, Library, MemoryClass,
@@ -74,12 +80,20 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
         (k + 1).wrapping_mul(0x9e37_79b9) ^ gid.wrapping_mul(0x85eb_ca6b)
     }
 
-    /// The kernel of 24 buffers writes nothing into the ring, and pushes once for its three
-    /// dispatches of the same bindings; the kernel of 30 writes one block a dispatch, whose new
-    /// address each dispatch pushes. Each answers the fold of its inputs.
+    /// The kernel of 12 buffers writes nothing into the ring, and pushes once for its three
+    /// dispatches of the same bindings; the kernel of 24 pushes every address and has only check
+    /// fields in its block, and the kernel of 30 has 4 addresses there too; each of those writes
+    /// one block a dispatch, whose new address each dispatch pushes. Each answers the fold of its
+    /// inputs.
     #[test]
     fn every_device_pushes_24_buffer_addresses_and_rings_30() {
-        for (buffers, blocks, pushes) in [(24u32, 0u64, 1u64), (30, 1, DISPATCHES)] {
+        // Each kernel's buffers, its addresses and check fields in the block, its blocks a
+        // dispatch, and its pushes over the dispatches.
+        for (buffers, (addresses, checks), blocks, pushes) in [
+            (12u32, (0usize, 0usize), 0u64, 1u64),
+            (24, (0, 22), 1, DISPATCHES),
+            (30, (4, 31), 1, DISPATCHES),
+        ] {
             let bitcode = match llvm_assemble_text(&kernel(buffers)) {
                 Ok(bitcode) => bitcode,
                 Err(AssembleError::Missing(why)) => {
@@ -99,6 +113,25 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 let state = device
                     .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                     .unwrap_or_else(|error| panic!("{what}: {error}"));
+                // The fields in the block: addresses, and the check's (the zero range's address
+                // and the lengths); nothing else goes there.
+                let mut ringed = (0, 0);
+                for field in &state.inner.compiled.whole.interface.fields {
+                    match (field.place, &field.value) {
+                        (Place::Push(_), _) => {}
+                        (Place::Block(_), FieldValue::BufferAddress { .. }) => ringed.0 += 1,
+                        (
+                            Place::Block(_),
+                            FieldValue::BufferRemaining(_) | FieldValue::ZeroAddress,
+                        ) => ringed.1 += 1,
+                        (Place::Block(_), _) => panic!("{what}: another field in the block"),
+                    }
+                }
+                assert_eq!(
+                    ringed,
+                    (addresses, checks),
+                    "{what}: addresses and check fields in the block"
+                );
                 let block = device
                     .take_block(MemoryClass::Shared, u64::from(buffers) * len)
                     .expect("a Shared block");
