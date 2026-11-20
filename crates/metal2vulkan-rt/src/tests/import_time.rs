@@ -44,43 +44,125 @@ mod on_device {
     const REPS: usize = 40;
 
     /// `len` bytes of host memory of the test's own at a multiple of `alignment`, every page
-    /// written, and its layout.
-    fn pages(len: u64, alignment: u64) -> (NonNull<u8>, Layout) {
-        let layout = Layout::from_size_align(len as usize, alignment as usize).expect("a layout");
-        // SAFETY: the layout's size is not zero.
-        let pointer = NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
-        for at in (0..len as usize).step_by(4096) {
-            // SAFETY: `at` is inside the allocation.
-            unsafe { pointer.add(at).write(at as u8) };
+    /// written: from the allocator, or (`shared`) a shared mapping of a memfd, as a virtual
+    /// machine's RAM is mapped. Freed as it drops.
+    struct Pages {
+        pointer: NonNull<u8>,
+        len: usize,
+        /// The allocator's layout; `None` for a mapping.
+        layout: Option<Layout>,
+    }
+
+    impl Pages {
+        fn new(len: u64, alignment: u64, shared: bool) -> Pages {
+            let (pointer, layout) = if shared {
+                (map_shared(len), None)
+            } else {
+                let layout =
+                    Layout::from_size_align(len as usize, alignment as usize).expect("a layout");
+                // SAFETY: the layout's size is not zero.
+                let pointer =
+                    NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
+                (pointer, Some(layout))
+            };
+            for at in (0..len as usize).step_by(4096) {
+                // SAFETY: `at` is inside the memory.
+                unsafe { pointer.add(at).write(at as u8) };
+            }
+            Pages {
+                pointer,
+                len: len as usize,
+                layout,
+            }
         }
-        (pointer, layout)
+    }
+
+    impl Drop for Pages {
+        fn drop(&mut self) {
+            match self.layout {
+                // SAFETY: allocated with `layout`, and nothing uses it any more.
+                Some(layout) => unsafe { std::alloc::dealloc(self.pointer.as_ptr(), layout) },
+                None => {
+                    // SAFETY: mapped by `map_shared` at `len` bytes, and nothing uses it any more.
+                    let unmapped = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.len) };
+                    assert_eq!(unmapped, 0, "the mapping's end");
+                }
+            }
+        }
+    }
+
+    /// A shared mapping of a new memfd of `len` bytes.
+    #[cfg(target_os = "linux")]
+    fn map_shared(len: u64) -> NonNull<u8> {
+        use std::os::fd::AsRawFd;
+        let memfd = memfd(len);
+        // SAFETY: a new mapping of the memfd's `len` bytes, which outlives the fd.
+        let at = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                memfd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(at, libc::MAP_FAILED, "a mapping");
+        NonNull::new(at.cast()).expect("a mapping")
+    }
+
+    /// Off Linux the test maps no memfd: its kinds there are the allocator's alone.
+    #[cfg(not(target_os = "linux"))]
+    fn map_shared(_: u64) -> NonNull<u8> {
+        unreachable!("a memfd off Linux")
+    }
+
+    /// The memory kinds timed: the allocator's, and on Linux a shared memfd mapping.
+    fn kinds() -> &'static [(&'static str, bool)] {
+        if cfg!(target_os = "linux") {
+            &[("anonymous", false), ("a shared memfd mapping", true)]
+        } else {
+            &[("anonymous", false)]
+        }
     }
 
     /// The whole call's time over `len` bytes, in nanoseconds, and the memory type it took; the
-    /// block dropped and its release waited for outside the time.
-    fn whole(device: &Device, len: u64, alignment: u64) -> (u128, u32) {
-        let (pointer, layout) = pages(len, alignment);
+    /// block dropped and its release waited for outside the time. Err where the call refuses
+    /// the memory, which is the test's again at once.
+    fn whole(
+        device: &Device,
+        len: u64,
+        alignment: u64,
+        shared: bool,
+    ) -> Result<(u128, u32), crate::Error> {
+        let pages = Pages::new(len, alignment, shared);
         let (release, released) = releasing();
         let start = Instant::now();
         // SAFETY: the memory is the test's, mapped until it frees it after the release.
-        let made = unsafe { device.import_host_memory(pointer, len, release) };
+        let made = unsafe { device.import_host_memory(pages.pointer, len, release) };
         let took = start.elapsed().as_nanos();
-        let (block, index) = made.unwrap_or_else(|error| panic!("an import: {error}"));
+        let (block, index) = made?;
         drop(block);
         wait_until("the release", || released.load(Ordering::SeqCst));
-        // SAFETY: allocated with `layout` above, and the release ran: nothing uses it.
-        unsafe { std::alloc::dealloc(pointer.as_ptr(), layout) };
-        (took, index)
+        drop(pages);
+        Ok((took, index))
     }
 
     /// Each of the call's steps' time over `len` bytes, in nanoseconds, made by hand into memory
     /// type `index`; what they made is destroyed outside the times.
-    fn parts(device: &Device, len: u64, alignment: u64, index: u32) -> [u128; PARTS.len()] {
+    fn parts(
+        device: &Device,
+        len: u64,
+        alignment: u64,
+        shared: bool,
+        index: u32,
+    ) -> [u128; PARTS.len()] {
         let core = device.core();
         let ash = &core.device;
         let (host, _) = (core.imports.host.as_ref()).expect("host memory imports");
         let handle = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
-        let (pointer, layout) = pages(len, alignment);
+        let pages = Pages::new(len, alignment, shared);
+        let pointer = pages.pointer;
         let mut times = [0u128; PARTS.len()];
         let mut properties = vk::MemoryHostPointerPropertiesEXT::default();
         let start = Instant::now();
@@ -151,8 +233,8 @@ mod on_device {
             ash.destroy_buffer(buffer, None);
             ash.free_memory(memory, None);
         }
-        // SAFETY: allocated with `layout` above, and its import is freed: nothing uses it.
-        unsafe { std::alloc::dealloc(pointer.as_ptr(), layout) };
+        // Its import is freed: nothing uses it.
+        drop(pages);
         times
     }
 
@@ -417,7 +499,8 @@ mod on_device {
         });
     }
 
-    /// `Device::import_host_memory` of 12 KiB, 16 KiB and 29 MiB of host memory, whole and by
+    /// `Device::import_host_memory` of 12 KiB, 16 KiB and 29 MiB of host memory of each kind
+    /// (anonymous, and on Linux a shared memfd mapping, unless the device refuses it), whole and by
     /// step, each `REPS` times, with the runtime's queue idle and then beside a thread committing
     /// small fills all along: each one's median and longest, printed. On an instance without the
     /// validation layer, whose own cost would be the count.
@@ -429,38 +512,46 @@ mod on_device {
                 println!("import time: {name}: imports no host memory; not timed");
                 return;
             };
-            for len in [12u64 << 10, 16 << 10, 29 << 20] {
-                let len = len.next_multiple_of(alignment);
-                for arm in ["idle", "busy"] {
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let worker = (arm == "busy").then(|| busy(device.clone(), Arc::clone(&stop)));
-                    let mut wholes = Vec::with_capacity(REPS);
-                    let mut by_part = vec![Vec::with_capacity(REPS); PARTS.len()];
-                    for _ in 0..REPS {
-                        let (took, index) = whole(&device, len, alignment);
-                        wholes.push(took);
-                        let steps = parts(&device, len, alignment, index);
-                        for (times, took) in by_part.iter_mut().zip(steps) {
-                            times.push(took);
+            for &(kind, shared) in kinds() {
+                if let Err(error) = whole(&device, 29 << 20, alignment, shared) {
+                    println!("import time: {name}: {kind}: refused: {error}; not timed");
+                    continue;
+                }
+                for len in [12u64 << 10, 16 << 10, 29 << 20] {
+                    let len = len.next_multiple_of(alignment);
+                    for arm in ["idle", "busy"] {
+                        let stop = Arc::new(AtomicBool::new(false));
+                        let worker =
+                            (arm == "busy").then(|| busy(device.clone(), Arc::clone(&stop)));
+                        let mut wholes = Vec::with_capacity(REPS);
+                        let mut by_part = vec![Vec::with_capacity(REPS); PARTS.len()];
+                        for _ in 0..REPS {
+                            let (took, index) = whole(&device, len, alignment, shared)
+                                .unwrap_or_else(|error| panic!("an import: {error}"));
+                            wholes.push(took);
+                            let steps = parts(&device, len, alignment, shared, index);
+                            for (times, took) in by_part.iter_mut().zip(steps) {
+                                times.push(took);
+                            }
                         }
-                    }
-                    stop.store(true, Ordering::Relaxed);
-                    let commits =
-                        worker.map_or(0, |worker| worker.join().expect("the busy thread"));
-                    let sums: Vec<u128> = (0..REPS)
-                        .map(|rep| by_part.iter().map(|times| times[rep]).sum())
-                        .collect();
-                    println!(
-                        "import time: {name}: {len} bytes, {arm} ({commits} commits beside): the \
-                         whole call {}; its steps by hand summed {}",
-                        shown(&wholes),
-                        shown(&sums)
-                    );
-                    for (part, times) in PARTS.iter().zip(&by_part) {
+                        stop.store(true, Ordering::Relaxed);
+                        let commits =
+                            worker.map_or(0, |worker| worker.join().expect("the busy thread"));
+                        let sums: Vec<u128> = (0..REPS)
+                            .map(|rep| by_part.iter().map(|times| times[rep]).sum())
+                            .collect();
                         println!(
-                            "import time: {name}: {len} bytes, {arm}: {part} {}",
-                            shown(times)
+                            "import time: {name}: {kind}, {len} bytes, {arm} ({commits} commits \
+                             beside): the whole call {}; its steps by hand summed {}",
+                            shown(&wholes),
+                            shown(&sums)
                         );
+                        for (part, times) in PARTS.iter().zip(&by_part) {
+                            println!(
+                                "import time: {name}: {kind}, {len} bytes, {arm}: {part} {}",
+                                shown(times)
+                            );
+                        }
                     }
                 }
             }
