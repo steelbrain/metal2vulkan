@@ -1274,9 +1274,10 @@ made, with no lock, and never rewritten for layouts.
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
 - An opaque-black border sampled through a view whose component mapping is not the identity (a
-  swizzle, or the mapping a pixel format takes, such as `A8Unorm` held in red where the device
-  has no `A8_UNORM`) is the device's
-  answer on a device that does not report `borderColorSwizzleFromImage`
+  swizzle, or the mapping a pixel format takes: `A8Unorm` is held in `R8_UNORM` read through
+  `(0, 0, 0, r)` on every device, as rt uses Vulkan 1.3 and does not enable
+  `VK_KHR_maintenance5`, so `A8_UNORM` is not exposed) is the device's answer on a device that
+  does not report `borderColorSwizzleFromImage`
   (`VkPhysicalDeviceBorderColorSwizzleFeaturesEXT`, `VK_EXT_border_color_swizzle`): Vulkan leaves
   that texel undefined, and the NVIDIA driver reads `(0, 0, 0, 1)` through such a view, where
   Metal reads the border through the swizzle. A sampler in the arrays meets every view, so no
