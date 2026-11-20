@@ -7,13 +7,6 @@ use crate::bind::astc_decode::{hdr, AstcDecode, AstcTexels};
 use crate::metal::PixelFormat;
 use crate::vk::Format;
 
-/// The sixteen `_HDR` formats.
-fn hdr_formats() -> Vec<PixelFormat> {
-    (PixelFormat::ALL.iter().copied())
-        .filter(|&pf| AstcDecode::of(pf).is_some_and(|d| d.hdr))
-        .collect()
-}
-
 /// The blocks Metal read for the committed digests: `count` blocks of xorshift64* from
 /// `seed | 1`, two words each (low first) and a third draw, which makes 1 in 16 an LDR
 /// void-extent block and 1 in 16 an HDR one (all-ones extents), a quarter of those with a red of

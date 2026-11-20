@@ -2,8 +2,8 @@ use super::{
     convert_typed_module, sample_typed_module, ChromaConvertModule, ChromaDecode,
     ChromaSampleModule, IMAGE,
 };
-use super::{BLOCKS, SHAPE, TEXELS};
-use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Order, Resources};
+use super::{BLOCKS, SHAPE};
+use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
 /// `n` bytes of the xorshift64* stream from `seed`.
