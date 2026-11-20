@@ -1,6 +1,6 @@
 // Owned fixture: a kernel that samples the two textures its argument buffer holds, a `half` one and
 // a `float` one, through a constexpr nearest sampler and through a sampler slot, which the
-// runtime's device test (`tests::argument_tier`) runs on every device and checks exactly. Thread
+// translator's identity-domain test (`tests::engine_identity`) compiles. Thread
 // `(x, y)` of a 2 by 2 grid samples texel `(x, y)` of each 2 by 2 texture at its center, and
 // writes the four answers to `out[4 * (2 y + x)]` on: the `half` texture's through the constexpr
 // sampler, the `float` texture's through it, then each through the slot's sampler.

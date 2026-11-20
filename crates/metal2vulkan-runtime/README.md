@@ -2432,8 +2432,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   domains, which every state is translated under: a state over a function that holds one is
   `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
   first form it holds. By form:
-  - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
-    both compared and sampled without comparison: no test yet;
+  - a sample, gather or comparison of an argument buffer's texture: the translator test
+    `an_argument_buffer_textures_sample_is_refused_as_the_sample_form_under_the_identity_domains`
+    asserts the text;
+  - a depth texture of an argument buffer both compared and sampled without comparison: no test
+    yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test

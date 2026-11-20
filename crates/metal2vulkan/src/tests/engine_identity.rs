@@ -62,6 +62,11 @@
 //!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. A
 //!   bicubic sample of a 1D texture (`engine/bcu_forms`) or at pixel coordinates
 //!   (`engine/bcu_address`) is still refused as `Unsupported{IdentityDomains}`, not implemented.
+//! - A kernel that samples a `half` and a `float` texture its argument buffer holds through a
+//!   constexpr nearest sampler and through a sampler slot (`examples/heap_samples`' `hs_sample`)
+//!   is refused as `Unsupported{IdentityDomains}`, not implemented, naming the sample form
+//!   ([`HEAP_SAMPLE_FORM`]), not a raw member's decode, which the identity domains plan for no
+//!   argument buffer's texture.
 //! - A kernel that encodes compute commands into an indirect command buffer it reaches through an
 //!   argument buffer (`engine/icb_replay_encode`) is refused as
 //!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
@@ -96,7 +101,9 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::library::Library;
 use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
-use crate::lower::select::{LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM};
+use crate::lower::select::{
+    LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM, HEAP_SAMPLE_FORM,
+};
 use crate::memory::handles::Lookup;
 use crate::metal::resource_word::TextureWord;
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
@@ -814,6 +821,40 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
                 }
                 other => panic!("{stem}: {entry}: {other:?}"),
             }
+        }
+    }
+}
+
+/// Under the identity domains a kernel that samples the `half` and the `float` texture its
+/// argument buffer holds, through a constexpr nearest sampler and through a sampler slot, is
+/// refused naming the sample form on every profile, where the default domains compile it.
+#[test]
+fn an_argument_buffer_textures_sample_is_refused_as_the_sample_form_under_the_identity_domains() {
+    let Some(bc) = assembled(
+        "heap_samples",
+        llvm_assemble(&engine_dir().join("../examples/heap_samples.ll")),
+    ) else {
+        return;
+    };
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        compile(&bc, "hs_sample", &default)
+            .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        match compile(&bc, "hs_sample", &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}"
+                );
+                assert_eq!(
+                    u.symbol.map(|f| f.to_string()).as_deref(),
+                    Some(HEAP_SAMPLE_FORM),
+                    "{stem}"
+                );
+            }
+            other => panic!("{stem}: {other:?}"),
         }
     }
 }

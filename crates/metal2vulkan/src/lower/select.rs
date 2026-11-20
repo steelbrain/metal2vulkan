@@ -1948,6 +1948,10 @@ pub(crate) const BICUBIC_PIXEL_FORM: &str = "a bicubic filter at pixel coordinat
 /// [`identity_refusal`]'s form for a 1D texture's bicubic sample.
 pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
 
+/// [`identity_refusal`]'s form for a sample, gather or comparison of an argument buffer's texture.
+pub(crate) const HEAP_SAMPLE_FORM: &str =
+    "a sample, gather or comparison of an argument buffer's texture";
+
 /// The first form plan `plan` holds that the identity domains do not lower yet, as a Metal
 /// program reaches it, which [`identity_admits`]'s refusal names (diagnostics only); `None` where
 /// it holds none.
@@ -2065,10 +2069,7 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 || !sampled.decls.is_empty(),
             "a texture argument sampled through a sampler the identity sampling does not take",
         ),
-        (
-            !sampled.heap.is_empty(),
-            "a sample, gather or comparison of an argument buffer's texture",
-        ),
+        (!sampled.heap.is_empty(), HEAP_SAMPLE_FORM),
         (
             !sampled.heap_samplers.is_empty() || sampled.cubic_reach,
             "an argument buffer's sampler",

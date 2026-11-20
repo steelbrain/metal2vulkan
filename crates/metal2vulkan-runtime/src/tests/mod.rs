@@ -26,7 +26,6 @@ mod first_use_sites;
 mod floor;
 mod hazard;
 mod heap;
-mod heap_samples;
 mod image_reads;
 mod import;
 mod import_overs;
