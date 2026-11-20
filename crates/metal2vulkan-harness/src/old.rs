@@ -74,9 +74,35 @@ impl crate::Device for runtime::Device {
         self.work_counts().variant_pipelines_made
     }
 
-    /// None: it counts its encoders and barriers by kind, in no one total.
+    /// Its render pass instances of render encoders' passes (`WorkCounts::render_passes_begun_*`
+    /// summed), those of no draws that resolve a pass after its last
+    /// (`render_passes_begun_resolves`), the passes that made or took the framebuffers of their
+    /// exact color resolves (`color_resolve_passes_made` and `_kept`), and the commands it
+    /// recorded of five kinds (`commands_recorded`): every `vkCmdBeginRenderPass` (its own
+    /// clears', resolves' and copies' among them), draws, pipeline barriers, and image copies and
+    /// blits.
     fn counts(&self) -> Vec<(&'static str, u64)> {
-        Vec::new()
+        let w = self.work_counts();
+        let c = w.commands_recorded;
+        vec![
+            (
+                "pass_instances",
+                w.render_passes_begun_instances
+                    + w.render_passes_begun_inline
+                    + w.render_passes_begun_inline_splits
+                    + w.render_passes_begun_resolves,
+            ),
+            ("resolve_instances", w.render_passes_begun_resolves),
+            (
+                "exact_color_resolve_passes",
+                w.color_resolve_passes_made + w.color_resolve_passes_kept,
+            ),
+            ("cmd_begin_render_pass", c.cmd_begin_render_pass),
+            ("cmd_draw", c.cmd_draw),
+            ("cmd_pipeline_barrier", c.cmd_pipeline_barrier),
+            ("cmd_copy_image", c.cmd_copy_image),
+            ("cmd_blit_image", c.cmd_blit_image),
+        ]
     }
 
     /// `WorkCounts::queue_submissions`.

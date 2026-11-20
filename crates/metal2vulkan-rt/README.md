@@ -2414,7 +2414,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   attachment's pixel format and one sample, and its level the attachment level's width and
   height. Refused as Metal refuses it: a resolving action with no resolve texture
   (`Refusal::ResolveTexture`, also where an encoder sets it later) and an integer format's resolve
-  (`Refusal::ResolveFormat`).
+  (`Refusal::ResolveFormat`). `Metrics::resolves` counts the attachments passes resolved.
 - A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
   `float`: an optimal image in its real layout, of the Vulkan format the translator's format table
   chooses by the device's format query (`Depth32Float` is `D32_SFLOAT`, `Depth32Float_Stencil8`

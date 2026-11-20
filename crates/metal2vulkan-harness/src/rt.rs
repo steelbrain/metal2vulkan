@@ -454,13 +454,14 @@ impl crate::Device for Device {
         self.device.counters().metrics().pipelines_created
     }
 
-    /// `Metrics`' passes (encoders), barriers and bytes copied.
+    /// `Metrics`' passes (encoders), barriers, bytes copied and resolves.
     fn counts(&self) -> Vec<(&'static str, u64)> {
         let metrics = self.device.counters().metrics();
         vec![
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
+            ("resolves", metrics.resolves),
         ]
     }
 

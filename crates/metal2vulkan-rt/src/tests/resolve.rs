@@ -182,7 +182,10 @@ mod on_device {
                 Some(PrecisionNote::DeviceRoundedResolve),
                 "{name}: the resolve's note"
             );
+            let before = device.counters().metrics().resolves;
             drawn(name, &device, &p, &four_state, None);
+            let resolves = device.counters().metrics().resolves - before;
+            assert_eq!(resolves, 1, "{name}: the pass's one resolve");
             let got = read_at(&into, SIDE, 4, 1, 1);
             for y in 0..SIDE {
                 for x in 0..SIDE {

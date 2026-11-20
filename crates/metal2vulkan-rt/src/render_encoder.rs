@@ -2321,6 +2321,9 @@ impl RenderCommandEncoder {
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
         // into while the encoder holds it.
         unsafe { device.cmd_end_rendering(self.command) };
+        for _ in self.pass.resolves() {
+            building.count(Metric::Resolves);
+        }
         if back.is_empty() {
             // Nothing moves home: the barrier that orders the pass before later commands is the
             // segment's next command's, or its end's.

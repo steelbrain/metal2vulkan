@@ -81,10 +81,12 @@ pub(crate) enum Metric {
     TextureClearBarriers,
     /// [`Metrics::sparse_binds`].
     SparseBinds,
+    /// [`Metrics::resolves`].
+    Resolves,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::SparseBinds as usize + 1;
+const METRICS: usize = Metric::Resolves as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -116,6 +118,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::SurfacesCopied,
     Metric::TextureClearBarriers,
     Metric::SparseBinds,
+    Metric::Resolves,
 ];
 
 // Each metric of the order is at its own index.
@@ -330,6 +333,7 @@ struct Atomics {
     surface_wait_max_nanos: AtomicU64,
     surface_wait_submissions: AtomicU64,
     sparse_binds: AtomicU64,
+    resolves: AtomicU64,
     handles_out: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
@@ -445,6 +449,7 @@ impl Counters {
             Metric::SurfacesCopied => &a.surfaces_copied,
             Metric::TextureClearBarriers => &a.texture_clear_barriers,
             Metric::SparseBinds => &a.sparse_binds,
+            Metric::Resolves => &a.resolves,
         }
     }
 
@@ -879,6 +884,7 @@ impl Counters {
             surface_wait_max_nanos: a.surface_wait_max_nanos.load(Relaxed),
             surface_wait_submissions: a.surface_wait_submissions.load(Relaxed),
             sparse_binds: a.sparse_binds.load(Relaxed),
+            resolves: a.resolves.load(Relaxed),
         }
     }
 
@@ -1280,6 +1286,11 @@ pub struct Metrics {
     /// (`Device::import_dma_bufs`, on Unix), binding its imports into its buffer. Each signals a
     /// value the next `vkQueueSubmit2` waits for.
     pub sparse_binds: u64,
+    /// Resolves of render passes' multisample attachments, each by Vulkan's resolve in the pass's
+    /// rendering as it ends (`MTLStoreActionMultisampleResolve` and
+    /// `MTLStoreActionStoreAndMultisampleResolve`): one per attachment a pass resolves, counted
+    /// as its encoder ends.
+    pub resolves: u64,
 }
 
 /// No Metal counterpart: the `vkAllocateMemory` calls one site of the runtime made on the
