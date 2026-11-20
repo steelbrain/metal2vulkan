@@ -2328,6 +2328,7 @@ field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.exports	pub exports: u64
 field	metal2vulkan-rt::Gauges.handles_out	pub handles_out: u64
+field	metal2vulkan-rt::Gauges.import_bytes	pub import_bytes: u64
 field	metal2vulkan-rt::Gauges.imports	pub imports: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
@@ -2335,25 +2336,32 @@ field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u
 field	metal2vulkan-rt::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.private_allocation_bytes	pub private_allocation_bytes: u64
+field	metal2vulkan-rt::Gauges.private_buffer_bytes	pub private_buffer_bytes: u64
 field	metal2vulkan-rt::Gauges.private_idle_age_nanos	pub private_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.private_long_reused_bytes	pub private_long_reused_bytes: u64
+field	metal2vulkan-rt::Gauges.private_placed_bytes	pub private_placed_bytes: u64
 field	metal2vulkan-rt::Gauges.private_reserve_bytes	pub private_reserve_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shadow_bytes	pub shadow_bytes: u64
 field	metal2vulkan-rt::Gauges.shadows	pub shadows: u64
 field	metal2vulkan-rt::Gauges.shared_allocation_bytes	pub shared_allocation_bytes: u64
+field	metal2vulkan-rt::Gauges.shared_buffer_bytes	pub shared_buffer_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_idle_age_nanos	pub shared_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_long_reused_bytes	pub shared_long_reused_bytes: u64
+field	metal2vulkan-rt::Gauges.shared_placed_bytes	pub shared_placed_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_reserve_bytes	pub shared_reserve_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
 field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.surface_buffers	pub surface_buffers: u64
+field	metal2vulkan-rt::Gauges.surface_import_bytes	pub surface_import_bytes: u64
 field	metal2vulkan-rt::Gauges.surface_imports	pub surface_imports: u64
+field	metal2vulkan-rt::Gauges.texture_block_bytes	pub texture_block_bytes: u64
+field	metal2vulkan-rt::Gauges.texture_own_bytes	pub texture_own_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::Gauges.textures_copied_over	pub textures_copied_over: u64
 field	metal2vulkan-rt::Gauges.threads	pub threads: [u64; THREADS]
@@ -2397,7 +2405,9 @@ field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u6
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
+field	metal2vulkan-rt::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
+field	metal2vulkan-rt::Metrics.maker_makes	pub maker_makes: Timed
 field	metal2vulkan-rt::Metrics.maker_wait_max_nanos	pub maker_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.maker_waits	pub maker_waits: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
@@ -2435,6 +2445,10 @@ field	metal2vulkan-rt::Metrics.surfaces_copied	pub surfaces_copied: u64
 field	metal2vulkan-rt::Metrics.surfaces_in_place	pub surfaces_in_place: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
 field	metal2vulkan-rt::Metrics.take_allocations	pub take_allocations: SiteAllocations
+field	metal2vulkan-rt::Metrics.take_lock_waits	pub take_lock_waits: Timed
+field	metal2vulkan-rt::Metrics.take_makes	pub take_makes: Timed
+field	metal2vulkan-rt::Metrics.take_maps	pub take_maps: Timed
+field	metal2vulkan-rt::Metrics.takes	pub takes: Timed
 field	metal2vulkan-rt::Metrics.takes_from_free_ranges	pub takes_from_free_ranges: u64
 field	metal2vulkan-rt::Metrics.texture_allocations	pub texture_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.texture_block_allocations	pub texture_block_allocations: SiteAllocations
@@ -2447,6 +2461,7 @@ field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffe
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u64
 field	metal2vulkan-rt::Metrics.zero_source_allocations	pub zero_source_allocations: SiteAllocations
+field	metal2vulkan-rt::Metrics.zero_writes	pub zero_writes: Timed
 field	metal2vulkan-rt::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-rt::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-rt::PixelFormatInfo.name	pub name: &'static str
@@ -2599,6 +2614,13 @@ field	metal2vulkan-rt::TextureSwizzleChannels.alpha	pub alpha: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.blue	pub blue: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.red	pub red: TextureSwizzle
+field	metal2vulkan-rt::Timed.bytes	pub bytes: u64
+field	metal2vulkan-rt::Timed.count	pub count: u64
+field	metal2vulkan-rt::Timed.longest_nanos	pub longest_nanos: u64
+field	metal2vulkan-rt::Timed.over_1_ms	pub over_1_ms: u64
+field	metal2vulkan-rt::Timed.over_20_ms	pub over_20_ms: u64
+field	metal2vulkan-rt::Timed.over_5_ms	pub over_5_ms: u64
+field	metal2vulkan-rt::Timed.total_nanos	pub total_nanos: u64
 field	metal2vulkan-rt::VertexDescriptor.attributes	pub attributes: BTreeMap<u32, VertexAttributeDescriptor>
 field	metal2vulkan-rt::VertexDescriptor.layouts	pub layouts: BTreeMap<u32, VertexBufferLayoutDescriptor>
 field	metal2vulkan-rt::Viewport.height	pub height: f64
@@ -11932,6 +11954,7 @@ struct	metal2vulkan-rt::TextureLevelInfo	#[derive(Clone, Copy, Debug, PartialEq,
 struct	metal2vulkan-rt::TextureLevelQuery	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct TextureLevelQuery
 struct	metal2vulkan-rt::TexturePlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct TexturePlace
 struct	metal2vulkan-rt::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
+struct	metal2vulkan-rt::Timed	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Timed
 struct	metal2vulkan-rt::VertexDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexDescriptor
 struct	metal2vulkan-rt::Viewport	#[derive(Clone, Copy, Debug, PartialEq)] pub struct Viewport
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
