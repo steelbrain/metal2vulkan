@@ -2055,7 +2055,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   for it. Nothing the runtime records
   depends on when a compile finishes: there is one recorded form, made after the wait. Each such
   wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
-  longest in `first_use_wait_max_nanos`.
+  longest in `first_use_wait_max_nanos`, and again by where it waited, each with its count, time
+  and longest: `first_use_variant_waits` (a kernel's pipeline for a new workgroup size,
+  threadgroup memory lengths or tiles), `first_use_lowering_waits` (a later lowering the reaper
+  made) and `first_use_line_waits` (a render content's line-class pipeline).
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
   with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled

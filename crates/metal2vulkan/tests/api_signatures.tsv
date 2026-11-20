@@ -2403,6 +2403,15 @@ field	metal2vulkan-rt::Metrics.creations_before_seed	pub creations_before_seed: 
 field	metal2vulkan-rt::Metrics.dispatches_without_effects	pub dispatches_without_effects: u64
 field	metal2vulkan-rt::Metrics.external_acquires	pub external_acquires: u64
 field	metal2vulkan-rt::Metrics.external_releases	pub external_releases: u64
+field	metal2vulkan-rt::Metrics.first_use_line_wait_max_nanos	pub first_use_line_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_line_wait_nanos	pub first_use_line_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_line_waits	pub first_use_line_waits: u64
+field	metal2vulkan-rt::Metrics.first_use_lowering_wait_max_nanos	pub first_use_lowering_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_lowering_wait_nanos	pub first_use_lowering_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_lowering_waits	pub first_use_lowering_waits: u64
+field	metal2vulkan-rt::Metrics.first_use_variant_wait_max_nanos	pub first_use_variant_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_variant_wait_nanos	pub first_use_variant_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_variant_waits	pub first_use_variant_waits: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64

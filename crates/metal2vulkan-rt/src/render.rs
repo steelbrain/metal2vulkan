@@ -868,7 +868,10 @@ impl RenderCompiled {
         if *lines == vk::Pipeline::null() {
             let began = host_time();
             *lines = self.make(vk::PrimitiveTopology::LINE_LIST)?;
-            (self.core.counters).first_use_wait(host_time().saturating_sub(began));
+            (self.core.counters).first_use_wait(
+                crate::counters::FirstUse::Lines,
+                host_time().saturating_sub(began),
+            );
         }
         Ok(*lines)
     }

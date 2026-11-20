@@ -1437,9 +1437,10 @@ impl Compiled {
                 let began = host_time();
                 self.core.reaper.lower(Arc::downgrade(self), which);
                 let lowered = later.lowered.wait();
-                self.core
-                    .counters
-                    .first_use_wait(host_time().saturating_sub(began));
+                self.core.counters.first_use_wait(
+                    crate::counters::FirstUse::Lowering,
+                    host_time().saturating_sub(began),
+                );
                 lowered
             }
         };
@@ -1572,8 +1573,10 @@ impl Kernel {
         };
         let began = host_time();
         let pipeline = self.make(core, &variant)?;
-        core.counters
-            .first_use_wait(host_time().saturating_sub(began));
+        core.counters.first_use_wait(
+            crate::counters::FirstUse::Variant,
+            host_time().saturating_sub(began),
+        );
         variants.keep(&mut more, variant, pipeline);
         Ok(pipeline)
     }

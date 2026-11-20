@@ -18,6 +18,7 @@ mod draw;
 mod export;
 mod fence;
 mod fetch;
+mod first_use_sites;
 mod floor;
 mod hazard;
 mod heap;
