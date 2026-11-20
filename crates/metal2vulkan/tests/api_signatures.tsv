@@ -330,8 +330,8 @@ assoc-const-value	metal2vulkan::bind::DrawReplayModule::RECORDS_PUSH	16
 assoc-const-value	metal2vulkan::bind::DrawReplayModule::RESIDENT_PUSH	0
 assoc-const-value	metal2vulkan::bind::DrawReplayModule::STATUS_PUSH	8
 assoc-const-value	metal2vulkan::bind::EtcDecode::ALL	[EtcDecode::Rgb8, EtcDecode::Rgb8A1, EtcDecode::Rgba8, EtcDecode::R11Unorm, EtcDecode::R11Snorm, EtcDecode::Rg11Unorm, EtcDecode::Rg11Snorm]
-assoc-const-value	metal2vulkan::bind::ExecutionStatus::BYTES	32
-assoc-const-value	metal2vulkan::bind::ExecutionStatus::WORDS	8
+assoc-const-value	metal2vulkan::bind::ExecutionStatus::BYTES	16
+assoc-const-value	metal2vulkan::bind::ExecutionStatus::WORDS	4
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::INDEX_OFFSET	0
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::PUSH_OFFSET	4
 assoc-const-value	metal2vulkan::bind::IndexBoundsFillModule::INDICES_BINDING	1
@@ -413,13 +413,13 @@ assoc-const-value	metal2vulkan::bind::ReplayPreprocessModule::STATUS_PUSH	8
 assoc-const-value	metal2vulkan::bind::RewritePhase::ALL	[RewritePhase::Count, RewritePhase::Place, RewritePhase::Write]
 assoc-const-value	metal2vulkan::bind::RewriteProgram::ALL	[RewriteProgram::LineStrip, RewriteProgram::TriangleStrip, RewriteProgram::LineLoop, RewriteProgram::TriangleFan, RewriteProgram::Quads, RewriteProgram::QuadStrip, RewriteProgram::LineList, RewriteProgram::TriangleList]
 assoc-const-value	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	(SINK_ROOT * ENTRY_BYTES + HOST) as u32
-assoc-const-value	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	StatusBits(1 <<4)
-assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<6)
-assoc-const-value	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	StatusBits(1 <<3)
-assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<10)
-assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<9)
-assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<2)
-assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<1)
+assoc-const-value	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	StatusBits(1 <<3)
+assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<4)
+assoc-const-value	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	StatusBits(1 <<2)
+assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<6)
+assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<5)
+assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<1)
+assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<0)
 assoc-const-value	metal2vulkan::bind::StatusWord::ALL	[StatusWord::Status, StatusWord::ResidentMisses, StatusWord::ReplayFaults, StatusWord::SeqCstFences]
 assoc-const-value	metal2vulkan::bind::StencilBit::ALL	[StencilBit(0), StencilBit(1), StencilBit(2), StencilBit(3), StencilBit(4), StencilBit(5), StencilBit(6), StencilBit(7)]
 assoc-const-value	metal2vulkan::bind::StencilSplitModule::DESTINATION_BINDING	1

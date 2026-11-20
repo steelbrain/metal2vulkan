@@ -1,12 +1,12 @@
 //! `ExecutionStatus` buffer layout: word indices and status bits.
 //!
-//! One 32-byte buffer per command buffer, shared by every plan in it. The consumer initializes it
+//! One 16-byte buffer per command buffer, shared by every plan in it. The consumer initializes it
 //! with [`ExecutionStatus::initial`] before the command buffer's first use and reads it back with
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
 //! the resident-set miss counter, the device replay's preprocess, the index
 //! bounds pass, an absent argument's read, a mesh draw's arguments pass, a sample
 //! through a cubic argument sampler, and a sequentially consistent fence write the
-//! words named here. Words 3 to 6 are not written.
+//! words named here.
 
 /// The `ExecutionStatus` buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -14,9 +14,9 @@ pub struct ExecutionStatus;
 
 impl ExecutionStatus {
     /// Size of the buffer in bytes.
-    pub const BYTES: usize = 32;
+    pub const BYTES: usize = 16;
     /// Size of the buffer in 32-bit words: up to the last of [`StatusWord::ALL`].
-    pub const WORDS: usize = 8;
+    pub const WORDS: usize = 4;
 
     /// The buffer's initial bytes: every word 0.
     pub const fn initial() -> [u8; ExecutionStatus::BYTES] {
@@ -112,8 +112,7 @@ impl StatusWord {
             StatusWord::Status => 0,
             StatusWord::ResidentMisses => 1,
             StatusWord::ReplayFaults => 2,
-            // Words 3 to 6 are not written.
-            StatusWord::SeqCstFences => 7,
+            StatusWord::SeqCstFences => 3,
         }
     }
 
@@ -129,33 +128,29 @@ pub struct StatusBits(pub u32);
 
 impl StatusBits {
     /// An access missed the resident set.
-    pub const RESIDENT_MISS: StatusBits = StatusBits(1 << 1);
+    pub const RESIDENT_MISS: StatusBits = StatusBits(1 << 0);
     /// The device replay's preprocess refused a command; [`StatusWord::ReplayFaults`] holds why.
-    pub const REPLAY_FAULT: StatusBits = StatusBits(1 << 2);
+    pub const REPLAY_FAULT: StatusBits = StatusBits(1 << 1);
     /// An index bounds pass found no room in the command buffer's index pool for a draw's
     /// indices, and the draw drew nothing (`bind::IndexBoundsPass`).
-    pub const INDEX_POOL_OVERFLOW: StatusBits = StatusBits(1 << 3);
+    pub const INDEX_POOL_OVERFLOW: StatusBits = StatusBits(1 << 2);
     /// A function read an argument its pipeline's function constants removed, a read Metal
     /// gives no value, and took zero for it (`RuntimeFact::AbsentArgumentRead`).
-    pub const ABSENT_ARGUMENT_READ: StatusBits = StatusBits(1 << 4);
-    // Bit 5 (an emulated mesh draw's records fault) is not reported: a device without
-    // `meshShader` refuses the pipeline.
+    pub const ABSENT_ARGUMENT_READ: StatusBits = StatusBits(1 << 3);
     /// A function sampled, gathered, or queried through a sampler an argument buffer holds whose
     /// min or mag filter is `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
     /// placeholder, not Metal's.
-    pub const CUBIC_ARGUMENT_SAMPLER: StatusBits = StatusBits(1 << 6);
-    // Bit 8 (an emulated tessellation draw's records fault) is not reported: a device without
-    // `tessellationShader` refuses the pipeline.
+    pub const CUBIC_ARGUMENT_SAMPLER: StatusBits = StatusBits(1 << 4);
     /// An indirect mesh draw's arguments pass met a grid that Metal draws and the device cannot
     /// launch: a mesh grid past the mesh stage's limits, an unfolded object grid past the task
     /// stage's, or a folded one of more pieces than `MeshArguments::OBJECT_PIECES` (only under task
     /// limits below Vulkan's required least); the draw drew nothing (`bind::MeshArguments`).
-    pub const MESH_GRID_PAST_LIMITS: StatusBits = StatusBits(1 << 9);
+    pub const MESH_GRID_PAST_LIMITS: StatusBits = StatusBits(1 << 5);
     /// An indirect mesh draw's arguments pass met an object grid of more threadgroups than
     /// `bind::METAL_OBJECT_GRID_TOTAL`, which Metal's GPU discards; the draw drew nothing
     /// (`bind::MeshArguments`).
-    pub const MESH_GRID_DISCARDED: StatusBits = StatusBits(1 << 10);
+    pub const MESH_GRID_DISCARDED: StatusBits = StatusBits(1 << 6);
     /// Every bit in `other` is set in `self`.
     pub const fn contains(self, other: StatusBits) -> bool {
         self.0 & other.0 == other.0
@@ -259,6 +254,8 @@ mod tests {
             assert_eq!(all & b.0, 0);
             all |= b.0;
         }
+        // The bits are the low ones, none left unused between them.
+        assert_eq!(all, (1 << bits.len()) - 1);
         assert!(StatusBits(all).contains(StatusBits::REPLAY_FAULT));
         assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::REPLAY_FAULT));
     }
@@ -273,19 +270,19 @@ mod tests {
 
     #[test]
     fn decode_reports_every_bit_and_counter() {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0u8; ExecutionStatus::BYTES];
         let bits = StatusBits::INDEX_POOL_OVERFLOW.0 | StatusBits::RESIDENT_MISS.0;
         bytes[0..4].copy_from_slice(&bits.to_le_bytes());
         bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.index_pool_overflow && r.resident_miss);
         assert_eq!(r.resident_misses, 7);
-        bytes = [0u8; 32];
+        bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::INDEX_POOL_OVERFLOW.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.index_pool_overflow && !r.resident_miss);
         assert_eq!(r.resident_misses, 0);
-        bytes = [0u8; 32];
+        bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
         let faults = ReplayFaults::VARIANT.0 | ReplayFaults::RECORD.0;
         bytes[8..12].copy_from_slice(&faults.to_le_bytes());
@@ -295,16 +292,16 @@ mod tests {
         assert!(r.replay_faults.contains(ReplayFaults::RECORD));
         assert!(!r.replay_faults.contains(ReplayFaults::ENCODING));
         assert!(!r.index_pool_overflow);
-        bytes = [0u8; 32];
+        bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::INDEX_POOL_OVERFLOW.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.index_pool_overflow && !r.replay_fault);
         assert!(!r.absent_argument_read);
-        bytes = [0u8; 32];
+        bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::ABSENT_ARGUMENT_READ.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(!r.cubic_argument_sampler);
-        let mut cubic = [0u8; 32];
+        let mut cubic = [0u8; ExecutionStatus::BYTES];
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
         assert!(c.cubic_argument_sampler && !c.absent_argument_read);

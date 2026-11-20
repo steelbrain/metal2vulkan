@@ -101,7 +101,7 @@ fn ran(pass: &IndexBoundsPass, arguments: &[u32], indices: &[u8], counter: u32) 
     let after = &planned[0];
     let bounds = words(&after[0]);
     let mut pool = words(&after[2]);
-    let status: [u8; 32] = after[3].as_slice().try_into().expect("status");
+    let status: [u8; ExecutionStatus::BYTES] = after[3].as_slice().try_into().expect("status");
     let report = ExecutionStatus::decode(&status);
     let groups = bounds[Output::FillDispatch as usize];
     if groups > 0 {

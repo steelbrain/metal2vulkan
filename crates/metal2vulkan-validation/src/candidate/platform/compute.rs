@@ -825,7 +825,7 @@ fn execute(
     let status_bytes: [u8; ExecutionStatus::BYTES] = unsafe { status.buffer.map()? }.bytes
         [..ExecutionStatus::BYTES]
         .try_into()
-        .expect("the status buffer holds 32 bytes");
+        .expect("the status buffer holds ExecutionStatus::BYTES bytes");
     let report = status_verdict(&status_bytes)?;
     // Each command buffer's records as the host contract decodes them: an encoding fault fails the
     // run. Then the commands the case executes run, over the run's allocations.

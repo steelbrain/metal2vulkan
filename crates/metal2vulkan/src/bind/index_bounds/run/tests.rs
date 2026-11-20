@@ -247,7 +247,9 @@ fn a_run_leaves_what_its_draws_passes_leave() {
             assert!(width <= widest && width * rows >= total && width * (rows - 1) < total);
             spread |= rows > 1 && width * rows > total;
             // The overflow happened, and both kinds of draw are among them.
-            let report = ExecutionStatus::decode(&got.2[..32].try_into().expect("status"));
+            let report = ExecutionStatus::decode(
+                &got.2[..ExecutionStatus::BYTES].try_into().expect("status"),
+            );
             assert!(report.index_pool_overflow, "{case}: no overflow");
             assert!(got.0.iter().any(|c| c[0] > 0) && got.0.iter().any(|c| c[5] > 0));
         }

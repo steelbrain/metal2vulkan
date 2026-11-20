@@ -418,7 +418,7 @@ fn submit_child(
     let status_bytes: [u8; ExecutionStatus::BYTES] = unsafe { status.buffer.map()? }.bytes
         [..ExecutionStatus::BYTES]
         .try_into()
-        .expect("the status buffer holds 32 bytes");
+        .expect("the status buffer holds ExecutionStatus::BYTES bytes");
     status_verdict(&status_bytes)?;
     drop(objects);
     drop(resources);

@@ -218,7 +218,7 @@ struct World {
     buffers: BTreeMap<u32, Alloc>,
     strides: BTreeMap<u32, u32>,
     region: Option<StageInRegion>,
-    status: [u8; 32],
+    status: [u8; ExecutionStatus::BYTES],
 }
 
 impl World {
@@ -434,7 +434,9 @@ fn execute(
                         }
                     }
                 }
-                Back::Status => world.status.copy_from_slice(&bytes[..32]),
+                Back::Status => world
+                    .status
+                    .copy_from_slice(&bytes[..ExecutionStatus::BYTES]),
                 Back::Nowhere => {}
             }
         }

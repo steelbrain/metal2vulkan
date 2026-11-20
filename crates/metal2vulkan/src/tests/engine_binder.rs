@@ -149,7 +149,7 @@ impl Alloc {
 pub(super) struct World {
     pub(super) buffers: BTreeMap<u32, Alloc>,
     used: Vec<(u64, u64, Vec<u8>)>,
-    status: [u8; 32],
+    status: [u8; ExecutionStatus::BYTES],
 }
 
 impl World {
@@ -421,7 +421,9 @@ pub(super) fn execute_with(
                     let n = world.used[i].2.len();
                     world.used[i].2.copy_from_slice(&bytes[..n]);
                 }
-                Back::Status => world.status.copy_from_slice(&bytes[..32]),
+                Back::Status => world
+                    .status
+                    .copy_from_slice(&bytes[..ExecutionStatus::BYTES]),
                 Back::Nowhere => {}
             }
         }

@@ -72,7 +72,7 @@ fn run_pass(
         0xEEEE_EEEE,
         "the pass writes its scratch only"
     );
-    let status: [u8; 32] = b[2].as_slice().try_into().expect("status");
+    let status: [u8; ExecutionStatus::BYTES] = b[2].as_slice().try_into().expect("status");
     (
         scratch[..bytes / 4].to_vec(),
         ExecutionStatus::decode(&status),

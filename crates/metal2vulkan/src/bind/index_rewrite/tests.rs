@@ -256,7 +256,7 @@ impl Draw {
         }
         assert_eq!(ran[0], ran[1], "order independent");
         let after = &ran[0];
-        let status: [u8; 32] = after[4].as_slice().try_into().expect("status");
+        let status: [u8; ExecutionStatus::BYTES] = after[4].as_slice().try_into().expect("status");
         let out = words(&after[3]);
         let (output, counter) = match self.counter {
             None => (out, None),
