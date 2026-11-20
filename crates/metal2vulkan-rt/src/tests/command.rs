@@ -1748,8 +1748,10 @@ pub(crate) mod on_device {
 
     /// At most `UNSEEN_JOINS` command buffers join a group while none of their queue's retires:
     /// behind three running submissions, on a queue whose command buffers ran 1 ms, that many
-    /// fills and two more go as two groups, the first as the next fill finds it full, before the
-    /// busy work ends, the second once it ends.
+    /// fills and two more go as two groups before the busy work ends, the first as the next fill
+    /// finds it full, the second as the queue sends it (`send_now`). Sent only once the busy work
+    /// ends, the second could go member by member: the busy work's long runs, retiring, raise the
+    /// expected run before or after it goes.
     #[test]
     fn every_device_joins_at_most_unseen_joins_to_a_group_while_none_retires() {
         each_device("command_group_unseen", |name, _, device| {
@@ -1772,12 +1774,16 @@ pub(crate) mod on_device {
                 let sent = || device.counters().metrics().submissions - before;
                 within(name, || sent() > AHEAD);
                 assert_eq!(sent(), AHEAD + 1, "{name}: sent behind the busy work");
+                let last = held.last().expect("a fill");
+                queue.send_now(last);
+                within(name, || sent() > AHEAD + 1);
+                assert_eq!(sent(), AHEAD + 2, "{name}: two groups");
                 busy.open();
                 for command_buffer in &held {
                     finished(name, command_buffer);
                 }
                 assert_eq!(word(&buffer), fills, "{name}");
-                assert_eq!(sent(), AHEAD + 2, "{name}: two groups");
+                assert_eq!(sent(), AHEAD + 2, "{name}: nothing more");
             });
             drop((buffer, arena, queue, device));
         });
