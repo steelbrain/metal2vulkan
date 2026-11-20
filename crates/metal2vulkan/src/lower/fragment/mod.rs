@@ -351,8 +351,9 @@ fn returns(cx: &SelectCx<'_>) -> u64 {
 /// interface's size estimate.
 pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     // A device may shade a triangle it clips as several, and then a quad a seam crosses runs
-    // once per piece: an operation over the active lanes sees each piece's (on every device).
-    if counts_active_lanes(cx) {
+    // once per piece: a fragment function's operation over the active lanes sees each piece's
+    // (on every device). No clipping splits another stage's groups.
+    if cx.stage == Stage::Fragment && counts_active_lanes(cx) {
         cx.precision.insert(PrecisionNote::QuadsSplitByClipping);
     }
     let looped = coverage::finish(cx)?;

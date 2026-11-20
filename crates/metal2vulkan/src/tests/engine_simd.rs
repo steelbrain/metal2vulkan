@@ -741,6 +741,41 @@ fn fragment_simdgroup_functions_record_the_grouping() {
     assert!(noted > 0, "no profile recorded the note");
 }
 
+/// An operation over the group's active lanes records `PrecisionNote::QuadsSplitByClipping` in a
+/// fragment function alone (`fragment_discard_counts`' sums), where clipping may split a quad, on
+/// every committed profile that compiles it; a kernel's (`simd_ops`' sum, vote, ballot and first
+/// lane) and a vertex function's (`rvc_simd_vertex`) record none, since no clipping splits their
+/// groups.
+#[test]
+fn only_a_fragment_function_records_quads_split_by_clipping() {
+    let note = PrecisionNote::QuadsSplitByClipping;
+    let (Some(counts), Some(kernels), Some(vertex)) = (
+        assemble("fragment_discard_counts"),
+        assemble("simd_ops"),
+        assemble("rvc_simd_vertex"),
+    ) else {
+        return;
+    };
+    let (mut noted, mut unnoted) = (0, 0);
+    for (name, p) in committed_profiles().expect("profiles") {
+        if let Ok(a) = compile(&counts, "discard_counts", &p) {
+            assert!(a.precision.contains(&note), "discard_counts on {name}");
+            noted += 1;
+        }
+        for kernel in ["simd_sum_k", "simd_vote_k", "simd_ballot_k", "simd_first_k"] {
+            if let Ok(a) = compile(&kernels, kernel, &p) {
+                assert!(!a.precision.contains(&note), "{kernel} on {name}");
+                unnoted += 1;
+            }
+        }
+        if let Ok(a) = compile(&vertex, "simd_functions_in_a_vertex_function", &p) {
+            assert!(!a.precision.contains(&note), "rvc_simd_vertex on {name}");
+        }
+    }
+    assert!(noted > 0, "no profile recorded the note");
+    assert!(unnoted > 0, "no profile compiled a kernel");
+}
+
 /// A kernel with compute derivatives and a simdgroup operation is refused as
 /// `ComputeDerivativesWithSimd` wherever the operation flattens it (flattening destroys the 2D quad
 /// shape the derivatives need). Emulated simdgroups keep the local size, so there the kernel
