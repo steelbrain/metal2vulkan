@@ -2851,6 +2851,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   rt makes no `VkPipeline` of one. No replay stream or live session has used one; harvested guest
   functions declare them, and validation's committed object and mesh cases qualify on Metal alone
   (its `mesh_render_pipeline` requirement).
+- On a Vulkan driver built on Metal (Mesa's KosmicKrisp on the Mac), a fragment function that
+  declares `[[early_fragment_tests]]` loses every texture write in a pipeline of more than one
+  sample: it runs, and its buffer writes land, but none of its texture writes does. This is
+  Metal's own defect, and the driver passes it on: it turns the module's `EarlyFragmentTests`
+  into Metal's `[[early_fragment_tests]]`. Metal itself, on an Apple M3 Max under macOS 27.0.1,
+  writes none of 512 texels at 2 or at 4 samples, while the same function without the attribute
+  writes every one. Vulkan requires those writes, and no Vulkan query tells such a driver apart,
+  so rt emits the mode on every device. The device test `tests::lost_writes` accepts exactly this
+  outcome there and prints it.
 
 ## Render encoders
 

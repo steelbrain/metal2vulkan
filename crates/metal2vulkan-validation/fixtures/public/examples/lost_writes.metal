@@ -4,8 +4,9 @@
 // whole target, its `uv` the target's position from 0 to 1 (top left 0, 1); `lw_half` draws the
 // lower-left half of the target, so the pixels on its diagonal are partly covered.
 //
-// - `lw_early_write` declares early fragment tests and writes its pixel's coordinates into a
-//   texture, `(x, y, 0.25, 1)`, at every sample count.
+// - `lw_early_write` declares early fragment tests, writes its pixel's coordinates into a
+//   texture, `(x, y, 0.25, 1)`, at every sample count, and adds 1 to a run count; `lw_late_write`
+//   is the same function without early tests, the control.
 // - `lw_dropped` samples a texture, discards where `(x + 3 y) % 5` is 0, samples again, takes a
 //   derivative, runs float arithmetic the module keeps apart
 //   (`contract(off)`) in a branch only the discarded fragments enter, and writes a code into a
@@ -38,12 +39,25 @@ vertex LwVertex lw_half(uint vid [[vertex_id]]) {
     return out;
 }
 
-[[early_fragment_tests]]
-fragment float4 lw_early_write(LwVertex in [[stage_in]],
-                               texture2d<float, access::write> out [[texture(0)]]) {
+static float4 lw_write(LwVertex in, texture2d<float, access::write> out,
+                       device atomic_uint *runs) {
     uint2 at = uint2(in.position.xy);
     out.write(float4(float(at.x), float(at.y), 0.25, 1.0), at);
+    atomic_fetch_add_explicit(runs, 1u, memory_order_relaxed);
     return float4(0.0, 1.0, 0.0, 1.0);
+}
+
+[[early_fragment_tests]]
+fragment float4 lw_early_write(LwVertex in [[stage_in]],
+                               texture2d<float, access::write> out [[texture(0)]],
+                               device atomic_uint *runs [[buffer(0)]]) {
+    return lw_write(in, out, runs);
+}
+
+fragment float4 lw_late_write(LwVertex in [[stage_in]],
+                              texture2d<float, access::write> out [[texture(0)]],
+                              device atomic_uint *runs [[buffer(0)]]) {
+    return lw_write(in, out, runs);
 }
 
 struct LwGlobals {
