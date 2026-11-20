@@ -12,7 +12,7 @@
 //! - the same patches of a post-tessellation function whose fields pass its push window (16 more
 //!   buffer arguments, written here): its parameter block survives the control stage's placement
 //!   of the vertex stage, and every buffer's address and bounds reach the function from it.
-//! - the same patches behind a fragment function whose fields fill the push range (4 to 16 buffer
+//! - the same patches behind a fragment function whose fields fill the push range (4 to 24 buffer
 //!   arguments, written here): the state is made, as Metal makes it, with the control stage's
 //!   range at 0 below the post-tessellation function's window, and the fragment function's fields
 //!   past the range in its block.
@@ -127,8 +127,10 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(read) }
 BUFFER_META"#;
 
     /// The buffer arguments of each of [`wide_fragment`]'s functions: the narrowest pushes
-    /// every field, the widest spills.
-    const FRAGMENT_WIDTHS: [u32; 4] = [4, 8, 12, 16];
+    /// every field; behind a post-tessellation function whose window started at 0, 19 would end
+    /// the pair's fields at 252, where the factors' 8-byte address no longer fits above them; the
+    /// widest spills.
+    const FRAGMENT_WIDTHS: [u32; 4] = [4, 12, 19, 24];
 
     /// A fragment function that writes its `user(locn0)` colour plus `width` `float4` buffer
     /// arguments at indices 0 and on, each read at element 0, a read checked against the
@@ -541,11 +543,12 @@ BUFFER_META"#;
     /// A patch state whose fragment function's fields fill the floor's push range behind the
     /// post-tessellation function's ([`wide_fragment`]) is made, as Metal makes it, and draws its
     /// patches: the control stage pushes the factors' address at 0, below the post-tessellation
-    /// function's window, and the fragment function's fields past the range go to its block. The
-    /// widest fragment function's fields reach past 248 bytes, where no range of the factors'
-    /// address is left above the pair's. Buffer `k` holds `2^(k % 4) / 255` in channel `k / 4`
-    /// and the tints are 0, so the first patch's colour holds every bit of the buffers a function
-    /// reads only where each buffer's address and bounds reach it; the second patch is culled.
+    /// function's window, and the fragment function's fields past the range go to its block. A
+    /// pair's fields reach past 248 bytes, where no range of the factors' address is left above
+    /// them, and the widest fragment function's spill. Every state is made before any draw.
+    /// Buffer `k` holds `2^(k / 4) / 255` in channel `k % 4` and the tints are 0, so the first
+    /// patch's colour holds every bit of the buffers a function reads only where each buffer's
+    /// address and bounds reach it; the second patch is culled.
     #[test]
     fn every_device_draws_patches_whose_fragment_fills_the_push_range() {
         use crate::pipeline::FieldValue;
@@ -568,15 +571,22 @@ BUFFER_META"#;
             }
         }
         each_device("draw_patches_full_range", |name, _, device| {
-            let mut widest = 0;
-            for (width, library) in &fragments {
-                let mut d = patches(&libraries);
-                d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-                    library
-                        .function("tess_wide_fragment")
-                        .expect("the function"),
-                )));
-                let state = state(name, &device, &d);
+            let states: Vec<_> = (fragments.iter())
+                .map(|(width, library)| {
+                    let mut d = patches(&libraries);
+                    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+                        library
+                            .function("tess_wide_fragment")
+                            .expect("the function"),
+                    )));
+                    (
+                        *width,
+                        state(&format!("{name}: {width} buffers"), &device, &d),
+                    )
+                })
+                .collect();
+            let (mut widest, mut spilled) = (0, false);
+            for (width, state) in &states {
                 let draws = &state.inner.compiled.draws;
                 assert!(
                     (draws.fields.iter()).any(|(place, _, value)| matches!(
@@ -586,13 +596,14 @@ BUFFER_META"#;
                     "{name}: {width} buffers: the factors' address at 0"
                 );
                 widest = widest.max(draws.push_len);
+                spilled |= draws.blocks[crate::render::FRAGMENT].is_some();
                 let mut buffers = Buffers::new(&device);
                 let (points, _, factors) = patch_buffers(&device, &mut buffers);
                 let tints = buffers.of(&device, &[0; 32]);
                 let summed: Vec<Buffer> = (0..*width)
                     .map(|k| {
                         let mut value = [0.0; 4];
-                        value[(k / 4) as usize] = f32::from(1u8 << (k % 4)) / 255.0;
+                        value[(k % 4) as usize] = f32::from(1u8 << (k / 4)) / 255.0;
                         buffers.of(&device, &floats(&value))
                     })
                     .collect();
@@ -607,7 +618,7 @@ BUFFER_META"#;
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 let draw =
                     |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_render_pipeline_state(state));
                 draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
                 draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
                 for (k, buffer) in summed.iter().enumerate() {
@@ -619,7 +630,7 @@ BUFFER_META"#;
                 run(name, &command_buffer);
                 let mut sums = [0u8; 4];
                 for k in 0..*width {
-                    sums[(k / 4) as usize] += 1 << (k % 4);
+                    sums[(k % 4) as usize] += 1 << (k / 4);
                 }
                 let black = [0, 0, 0, 255];
                 let want: Vec<u8> = (0..SIDE * SIDE)
@@ -637,6 +648,7 @@ BUFFER_META"#;
                 widest > 248,
                 "{name}: the widest pair's fields end at {widest}, not past 248"
             );
+            assert!(spilled, "{name}: no fragment function's fields spill");
         });
     }
 
