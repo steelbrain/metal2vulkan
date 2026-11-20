@@ -101,6 +101,19 @@ const IN_PLACE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
 /// `DRM_FORMAT_MOD_LINEAR`.
 const MOD_LINEAR: u64 = 0;
 
+/// A plane's image in place, as `Query::plane` finds it.
+struct PlaneImage {
+    /// Every bit of `IN_PLACE_USAGE`, storage and the plan's usage that its tiling holds
+    /// ([`held_usage`]) and the query offers, with the feedback usage where the plan asks it and
+    /// the query offers it with the rest and the export features alike.
+    usage: vk::ImageUsageFlags,
+    /// Its view-format list: the plan's formats the tiling samples, none where the query refuses
+    /// it.
+    list: Vec<vk::Format>,
+    /// Whether it renders as a linear colour attachment alone ([`linear_alone`]), so marked.
+    linear: bool,
+}
+
 /// No Metal counterpart: what [`Device::new_exported_surface`] makes.
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceSpec<'a> {
@@ -436,19 +449,14 @@ impl Query<'_> {
         (own, optimal)
     }
 
-    /// The plane's image in place: its usage, every bit of `IN_PLACE_USAGE`, storage and the
-    /// plan's usage that its tiling holds ([`held_usage`]) and the query offers, with the
-    /// feedback usage where the plan asks it and the query offers it with the rest and the export
-    /// features alike, its view-format list, the plan's formats the tiling samples (none where
-    /// the query refuses it), and whether it renders as a linear colour attachment alone
-    /// ([`linear_alone`]), so marked; `Err` with the copy form's reason, or the gap of a usage the
+    /// The plane's image in place; `Err` with the copy form's reason, or the gap of a usage the
     /// plan asks that the tiling lacks.
     fn plane(
         &self,
         at: usize,
         plan: &PlanePlan,
         pixel_format: crate::PixelFormat,
-    ) -> Result<Result<(vk::ImageUsageFlags, Vec<vk::Format>, bool), SurfaceCopy>, Error> {
+    ) -> Result<Result<PlaneImage, SurfaceCopy>, Error> {
         let wanted = IN_PLACE_USAGE | vk::ImageUsageFlags::STORAGE | plan.usage;
         let (own, optimal) = self.features(plan.format);
         let held = held_usage(wanted, own, optimal, self.tiling(), self.linear_attachments);
@@ -501,9 +509,17 @@ impl Query<'_> {
         let looped = offered | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
         let keeps = |features| tiling_verdict(at, looped, features).is_ok();
         if plan.looped && self.external(plan.format, looped, &list).is_some_and(keeps) {
-            return Ok(Ok((looped, list, alone)));
+            return Ok(Ok(PlaneImage {
+                usage: looped,
+                list,
+                linear: alone,
+            }));
         }
-        Ok(Ok((offered, list, alone)))
+        Ok(Ok(PlaneImage {
+            usage: offered,
+            list,
+            linear: alone,
+        }))
     }
 }
 
@@ -973,7 +989,11 @@ impl Device {
                 Ok(Err(reason))
             };
         for (at, (plane, plan)) in spec.planes.iter().zip(plans).enumerate() {
-            let (usage, list, linear) = match query.plane(at, plan, plane.descriptor.pixel_format) {
+            let PlaneImage {
+                usage,
+                list,
+                linear,
+            } = match query.plane(at, plan, plane.descriptor.pixel_format) {
                 Ok(Ok(found)) => found,
                 Ok(Err(reason)) => return copy(made, reason),
                 Err(error) => {
@@ -1116,11 +1136,14 @@ impl Device {
         let mut chosen = Vec::with_capacity(plans.len());
         let mut pitch = 0u64;
         for (at, (plane, plan)) in spec.planes.iter().zip(plans).enumerate() {
-            let (usage, list, linear) =
-                match query.plane(at, plan, plane.descriptor.pixel_format)? {
-                    Ok(found) => found,
-                    Err(reason) => return Ok(Err(reason)),
-                };
+            let PlaneImage {
+                usage,
+                list,
+                linear,
+            } = match query.plane(at, plan, plane.descriptor.pixel_format)? {
+                Ok(found) => found,
+                Err(reason) => return Ok(Err(reason)),
+            };
             step!("queries");
             // SAFETY: the query accepted the image; the extensions are enabled.
             let implicit = unsafe {
