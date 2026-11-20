@@ -136,7 +136,9 @@ vertex or primitive and writes no device memory: it has no effect a stage observ
 without rasterization and its case observes the empty output (`"output": {"kind": "none"}`). The Metal oracle draws a case through
 `MTLMeshRenderPipelineDescriptor` and the case's own stage's setters. The engine's candidate
 does not draw one: an object or mesh case requires `mesh_render_pipeline`, which no candidate
-runs, so its Metal observation stands with its Vulkan side unsupported. An object case's
+runs, so its Metal observation stands with its Vulkan side unsupported. The authored compile
+census still compiles its mesh render pipeline, as the candidate would build it, on each
+profile-leg. An object case's
 `threadgroup_memory` sets its arguments' lengths through `setObjectThreadgroupMemoryLength:atIndex:`.
 
 Dynamic Metal `threadgroup` arguments are declared through `threadgroup_memory` binding/length

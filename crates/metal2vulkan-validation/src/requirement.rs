@@ -125,7 +125,9 @@ pub enum ToolingRequirement {
     DepthOutsideUnitRange,
     /// An object or mesh function's row or case (`executor_contract::mesh`), or a case that runs a
     /// pipeline template of one: the engine's candidate draws no mesh render pipeline. The Metal
-    /// oracle draws it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
+    /// oracle draws it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]), and
+    /// the authored compile census still compiles an object or mesh case's pipeline
+    /// (`engine::prepare_compile`).
     MeshRenderPipeline,
     /// A replayed pipeline template the engine's candidate does not replay
     /// (`candidate::engine::replay_templates`): a compute template that binds more than buffers

@@ -1992,7 +1992,8 @@ pub fn execute_case(
     )
 }
 
-/// An admitted case that passed the executor's device-free checks ([`prepare_case`]).
+/// An admitted case that passed the executor's device-free checks ([`prepare_case`]), or the
+/// compile census's ([`prepare_compile`]).
 pub struct PreparedCase {
     device: DeviceType,
     checked: CheckedCase,
@@ -2379,8 +2380,33 @@ pub fn prepare_case(
     device: DeviceType,
     admitted: AdmittedCase,
 ) -> Result<PreparedCase, ExecutorError> {
+    prepare(device, admitted, false)
+}
+
+/// [`prepare_case`] for the authored compile census (`authored_compile`): a case whose only stop
+/// is the mesh render pipeline the executor does not draw
+/// ([`ToolingRequirement::MeshRenderPipeline`]) is prepared too, its draw mapped
+/// ([`mesh::mesh_case`]), so [`case_compiles`] lists the pipeline a run of it would compile. A
+/// run's preparation refuses such a case before any device, its device worker's included.
+pub fn prepare_compile(
+    device: DeviceType,
+    admitted: AdmittedCase,
+) -> Result<PreparedCase, ExecutorError> {
+    prepare(device, admitted, true)
+}
+
+/// [`prepare_case`], or with `compile_only` [`prepare_compile`].
+fn prepare(
+    device: DeviceType,
+    admitted: AdmittedCase,
+    compile_only: bool,
+) -> Result<PreparedCase, ExecutorError> {
     let checked = admitted.into_checked_for(ExecutionRequest::EngineCandidate { device })?;
-    crate::executor_contract::require_executor(&checked.requirements(), Executor::EngineCandidate)
+    let mut requirements = checked.requirements();
+    if compile_only {
+        requirements.remove(&ToolingRequirement::MeshRenderPipeline);
+    }
+    crate::executor_contract::require_executor(&requirements, Executor::EngineCandidate)
         .map_err(NotSupported::Requirements)?;
     let case = &checked.primary.case;
     let mapped = match case.stage {
@@ -2876,7 +2902,8 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
                 backend,
             )
         }
-        // The checker's requirements refuse a mesh case before it maps (`prepare_case`).
+        // A run's preparation refuses a mesh case before it maps (`prepare_case`); only the
+        // compile census prepares one (`prepare_compile`).
         Mapped::Mesh(_) => RunAttempt::of(Err(NotSupported::Requirements(
             [ToolingRequirement::MeshRenderPipeline].into(),
         )

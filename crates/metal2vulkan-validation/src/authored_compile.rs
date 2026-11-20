@@ -9,7 +9,9 @@
 //! census closes that gap:
 //!
 //! - **The request.** A case is admitted and prepared by the executor's own device-free half
-//!   (`engine::prepare_case`), and every pipeline a run compiles before it reads device output
+//!   (`engine::prepare_compile`: its run's preparation, except that an object or mesh case, whose
+//!   mesh render pipeline the executor does not draw, is prepared to compile it), and every
+//!   pipeline a run compiles before it reads device output
 //!   comes from `engine::case_compiles`: the case's own, and on a device where the device
 //!   replay runs, each registered replay variant. Each compiles in a compile worker (the 20-s and
 //!   500-MiB per-attempt ceilings, a process-group kill). The pipelines of host-replayed commands
@@ -46,7 +48,8 @@
 
 use crate::candidate::engine::artifact::CaseArtifact;
 use crate::candidate::engine::{
-    case_compiles, prepare_case, CompileFailure, CompileSubject, PreparedCase, ENGINE_EXECUTOR_ABI,
+    case_compiles, prepare_compile, CompileFailure, CompileSubject, PreparedCase,
+    ENGINE_EXECUTOR_ABI,
 };
 use crate::case::AuthoredCase;
 use crate::check::admission::{admit, ExecutionRequest, ExecutorError, NotSupported};
@@ -86,7 +89,10 @@ mod tests;
 ///    replay its templates, each executed command buffer uncovered (`engine::case_compiles`).
 /// 5: an object or mesh case compiles its mesh render pipeline, where it was refused
 ///    (`engine::mesh::mesh_request`).
-pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 5;
+/// 6: an object or mesh case whose only stop is that the executor draws no mesh render pipeline
+///    (`mesh_render_pipeline`) compiles it, where the run's preparation refuses it
+///    (`engine::prepare_compile`).
+pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 6;
 
 /// The expectation file's name under the corpus root (`validation/corpus`).
 pub const EXPECTATIONS: &str = "authored-compile.tsv";
@@ -461,9 +467,9 @@ pub trait CaseCompiler: Sync {
     fn compile(&self, case: &AuthoredCase, profiles: &[&CensusProfile]) -> CaseResult;
 }
 
-/// The executor's admission and preparation of `case` over the corpus at `root`, then every
-/// pipeline [`case_compiles`] lists for each of `devices`, each in a compile worker of `worker`:
-/// one cell per device, in order.
+/// The executor's admission and compile preparation ([`prepare_compile`]) of `case` over the
+/// corpus at `root`, then every pipeline [`case_compiles`] lists for each of `devices`, each in a
+/// compile worker of `worker`: one cell per device, in order.
 pub fn compile_case(
     root: &Path,
     worker: &CompileWorker,
@@ -478,7 +484,7 @@ pub fn compile_case(
         case.clone(),
         ExecutionRequest::EngineCandidate { device },
     )
-    .and_then(|admitted| prepare_case(device, admitted));
+    .and_then(|admitted| prepare_compile(device, admitted));
     match prepared {
         Ok(prepared) => devices
             .iter()

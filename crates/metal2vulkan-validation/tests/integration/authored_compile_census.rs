@@ -328,3 +328,71 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
     assert_eq!(drawn.host_replayed, 1);
     assert_eq!(drawn.compiles.len(), 1);
 }
+
+/// An object or mesh case, which no candidate draws (`mesh_render_pipeline`), still compiles its
+/// mesh render pipeline in the census: a run's preparation refuses the committed public mesh and
+/// object cases by that requirement alone, the census's prepares them, and each one's pipeline,
+/// its partners' stages with it, compiles in the worker as its one compile.
+#[test]
+fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
+    use metal2vulkan_validation::authored_compile::{compile_case, CensusProfile};
+    use metal2vulkan_validation::candidate::engine::{
+        case_compiles, prepare_case, prepare_compile, CompileSubject,
+    };
+    use metal2vulkan_validation::check::admission::{
+        admit, ExecutionRequest, ExecutorError, NotSupported,
+    };
+    use metal2vulkan_validation::gpu::DeviceType;
+    use metal2vulkan_validation::requirement::ToolingRequirement;
+    if !llvm_as_available() {
+        return;
+    }
+    let worker = {
+        let program = bin_exe!("corpus-triage");
+        let _ = Command::new(&program).arg("--help").output();
+        CompileWorker::program(program)
+    };
+    let lavapipe = CensusProfile::load(&ProfileLeg::parse("lavapipe").unwrap()).unwrap();
+    let device = DeviceType::Cpu;
+    for name in [
+        "a-mesh-grid-of-threadgroups-draws-through-its-fragment",
+        "an-object-function-launches-its-mesh-partner-with-a-payload",
+    ] {
+        let (scratch, case) = corpus_with_templates(name);
+        let admitted = || {
+            admit(
+                scratch.path(),
+                case.clone(),
+                ExecutionRequest::EngineCandidate { device },
+            )
+            .unwrap_or_else(|error| panic!("{name}: admission: {error}"))
+        };
+        let refused = prepare_case(device, admitted()).err();
+        assert!(
+            matches!(&refused, Some(ExecutorError::NotSupported(NotSupported::Requirements(stops)))
+                if stops.iter().eq([&ToolingRequirement::MeshRenderPipeline])),
+            "{name}: {refused:?}"
+        );
+        let prepared = prepare_compile(device, admitted())
+            .unwrap_or_else(|error| panic!("{name}: preparation: {error}"));
+        let planned = case_compiles(&prepared, &lavapipe.device).unwrap();
+        assert_eq!(planned.host_replayed, 0, "{name}");
+        assert_eq!(
+            planned
+                .compiles
+                .iter()
+                .map(|compile| compile.subject)
+                .collect::<Vec<_>>(),
+            [CompileSubject::Case],
+            "{name}"
+        );
+        let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe.device]);
+        assert_eq!(cells.len(), 1, "{name}");
+        assert_eq!(
+            cells[0].outcome,
+            Ok(CellOutcome::Compiled),
+            "{name}: {cells:?}"
+        );
+        assert_eq!(cells[0].compiles, 1, "{name}");
+    }
+}
