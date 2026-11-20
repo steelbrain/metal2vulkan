@@ -4284,7 +4284,7 @@ pub(crate) trait TextureObject {
 
     /// How Metal's bicubic filter treats its texels, under the swizzle it is sampled through
     /// (`metal::format::bicubic_texels_word`): `None` for a format with no such treatment.
-    pub(crate) fn bicubic_texels(&self) -> Option<u32> {
+    fn bicubic_texels(&self) -> Option<u32> {
         let inner = self.object();
         bicubic_texels_word(inner.descriptor.pixel_format, inner.reads())
     }
