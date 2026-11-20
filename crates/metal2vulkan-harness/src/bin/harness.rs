@@ -2,7 +2,7 @@
 //! runtime or several, checked, then timed (the crate's docs).
 //!
 //! ```text
-//! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--no-settle]
+//! harness --runtime new[,new...] [--runs N] [--warmup N] [--no-settle]
 //!     [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... [--store DIRECTORY]
 //!     [--workloads DIRECTORY --description FILE]
 //! ```
@@ -12,8 +12,7 @@
 //! before it: `--skip 'create_*'` runs every workload but the creation ones, and
 //! `--only 'create_*'` those alone. A name that names no workload is an error.
 //!
-//! Each runtime's device keeps its pipelines (the old runtime's shader cache, the new runtime's
-//! cache directory) in a store of its own: `<DIRECTORY>/<place>-<runtime>` under `--store`, so a
+//! Each runtime's device keeps its pipelines (the runtime's cache directory) in a store of its own: `<DIRECTORY>/<place>-<runtime>` under `--store`, so a
 //! second run on the same directory is warm, or a directory made for the run under the OS temp
 //! directory and removed after it, so every run is cold. Each runtime's line says whether its
 //! store was fresh or held files, and so does each `create_state` row.
@@ -39,7 +38,7 @@ use metal2vulkan_harness::run::{
     count_instructions, matrix_time, percentile, run_each, steady, CreateReport, Harness, Report,
     Runs, Session, Warmup, FROM_IDLE,
 };
-use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
+use metal2vulkan_harness::{authored, description, rt, Error, Failed, Result, Waits};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -58,7 +57,7 @@ struct Args {
     description: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
+const USAGE: &str = "usage: harness --runtime new[,new...] [--runs N] [--warmup N] \
                      [--no-settle] [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... \
                      [--store DIRECTORY] [--workloads DIRECTORY --description FILE]";
 
@@ -164,15 +163,11 @@ fn files(directory: &Path) -> usize {
 /// The session of the runtime named `name`, its device's pipelines kept in `store`.
 fn session(name: &str, authored: &[u8], store: &Path) -> Result<Box<dyn Session>> {
     match name {
-        "old" => Ok(Box::new(Harness::new(
-            old::system_default(Some(store))?,
-            authored,
-        )?)),
         "new" => Ok(Box::new(Harness::new(
             rt::system_default(Some(store))?,
             authored,
         )?)),
-        other => Err(format!("no runtime {other}; the runtimes are: old, new").into()),
+        other => Err(format!("no runtime {other}; the runtime is: new").into()),
     }
 }
 

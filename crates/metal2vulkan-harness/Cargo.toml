@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "The runtimes' compute harness: one set of Metal compute workloads through each runtime's Metal-shaped API, checked and timed"
+description = "The runtime's compute harness: one set of Metal compute workloads through the runtime's Metal-shaped API, checked and timed"
 # Dev-only: never published.
 publish = false
 autobins = false
@@ -21,11 +21,8 @@ name = "harness"
 path = "src/bin/harness.rs"
 
 [dependencies]
-# The translator: the library of AIR bitcode the old runtime takes (`old.rs`), and the function
-# constant values both runtimes take (`plan.rs`).
+# The translator: the function constant values the runtime takes (`plan.rs`).
 metal2vulkan = { path = "../metal2vulkan" }
-# The old runtime, behind the harness's traits in `old.rs` alone.
-metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 # The new runtime, behind the harness's traits in `rt.rs` alone, and the Vulkan types it chooses
 # a physical device by.
 metal2vulkan-rt = { path = "../metal2vulkan-rt" }

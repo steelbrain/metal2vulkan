@@ -73,7 +73,7 @@ pub(crate) fn size(size: Size) -> Result<[u32; 3]> {
 
 /// The new runtime's `MTLCreateSystemDefaultDevice`: the first physical device of the most
 /// preferred type (discrete, integrated, virtual, CPU, other) that opens, in the loader's order
-/// within a type, as the old runtime chooses, with its cache directory `store` where one is given
+/// within a type, with its cache directory `store` where one is given
 /// (else none).
 pub fn system_default(store: Option<&Path>) -> Result<Device> {
     let instance = rt::Instance::new(&[])?;

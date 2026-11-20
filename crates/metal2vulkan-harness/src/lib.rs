@@ -1,12 +1,10 @@
-//! The runtimes' compute harness: one set of Metal compute workloads run through a runtime's
+//! The runtime's compute harness: one set of Metal compute workloads run through the runtime's
 //! Metal-shaped API on one GPU, with no guest. Each workload's result is checked against a CPU
-//! reference before any time is reported. It is a regression gate between the runtimes, not a
-//! measure against native Metal.
+//! reference before any time is reported. It is not a measure against native Metal.
 //!
 //! The traits below are the Metal compute subset the workloads call, one method per Metal call,
 //! with the blit encoder's copies and fill and a render encoder's draws of triangles.
-//! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
-//! file, and the new runtime in [`rt`]. A workload a runtime answers with a typed refusal (a
+//! The runtime implements them in [`rt`]. A workload the runtime answers with a typed refusal (a
 //! known gap or a device limit, [`Refused`]) is reported by name as refused, not as a failure.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
@@ -23,9 +21,8 @@
 //! `draw_full` into a target of `RenderTarget` usage alone, whose texels nothing checks;
 //! `bind_2000` is `draw_2000` with a vertex buffer and a fragment texture set before each draw,
 //! each alternating between two objects.
-//! Every command buffer of a workload's runs carries a scheduled handler (on the old runtime, its
-//! submission handler) and a completed handler, as the consumer's command buffers do, so the times
-//! hold what the runtimes do to run them.
+//! Every command buffer of a workload's runs carries a scheduled handler and a completed handler,
+//! as the consumer's command buffers do, so the times hold what the runtime does to run them.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -54,7 +51,7 @@
 //! function), timed as the row's `device_first` ([`run::CreateReport::device_first_us`]).
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
+//! cargo run --release -p metal2vulkan-harness -- --runtime new[,new...] [--runs 200] \
 //!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... \
 //!     [--store DIRECTORY] [--workloads DIRECTORY --description FILE]
 //! ```
@@ -153,14 +150,13 @@
 //! began 25 ms or more past its allocation's idle age fails the row, and they record no time.
 //! `export_submit_cost` records a submission's median time with no export and with 64 live
 //! (`none` and `exports_64`), which the matrix judges as it judges a time of one runtime: as a
-//! cross-GPU outlier against the leg's base; with no old runtime's row it has no harness budget.
+//! cross-GPU outlier against the leg's base.
 
 use std::ptr::NonNull;
 
 pub mod authored;
 mod clocks;
 pub mod description;
-pub mod old;
 pub mod plan;
 pub mod rt;
 pub mod run;
@@ -188,7 +184,7 @@ impl std::error::Error for Refused {}
 /// A workload's failure on one runtime, other than a refusal: the runtime's name and why.
 #[derive(Debug)]
 pub struct Failed {
-    /// The runtime's name (`old` or `new`).
+    /// The runtime's name (`new`).
     pub runtime: String,
     /// Why it failed.
     pub why: Error,
@@ -444,8 +440,7 @@ pub trait CommandBuffer<D: ComputeDevice> {
     /// `GPUEndTime` to the handler's start, both on the runtime's host clock, in microseconds.
     fn add_completed_handler(&self, handler: Box<dyn FnOnce(f64) + Send>) -> Result<()>;
 
-    /// `addScheduledHandler:`; on the old runtime its submission handler, the point its consumer
-    /// takes as a command buffer is scheduled.
+    /// `addScheduledHandler:`.
     fn add_scheduled_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()>;
 }
 
