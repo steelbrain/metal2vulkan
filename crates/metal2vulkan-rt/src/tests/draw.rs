@@ -2137,11 +2137,13 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 let shadows = counters.gauges();
                 // Through the loop: the pass's two, the move, the memory barrier's, the segment's
                 // end. Through a copy: the pass's two, two around the shadow's clear and two
-                // around the copy, the segment's end, and the upload's end, which moves the new
-                // shadow home ahead of the pass.
+                // around the copy, the segment's end, and the upload's two, which the submission
+                // records ahead of the pass: the one that moves the new shadow home, from
+                // undefined to shader-read-only, where the copies' barriers take it from, and the
+                // upload's end.
                 let barriers = match looped {
                     true => 5,
-                    false => 8,
+                    false => 9,
                 };
                 assert_eq!(
                     (
