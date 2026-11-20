@@ -15,6 +15,7 @@ mod copy_over;
 mod cube_views;
 mod d3d11;
 mod device;
+mod dispatch_tiles;
 mod dma_bufs;
 mod draw;
 mod export;
