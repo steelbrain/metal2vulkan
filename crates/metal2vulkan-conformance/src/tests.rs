@@ -3670,12 +3670,18 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             known.waiting_on
         );
     }
-    // Every row's site must be one its case's committed recording actually holds. A row for a
-    // site that cannot exist is otherwise committable and silently unheld: one stream in this
+    // Every divergent row's site must be one its case's committed recording actually holds. A row
+    // for a site that cannot exist is otherwise committable and silently unheld: one stream in this
     // round nearly added a row for `case/texels/argb8` of a case whose `argb8` leg refuses at the
     // pipeline and so produces no texels at all, and it was caught only because a hand count
-    // disagreed with a parser's. This makes that near-miss impossible without a device.
-    for known in &ledger {
+    // disagreed with a parser's. This makes that near-miss impossible without a device. A refused
+    // row's site is where our side's run stopped, a step of the case's program that Metal's
+    // transcript need not hold (`case/write-program/renderCommandEncoder`, a label setter's
+    // `set-label-0`), so it is held by the replay alone.
+    for known in ledger
+        .iter()
+        .filter(|known| known.expects == crate::known_gaps::Expects::Divergent)
+    {
         let recording = crate::recording::read(&known.case)
             .unwrap_or_else(|why| panic!("{}: {why}", known.case));
         let held = recording.answers.iter().any(|answer| {
