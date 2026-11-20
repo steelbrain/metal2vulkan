@@ -20,7 +20,6 @@ use crate::sampler::SamplerState;
 use crate::texture::{Image, OverCopy, Texture, TextureInner, TextureObject};
 use crate::times::{self, Pair, Times};
 use ash::vk;
-use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -178,86 +177,29 @@ pub(crate) struct Building {
     presents: Vec<(Texture, vk::Semaphore)>,
 }
 
-/// The push constant bytes a command buffer holds, from offset 0, as its pushes left them, and a
-/// mark of them.
+/// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
 ///
 /// Every pipeline, compute and graphics, has the device's one layout and its one push range of
-/// [`PUSH_STAGES`](crate::pipeline::PUSH_STAGES), so every pipeline bind is compatible for push
-/// constants and keeps them, and a push stays for both bind points until the next one: a
-/// dispatch's push changes what a later draw of the command buffer reads, and a draw's what a
-/// later dispatch reads. The bytes are of the command buffer, not of an encoder: every push its
-/// encoders record goes through [`Building::push_words`], which records only the words that
-/// change, as a Metal argument set once stays bound for the commands after it. A new
-/// `VkCommandBuffer` holds none: its push constants are undefined until a push sets them.
+/// [`PUSH_STAGES`](crate::pipeline::PUSH_STAGES), so a push stays across pipeline binds and both
+/// bind points until the next one: a dispatch or a draw whose push bytes are already there
+/// records none, as a Metal argument set once stays bound for the commands after it.
 #[derive(Default)]
 pub(crate) struct Pushed {
     bytes: Vec<u8>,
-    /// Moves at each push and at each new `VkCommandBuffer`: an encoder whose own last push left
-    /// this mark knows the command buffer holds what it pushed.
-    mark: u64,
 }
 
 impl Pushed {
-    /// A new `VkCommandBuffer`'s: no byte held, and a new mark.
-    pub(crate) fn restart(&mut self) {
-        self.bytes.clear();
-        self.mark += 1;
-    }
-
-    /// The bytes of `push`, written from offset 0, that a push records so that the command buffer
-    /// holds `push`: from the first word that differs from the bytes held to the last, and every
-    /// word past the bytes held, which no push has set; None where it holds them all. Where `mark`
-    /// is the mark the caller's own last push left, only the words in `span` (word-aligned bytes)
-    /// can differ, and only they are compared; otherwise every word is. The bytes held are `push`
-    /// from now, those past its end kept, and `mark` is the mark they leave.
-    pub(crate) fn changed(
-        &mut self,
-        push: &[u8],
-        span: Range<usize>,
-        mark: &mut u64,
-    ) -> Option<Range<usize>> {
-        let span = match *mark == self.mark {
-            true => span,
-            false => 0..push.len(),
-        };
-        let held = self.bytes.len().min(push.len());
-        let (first, end) = {
-            let words = (span.start..span.end.min(held)).step_by(4);
-            let differs = |at: &usize| push[*at..*at + 4] != self.bytes[*at..*at + 4];
-            let first = words.clone().find(differs).unwrap_or(held);
-            let end = match push.len() > held {
-                true => push.len(),
-                false => words.rev().find(differs).map_or(0, |at| at + 4),
-            };
-            (first, end)
-        };
-        if first >= end {
-            *mark = self.mark;
-            return None;
+    /// Whether `push`, written from offset 0, changes the bytes held; they are `push` from now,
+    /// with the held bytes past its end kept.
+    pub(crate) fn needed(&mut self, push: &[u8]) -> bool {
+        if self.bytes.get(..push.len()) == Some(push) {
+            return false;
         }
         if self.bytes.len() < push.len() {
             self.bytes.resize(push.len(), 0);
         }
-        self.bytes[first..end].copy_from_slice(&push[first..end]);
-        self.mark += 1;
-        *mark = self.mark;
-        Some(first..end)
-    }
-
-    /// The bytes held.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-/// The bytes from the first of `a` and `b` to the end of the last: either where the other is
-/// empty.
-pub(crate) fn cover(a: Range<usize>, b: Range<usize>) -> Range<usize> {
-    match (a.is_empty(), b.is_empty()) {
-        (true, _) => b,
-        (_, true) => a,
-        _ => a.start.min(b.start)..a.end.max(b.end),
+        self.bytes[..push.len()].copy_from_slice(push);
+        true
     }
 }
 
@@ -964,7 +906,7 @@ impl Building {
         self.last().command = Some(command);
         self.bound = None;
         self.drawn = None;
-        self.pushed.restart();
+        self.pushed = Pushed::default();
         self.vertex.clear();
         Ok(command)
     }
@@ -1205,30 +1147,15 @@ impl Building {
         }
     }
 
-    /// The bytes of `push`, the push bytes of a dispatch or a draw from offset 0, that the current
-    /// command buffer needs pushed so that it holds them ([`Pushed::changed`], of `span` and
-    /// `mark`); it holds them from now.
-    pub(crate) fn push_words(
-        &mut self,
-        push: &[u8],
-        span: Range<usize>,
-        mark: &mut u64,
-    ) -> Option<Range<usize>> {
-        let words = self.pushed.changed(push, span, mark);
-        match &words {
-            Some(words) => {
-                self.tally.count(Metric::Pushes);
-                self.tally.count_some(Metric::PushBytes, words.len() as u64);
-            }
-            None => self.tally.count(Metric::PushesHeld),
-        }
-        words
-    }
-
-    /// The push bytes the current command buffer holds.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn pushed(&self) -> &[u8] {
-        self.pushed.bytes()
+    /// Whether `push`, the push bytes of a dispatch or a draw from offset 0, needs recording in
+    /// the current command buffer: its push bytes do not already begin with it. They do from now.
+    pub(crate) fn push_needed(&mut self, push: &[u8]) -> bool {
+        let needed = self.pushed.needed(push);
+        self.tally.count(match needed {
+            true => Metric::Pushes,
+            false => Metric::PushesHeld,
+        });
+        needed
     }
 
     /// Counts one more of `metric`, added to the device's counters once the encoder ends.

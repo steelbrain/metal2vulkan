@@ -74,7 +74,7 @@
 //! carries [`PrecisionNote::DepthDenormals`].
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::command::{cover, Building, CommandBuffer};
+use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
@@ -102,7 +102,6 @@ use metal2vulkan::metal::{
     CullMode, DepthClipMode, IndexType, PrimitiveType, TriangleFillMode, Winding,
 };
 use metal2vulkan::pipeline::PrecisionNote;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// `MTLViewport`: an origin and size in pixels, and a depth range.
@@ -219,13 +218,12 @@ struct Shadowed {
     cleared: Option<vk::ClearColorValue>,
 }
 
-/// What a draw of the encoder's pipeline state reaches of its bound resources, kept from draw to
-/// draw: the vertex buffers it binds, and per function the slots whose objects make it read an
-/// attachment of its pass through a texture, reach a Managed buffer's device copy or a texture
-/// over one, or write memory the host may read. A draw after no change runs none of the scans. One
-/// after binds finds again the facts of the slots bound since ([`Rebound`]), checking their vertex
-/// buffers' offsets and their buffers' alignments, and keeps every other slot's; one after a
-/// change of the pipeline state finds them all.
+/// What a draw of the encoder's pipeline state reaches of its bound resources, worked out at the
+/// first draw after either changes and kept until the next change: the vertex buffers it binds,
+/// and whether it reads an attachment of its pass through a texture, reaches a Managed buffer's
+/// device copy or a texture over one, or writes memory the host may read. A draw after no change
+/// runs none of the scans; one after a change checks its vertex buffers' offsets and its buffers'
+/// alignments again.
 ///
 /// A change is the encoder's own call: a pipeline state set, or a buffer, an offset, bytes or a
 /// texture bound. Nothing outside the encoder changes what a fact holds: each is of the objects
@@ -239,162 +237,30 @@ struct Facts {
     held: bool,
     /// The fixed-function vertex buffers the vertex descriptor reads: binding, buffer, offset.
     vertex: Vec<(u32, vk::Buffer, u64)>,
-    /// Per function, the texture slots the draw reads whose texture is of an image the pass
-    /// renders.
-    attached: [u128; 2],
-    /// The slots of a buffer the draw reaches that has a device copy, and of a texture it writes
-    /// that is over one.
-    managed: Slots,
-    /// The slots of a Shared buffer the draw writes, and of a texture it writes that the host
-    /// reads (one over a Shared buffer).
-    host: Slots,
-    /// The nil buffer's address once a buffer argument the draw reaches was bound to nothing
-    /// since the pipeline state was set (`Ring::nil`), else 0, and the zero range's where the draw
-    /// checks a load (`Ring::zero`), else 0.
+    /// A texture the draw reads is of an image the pass renders, or the fragment function reads
+    /// a colour attachment (`Draws::fetched`).
+    attachments: bool,
+    /// A buffer the draw reaches has a device copy, or a texture it writes is over one.
+    managed: bool,
+    /// A write the host may read once the command buffer completes: to a Shared buffer or a
+    /// texture over one, or through an address outside the draw's resources.
+    host: bool,
+    /// The nil buffer's address where a buffer argument the draw reaches is bound to nothing
+    /// (`Ring::nil`), else 0, and the zero range's where the draw checks a load (`Ring::zero`),
+    /// else 0.
     nil: (u64, u64),
 }
 
-/// Per function, a bit per buffer slot and one per texture slot.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Slots {
-    buffers: [u32; 2],
-    textures: [u128; 2],
-}
-
-impl Slots {
-    fn any(&self) -> bool {
-        *self != Slots::default()
-    }
-
-    /// Clears the bits of the slots `rebound` names.
-    fn forget(&mut self, rebound: &Rebound) {
-        for table in [VERTEX, FRAGMENT] {
-            self.buffers[table] &= !rebound.buffer_bits(table);
-            self.textures[table] &= !rebound.texture_bits(table);
-        }
-    }
-}
-
-/// What the next draw finds and fills again of its facts and fields: every one after a change of
-/// the pipeline state; otherwise, per function, the buffer, texture and sampler slots bound since
-/// the last draw filled its fields, the tessellation factor buffer and the alpha test reference
-/// where they changed, and the texture slots whose element changed with the pass's moves to the
-/// feedback layout or with the shadows the draw reads. A draw fills those fields alone and writes
-/// into the ring only the parameter blocks they are in.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Rebound {
-    all: bool,
-    buffers: [u32; 2],
-    textures: [u128; 2],
-    samplers: [u16; 2],
-    factors: bool,
-    alpha_test: bool,
-}
-
-impl Rebound {
-    /// Every fact and field: the pipeline state changed.
-    const ALL: Rebound = Rebound {
-        all: true,
-        buffers: [0; 2],
-        textures: [0; 2],
-        samplers: [0; 2],
-        factors: false,
-        alpha_test: false,
-    };
-
-    /// Function `table`'s buffer slots it names, a bit each.
-    fn buffer_bits(&self, table: usize) -> u32 {
-        match self.all {
-            true => u32::MAX,
-            false => self.buffers[table],
-        }
-    }
-
-    /// Function `table`'s texture slots it names, a bit each.
-    fn texture_bits(&self, table: usize) -> u128 {
-        match self.all {
-            true => u128::MAX,
-            false => self.textures[table],
-        }
-    }
-
-    fn buffer(&self, table: usize, slot: u32) -> bool {
-        self.all || (self.buffers[table].checked_shr(slot)).is_some_and(|bits| bits & 1 != 0)
-    }
-
-    fn texture(&self, table: usize, slot: u32) -> bool {
-        self.all || (self.textures[table].checked_shr(slot)).is_some_and(|bits| bits & 1 != 0)
-    }
-
-    fn sampler(&self, table: usize, slot: u32) -> bool {
-        self.all || (self.samplers[table].checked_shr(slot)).is_some_and(|bits| bits & 1 != 0)
-    }
-
-    /// Whether a draw fills `value`, a field of function `table`'s, again: a field of a slot, the
-    /// factor buffer or the alpha test reference where it names them, and one of the pipeline
-    /// state and the pass alone only after a change of the state.
-    fn field(&self, table: usize, value: FieldValue) -> bool {
-        match value {
-            FieldValue::BufferAddress { slot, .. } | FieldValue::BufferBounds(slot) => {
-                self.buffer(table, slot)
-            }
-            FieldValue::TextureId(slot) | FieldValue::IntegerChannels(slot) => {
-                self.texture(table, slot)
-            }
-            FieldValue::SamplerId(slot) => self.sampler(table, slot),
-            FieldValue::TessellationFactors => self.all || self.factors,
-            FieldValue::AlphaTestReference => self.all || self.alpha_test,
-            FieldValue::ZeroAddress
-            | FieldValue::ConstexprSampler(_)
-            | FieldValue::Word(_)
-            | FieldValue::FetchedColor(_)
-            | FieldValue::DispatchRegion
-            | FieldValue::StageInRegion => self.all,
-        }
-    }
-}
-
 impl Facts {
-    /// A texture the draw reads is of an image the pass renders, or the fragment function of
-    /// `draws` reads a colour attachment (`Draws::fetched`).
-    fn attachments(&self, draws: &Draws) -> bool {
-        !draws.fetched.is_empty() || self.attached != [0; 2]
-    }
-
-    /// A buffer the draw reaches has a device copy, or a texture it writes is over one.
-    fn managed(&self) -> bool {
-        self.managed.any()
-    }
-
-    /// A write the host may read once the command buffer completes: to a Shared buffer or a
-    /// texture over one, or through an address outside the resources of a draw of `draws`.
-    fn host(&self, draws: &Draws) -> bool {
-        draws.writes_unbound || self.host.any()
-    }
-
-    /// The facts of a draw of `draws` with `tables` bound in `pass`, found again for the slots
-    /// `rebound` names and kept for the others, but the alignments
-    /// ([`align`](Self::align)), which the draw checks after its attachment reads. Each slot's
-    /// facts are of its object alone, so a slot not bound again holds what it held, and the
-    /// first refusal in the order below is the one a find of every slot meets: every other slot
-    /// met none when it was found.
+    /// The facts of a draw of `draws` with `tables` bound in `pass`, but the alignments, which the
+    /// draw checks after its attachment reads.
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
     /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
     /// [`Gap::StorageElement`].
-    fn find(
-        &mut self,
-        draws: &Draws,
-        tables: &[Tables; 2],
-        pass: &Pass,
-        rebound: &Rebound,
-    ) -> Result<(), Error> {
-        // A change of the pipeline state finds every binding of its own.
-        (self.vertex).resize(draws.bindings.len(), (0, vk::Buffer::null(), 0));
-        for (found, &(binding, index)) in self.vertex.iter_mut().zip(&draws.bindings) {
-            if !rebound.buffer(VERTEX, index) {
-                continue;
-            }
+    fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
+        self.vertex.clear();
+        for &(binding, index) in &draws.bindings {
             let (buffer, offset) = match tables[VERTEX].buffers.get(index as usize) {
                 Some(Bound::Buffer { buffer, offset }) => {
                     if *offset >= buffer.length() {
@@ -412,108 +278,52 @@ impl Facts {
                     return Err(Error::Refused(Refusal::NoBufferAtIndex { index }))
                 }
             };
-            *found = (binding, buffer, offset);
+            self.vertex.push((binding, buffer, offset));
         }
         for &(table, slot) in &draws.storage_reads {
-            let swizzled = || tables[table].texture(slot).is_some_and(|t| t.swizzled());
-            if rebound.texture(table, slot) && swizzled() {
+            if tables[table].texture(slot).is_some_and(|t| t.swizzled()) {
                 return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
             }
         }
-        for table in [VERTEX, FRAGMENT] {
-            self.attached[table] &= !rebound.texture_bits(table);
-        }
-        self.managed.forget(rebound);
-        self.host.forget(rebound);
         for &(table, slot, access) in &draws.textures {
-            if !rebound.texture(table, slot) {
-                continue;
-            }
-            let Some(texture) = tables[table].texture(slot) else {
-                continue;
-            };
             let read = draws.storage_reads.contains(&(table, slot));
-            if access != Access::Read || read {
-                let unstored = (texture.unstored()).or_else(|| texture.unread().filter(|_| read));
-                if let Some(pixel_format) = unstored {
-                    return Err(Error::Unsupported(Gap::StorageElement {
-                        slot: Some(slot),
-                        pixel_format,
-                    }));
-                }
-            }
-            // A slot holds a texture only below `TEXTURE_SLOTS`, 128.
-            let bit = 1u128 << slot;
-            let hazard = texture.hazard_id();
-            if pass.targets().any(|t| t.texture.hazard_id() == hazard) {
-                self.attached[table] |= bit;
-            }
-            if access.writes() {
-                if texture.managed_over().is_some() {
-                    self.managed.textures[table] |= bit;
-                }
-                if texture.host_reads() {
-                    self.host.textures[table] |= bit;
-                }
+            let stored = access != Access::Read || read;
+            let unstored = match tables[table].texture(slot) {
+                Some(texture) if stored => texture
+                    .unstored()
+                    .or_else(|| texture.unread().filter(|_| read)),
+                _ => None,
+            };
+            if let Some(pixel_format) = unstored {
+                return Err(Error::Unsupported(Gap::StorageElement {
+                    slot: Some(slot),
+                    pixel_format,
+                }));
             }
         }
+        self.attachments = !draws.fetched.is_empty()
+            || (draws.textures.iter()).any(|&(table, slot, _)| {
+                tables[table].texture(slot).is_some_and(|texture| {
+                    let hazard = texture.hazard_id();
+                    pass.targets().any(|t| t.texture.hazard_id() == hazard)
+                })
+            });
         let copied = |buffer: &Arc<BufferInner>| buffer.held().1.is_some();
-        // A slot holds a buffer only below `BUFFER_SLOTS`, 31.
-        for &(table, slot, access) in &draws.buffers {
-            if !rebound.buffer(table, slot) {
-                continue;
-            }
-            if let Some(buffer) = tables[table].buffer(slot) {
-                if copied(buffer) {
-                    self.managed.buffers[table] |= 1 << slot;
-                }
-                if access.writes() && buffer.is_shared() {
-                    self.host.buffers[table] |= 1 << slot;
-                }
-            }
-        }
-        for &(_, index) in &draws.bindings {
-            let reached = || tables[VERTEX].buffer(index).is_some_and(copied);
-            if rebound.buffer(VERTEX, index) && reached() {
-                self.managed.buffers[VERTEX] |= 1 << index;
-            }
-        }
-        Ok(())
-    }
-
-    /// The alignments of the buffers bound at the slots `rebound` names that a field of `draws`
-    /// reaches by address ([`check_alignment`]), with `tables` bound, and the nil buffer's address
-    /// where such a slot is bound to nothing and the zero range's where a field checks a load,
-    /// made on `core` where none is yet. The first refusal is the one a check of every slot
-    /// meets, as in [`find`](Self::find).
-    ///
-    /// Err: [`Refusal::BufferOffsetAlignment`]; [`Error::Vulkan`] where the nil buffer or the
-    /// zero range cannot be made.
-    fn align(
-        &mut self,
-        core: &Core,
-        draws: &Draws,
-        tables: &[Tables; 2],
-        rebound: &Rebound,
-    ) -> Result<(), Error> {
-        if rebound.all {
-            self.nil = (0, 0);
-        }
-        for &(_, table, value) in &draws.fields {
-            match value {
-                FieldValue::BufferAddress { slot, mask } if rebound.buffer(table, slot) => {
-                    match tables[table].buffers.get(slot as usize) {
-                        Some(Bound::Buffer { buffer, offset }) => {
-                            check_alignment(slot, mask, buffer, *offset)?
-                        }
-                        Some(Bound::Bytes(..)) => {}
-                        Some(Bound::Empty) | None => self.nil.0 = core.ring.nil(core)?,
-                    }
-                }
-                FieldValue::ZeroAddress if rebound.all => self.nil.1 = core.ring.zero(core)?,
-                _ => {}
-            }
-        }
+        self.managed = (draws.buffers.iter())
+            .any(|&(table, slot, _)| tables[table].buffer(slot).is_some_and(copied))
+            || (draws.bindings.iter())
+                .any(|&(_, index)| tables[VERTEX].buffer(index).is_some_and(copied))
+            || (draws.textures.iter()).any(|&(table, slot, access)| {
+                access.writes()
+                    && (tables[table].texture(slot)).is_some_and(|t| t.managed_over().is_some())
+            });
+        self.host = draws.writes_unbound
+            || (draws.buffers.iter()).any(|&(table, slot, access)| {
+                access.writes() && tables[table].buffer(slot).is_some_and(|b| b.is_shared())
+            })
+            || (draws.textures.iter()).any(|&(table, slot, access)| {
+                access.writes() && tables[table].texture(slot).is_some_and(|t| t.host_reads())
+            });
         Ok(())
     }
 }
@@ -747,13 +557,9 @@ pub struct RenderCommandEncoder {
     push: Vec<u8>,
     /// The parameter blocks of the last draw's functions, where their fields spill.
     blocks: [Vec<u8>; 2],
-    /// What changed since the last draw filled its fields, which the next draw finds and fills
-    /// again.
-    rebound: Rebound,
-    /// The mark the encoder's last push left in its command buffer's push bytes (`Pushed`): while
-    /// they hold it, no other push came between, and they hold `push` but the words a fill wrote
-    /// since. `u64::MAX`, which no push leaves, before its first.
-    push_mark: u64,
+    /// The push bytes are those of the bound pipeline state and resources, and of the images the
+    /// pass moved and the shadows the last draw read: the next draw pushes them as they are.
+    push_filled: bool,
 }
 
 impl CommandBuffer {
@@ -823,8 +629,7 @@ impl CommandBuffer {
                     facts: Facts::default(),
                     push: Vec::new(),
                     blocks: [Vec::new(), Vec::new()],
-                    rebound: Rebound::ALL,
-                    push_mark: u64::MAX,
+                    push_filled: false,
                     pass,
                 })
             }
@@ -932,18 +737,11 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends")
     }
 
-    /// Buffer slot `slot` of function `table` holds another binding: the next draw finds its facts
-    /// and fills its fields again.
-    fn rebound_buffer(&mut self, table: usize, slot: usize) {
-        self.rebound.buffers[table] |= 1 << slot;
+    /// The pipeline state or a binding changed: the next draw finds its facts and fills its push
+    /// bytes again.
+    fn changed(&mut self) {
         self.facts.held = false;
-    }
-
-    /// Texture slot `slot` of function `table` holds another texture, as
-    /// [`rebound_buffer`](Self::rebound_buffer).
-    fn rebound_texture(&mut self, table: usize, slot: u32) {
-        self.rebound.textures[table] |= 1 << slot;
-        self.facts.held = false;
+        self.push_filled = false;
     }
 
     /// `setRenderPipelineState:`. The command buffer keeps the state until it retires.
@@ -959,8 +757,7 @@ impl RenderCommandEncoder {
         self.renders_into = state.inner.compiled.renders_into(&self.pass);
         // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
         self.pipeline = Some(unsafe { self.building().lend_render_pipeline(state) });
-        self.rebound = Rebound::ALL;
-        self.facts.held = false;
+        self.changed();
         Ok(())
     }
 
@@ -1026,7 +823,7 @@ impl RenderCommandEncoder {
             None => Bound::Empty,
         };
         self.tables[table].buffers[slot] = bound;
-        self.rebound_buffer(table, slot);
+        self.changed();
         Ok(())
     }
 
@@ -1046,11 +843,10 @@ impl RenderCommandEncoder {
     }
 
     fn set_buffer_offset(&mut self, table: usize, offset: u64, index: u32) -> Result<(), Error> {
-        let slot = slot(index)?;
-        match &mut self.tables[table].buffers[slot] {
+        match &mut self.tables[table].buffers[slot(index)?] {
             Bound::Buffer { offset: bound, .. } => {
                 *bound = offset;
-                self.rebound_buffer(table, slot);
+                self.changed();
                 Ok(())
             }
             _ => Err(Error::Refused(Refusal::NoBufferAtIndex { index })),
@@ -1088,7 +884,7 @@ impl RenderCommandEncoder {
         let placed = self.building().write_ring_placed(bytes)?;
         // At most one chunk, 64 KiB.
         self.tables[table].buffers[slot] = Bound::Bytes(placed, bytes.len() as u32);
-        self.rebound_buffer(table, slot);
+        self.changed();
         Ok(())
     }
 
@@ -1145,7 +941,7 @@ impl RenderCommandEncoder {
             None => None,
         };
         self.tables[table].set_texture(index, lent);
-        self.rebound_texture(table, index);
+        self.changed();
         Ok(())
     }
 
@@ -1240,8 +1036,7 @@ impl RenderCommandEncoder {
             None => None,
         };
         self.tables[table].samplers[index as usize] = lent;
-        // A sampler state is a field alone: the facts are of buffers and textures.
-        self.rebound.samplers[table] |= 1 << index;
+        self.push_filled = false;
         Ok(())
     }
 
@@ -1372,7 +1167,7 @@ impl RenderCommandEncoder {
         let code = alpha_test_code(value);
         if code != self.alpha_test {
             self.alpha_test = code;
-            self.rebound.alpha_test = true;
+            self.push_filled = false;
         }
     }
 
@@ -1590,8 +1385,7 @@ impl RenderCommandEncoder {
             }
         }
         self.moved.extend(moves.into_iter().map(|m| m.moved));
-        // A texture of a moved image reads through its second element from now.
-        self.rebound.textures = [u128::MAX; 2];
+        self.push_filled = false;
         (self.drew, self.owed) = (false, false);
         self.interrupt(|building, core| {
             let command = building.ordered_command()?;
@@ -1894,8 +1688,7 @@ impl RenderCommandEncoder {
             None => None,
         };
         self.factors = factors;
-        // A field alone: no fact is of the factor buffer.
-        self.rebound.factors = true;
+        self.changed();
         Ok(())
     }
 
@@ -2003,8 +1796,7 @@ impl RenderCommandEncoder {
             }
         };
         if !self.facts.held {
-            self.facts
-                .find(draws, &self.tables, &self.pass, &self.rebound)?;
+            self.facts.find(draws, &self.tables, &self.pass)?;
         }
         // Metal orders a colour attachment's read (`[[color(n)]]`) after every earlier fragment of
         // the pass, with no barrier from the program: after a draw of the pass, a draw that reads
@@ -2020,15 +1812,30 @@ impl RenderCommandEncoder {
                 shadowed.held.clear();
             }
         }
-        let reads = match self.facts.attachments(draws) {
+        let reads = match self.facts.attachments {
             true => Some(self.attachment_reads(draws)?),
             false => None,
         };
         if !self.facts.held {
             // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`), and a checked
             // load outside its buffer the zero range (`Ring::zero`).
-            let core = &*self.core;
-            (self.facts).align(core, draws, &self.tables, &self.rebound)?;
+            let (mut nil, mut zero) = (0, 0);
+            for &(_, table, value) in &draws.fields {
+                match value {
+                    FieldValue::BufferAddress { slot, mask } => {
+                        match self.tables[table].buffers.get(slot as usize) {
+                            Some(Bound::Buffer { buffer, offset }) => {
+                                check_alignment(slot, mask, buffer, *offset)?
+                            }
+                            Some(Bound::Bytes(..)) => {}
+                            Some(Bound::Empty) | None => nil = self.core.ring.nil(&self.core)?,
+                        }
+                    }
+                    FieldValue::ZeroAddress => zero = self.core.ring.zero(&self.core)?,
+                    _ => {}
+                }
+            }
+            self.facts.nil = (nil, zero);
             self.facts.held = true;
         }
         let count = match call {
@@ -2052,7 +1859,6 @@ impl RenderCommandEncoder {
         let pipeline = compiled.pipeline(topology)?;
         let discards = compiled.discards();
         let writes_memory = draws.writes_memory;
-        let host = self.facts.host(draws);
         let building = (self.building.as_ref())
             .expect("an encoder holds its command buffer's recording until it ends");
         // What a draw reaches that each draw looks at again: an attachment of its pass through a
@@ -2069,64 +1875,53 @@ impl RenderCommandEncoder {
                 || self.tables.iter().any(|tables| tables.copied > 0)
                 || building.overs_ahead());
         let each = reads.is_some()
-            || self.facts.managed()
+            || self.facts.managed
             || index_buffer.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
         match each {
             true => self.draw_reaches(reads, index_buffer, overs)?,
             false => {
-                self.read_shadows(Vec::new());
+                if !self.shadow_slots.is_empty() {
+                    self.shadow_slots.clear();
+                    self.push_filled = false;
+                }
                 self.loop_reads(false);
                 self.overs_after();
             }
         }
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
-        // The fields that changed since the last draw, every one after a change of the pipeline
-        // state; filled before anything of the draw is recorded, so a ring that cannot grow
-        // leaves the recording as it was, and the next draw fills them again. `written` is the
-        // push bytes they changed.
-        let mut written = 0..0;
-        if self.rebound != Rebound::default() {
-            if let Some(state) = &self.pipeline {
-                let factors = (self.factors.as_ref()).map_or(0, |(buffer, offset)| {
-                    buffer.gpu_address().wrapping_add(*offset)
-                });
-                let filled;
-                (written, filled) = fill_push(
-                    (&mut self.push, &mut self.blocks),
-                    (&self.tables, self.facts.nil, factors, self.alpha_test),
-                    (&self.moved, &self.shadow_slots, &self.pass),
-                    state,
-                    &self.rebound,
-                );
-                // Each spilled function's block whose fields changed into the ring, and its new
-                // address into the range: the GPU may still read the last one.
-                let made = &state.inner.compiled.draws.blocks;
-                for ((block, made), filled) in self.blocks.iter().zip(made).zip(filled) {
-                    if let (Some((_, at)), true) = (*made, filled) {
-                        let address = building.write_ring(block)?;
-                        let at = at as usize;
-                        self.push[at..at + 8].copy_from_slice(&address.to_le_bytes());
-                        written = cover(written, at..at + 8);
-                    }
-                }
-            }
-            self.rebound = Rebound::default();
-        }
-        if host {
+        if self.facts.host {
             building.wrote_host();
         }
         self.wrote |= writes_memory;
         (self.drew, self.pass_drew) = (true, true);
         let (bind, first) = building.bind_graphics(pipeline);
-        // The words the command buffer does not hold: every one at its first use, else those the
-        // fill changed (`Pushed`).
-        let words = match self.push.is_empty() {
-            true => None,
-            false => building.push_words(&self.push, written, &mut self.push_mark),
-        };
+        if !self.push_filled {
+            if let Some(state) = &self.pipeline {
+                let factors = (self.factors.as_ref()).map_or(0, |(buffer, offset)| {
+                    buffer.gpu_address().wrapping_add(*offset)
+                });
+                fill_push(
+                    (&mut self.push, &mut self.blocks),
+                    (&self.tables, self.facts.nil, factors, self.alpha_test),
+                    (&self.moved, &self.shadow_slots, &self.pass),
+                    state,
+                );
+                // Each spilled function's block into the ring, and its address into the range.
+                let made = &state.inner.compiled.draws.blocks;
+                for (block, made) in self.blocks.iter().zip(made) {
+                    if let Some((_, at)) = *made {
+                        let address = building.write_ring(block)?;
+                        let at = at as usize;
+                        self.push[at..at + 8].copy_from_slice(&address.to_le_bytes());
+                    }
+                }
+            }
+            self.push_filled = true;
+        }
+        let push = !self.push.is_empty() && building.push_needed(&self.push);
         let core = &*self.core;
         let command = self.command;
         // SAFETY: the command buffer is inside the pass's rendering, which the pipeline renders
@@ -2168,17 +1963,8 @@ impl RenderCommandEncoder {
                     device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
                 }
             }
-            if let Some(words) = words {
-                // Word-aligned: the push bytes' fields are of 4 and 8 bytes, at multiples of
-                // their size, and the window ends at a multiple of 4.
-                let offset = words.start as u32;
-                device.cmd_push_constants(
-                    command,
-                    core.layout,
-                    PUSH_STAGES,
-                    offset,
-                    &self.push[words],
-                );
+            if push {
+                device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &self.push);
             }
             match (call, index) {
                 (
@@ -2393,7 +2179,8 @@ impl RenderCommandEncoder {
                 if !found.shadow_reads.is_empty() {
                     self.shadow_copies(&found.shadow_reads)?;
                 }
-                self.read_shadows(found.shadow_slots);
+                self.shadow_slots = found.shadow_slots;
+                self.push_filled = false;
                 if found.reads {
                     (self.building.as_mut())
                         .expect("an encoder holds its command buffer's recording until it ends")
@@ -2402,7 +2189,10 @@ impl RenderCommandEncoder {
                 found.reads
             }
             None => {
-                self.read_shadows(Vec::new());
+                if !self.shadow_slots.is_empty() {
+                    self.shadow_slots.clear();
+                    self.push_filled = false;
+                }
                 false
             }
         };
@@ -2475,18 +2265,6 @@ impl RenderCommandEncoder {
         (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends")
             .overs_after(slots(draws, &self.tables, true, true), draws.writes_unbound);
-    }
-
-    /// Holds `slots` as the texture slots that read a shadow in the draw being recorded: where
-    /// they change, the fields of the slots that join or leave them, whose element changes, are
-    /// filled again.
-    fn read_shadows(&mut self, slots: Vec<(usize, u32)>) {
-        if slots != self.shadow_slots {
-            for &(table, slot) in self.shadow_slots.iter().chain(&slots) {
-                self.rebound.textures[table] |= 1 << slot;
-            }
-            self.shadow_slots = slots;
-        }
     }
 
     /// Sets the feedback loop's aspects for a draw that reads an attachment (`reads`) or none,
@@ -2734,84 +2512,6 @@ impl Drop for RenderCommandEncoder {
     }
 }
 
-/// What a draw's facts and fields hold: the vertex buffers it binds, whether it reads an
-/// attachment, reaches a device copy and writes what the host reads, its push bytes with each
-/// parameter block's address zeroed, and its blocks.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-#[derive(Debug, PartialEq)]
-pub(crate) struct Filled {
-    vertex: Vec<(u32, vk::Buffer, u64)>,
-    facts: [bool; 3],
-    push: Vec<u8>,
-    blocks: [Vec<u8>; 2],
-}
-
-/// An encoder's facts and fields beside a find and fill of every slot ([`RenderCommandEncoder::refilled`]).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) struct Refilled {
-    /// The facts and fields the encoder's draws left, found and filled slot by slot since the
-    /// pipeline state was set.
-    pub(crate) slot_by_slot: Filled,
-    /// A find and fill of every slot of what is bound now ([`Rebound::ALL`]), or its refusal's
-    /// text.
-    pub(crate) whole: Result<Filled, String>,
-    /// The push bytes as the encoder holds them.
-    pub(crate) push: Vec<u8>,
-    /// The push bytes its command buffer holds.
-    pub(crate) held: Vec<u8>,
-}
-
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-impl RenderCommandEncoder {
-    /// Its facts and fields beside a find and fill of every slot of what is bound now.
-    pub(crate) fn refilled(&self) -> Refilled {
-        let state = self.pipeline.as_ref().expect("a pipeline state set");
-        let draws = &state.inner.compiled.draws;
-        let filled = |facts: &Facts, mut push: Vec<u8>, blocks: [Vec<u8>; 2]| {
-            for &(_, at) in draws.blocks.iter().flatten() {
-                let at = at as usize;
-                if let Some(address) = push.get_mut(at..at + 8) {
-                    address.fill(0);
-                }
-            }
-            Filled {
-                vertex: facts.vertex.clone(),
-                facts: [facts.attachments(draws), facts.managed(), facts.host(draws)],
-                push,
-                blocks,
-            }
-        };
-        let mut facts = Facts::default();
-        let whole = (facts.find(draws, &self.tables, &self.pass, &Rebound::ALL))
-            .and_then(|()| facts.align(&self.core, draws, &self.tables, &Rebound::ALL))
-            .map(|()| {
-                let (mut push, mut blocks) = (Vec::new(), [Vec::new(), Vec::new()]);
-                let factors = (self.factors.as_ref()).map_or(0, |(buffer, offset)| {
-                    buffer.gpu_address().wrapping_add(*offset)
-                });
-                fill_push(
-                    (&mut push, &mut blocks),
-                    (&self.tables, facts.nil, factors, self.alpha_test),
-                    (&self.moved, &self.shadow_slots, &self.pass),
-                    state,
-                    &Rebound::ALL,
-                );
-                filled(&facts, push, blocks)
-            })
-            .map_err(|error| format!("{error:?}"));
-        let held = (self.building.as_ref())
-            .expect("an encoder holds its command buffer's recording until it ends")
-            .pushed()
-            .to_vec();
-        Refilled {
-            slot_by_slot: filled(&self.facts, self.push.clone(), self.blocks.clone()),
-            whole,
-            push: self.push.clone(),
-            held,
-        }
-    }
-}
-
 /// The topology of a draw of `primitive_type`, and whether it restarts strips.
 ///
 /// Err: [`Gap::Draw`] of [`DrawKind::Points`].
@@ -2826,47 +2526,44 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
     Ok((topology, restart))
 }
 
-/// Fills, of `push`, the push bytes of a draw of `state`, and of `blocks`, each function's
-/// parameter block where its fields spill (`Draws::blocks`; their addresses the caller writes once
-/// they are in the ring), the fields `rebound` names: every field, into bytes sized afresh, after
-/// a change of the pipeline state. Each is from the `tables`, a buffer argument bound to nothing
-/// taking `nil`, the nil buffer's address, and bounds of 0 and 0, a checked load's zero range at
-/// `zero`: a texture whose image the pass `moved` to the feedback layout reads through its second
-/// element in that layout, and one in `shadow_slots`, which reads a shadow, through its second
-/// element, the shadow's; a colour attachment of `pass` the fragment function reads is read
-/// through its texture's second element. Returns the push bytes it wrote, from the first to the
-/// end of the last, and each block it wrote a field of (every block after a change of the state).
+/// Fills `push`, the push bytes of a draw of `state`, and `blocks`, each function's parameter
+/// block where its fields spill (`Draws::blocks`; their addresses the caller writes once they are
+/// in the ring), from the `tables`, a buffer argument bound to nothing taking `nil`, the nil
+/// buffer's address, and bounds of 0 and 0, a checked load's zero range at `zero`: a texture whose
+/// image the pass `moved` to the feedback layout reads through its second element in that layout,
+/// and one in `shadow_slots`, which reads a shadow, through its second element, the shadow's; a
+/// colour attachment of `pass` the fragment function reads is read through its texture's second
+/// element.
 fn fill_push(
     (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
     (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
     (moved, shadow_slots, pass): (&[Moved], &[(usize, u32)], &Pass),
     state: &RenderPipelineState,
-    rebound: &Rebound,
-) -> (Range<usize>, [bool; 2]) {
+) {
     let draws = &state.inner.compiled.draws;
     let ids = &state.inner.numbered.ids;
-    let (mut written, mut filled) = (0..0, [false; 2]);
-    if rebound.all {
-        push.clear();
-        push.resize(draws.push_len.next_multiple_of(4) as usize, 0);
-        for (block, made) in blocks.iter_mut().zip(&draws.blocks) {
-            block.clear();
-            block.resize(made.map_or(0, |(len, _)| len as usize), 0);
-        }
-        written = 0..push.len();
-        filled = draws.blocks.map(|made| made.is_some());
+    push.clear();
+    push.resize(draws.push_len.next_multiple_of(4) as usize, 0);
+    for (block, made) in blocks.iter_mut().zip(&draws.blocks) {
+        block.clear();
+        block.resize(made.map_or(0, |(len, _)| len as usize), 0);
     }
     for &(place, table, value) in &draws.fields {
-        if !rebound.field(table, value) {
-            continue;
-        }
         let tables = &tables[table];
-        // The field's bytes, the first `len` of a little-endian `u64`.
-        let (word, len): (u64, usize) = match value {
+        let (bytes, at) = match place {
+            DrawPlace::Push(offset) => (&mut *push, offset as usize),
+            DrawPlace::Block(of, offset) => (&mut blocks[of], offset as usize),
+        };
+        match value {
             // At a multiple of the argument's alignment, which the draw checked first.
-            FieldValue::BufferAddress { slot, .. } => (address_word(tables.address(slot, nil)), 8),
-            FieldValue::BufferBounds(slot) => (u64::from_le_bytes(tables.bounds(slot)), 8),
-            FieldValue::ZeroAddress => (zero, 8),
+            FieldValue::BufferAddress { slot, .. } => {
+                let word = address_word(tables.address(slot, nil));
+                bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
+            }
+            FieldValue::BufferBounds(slot) => {
+                bytes[at..at + 8].copy_from_slice(&tables.bounds(slot));
+            }
+            FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
             FieldValue::TextureId(slot) => {
                 let id = (tables.texture(slot)).map_or(0, |t| {
                     let second = (moved.iter()).any(|m| m.hazard == t.hazard_id())
@@ -2876,51 +2573,43 @@ fn fill_push(
                         false => t.gpu_resource_id().to_bits(),
                     }
                 });
-                (id, 8)
+                bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
             }
             FieldValue::SamplerId(slot) => {
                 let id = match tables.samplers.get(slot as usize) {
                     Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
                     _ => 0,
                 };
-                (id, 8)
+                bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
             }
             FieldValue::IntegerChannels(slot) => {
                 let word = (tables.texture(slot))
                     .map_or(0, |t| integer_channels_word(t.descriptor().pixel_format));
-                (u64::from(word), 4)
+                bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
             }
             FieldValue::ConstexprSampler(place) => {
-                (u64::from(ids.get(place).copied().unwrap_or(0)), 4)
+                let index = ids.get(place).copied().unwrap_or(0);
+                bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
-            FieldValue::Word(word) => (u64::from(word), 4),
-            FieldValue::TessellationFactors => (factors, 8),
-            FieldValue::AlphaTestReference => (u64::from(alpha_test), 4),
+            FieldValue::Word(word) => bytes[at..at + 4].copy_from_slice(&word.to_le_bytes()),
+            FieldValue::TessellationFactors => {
+                bytes[at..at + 8].copy_from_slice(&factors.to_le_bytes());
+            }
+            FieldValue::AlphaTestReference => {
+                bytes[at..at + 4].copy_from_slice(&alpha_test.to_le_bytes());
+            }
             // The pass's attachment's texture's second element, which the draw's attachment reads
             // checked (`attachment_reads`).
             FieldValue::FetchedColor(color) => {
                 let index = (pass.colors.get(color as usize))
                     .and_then(Option::as_ref)
                     .map_or(0, |target| target.texture.second_resource_id().index);
-                (u64::from(index), 4)
+                bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
-            FieldValue::DispatchRegion | FieldValue::StageInRegion => continue,
-        };
-        let (bytes, at) = match place {
-            DrawPlace::Push(offset) => {
-                let at = offset as usize;
-                written = cover(written, at..at + len);
-                (&mut *push, at)
-            }
-            DrawPlace::Block(of, offset) => {
-                filled[of] = true;
-                (&mut blocks[of], offset as usize)
-            }
-        };
-        bytes[at..at + len].copy_from_slice(&word.to_le_bytes()[..len]);
+            FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
+        }
     }
-    (written, filled)
 }
 
 /// The copy of `area` from an image into its shadow, of `aspects`, at the same place in both.

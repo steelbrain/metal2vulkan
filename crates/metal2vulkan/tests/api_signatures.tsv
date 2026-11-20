@@ -2439,7 +2439,6 @@ field	metal2vulkan-rt::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_l
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-rt::Metrics.private_take_allocations	pub private_take_allocations: SiteAllocations
-field	metal2vulkan-rt::Metrics.push_bytes	pub push_bytes: u64
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
 field	metal2vulkan-rt::Metrics.resolves	pub resolves: u64

@@ -1836,13 +1836,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
   go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a
   kernel with more than 28 buffers. `Counters::metrics`' `ring_writes` counts each block and each
-  `set_bytes` copy. A bind marks its own slot: the next dispatch checks that slot alone (its
-  buffer's alignment, its texture's storage) and fills its fields alone, with the dispatch
-  region, which each launch carries; a change of pipeline state, or of the module a dispatch
-  runs, checks and fills every slot. The block goes into the ring again only where one of its
-  fields changed, and a dispatch pushes only the words of the window its command buffer does not
-  hold, as a draw does (see Render encoders): a kernel of 30 buffers dispatched three times with
-  the same bindings writes one block and pushes once.
+  `set_bytes` copy.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
@@ -2635,16 +2629,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   plus offsets, the resource IDs of their textures and sampler states, the state's constexpr
   sampler indices), binds the vertex buffers its vertex descriptor reads and the index buffer,
   and sets the dynamic state that changed since the encoder's last draw: all of it at the first.
-  A bind marks its own slot: the next draw finds that slot's facts (its vertex binding's offset,
-  its buffer's alignment, whether it reaches a device copy or what the host reads) and fills that
-  slot's fields alone, writing into the parameter ring only a parameter block one of them is in;
-  a change of pipeline state finds and fills them all. Push constants belong to the
-  `VkCommandBuffer`: every pipeline shares the one layout and push range, so a push stays across
-  pipelines, both bind points and encoders, and a draw or a dispatch pushes only the words the
-  command buffer does not hold (the whole window at its first, then from the first word that
-  differs to the last). 2,000 draws of unchanged bindings are one push and 2,000 `vkCmdDraw`s, as
-  Metal's bindings set once stay for the draws after them. `Counters::metrics`' `pushes` counts
-  each push recorded, `pushes_held` each one skipped and `push_bytes` the bytes pushed.
+  A draw or a dispatch whose push bytes the command buffer already holds pushes nothing: the push
+  stays across pipelines, which share the one layout, so 2,000 draws of unchanged bindings are one
+  push and 2,000 `vkCmdDraw`s, as Metal's bindings set once stay for the draws after them.
+  `Counters::metrics`' `pushes` counts each push recorded and `pushes_held` each one skipped.
   A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
   any number of draws records the barriers a pass of one does. A draw of no vertices, indices or instances
   records nothing.

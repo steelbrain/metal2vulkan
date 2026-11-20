@@ -3,17 +3,17 @@
 //! buffer's address, and the containment check's fields: the zero range's address and each
 //! buffer's bounds (its bytes before the bind offset and its length, 8 bytes), which come last in
 //! the order, so they are the first to go to a parameter block. A kernel of 12 buffers (232
-//! bytes) pushes them all and writes nothing into the parameter ring. One of 24 buffers pushes
-//! its block's address, every buffer's address, the zero range's and one buffer's bounds, and the
-//! other 23 bounds go to a block; one of 30 pushes 26 addresses, and the other 4, the zero
-//! range's and the 30 bounds go to a block. Each of those two writes its block at its first
-//! dispatch alone. Each kernel's dispatches after its first, of the same bindings and grid, push
-//! nothing, their bytes held. All answer the fold of their inputs.
+//! bytes) pushes them all and writes nothing into the parameter ring, and its dispatches after
+//! the first push nothing, their bytes held. One of 24 buffers pushes its block's address, every
+//! buffer's address, the zero range's and one buffer's bounds, and the other 23 bounds go to a
+//! block; one of 30 pushes 26 addresses, and the other 4, the zero range's and the 30 bounds go
+//! to a block. Each of those two writes one block a dispatch, whose
+//! new address each dispatch pushes. All answer the fold of their inputs.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-pub(crate) mod on_device {
+mod on_device {
     use crate::pipeline::{FieldValue, Place};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
@@ -30,7 +30,7 @@ pub(crate) mod on_device {
 
     /// A kernel of `buffers` buffers: thread `gid` folds word `gid` of the first `buffers - 1`
     /// (`s · 3 + v`) into word `gid` of the last.
-    pub(crate) fn kernel(buffers: u32) -> String {
+    fn kernel(buffers: u32) -> String {
         let inputs = buffers - 1;
         let mut params = Vec::new();
         let mut meta = Vec::new();
@@ -77,22 +77,23 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
     }
 
     /// Word `gid` of input `k`.
-    pub(crate) fn word(k: u32, gid: u32) -> u32 {
+    fn word(k: u32, gid: u32) -> u32 {
         (k + 1).wrapping_mul(0x9e37_79b9) ^ gid.wrapping_mul(0x85eb_ca6b)
     }
 
-    /// The kernel of 12 buffers writes nothing into the ring; the kernel of 24 pushes every
-    /// address and has only check fields in its block, and the kernel of 30 has 4 addresses there
-    /// too; each of those writes its block at its first dispatch alone. Each pushes once for its
-    /// three dispatches of the same bindings, and answers the fold of its inputs.
+    /// The kernel of 12 buffers writes nothing into the ring, and pushes once for its three
+    /// dispatches of the same bindings; the kernel of 24 pushes every address and has only check
+    /// fields in its block, and the kernel of 30 has 4 addresses there too; each of those writes
+    /// one block a dispatch, whose new address each dispatch pushes. Each answers the fold of its
+    /// inputs.
     #[test]
     fn every_device_pushes_24_buffer_addresses_and_rings_30() {
-        // Each kernel's buffers, its addresses and check fields in the block, and its blocks
-        // over the dispatches; each pushes once.
-        for (buffers, (addresses, checks), blocks) in [
-            (12u32, (0usize, 0usize), 0u64),
-            (24, (0, 23), 1),
-            (30, (4, 31), 1),
+        // Each kernel's buffers, its addresses and check fields in the block, its blocks a
+        // dispatch, and its pushes over the dispatches.
+        for (buffers, (addresses, checks), blocks, pushes) in [
+            (12u32, (0usize, 0usize), 0u64, 1u64),
+            (24, (0, 23), 1, DISPATCHES),
+            (30, (4, 31), 1, DISPATCHES),
         ] {
             let bitcode = match llvm_assemble_text(&kernel(buffers)) {
                 Ok(bitcode) => bitcode,
@@ -179,10 +180,14 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 let after = device.counters().metrics();
                 let writes = after.ring_writes - before.ring_writes;
                 assert_eq!(command_buffer.error(), None, "{what}");
-                assert_eq!(writes, blocks, "{what}: ring writes");
+                assert_eq!(writes, blocks * DISPATCHES, "{what}: ring writes");
                 let pushed = after.pushes - before.pushes;
                 let held = after.pushes_held - before.pushes_held;
-                assert_eq!((pushed, held), (1, DISPATCHES - 1), "{what}: pushes, held");
+                assert_eq!(
+                    (pushed, held),
+                    (pushes, DISPATCHES - pushes),
+                    "{what}: pushes, held"
+                );
                 let inputs = buffers - 1;
                 let contents = bound[inputs as usize].contents().expect("a Shared buffer");
                 for gid in 0..THREADS {

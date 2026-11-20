@@ -6,7 +6,7 @@
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
 //! device; the thread gauge holding the device's four threads as it is made; and a command
 //! buffer joining a held group only within the group's expected GPU run. Without a device: a push
-//! records only the words the command buffer does not hold; a queue's expected run rises to a
+//! whose bytes the command buffer holds is not recorded again; a queue's expected run rises to a
 //! longer run at once and halves toward a shorter one; the join and send decisions of the group
 //! bound.
 
@@ -59,64 +59,18 @@ fn a_queues_expected_run_rises_at_once_and_halves_toward_a_shorter_run() {
     assert_eq!(next_run(None, u64::MAX), u64::MAX - 1);
 }
 
-/// A push records only the words its command buffer does not hold: every word at a new
-/// `VkCommandBuffer`'s first push, whatever the caller names, each word past the bytes held, and
-/// from the first word that differs to the last; one of words held records nothing and keeps the
-/// held bytes past its end. A caller whose own push left the mark has only the words it names
-/// compared; after any other push, every word is.
+/// A push whose bytes the command buffer already holds from offset 0 records nothing; one that
+/// changes any of them records, and keeps the held bytes past its end.
 #[test]
-fn a_push_records_only_the_words_its_command_buffer_does_not_hold() {
-    let words = |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|w| w.to_le_bytes()).collect() };
+fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
     let mut pushed = Pushed::default();
-    pushed.restart();
-    let (mut mine, mut other) = (u64::MAX, u64::MAX);
-    let push = words(&[1, 2, 3, 4]);
-    assert_eq!(
-        pushed.changed(&push, 0..0, &mut mine),
-        Some(0..16),
-        "a new command buffer's first: every word"
-    );
-    assert_eq!(
-        pushed.changed(&push, 0..16, &mut mine),
-        None,
-        "the same words"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[1, 2]), 0..8, &mut mine),
-        None,
-        "a shorter push of words held"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[1, 9, 3, 7]), 0..16, &mut mine),
-        Some(4..16),
-        "from the first word that differs to the last"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[5, 9, 3, 7]), 0..4, &mut mine),
-        Some(0..4),
-        "the caller's own words"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[5, 6]), 0..0, &mut other),
-        Some(4..8),
-        "another caller's push: every word compared"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[5, 9, 3, 7]), 0..0, &mut mine),
-        Some(4..8),
-        "after another's push: every word compared again"
-    );
-    assert_eq!(
-        pushed.changed(&words(&[5, 9, 3, 7, 8]), 0..0, &mut mine),
-        Some(16..20),
-        "a longer push: the words past the bytes held"
-    );
-    pushed.restart();
-    assert_eq!(
-        pushed.changed(&words(&[5, 9]), 0..0, &mut mine),
-        Some(0..8),
-        "the next command buffer's first: every word"
-    );
+    assert!(pushed.needed(&[1, 2, 3, 4]), "the first push");
+    assert!(!pushed.needed(&[1, 2, 3, 4]), "the same bytes again");
+    assert!(!pushed.needed(&[1, 2]), "a shorter push of bytes held");
+    assert!(pushed.needed(&[1, 9]), "a shorter push that changes one");
+    assert!(!pushed.needed(&[1, 9, 3, 4]), "the bytes past it kept");
+    assert!(pushed.needed(&[1, 9, 3, 4, 5]), "a longer push");
+    assert!(Pushed::default().needed(&[1, 9]), "a new command buffer's");
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -1,7 +1,7 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::command::{cover, Building, CommandBuffer};
+use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
 use crate::error::{Error, Gap, Limit, Refusal};
@@ -25,7 +25,7 @@ use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
-use std::ops::{BitOr, Range};
+use std::ops::BitOr;
 use std::sync::Arc;
 
 /// Metal's count of buffer argument table entries per stage.
@@ -202,255 +202,45 @@ pub struct ComputeCommandEncoder {
     /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
     /// threadgroup memory lengths are unchanged.
     last: Option<Last>,
-    /// The parameters the dispatches filled, kept: a dispatch fills again only the fields of what
-    /// changed since ([`Rebound`]).
+    /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
     wrote: bool,
     /// What a dispatch of the pipeline state reaches of the bound resources.
     facts: DispatchFacts,
-    /// What changed since the last dispatch filled its parameters, which the next dispatch finds
-    /// and fills again.
-    rebound: Rebound,
     /// The stage-in region set ([`ComputeCommandEncoder::set_stage_in_region`]), as the bytes of
     /// its push field: the origin and the size, each a `uvec4` with a zero `w`.
     stage_in_region: Option<[u8; 32]>,
 }
 
 /// What a dispatch of the encoder's pipeline state reaches of its bound resources and
-/// declarations, found slot by slot and kept: whether its buffers are aligned as its kernel takes
-/// them and its textures have the storage it uses, which of its slots reach a Managed buffer's
-/// device copy or write a texture over one, and which write memory the host may read. The first
-/// dispatch after a change of the pipeline state, or of the module a dispatch runs, finds every
-/// slot's; the first after a binding or a declaration finds only what that call changed
-/// ([`Rebound`]); a dispatch after no change finds nothing.
+/// declarations, worked out at the first dispatch after either changes and kept until the next
+/// change: whether its buffers are aligned as its kernel takes them, whether it reaches a Managed
+/// buffer's device copy or writes a texture over one, and whether it writes memory the host may
+/// read. A dispatch after no change runs none of the scans.
 ///
 /// A change is the encoder's own call: a pipeline state set, or a buffer, an offset, bytes or a
-/// texture bound, or a resource declared. Nothing outside the encoder changes what a slot's fact
-/// holds: each is of the object bound (a buffer's device copy and storage, a texture's storage)
-/// and of the kernel, which do not change. What can change outside it between two dispatches, a
-/// Managed buffer's textures over its device copy and the textures over a buffer in images of
-/// their own that live, each dispatch looks at again where a fact says it may matter.
+/// texture bound, or a resource declared. Nothing outside the encoder changes what a fact holds:
+/// each is of the objects bound (a buffer's device copy and storage, a texture's storage) and of
+/// the kernel, which do not change. What can change outside it between two dispatches, a Managed
+/// buffer's textures over its device copy and the textures over a buffer in images of their own
+/// that live, each dispatch looks at again where a fact says it may matter.
 #[derive(Default)]
 struct DispatchFacts {
-    /// The checks hold: every slot met them but those the encoder's [`Rebound`] names.
-    held: bool,
-    /// The module whose kernel the slots below are of, while they hold.
+    /// The bound buffers are aligned as the state's kernels take them.
+    aligned: bool,
+    /// The module whose kernel the facts below are of, while they hold.
     module: Option<Module>,
-    /// The bound buffers the kernel reaches that have a device copy, and the textures it writes
-    /// over one.
-    managed: Slots,
-    /// The bound Shared buffers the kernel writes, and the textures over one it writes: writes
-    /// the host may read once the command buffer completes.
-    host: Slots,
-    /// The nil buffer's address where a buffer argument the kernels reach was found bound to
-    /// nothing (`Ring::nil`), else 0, and the zero range's where the kernels check a load
-    /// (`Ring::zero`), else 0, found with the alignments.
+    /// A buffer the kernel reaches has a device copy, or a texture it writes is over one.
+    managed: bool,
+    /// A write the host may read once the command buffer completes: to a Shared buffer or a
+    /// texture over one, bound or declared, or through an address outside the dispatch's
+    /// resources.
+    host: bool,
+    /// The nil buffer's address where a buffer argument the kernels reach is bound to nothing
+    /// (`Ring::nil`), else 0, and the zero range's where the kernels check a load (`Ring::zero`),
+    /// else 0, found with the alignments.
     nil: (u64, u64),
-}
-
-/// Buffer and texture slots, a bit each.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Slots {
-    buffers: u32,
-    textures: u128,
-}
-
-impl Slots {
-    fn any(&self) -> bool {
-        self.buffers != 0 || self.textures != 0
-    }
-
-    /// Clears the slots `rebound` names.
-    fn forget(&mut self, rebound: &Rebound) {
-        self.buffers &= !rebound.buffers;
-        self.textures &= !rebound.textures;
-    }
-}
-
-/// What changed since a dispatch last found its facts and filled its parameters: everything after
-/// a change of the pipeline state; else a bit for each buffer, texture and sampler slot bound
-/// since, the stage-in region set, and resources declared.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Rebound {
-    all: bool,
-    buffers: u32,
-    textures: u128,
-    samplers: u16,
-    stage_in: bool,
-    declared: bool,
-}
-
-impl Rebound {
-    /// Every slot, field and declaration.
-    const ALL: Rebound = Rebound {
-        all: true,
-        buffers: 0,
-        textures: 0,
-        samplers: 0,
-        stage_in: false,
-        declared: false,
-    };
-
-    fn buffer(&self, slot: u32) -> bool {
-        self.all || (self.buffers.checked_shr(slot)).is_some_and(|bits| bits & 1 == 1)
-    }
-
-    fn texture(&self, slot: u32) -> bool {
-        self.all || (self.textures.checked_shr(slot)).is_some_and(|bits| bits & 1 == 1)
-    }
-
-    fn sampler(&self, slot: u32) -> bool {
-        self.all || (self.samplers.checked_shr(slot)).is_some_and(|bits| bits & 1 == 1)
-    }
-
-    /// Whether a field of `value` is filled again: a slot's where the slot changed, the stage-in
-    /// region's where it was set, the dispatch region's at every dispatch (each launch carries
-    /// its own), and every field after a change of the state.
-    fn field(&self, value: FieldValue) -> bool {
-        match value {
-            FieldValue::BufferAddress { slot, .. } | FieldValue::BufferBounds(slot) => {
-                self.buffer(slot)
-            }
-            FieldValue::TextureId(slot) | FieldValue::IntegerChannels(slot) => self.texture(slot),
-            FieldValue::SamplerId(slot) => self.sampler(slot),
-            FieldValue::StageInRegion => self.all || self.stage_in,
-            FieldValue::DispatchRegion => true,
-            FieldValue::ZeroAddress
-            | FieldValue::ConstexprSampler(_)
-            | FieldValue::Word(_)
-            | FieldValue::TessellationFactors
-            | FieldValue::AlphaTestReference
-            | FieldValue::FetchedColor(_) => self.all,
-        }
-    }
-}
-
-impl DispatchFacts {
-    /// Checks, of the slots `rebound` names, what a dispatch of a kernel of `interface` reaches of
-    /// `slots` and `textures`: each buffer bound at an address of the alignment it takes
-    /// ([`check_alignment`]), with the nil buffer's address where one is bound to nothing
-    /// (`Ring::nil`) and the zero range's where the kernel checks a load (`Ring::zero`); no
-    /// swizzled texture it reads as storage; a storage element for each texture it stores to or
-    /// reads as storage; and, where `rebound` names the declarations, none of
-    /// `declared_unstored_write` where it may reach a texture beyond its slots. Every other slot
-    /// met them when it was found, so the first a dispatch fails is the one a check of every slot
-    /// meets first.
-    ///
-    /// Err: [`Refusal::BufferOffsetAlignment`]; [`Gap::SwizzledReadWrite`];
-    /// [`Gap::StorageElement`]; [`Error::Vulkan`] where the nil buffer or the zero range cannot be
-    /// made.
-    fn find(
-        &mut self,
-        core: &Core,
-        (slots, textures): (&[Slot], &[Option<Lent<Texture>>]),
-        declared_unstored_write: Option<PixelFormat>,
-        interface: &Interface,
-        rebound: &Rebound,
-    ) -> Result<(), Error> {
-        if rebound.all {
-            self.nil = (0, 0);
-        }
-        // A `set_bytes` copy is at a multiple of 16 in the ring, which every mask divides, and so
-        // is the nil buffer.
-        for field in &interface.fields {
-            match field.value {
-                FieldValue::BufferAddress { slot, mask } if rebound.buffer(slot) => {
-                    match slots.get(slot as usize) {
-                        Some(Slot::Buffer { buffer, offset }) => {
-                            check_alignment(slot, mask, buffer, *offset)?
-                        }
-                        Some(Slot::Bytes(..)) => {}
-                        Some(Slot::Empty) | None => self.nil.0 = core.ring.nil(core)?,
-                    }
-                }
-                FieldValue::ZeroAddress if rebound.all => self.nil.1 = core.ring.zero(core)?,
-                _ => {}
-            }
-        }
-        for &slot in &interface.storage_reads {
-            if rebound.texture(slot)
-                && matches!(textures.get(slot as usize), Some(Some(t)) if t.swizzled())
-            {
-                return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
-            }
-        }
-        for &(slot, access) in &interface.textures {
-            if !rebound.texture(slot) {
-                continue;
-            }
-            let read = interface.storage_reads.contains(&slot);
-            let stored = access != Access::Read || read;
-            let unstored = match textures.get(slot as usize) {
-                Some(Some(texture)) if stored => texture
-                    .unstored()
-                    .or_else(|| texture.unread().filter(|_| read)),
-                _ => None,
-            };
-            if let Some(pixel_format) = unstored {
-                return Err(Error::Unsupported(Gap::StorageElement {
-                    slot: Some(slot),
-                    pixel_format,
-                }));
-            }
-        }
-        // A texture declared written with no storage element, which the kernel may reach through
-        // its storage image beyond its slots.
-        if let (true, true, Some(pixel_format)) = (
-            rebound.all || rebound.declared,
-            interface.unbound_storage,
-            declared_unstored_write,
-        ) {
-            return Err(Error::Unsupported(Gap::StorageElement {
-                slot: None,
-                pixel_format,
-            }));
-        }
-        Ok(())
-    }
-
-    /// Finds again, of the slots `rebound` names, which of `slots` and `textures` a dispatch of a
-    /// kernel of `interface` reaches with a device copy (a buffer it reaches that has one, a
-    /// texture it writes over one: the only dispatches that may owe a Managed buffer's textures
-    /// over its device copy their copies), and which it writes that the host may read once the
-    /// command buffer completes (a Shared buffer, a texture over one).
-    fn reach(
-        &mut self,
-        (slots, textures): (&[Slot], &[Option<Lent<Texture>>]),
-        interface: &Interface,
-        rebound: &Rebound,
-    ) {
-        if rebound.all {
-            (self.managed, self.host) = (Slots::default(), Slots::default());
-        }
-        self.managed.forget(rebound);
-        self.host.forget(rebound);
-        for &(slot, access) in &interface.buffers {
-            if let (true, Some(Slot::Buffer { buffer, .. })) =
-                (rebound.buffer(slot), slots.get(slot as usize))
-            {
-                if buffer.held().1.is_some() {
-                    self.managed.buffers |= 1 << slot;
-                }
-                if access.writes() && buffer.is_shared() {
-                    self.host.buffers |= 1 << slot;
-                }
-            }
-        }
-        for &(slot, access) in &interface.textures {
-            if let (true, Some(Some(texture))) = (
-                access.writes() && rebound.texture(slot),
-                textures.get(slot as usize),
-            ) {
-                if texture.managed_over().is_some() {
-                    self.managed.textures |= 1 << slot;
-                }
-                if texture.host_reads() {
-                    self.host.textures |= 1 << slot;
-                }
-            }
-        }
-    }
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -634,13 +424,9 @@ impl CommandBuffer {
             declared_shared_write: false,
             declared_unstored_write: None,
             last: None,
-            parameters: Parameters {
-                mark: u64::MAX,
-                ..Parameters::default()
-            },
+            parameters: Parameters::default(),
             wrote: false,
             facts: DispatchFacts::default(),
-            rebound: Rebound::ALL,
             stage_in_region: None,
         })
     }
@@ -651,10 +437,10 @@ impl ComputeCommandEncoder {
         recording(&mut self.building)
     }
 
-    /// Buffer slot `slot` changed: the next dispatch finds its facts and fills its fields again.
-    fn rebound_buffer(&mut self, slot: usize) {
-        self.rebound.buffers |= 1 << slot;
-        self.facts.held = false;
+    /// The pipeline state, a binding or a declaration changed: the next dispatch finds its facts
+    /// again.
+    fn changed(&mut self) {
+        self.facts = DispatchFacts::default();
     }
 
     /// `setComputePipelineState:`. The command buffer keeps the state until it retires.
@@ -673,8 +459,7 @@ impl ComputeCommandEncoder {
         // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
         self.pipeline = Some(unsafe { self.building().lend_pipeline(state) });
         self.last = None;
-        self.facts = DispatchFacts::default();
-        self.rebound = Rebound::ALL;
+        self.changed();
         Ok(())
     }
 
@@ -715,7 +500,7 @@ impl ComputeCommandEncoder {
             None => Slot::Empty,
         };
         self.slots[slot] = bound;
-        self.rebound_buffer(slot);
+        self.changed();
         Ok(())
     }
 
@@ -749,8 +534,7 @@ impl ComputeCommandEncoder {
         let held = &mut self.textures[index as usize];
         self.copied = self.copied - over::copied(held.as_deref()) + over::copied(lent.as_deref());
         *held = lent;
-        self.rebound.textures |= 1 << index;
-        self.facts.held = false;
+        self.changed();
         Ok(())
     }
 
@@ -785,7 +569,6 @@ impl ComputeCommandEncoder {
             None => None,
         };
         self.samplers[index as usize] = lent;
-        self.rebound.samplers |= 1 << index;
         Ok(())
     }
 
@@ -822,7 +605,6 @@ impl ComputeCommandEncoder {
             *at = word.to_le_bytes();
         }
         self.stage_in_region = Some(bytes);
-        self.rebound.stage_in = true;
     }
 
     /// `setBufferOffset:atIndex:`.
@@ -834,7 +616,7 @@ impl ComputeCommandEncoder {
         match &mut self.slots[slot] {
             Slot::Buffer { offset: bound, .. } => {
                 *bound = offset;
-                self.rebound_buffer(slot);
+                self.changed();
                 Ok(())
             }
             _ => Err(Error::Refused(Refusal::NoBufferAtIndex { index })),
@@ -857,9 +639,13 @@ impl ComputeCommandEncoder {
             }));
         }
         let address = self.building().write_ring(bytes)?;
+        // Bytes are aligned, of no Managed or Shared buffer: a dispatch's facts change only where
+        // the slot held a buffer.
+        if !matches!(self.slots[slot], Slot::Bytes(..)) {
+            self.changed();
+        }
         // At most one chunk, 64 KiB.
         self.slots[slot] = Slot::Bytes(address, bytes.len() as u32);
-        self.rebound_buffer(slot);
         Ok(())
     }
 
@@ -935,8 +721,7 @@ impl ComputeCommandEncoder {
         if access.writes() && self.declared_unstored_write.is_none() {
             self.declared_unstored_write = unstored;
         }
-        self.rebound.declared = true;
-        self.facts.held = false;
+        self.changed();
         match self
             .declared
             .iter_mut()
@@ -1146,13 +931,42 @@ impl ComputeCommandEncoder {
             return Err(Error::Limit(Limit::ThreadgroupThreads { size, max }));
         }
         // Every module of a state is the same function, with the same arguments and alignments,
-        // so the whole module answers these checks, of what changed since they last held.
-        if !self.facts.held {
-            let bound = (&self.slots[..], &self.textures[..]);
+        // so the whole module answers this check and the next, once after each change.
+        if !self.facts.aligned {
+            self.facts.nil = check_alignments(&self.core, &self.slots, &inner.whole.interface)?;
+            for &slot in &inner.whole.interface.storage_reads {
+                if matches!(self.textures.get(slot as usize), Some(Some(t)) if t.swizzled()) {
+                    return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
+                }
+            }
             let interface = &inner.whole.interface;
-            let unstored = self.declared_unstored_write;
-            (self.facts).find(&self.core, bound, unstored, interface, &self.rebound)?;
-            self.facts.held = true;
+            for &(slot, access) in &interface.textures {
+                let read = interface.storage_reads.contains(&slot);
+                let stored = access != Access::Read || read;
+                let unstored = match self.textures.get(slot as usize) {
+                    Some(Some(texture)) if stored => texture
+                        .unstored()
+                        .or_else(|| texture.unread().filter(|_| read)),
+                    _ => None,
+                };
+                if let Some(pixel_format) = unstored {
+                    return Err(Error::Unsupported(Gap::StorageElement {
+                        slot: Some(slot),
+                        pixel_format,
+                    }));
+                }
+            }
+            // A texture declared written with no storage element, which the kernel may reach
+            // through its storage image beyond its slots.
+            if let (true, Some(pixel_format)) =
+                (interface.unbound_storage, self.declared_unstored_write)
+            {
+                return Err(Error::Unsupported(Gap::StorageElement {
+                    slot: None,
+                    pixel_format,
+                }));
+            }
+            self.facts.aligned = true;
         }
         let core = &*self.core;
         let limits = &core.limits;
@@ -1258,21 +1072,11 @@ impl ComputeCommandEncoder {
             pipeline: vk_pipeline,
         });
         let interface = &kernel.interface;
-        // Every slot's where the module changed, whose interface may reach others, else those of
-        // what changed.
-        let rebound = match self.facts.module == Some(module) {
-            true => self.rebound,
-            false => Rebound::ALL,
-        };
-        if rebound != Rebound::default() {
-            let bound = (&self.slots[..], &self.textures[..]);
-            self.facts.reach(bound, interface, &rebound);
+        if self.facts.module != Some(module) {
+            self.facts.managed = self.reaches_managed(interface);
+            self.facts.host = self.writes_host(interface);
             self.facts.module = Some(module);
         }
-        // A write the host may read once the command buffer completes: to a Shared buffer or a
-        // texture over one, bound or declared, or through an address outside the dispatch's
-        // resources.
-        let host = interface.writes_unbound || self.declared_shared_write || self.facts.host.any();
         let wrote = {
             let accesses = Accesses {
                 slots: &self.slots,
@@ -1294,7 +1098,7 @@ impl ComputeCommandEncoder {
                 let reached = accesses.overs(interface, unbound || ahead, false);
                 building.overs_before(reached, unbound)?;
             }
-            if self.facts.managed.any() {
+            if self.facts.managed {
                 // A binding of a Managed buffer with textures over its device copy takes their
                 // copies back first, and one whose compiled interface writes it owes them their
                 // copies in; a texture slot written owes its copy back
@@ -1324,7 +1128,7 @@ impl ComputeCommandEncoder {
             building.overs_after(written, interface.writes_unbound);
             // Marked after the hazards' barrier, which may have split the recording at a signal:
             // the mark is the dispatch's own segment's.
-            if host {
+            if self.facts.host {
                 building.wrote_host();
             }
             wrote
@@ -1337,7 +1141,7 @@ impl ComputeCommandEncoder {
             }
             .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };
-        let ids = &state.numbered.ids[..];
+        let ids = &state.numbered.ids;
         match (direct, grid) {
             (Some((threads, groups, ragged)), _) => {
                 // A count past the device's limit on an axis is split: each piece starts at its
@@ -1353,13 +1157,8 @@ impl ComputeCommandEncoder {
                             let region = region(base, threads, ragged)?;
                             let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
                             let regions = (&region, self.stage_in_region.as_ref());
-                            let fields = (&self.rebound, ids, regions);
-                            (self.parameters).fill(
-                                (kernel, module),
-                                (bound, self.facts.nil),
-                                fields,
-                            );
-                            self.rebound = Rebound::default();
+                            self.parameters
+                                .fill(kernel, (bound, self.facts.nil), ids, regions);
                             recording(&mut self.building).record_dispatch(
                                 core,
                                 vk_pipeline,
@@ -1375,9 +1174,8 @@ impl ComputeCommandEncoder {
                 let region = region([0; 3], [0; 3], false)?;
                 let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
                 let regions = (&region, self.stage_in_region.as_ref());
-                let fields = (&self.rebound, ids, regions);
-                (self.parameters).fill((kernel, module), (bound, self.facts.nil), fields);
-                self.rebound = Rebound::default();
+                self.parameters
+                    .fill(kernel, (bound, self.facts.nil), ids, regions);
                 recording(&mut self.building).record_dispatch(
                     core,
                     vk_pipeline,
@@ -1387,6 +1185,46 @@ impl ComputeCommandEncoder {
             }
             (None, Grid::Direct { .. }) => Ok(()),
         }
+    }
+
+    /// Whether a dispatch of a kernel of `interface` reaches a bound buffer that has a device
+    /// copy, or writes a bound texture over one: the only dispatches that may owe a Managed
+    /// buffer's textures over its device copy their copies.
+    fn reaches_managed(&self, interface: &Interface) -> bool {
+        (interface.buffers.iter()).any(|&(slot, _)| {
+            matches!(
+                self.slots.get(slot as usize),
+                Some(Slot::Buffer { buffer, .. }) if buffer.held().1.is_some()
+            )
+        }) || (interface.textures.iter()).any(|&(slot, access)| {
+            access.writes()
+                && matches!(
+                    self.textures.get(slot as usize),
+                    Some(Some(texture)) if texture.managed_over().is_some()
+                )
+        })
+    }
+
+    /// Whether a dispatch of a kernel of `interface` writes what the host may read once the
+    /// command buffer completes: a Shared buffer or a texture over one, bound or declared, or
+    /// memory through an address outside the dispatch's resources.
+    fn writes_host(&self, interface: &Interface) -> bool {
+        interface.writes_unbound
+            || self.declared_shared_write
+            || (interface.buffers.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.slots.get(slot as usize),
+                        Some(Slot::Buffer { buffer, .. }) if buffer.is_shared()
+                    )
+            })
+            || (interface.textures.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.textures.get(slot as usize),
+                        Some(Some(texture)) if texture.host_reads()
+                    )
+            })
     }
 }
 
@@ -1402,6 +1240,34 @@ fn recording(building: &mut Option<Building>) -> &mut Building {
     building
         .as_mut()
         .expect("an encoder holds its command buffer's recording until it ends")
+}
+
+/// [`check_alignment`] of each buffer bound in `slots` that `interface` reaches, the nil buffer's
+/// address where one it reaches is bound to nothing (`Ring::nil`), else 0, and the zero range's
+/// where it checks a load (`Ring::zero`), else 0. A `set_bytes` copy is at a multiple of 16 in the
+/// ring, which every mask divides, and so is the nil buffer.
+fn check_alignments(
+    core: &Core,
+    slots: &[Slot],
+    interface: &Interface,
+) -> Result<(u64, u64), Error> {
+    let (mut nil, mut zero) = (0, 0);
+    for field in &interface.fields {
+        let (slot, mask) = match field.value {
+            FieldValue::BufferAddress { slot, mask } => (slot, mask),
+            FieldValue::ZeroAddress => {
+                zero = core.ring.zero(core)?;
+                continue;
+            }
+            _ => continue,
+        };
+        match slots.get(slot as usize) {
+            Some(Slot::Buffer { buffer, offset }) => check_alignment(slot, mask, buffer, *offset)?,
+            Some(Slot::Bytes(..)) => {}
+            Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
+        }
+    }
+    Ok((nil, zero))
 }
 
 /// A slot's [`FieldValue::BufferBounds`] for a buffer of `length` bytes bound at `offset`: the
@@ -1423,51 +1289,37 @@ type Bound<'a> = (
 );
 
 impl Parameters {
-    /// Fills, of the push window and the ring block of one launch of `kernel`, module `module`'s,
-    /// the fields `rebound` names, every field into bytes sized afresh where the bytes were of
-    /// another module or `rebound` names everything; each from `bound`, the encoder's argument
-    /// tables, whose regions are `region`, the `DispatchRegion` field's bytes, and `stage_in`,
-    /// the `StageInRegion` field's where the encoder set a region (a kernel that reads it has
-    /// one: the dispatch checked first), and whose state gave its numbered samplers
-    /// `sampler_ids`. Only a kernel that reads the stage-in region copies it. The block's address
-    /// is written by [`Building::record_dispatch`] once the block is in the ring, where a field
-    /// of it was filled. A buffer argument bound to nothing takes `nil`, the nil buffer's
-    /// address, and bounds of 0 and 0; the zero range's address is `zero`.
+    /// Fills the push window and the ring block of one launch of `kernel` with `bound`, the
+    /// encoder's argument tables, whose regions are `region`, the `DispatchRegion` push field's
+    /// bytes, and `stage_in`, the `StageInRegion` field's where the encoder set a region (a
+    /// kernel that reads it has one: the dispatch checked first), and whose state gave its
+    /// numbered samplers `sampler_ids`. Only a kernel that reads the stage-in region copies it.
+    /// The block's address is written by [`Building::record_dispatch`] once the block is in the
+    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address, and bounds
+    /// of 0 and 0; the zero range's address is `zero`.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
-    /// dispatch checked first ([`DispatchFacts::find`], which gave `nil`).
+    /// dispatch checked first ([`check_alignments`], which gave `nil`).
     fn fill(
         &mut self,
-        (kernel, module): (&Kernel, Module),
+        kernel: &Kernel,
         (bound, (nil, zero)): (Bound<'_>, (u64, u64)),
-        (rebound, sampler_ids, (region, stage_in)): Fields<'_>,
+        sampler_ids: &[u32],
+        (region, stage_in): (&[u8; 32], Option<&[u8; 32]>),
     ) {
         let (slots, textures, samplers) = bound;
         let interface: &Interface = &kernel.interface;
-        let all = rebound.all || self.module != Some(module);
-        if all {
-            self.push.clear();
-            self.push
-                .resize(interface.push_len.next_multiple_of(4) as usize, 0);
-            self.block.clear();
-            self.block.resize(interface.block_len as usize, 0);
-            self.unpushed = 0..self.push.len();
-            self.block_owed = true;
-            self.module = Some(module);
-        }
+        self.push.clear();
+        self.push
+            .resize(interface.push_len.next_multiple_of(4) as usize, 0);
+        self.block.clear();
+        self.block.resize(interface.block_len as usize, 0);
         for field in &interface.fields {
-            if !all && !rebound.field(field.value) {
-                continue;
-            }
             let (bytes, at) = match field.place {
                 Place::Push(offset) => (&mut self.push, offset as usize),
-                Place::Block(offset) => {
-                    self.block_owed = true;
-                    (&mut self.block, offset as usize)
-                }
+                Place::Block(offset) => (&mut self.block, offset as usize),
             };
-            // Each field's bytes, and how many.
-            let len = match field.value {
+            match field.value {
                 FieldValue::BufferAddress { slot, .. } => {
                     let address = match slots.get(slot as usize) {
                         Some(Slot::Buffer { buffer, offset }) => {
@@ -1478,7 +1330,6 @@ impl Parameters {
                     };
                     let word = address_word(address);
                     bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
-                    8
                 }
                 FieldValue::BufferBounds(slot) => {
                     let bounds = match slots.get(slot as usize) {
@@ -1487,19 +1338,14 @@ impl Parameters {
                         Some(Slot::Empty) | None => [0; 8],
                     };
                     bytes[at..at + 8].copy_from_slice(&bounds);
-                    8
                 }
-                FieldValue::ZeroAddress => {
-                    bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes());
-                    8
-                }
+                FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
                 FieldValue::TextureId(slot) => {
                     let id = match textures.get(slot as usize) {
                         Some(Some(texture)) => texture.gpu_resource_id().to_bits(),
                         _ => 0,
                     };
                     bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
-                    8
                 }
                 FieldValue::SamplerId(slot) => {
                     let id = match samplers.get(slot as usize) {
@@ -1507,7 +1353,6 @@ impl Parameters {
                         _ => 0,
                     };
                     bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
-                    8
                 }
                 FieldValue::IntegerChannels(slot) => {
                     let word = match textures.get(slot as usize) {
@@ -1517,162 +1362,35 @@ impl Parameters {
                         _ => 0,
                     };
                     bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
-                    4
                 }
                 FieldValue::ConstexprSampler(place) => {
                     let index = sampler_ids.get(place).copied().unwrap_or(0);
                     bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
-                    4
                 }
-                FieldValue::DispatchRegion => {
-                    bytes[at..at + 32].copy_from_slice(region);
-                    32
-                }
-                FieldValue::StageInRegion => match stage_in {
-                    Some(stage_in) => {
+                FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
+                FieldValue::StageInRegion => {
+                    if let Some(stage_in) = stage_in {
                         bytes[at..at + 32].copy_from_slice(stage_in);
-                        32
                     }
-                    None => 0,
-                },
+                }
                 // A compute content has none of these (`pipeline::interface`).
                 FieldValue::Word(_)
                 | FieldValue::TessellationFactors
                 | FieldValue::AlphaTestReference
-                | FieldValue::FetchedColor(_) => 0,
-            };
-            if let Place::Push(_) = field.place {
-                self.unpushed = cover(self.unpushed.clone(), at..at + len);
+                | FieldValue::FetchedColor(_) => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);
     }
 }
 
-/// What [`Parameters::fill`] fills: the fields of what changed, the state's numbered samplers,
-/// and the launch's dispatch region and the encoder's stage-in region.
-type Fields<'a> = (&'a Rebound, &'a [u32], (&'a [u8; 32], Option<&'a [u8; 32]>));
-
 /// A dispatch's parameters: the push window's bytes, and the ring block's with where its address
-/// goes in the window; kept by the encoder, whose dispatches fill only the fields of what changed
-/// since the last ([`Parameters::fill`]), write the block into the ring only where a field of it
-/// changed, and push only the words their command buffer does not hold.
+/// goes in the window.
 #[derive(Default)]
 struct Parameters {
     push: Vec<u8>,
     block: Vec<u8>,
     block_address: Option<u32>,
-    /// The module whose kernel's fields the bytes are, while they are.
-    module: Option<Module>,
-    /// The push bytes filled since the encoder's last push.
-    unpushed: Range<usize>,
-    /// A field of the block was filled since it was last written into the ring.
-    block_owed: bool,
-    /// The mark the encoder's last push left in its command buffer's push bytes (`Pushed`):
-    /// while they hold it, no other push came between, and they hold `push` but `unpushed`.
-    /// `u64::MAX`, which no push leaves, before its first.
-    mark: u64,
-}
-
-/// A dispatch's facts and fields: the slots that reach a device copy and that write what the host
-/// reads, the push bytes with the block's address zeroed (each fill writes its own block), and
-/// the block's bytes.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-#[derive(Debug, PartialEq)]
-pub(crate) struct DispatchFilled {
-    facts: [Slots; 2],
-    push: Vec<u8>,
-    block: Vec<u8>,
-}
-
-/// An encoder's facts and fields beside a find and fill of every slot
-/// ([`ComputeCommandEncoder::refilled`]).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) struct DispatchRefilled {
-    /// The facts and fields the encoder's dispatches left, found and filled slot by slot since
-    /// the pipeline state was set.
-    pub(crate) slot_by_slot: DispatchFilled,
-    /// A find and fill of every slot of what is bound now ([`Rebound::ALL`]) for the last
-    /// dispatch's module and region, or its refusal's text.
-    pub(crate) whole: Result<DispatchFilled, String>,
-    /// The push bytes as the encoder holds them.
-    pub(crate) push: Vec<u8>,
-    /// The push bytes its command buffer holds.
-    pub(crate) held: Vec<u8>,
-}
-
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-impl ComputeCommandEncoder {
-    /// Its facts and fields beside a find and fill of every slot of what is bound now, after a
-    /// dispatch filled its parameters.
-    pub(crate) fn refilled(&self) -> DispatchRefilled {
-        let state = &self.pipeline.as_ref().expect("a pipeline state set").inner;
-        let inner = &state.compiled;
-        let filled = |facts: &DispatchFacts, parameters: &Parameters| {
-            let mut push = parameters.push.clone();
-            if let Some(at) = parameters.block_address {
-                let at = at as usize;
-                push[at..at + 8].fill(0);
-            }
-            DispatchFilled {
-                facts: [facts.managed, facts.host],
-                push,
-                block: parameters.block.clone(),
-            }
-        };
-        let bound = (&self.slots[..], &self.textures[..]);
-        let mut facts = DispatchFacts::default();
-        let unstored = self.declared_unstored_write;
-        let whole = (facts.find(
-            &self.core,
-            bound,
-            unstored,
-            &inner.whole.interface,
-            &Rebound::ALL,
-        ))
-        .map(|()| {
-            let module = (self.parameters.module).expect("a dispatch filled its parameters");
-            let kernel = match module {
-                Module::Partial => {
-                    inner.later_kernel(Which::Partial, || Error::Refused(Refusal::NoPipeline))
-                }
-                Module::Emulated => {
-                    inner.later_kernel(Which::Emulated, || Error::Refused(Refusal::NoPipeline))
-                }
-                Module::Whole | Module::Tiles => Ok(&inner.whole),
-            }
-            .expect("the module's kernel");
-            // The dispatch region is each launch's own: the last launch's.
-            let mut region = [0; 32];
-            for field in &kernel.interface.fields {
-                if let FieldValue::DispatchRegion = field.value {
-                    let (bytes, at) = match field.place {
-                        Place::Push(offset) => (&self.parameters.push, offset as usize),
-                        Place::Block(offset) => (&self.parameters.block, offset as usize),
-                    };
-                    region.copy_from_slice(&bytes[at..at + 32]);
-                }
-            }
-            facts.reach(bound, &kernel.interface, &Rebound::ALL);
-            let mut parameters = Parameters::default();
-            let tables = (&self.slots[..], &self.textures[..], &self.samplers[..]);
-            let regions = (&region, self.stage_in_region.as_ref());
-            let fields = (&Rebound::ALL, &state.numbered.ids[..], regions);
-            parameters.fill((kernel, module), (tables, facts.nil), fields);
-            filled(&facts, &parameters)
-        })
-        .map_err(|error| format!("{error:?}"));
-        let held = (self.building.as_ref())
-            .expect("an encoder holds its command buffer's recording until it ends")
-            .pushed()
-            .to_vec();
-        DispatchRefilled {
-            slot_by_slot: filled(&self.facts, &self.parameters),
-            whole,
-            push: self.parameters.push.clone(),
-            held,
-        }
-    }
 }
 
 impl Drop for ComputeCommandEncoder {
@@ -1816,10 +1534,8 @@ impl Building {
         Ok(wrote)
     }
 
-    /// Binds `pipeline` where it is not bound, writes the parameters' ring block and its address
-    /// where a field of the block was filled since it was last written, pushes the words of the
-    /// window the command buffer does not hold, and records the dispatch, on `core`, the
-    /// recording's device.
+    /// Binds `pipeline` where it is not bound, writes the parameters' ring block and its address,
+    /// pushes the window, and records the dispatch, on `core`, the recording's device.
     fn record_dispatch(
         &mut self,
         core: &Core,
@@ -1828,12 +1544,10 @@ impl Building {
         launch: &Launch<'_>,
     ) -> Result<(), Error> {
         let device = &core.device;
-        if let (Some(at), true) = (parameters.block_address, parameters.block_owed) {
+        if let Some(at) = parameters.block_address {
             let address = self.write_ring(&parameters.block)?;
             let at = at as usize;
             parameters.push[at..at + 8].copy_from_slice(&address.to_le_bytes());
-            parameters.unpushed = cover(parameters.unpushed.clone(), at..at + 8);
-            parameters.block_owed = false;
         }
         let push = &parameters.push[..];
         debug_assert!(push.len() <= PUSH_BYTES as usize);
@@ -1860,21 +1574,8 @@ impl Building {
             if self.bind(pipeline) {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             }
-            // The words the command buffer does not hold: every one at its first use, else those
-            // the fills changed (`Pushed`).
-            let words = match push.is_empty() {
-                true => None,
-                false => {
-                    let unpushed = parameters.unpushed.clone();
-                    self.push_words(push, unpushed, &mut parameters.mark)
-                }
-            };
-            parameters.unpushed = 0..0;
-            if let Some(words) = words {
-                // Word-aligned: each field is at a multiple of its size, 4 bytes or more, and the
-                // window ends at a multiple of 4.
-                let offset = words.start as u32;
-                device.cmd_push_constants(command, core.layout, PUSH_STAGES, offset, &push[words]);
+            if !push.is_empty() && self.push_needed(push) {
+                device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
             }
             match *launch {
                 Launch::Direct(groups) => {
