@@ -1146,6 +1146,74 @@ pub(crate) mod on_device {
         });
     }
 
+    /// An event's signal on a queue with three submissions running goes to the driver at once,
+    /// with the group held there, and a waiter on another queue that the submit thread holds for
+    /// that value goes after it: two submissions, both before the busy work ends. A held group
+    /// never keeps back a signal. For a plain event's value and for a shared event's alike; the
+    /// waiter is held once, counted in `Metrics::event_holds`.
+    #[test]
+    fn every_device_sends_a_signal_from_a_queue_three_deep_to_a_held_waiter_on_another_queue() {
+        each_device("event_signal_three_deep", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let plain = device.new_event().expect("an event");
+            let shared = shared_event(&device);
+            let holds = || device.counters().metrics().event_holds.iter().sum::<u64>();
+            for (label, event) in [("plain", &plain), ("shared", shared.as_event())] {
+                let (grouped, signalled, waited) = (arena.buffer(), arena.buffer(), arena.buffer());
+                let (signaller_queue, waiter_queue) = (queue(&device), queue(&device));
+                let held_before = holds();
+                behind_busy(name, &device, &signaller_queue, |busy, before, _| {
+                    let sent = || device.counters().metrics().submissions - before;
+                    let waiter = waiter_queue.command_buffer().expect("a command buffer");
+                    (waiter.encode_wait_for_event(event, 1)).expect("a wait");
+                    fill(&waiter, &waited, 3);
+                    waiter.commit().expect("a commit");
+                    // Committed after the waiter, so staged once the submit thread has found the
+                    // waiter's value neither set nor promised: held in a group behind the busy
+                    // work.
+                    let held = queue_fill(&signaller_queue, &grouped, 1);
+                    within(name, || held.status() != CommandBufferStatus::Committed);
+                    assert_eq!(
+                        (waiter.status(), sent()),
+                        (CommandBufferStatus::Committed, AHEAD),
+                        "{name}: {label}: the waiter held for its value, the fill in a group"
+                    );
+                    let signaller = signaller_queue.command_buffer().expect("a command buffer");
+                    fill(&signaller, &signalled, 2);
+                    (signaller.encode_signal_event(event, 1)).expect("a signal");
+                    signaller.commit().expect("a commit");
+                    within(name, || sent() >= AHEAD + 2);
+                    let seen = host_time();
+                    assert_eq!(
+                        sent(),
+                        AHEAD + 2,
+                        "{name}: {label}: the group with the signal, then the waiter"
+                    );
+                    busy.open();
+                    for command_buffer in [&held, &signaller, &waiter] {
+                        finished(name, command_buffer);
+                    }
+                    assert!(
+                        busy.running()[0].gpu_end_time() > seen,
+                        "{name}: {label}: both went before the busy work ended"
+                    );
+                });
+                assert_eq!(
+                    [&grouped, &signalled, &waited].map(word),
+                    [1, 2, 3],
+                    "{name}: {label}: every fill ran"
+                );
+                assert_eq!(
+                    holds() - held_before,
+                    1,
+                    "{name}: {label}: the waiter held once"
+                );
+                drop((grouped, signalled, waited, signaller_queue, waiter_queue));
+            }
+            drop((arena, plain, shared, device));
+        });
+    }
+
     /// A listener runs when the GPU reaches its value in the middle of a command buffer, at once
     /// for a value already reached, and for a host value.
     #[test]
