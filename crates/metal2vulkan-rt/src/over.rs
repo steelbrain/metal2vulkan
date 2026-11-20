@@ -20,15 +20,21 @@
 //!   leans on the leading copy for a buffer an earlier segment of the held group wrote leads a new
 //!   group, the one held going first (`submit`), so its leading copy follows the write.
 //! - **Back, after a write of the texture.** A command that wrote the texture leaves its image to
-//!   be copied back: before the next command of the segment that reaches the buffer, or that
-//!   reaches memory through an address outside its resources, and at the segment's end, whose
-//!   end barrier then reaches the host for a Shared buffer. A segment's end is a submission's
-//!   edge, so the next submission's leading copy reads what the image held.
+//!   be copied back: before the next command of the segment that reaches the buffer, that uses
+//!   another such texture over bytes it holds, or that reaches memory through an address outside
+//!   its resources, and at the segment's end, whose end barrier then reaches the host for a
+//!   Shared buffer. A segment's end is a submission's edge, so the next submission's leading copy
+//!   reads what the image held.
+//! - **Across textures over the same bytes.** Two textures over one buffer whose bytes meet alias,
+//!   as in Metal: a write through one makes the other's image stale, and the other's next use
+//!   takes the first's copy back, then its own copy in. Textures over bytes that do not meet owe
+//!   each other nothing.
 //!
 //! Each copy is counted (`Metrics::over_copies`, and its bytes in `Metrics::over_copy_bytes`
 //! and `Metrics::bytes_copied`; a copy over a buffer in an imported block in
-//! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). The tracking is
-//! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
+//! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). A command's
+//! write of a buffer is tracked by buffer: a write of any of its bytes makes every such texture
+//! over it stale.
 //!
 //! A command hands over what it reaches ([`Reached`]): each texture says itself whether it is such
 //! a texture, and a buffer it only reads owes nothing while no texture the segment used has an
@@ -101,7 +107,8 @@ struct Used {
     /// Its first use in the segment came before any write of the buffer in it: the image holds
     /// the bytes of the submission's leading copy.
     leans: bool,
-    /// A command wrote the buffer after the image last took its bytes.
+    /// A command wrote the buffer, or another such texture's image over bytes this one holds,
+    /// after the image last took its bytes.
     image_stale: bool,
     /// A command wrote the image after its bytes last went back.
     buffer_stale: bool,
@@ -180,15 +187,33 @@ impl Overs {
         copies
     }
 
-    /// A command uses `texture`: where it is a texture over a buffer in an image of its own, its
-    /// copy in where its image is stale, or, at its first use in the segment, where a command of
-    /// the segment wrote its buffer; false for any other texture.
+    /// A command uses `texture`: where it is a texture over a buffer in an image of its own, first
+    /// the copy back of each other such texture whose image over bytes this one holds a command
+    /// wrote since they last went back, then its copy in where its image is stale, or, at its
+    /// first use in the segment, where a command of the segment wrote its buffer; false for any
+    /// other texture.
     fn uses(&mut self, texture: &Arc<TextureInner>, copies: &mut Copies) -> bool {
         if !texture.copied_shared() {
             return false;
         }
         let id = texture.id();
-        if let Some(used) = self.used.iter_mut().rev().find(|used| used.texture == id) {
+        let found = self.used.iter().rposition(|used| used.texture == id);
+        if self.ahead > 0 {
+            let (buffer, range) = match found {
+                Some(at) => (self.used[at].buffer, self.used[at].copy.range),
+                None => match texture.copied_over() {
+                    Some((buffer, copy)) => (buffer.id(), copy.range),
+                    None => return false,
+                },
+            };
+            // The other image goes back to the buffer, which the copy in reads: this texture's
+            // image is stale since that write (`after`), or takes its first copy in after it.
+            self.backs(&mut copies.back, |used| {
+                used.texture != id && used.buffer == buffer && meets(used.copy.range, range)
+            });
+        }
+        if let Some(at) = found {
+            let used = &mut self.used[at];
             if used.image_stale {
                 copies.into.push(used.copy);
                 used.image_stale = false;
@@ -234,8 +259,9 @@ impl Overs {
     }
 
     /// After a command that reached `reached`: a texture it wrote is to go back to its buffer,
-    /// and a buffer it wrote (a texture in place over one writes it) is to go into every texture
-    /// over it, all where it wrote through an address outside its resources (`unbound`).
+    /// and every other such texture whose bytes meet its is to take them in again; a buffer it
+    /// wrote (a texture in place over one writes it) is to go into every texture over it, all
+    /// where it wrote through an address outside its resources (`unbound`).
     pub(crate) fn after<'a>(
         &mut self,
         reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
@@ -249,10 +275,21 @@ impl Overs {
                 Reached::Texture(texture) => {
                     let id = texture.id();
                     if texture.copied_shared() {
-                        let used = self.used.iter_mut().rev().find(|used| used.texture == id);
-                        if let Some(used) = used.filter(|used| !used.buffer_stale) {
-                            used.buffer_stale = true;
-                            self.ahead += 1;
+                        if let Some(at) = self.used.iter().rposition(|used| used.texture == id) {
+                            let (buffer, range) = (self.used[at].buffer, self.used[at].copy.range);
+                            if !self.used[at].buffer_stale {
+                                self.used[at].buffer_stale = true;
+                                self.ahead += 1;
+                            }
+                            // The other images over these bytes hold them no longer.
+                            for used in &mut self.used {
+                                if used.texture != id
+                                    && used.buffer == buffer
+                                    && meets(used.copy.range, range)
+                                {
+                                    used.image_stale = true;
+                                }
+                            }
                         }
                         continue;
                     }

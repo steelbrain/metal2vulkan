@@ -1570,18 +1570,9 @@ impl Device {
         // Over a Managed buffer's device copy, its buffer keeps what Metal's Managed events owe it
         // (`crate::over::ManagedOvers`), once the move to its home layout goes ahead of every
         // later commit, a capture's copy in among them.
-        if let (Some(buffer), Some((_, copy)), Some(unit)) = (
-            texture.managed_over(),
-            texture.copied_over(),
-            texture.inner.unit,
-        ) {
-            let place =
-                (texture.inner.named.as_ref()).map_or(BytesPlace::default(), |n| n.places[0]);
-            let end = place.offset
-                + u64::from(d.height - 1) * place.bytes_per_row
-                + u64::from(d.width) * u64::from(unit.bytes);
+        if let (Some(buffer), Some((_, copy))) = (texture.managed_over(), texture.copied_over()) {
             let image = Arc::clone(&texture.inner.image);
-            (buffer.over_entries()).add(texture.inner.id, image, copy, (place.offset, end));
+            (buffer.over_entries()).add(texture.inner.id, image, copy, copy.range);
         }
         Ok(texture)
     }
@@ -4592,6 +4583,9 @@ pub(crate) trait TextureObject {
                 depth: 1,
             },
         };
+        let end = place.offset
+            + u64::from(d.height - 1) * place.bytes_per_row
+            + u64::from(d.width) * u64::from(unit.bytes);
         let copy = OverCopy {
             image: inner.image.image,
             home: inner.image.home,
@@ -4599,6 +4593,7 @@ pub(crate) trait TextureObject {
             buffer,
             region,
             unit,
+            range: (place.offset, end),
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.imported(),
@@ -4759,6 +4754,8 @@ pub(crate) struct OverCopy {
     pub(crate) region: vk::BufferImageCopy,
     /// The texture's copy unit, which a copy back's regions take ([`copy_out::regions`]).
     pub(crate) unit: CopyUnit,
+    /// The texels' bytes in the buffer, from its start: `start..end`.
+    pub(crate) range: (u64, u64),
     /// The texels' bytes.
     pub(crate) bytes: u64,
     /// The buffer is Shared: the host reads what a copy back writes.
