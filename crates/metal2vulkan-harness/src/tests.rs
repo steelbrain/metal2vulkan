@@ -205,16 +205,16 @@ fn a_plan_refuses_a_texture_the_harness_cannot_make_or_fill() {
     assert_eq!(
         problem(|t| t.texture_type = metal2vulkan::metal::TextureType::Type3D),
         Some(
-            "probe: texture 0: a Type3D texture of 1 slices: the harness makes 2D textures and 2D \
-             arrays"
+            "probe: texture 0: a Type3D texture of 1 slices and 1 samples: the harness makes 2D \
+             textures and 2D arrays of one sample, and 2D multisample textures of more"
                 .to_owned()
         )
     );
     assert_eq!(
         problem(|t| t.array_length = 2),
         Some(
-            "probe: texture 0: a Type2D texture of 2 slices: the harness makes 2D textures and 2D \
-             arrays"
+            "probe: texture 0: a Type2D texture of 2 slices and 1 samples: the harness makes 2D \
+             textures and 2D arrays of one sample, and 2D multisample textures of more"
                 .to_owned()
         )
     );
@@ -844,8 +844,8 @@ fn a_faulty_description_is_refused_naming_its_line() {
     );
     assert_eq!(
         refusal("texture 7 70 4 4 1 1 shared plain undefined"),
-        "line 3: the texture: a Type3D texture of 1 slices: the harness makes 2D textures and 2D \
-         arrays"
+        "line 3: the texture: a Type3D texture of 1 slices and 1 samples: the harness makes 2D \
+         textures and 2D arrays of one sample, and 2D multisample textures of more"
     );
     assert_eq!(
         refusal("texture 2 70 4 0 1 1 shared plain undefined"),
