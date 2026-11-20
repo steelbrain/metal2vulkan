@@ -1008,8 +1008,9 @@ pub enum PrecisionNote {
     /// holds Metal's reads exactly but which Metal's sampler filters as an `RGBA16Float` or
     /// `RGBA32Float` texture's texels, within one step of the format's grid, where Metal sums the
     /// steps on the grid, each term truncated (`lower::sampler::linear`). Recorded under the slot's
-    /// bound format, which the runtime reads at each draw or dispatch and announces as
-    /// `ycbcr-filter-not-exact`, and through a runtime sampler slot under the bound sampler's word
+    /// bound format, which a consumer reads at each draw or dispatch
+    /// ([`StageModule::precision_notes_bound`]), and through a runtime sampler slot under the bound
+    /// sampler's word
     /// (`SpecKey::BoundSamplerWord`, which the plan gives) where it filters: a linear minification
     /// or magnification filter, a linear mip filter, anisotropy, or a cubic filter. A sample of a
     /// texture an argument buffer holds (a heap's) is recorded where a texture its handles can name
@@ -1025,7 +1026,7 @@ pub enum PrecisionNote {
     /// reads in place (`lower::sampler::in_place`) by Vulkan's Y′CbCr model of the codes
     /// records it too,
     /// under the slot's bound converted 4:2:0 format and, through a runtime sampler slot, the bound
-    /// word's linear filter that addresses no border, announced as `ycbcr-filter-not-exact`. The
+    /// word's linear filter that addresses no border. The
     /// `float` result's counterpart is [`PrecisionNote::FloatSampleFilter`]. Validation derives no
     /// tolerance from it: the class is unbounded.
     HalfSampleFilter,
@@ -1075,8 +1076,8 @@ pub enum PrecisionNote {
     /// cubic filter filter. Recorded under the slot's bound format, and through a runtime sampler
     /// slot under the bound sampler's word (`SpecKey::BoundSamplerWord`), whose filter is not
     /// known when the function compiles, and for a heap's texture under what its handles and an
-    /// argument buffer's sampler can name, as [`PrecisionNote::HalfSampleFilter`] is: the runtime
-    /// reads them at each draw or dispatch and announces it as `ycbcr-filter-not-exact`. A
+    /// argument buffer's sampler can name, as [`PrecisionNote::HalfSampleFilter`] is: a consumer
+    /// reads them at each draw or dispatch ([`StageModule::precision_notes_bound`]). A
     /// device that samples natively records [`PrecisionNote::DeviceSampling`] instead. The model's
     /// linear sample of planes read in place records it on every device, as
     /// [`PrecisionNote::HalfSampleFilter`] states. Validation derives no tolerance from it: the
@@ -1213,10 +1214,7 @@ pub enum PrecisionNote {
     /// float's rounding to it, where Metal's clear rounds each channel to nearest, a tie to even (a
     /// packed 16-bit channel through `half`) and truncates a small float's and a shared exponent's
     /// mantissas. A normalized channel lies off a whole code there, and stores one of the two
-    /// closest. Not for a clear by the load operation of an attachment the pass's render area
-    /// covers on a driver whose load operation clears as Metal's `Clear` load action does
-    /// (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on
-    /// the M3 Max).
+    /// closest.
     ///
     /// Also (the runtime announces it): a plain color fill (`fillTexture…color:` without
     /// `pixelFormat:`) of a texture of such a format the device renders, which the device's clear
@@ -1626,8 +1624,8 @@ pub enum PrecisionNote {
     /// 3090), 0.877 on RADV (Mesa 26.0.8, Radeon 780M and RX 7900 XTX), 1.058 on ANV (Mesa 26.2.4,
     /// Iris Xe of RPL-P) and 0.872 on lavapipe (Mesa 26.2.4); at coordinates on the 1/256 grid,
     /// 0.498, 0.125, 0.125 and 0.125, and 0.56 on NVIDIA's RTX 5080 Laptop GPU over 10-bit and
-    /// packed textures (615.71.09). Where the device converts the texels itself
-    /// (`ycbcr-filter-not-exact`), its filter's sum is of its own conversion's texels.
+    /// packed textures (615.71.09). Where the device converts the texels itself, its filter's sum
+    /// is of its own conversion's texels.
     ///
     /// Validation derives no tolerance from it.
     DeviceSampling,

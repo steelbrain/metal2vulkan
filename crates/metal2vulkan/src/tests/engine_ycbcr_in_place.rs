@@ -1175,7 +1175,7 @@ fn in_place_gathers_are_metals() {
 /// filter of the format (`PrecisionNote::HalfSampleFilter`, `FloatSampleFilter`), and states the
 /// in-place form with the sampler, whose compile reads the planes for both and notes no pixel
 /// sampler's scaling: the model's sample where the bound word filters linearly and addresses no
-/// border, noting the filter there alone (announced `ycbcr-filter-not-exact`), and Metal's taps.
+/// border, noting the filter there alone, and Metal's taps.
 #[test]
 fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
     use crate::pipeline::artifact::PrecisionNote;

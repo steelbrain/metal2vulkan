@@ -116,8 +116,8 @@ pub struct SamplerUse {
     /// as a Mac with an Intel or AMD GPU does: [`vk_sampler`] makes the device's `mipLodBias`
     /// of it ([`device_lod_bias`]). Without it (the default) the sampler samples as an Apple GPU
     /// of the families the runtime claims does, every level as with no bias. Not a fact of the
-    /// function: the consumer states it per bind, from the Mac it presents (the runtime's
-    /// `MacClass`), and a plan's uses leave it unset.
+    /// function: the consumer states it per bind, from the Mac it presents, and a plan's uses
+    /// leave it unset.
     pub lod_bias: bool,
 }
 

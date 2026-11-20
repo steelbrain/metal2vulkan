@@ -1369,8 +1369,8 @@ fn select_in_place(
 /// The note of the model's sample `s` (`super::in_place`'s **The model**): the codes' blend, not
 /// Metal's exact filter of the format, `PrecisionNote::HalfSampleFilter` for a `half` result and
 /// `FloatSampleFilter` for a `float` one, under the clause that the slot binds a converted 4:2:0
-/// format (`SpecKey::BoundTexelFormat`, which the runtime reads at each draw or dispatch and
-/// announces as `ycbcr-filter-not-exact`), and through a runtime sampler slot that the word bound
+/// format (`SpecKey::BoundTexelFormat`, which a consumer reads at each draw or dispatch,
+/// `StageModule::precision_notes_bound`), and through a runtime sampler slot that the word bound
 /// there filters linearly and addresses no border on either plane axis
 /// (`SpecKey::BoundSamplerWord`), where the sample takes the model.
 fn model_note(

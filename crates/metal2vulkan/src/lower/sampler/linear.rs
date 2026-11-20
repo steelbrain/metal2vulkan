@@ -134,8 +134,8 @@ pub(super) fn filtering_word(n: u32) -> [NoteTest; 2] {
 /// [`PackedTexels::YCbCr2048`], [`PackedTexels::YCbCr8192`] and
 /// [`PackedTexels::YCbCrExtended8192`]), whose view holds Metal's reads exactly but which Metal's
 /// sampler then filters as an `RGBA16Float` or `RGBA32Float` texture's texels, not on the format's
-/// own grid. The runtime reads the bound format (`SpecKey::BoundTexelFormat`) and announces it as
-/// `ycbcr-filter-not-exact` ([`filter_note`] adds a runtime sampler slot's word). A heap's
+/// own grid. A consumer reads it under the bound format (`SpecKey::BoundTexelFormat`,
+/// `StageModule::precision_notes_bound`; [`filter_note`] adds a runtime sampler slot's word). A heap's
 /// texture, which a handle names at run time, holds one clause: a texture the stage's handles can
 /// name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`, which the plan gives from the command's
 /// heap members). `None` on any other device.

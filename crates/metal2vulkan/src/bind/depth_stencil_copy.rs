@@ -37,8 +37,8 @@
 //!     The code is the carrier because it makes the pair exact by construction rather than by a
 //!     measured tolerance. `c / 65535` is one correctly rounded division, so it is bit for bit
 //!     the `float` nearest `c / 65535` — the very value a driver's fragment depth is measured to
-//!     store back as `c` ([`DepthStencilCopy::Depth`]'s rule,
-//!     `DriverFact::FragmentDepthKeepsDepth16Codes`, whose probe writes exactly these depths).
+//!     store back as `c` ([`DepthStencilCopy::Depth`]'s rule, measured by a probe that writes
+//!     exactly these depths).
 //!     The other way, `round(d * 65535)` recovers `c` from any `d` within 0.498 of a step of
 //!     `c / 65535`: over all 65536 codes the largest `|d * 65535 - c|` is 1.96e-3, whether or not
 //!     the multiply and add are contracted into one fused operation, against a half-step budget

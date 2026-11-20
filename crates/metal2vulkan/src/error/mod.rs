@@ -1814,8 +1814,7 @@ pub enum DescriptorError {
 /// (`compute_pipeline_limits.m`, plain and with `MTL_DEBUG_LAYER=1`, which agree). The limit is
 /// Metal's 1024, not a lower one of this device's (the compiled pipeline's
 /// [`ComputePipelineMetalInfo`](crate::pipeline::ComputePipelineMetalInfo) answers that one). A
-/// required threadgroup size beside the maximum is the runtime's check
-/// (`RequiredThreadsProblem`).
+/// required threadgroup size beside the maximum is the runtime's check.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ComputePipelineProblem {
