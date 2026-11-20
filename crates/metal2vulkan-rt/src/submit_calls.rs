@@ -14,7 +14,7 @@
 
 use crate::counters::Counters;
 use crate::device::lock;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Condvar, Mutex, PoisonError};
 
 /// The device's submit calls inside the driver, the ones the block-maker thread's last memory call
@@ -28,6 +28,9 @@ pub(crate) struct SubmitCalls {
     ///
     /// [`Metrics::submissions_during_frees`]: crate::Metrics::submissions_during_frees
     freeing: AtomicBool,
+    /// The block-maker thread's `vkFreeMemory` calls begun: a submit call that sees it change
+    /// from its entry to its return met a free that began beside it.
+    frees_begun: AtomicU64,
     /// The device's counters: the block-maker thread's calls and its waits.
     counters: Counters,
     /// For the device tests: while set, the block-maker thread waits inside each of its frees,
@@ -50,12 +53,32 @@ struct Calls {
     waiting: usize,
 }
 
-/// A submit call inside the driver: counted out as it drops, once the call returned.
-pub(crate) struct InDriver<'a>(&'a SubmitCalls);
+/// A submit call inside the driver: counted out as it drops, once the call returned. It holds
+/// what it saw of the block-maker thread's frees as it entered.
+pub(crate) struct InDriver<'a> {
+    calls: &'a SubmitCalls,
+    /// Whether the block-maker thread was inside a `vkFreeMemory` as the call entered.
+    in_free: bool,
+    /// [`SubmitCalls::frees_begun`] as the call entered.
+    begun: u64,
+}
+
+impl InDriver<'_> {
+    /// Whether the block-maker thread was inside a `vkFreeMemory` as the call entered.
+    pub(crate) fn entered_in_free(&self) -> bool {
+        self.in_free
+    }
+
+    /// After the call returned: whether it met one of the block-maker thread's frees, the one it
+    /// entered during or one that began beside it.
+    pub(crate) fn met_free(&self) -> bool {
+        self.in_free || self.calls.frees_begun.load(Relaxed) != self.begun
+    }
+}
 
 impl Drop for InDriver<'_> {
     fn drop(&mut self) {
-        let calls = &self.0;
+        let calls = &self.calls;
         let mut counts = lock(&calls.calls);
         counts.returned += 1;
         if counts.waiting > 0 {
@@ -71,6 +94,7 @@ impl SubmitCalls {
             calls: Mutex::new(Calls::default()),
             returned: Condvar::new(),
             freeing: AtomicBool::new(false),
+            frees_begun: AtomicU64::new(0),
             counters,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_frees: Mutex::new(false),
@@ -81,7 +105,11 @@ impl SubmitCalls {
     /// returned guard drops, after the call returned, whatever it returned.
     pub(crate) fn enter(&self) -> InDriver<'_> {
         lock(&self.calls).entered += 1;
-        InDriver(self)
+        InDriver {
+            calls: self,
+            in_free: self.freeing.load(Relaxed),
+            begun: self.frees_begun.load(Relaxed),
+        }
     }
 
     /// On the block-maker thread, `call`, one `vkAllocateMemory`: first [`wait_out`] the submit
@@ -101,6 +129,7 @@ impl SubmitCalls {
     pub(crate) fn free(&self, free: impl FnOnce()) {
         self.wait_out();
         self.freeing.store(true, Relaxed);
+        self.frees_begun.fetch_add(1, Relaxed);
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         while *lock(&self.hold_frees) {
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -145,10 +174,8 @@ impl SubmitCalls {
         counts.met = counts.entered;
     }
 
-    /// Whether the block-maker thread is inside a `vkFreeMemory`, which a driver may hold a
-    /// submission made now for ([`Metrics::submissions_during_frees`]).
-    ///
-    /// [`Metrics::submissions_during_frees`]: crate::Metrics::submissions_during_frees
+    /// For the tests: whether the block-maker thread is inside a `vkFreeMemory`.
+    #[cfg(test)]
     pub(crate) fn freeing(&self) -> bool {
         self.freeing.load(Relaxed)
     }

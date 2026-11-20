@@ -59,6 +59,11 @@ const BASE_ALIGN: u64 = 2 << 20;
 /// [`Metrics::submissions_during_frees`](crate::Metrics::submissions_during_frees) counts them.
 pub(crate) const IDLE_AGE_NANOS: u64 = 250_000_000;
 
+/// How soon after a free of its class, in nanoseconds of [`host_time`](crate::host_time), an
+/// allocation of the pool is counted as one remade
+/// ([`Metrics::shared_remade_after_frees`](crate::Metrics::shared_remade_after_frees)): a second.
+const REMADE_WITHIN_NANOS: u64 = 1_000_000_000;
+
 /// The idle clock, the one clock for everything the runtime gives back: what became idle at
 /// `since` and stayed idle is due at `now` ([`host_time`](crate::host_time)) once
 /// [`IDLE_AGE_NANOS`] has passed (`None`); before then, the host time it becomes due.
@@ -630,6 +635,9 @@ struct State {
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
+    /// Per class, when the block-maker thread's last free of an idle allocation of it ended, in
+    /// nanoseconds of [`host_time`](crate::host_time); 0 before one.
+    freed_at: [u64; 2],
     /// The internals asked of the block-maker thread and not yet made, by [`Internal::index`]:
     /// the zero source, the ring's first block and the staging region from the device's making.
     asked: [bool; INTERNALS],
@@ -747,6 +755,7 @@ impl Pool {
                 allocations: [Vec::new(), Vec::new()],
                 owned: VecDeque::new(),
                 failed: [false, false],
+                freed_at: [0, 0],
                 // The device's fixed-size internals: the block-maker thread's first work.
                 asked: [true; INTERNALS],
                 stop: false,
@@ -1418,8 +1427,10 @@ pub(crate) fn run(core: Arc<Core>) {
         if let Some(allocation) = gone {
             pool.changed.notify_all();
             drop(state);
+            let class = allocation.class;
             free_idle(&core, allocation);
             state = pool.lock();
+            state.freed_at[class.index()] = crate::host_time();
             continue;
         }
         state = match wake {
@@ -1556,7 +1567,13 @@ fn make_allocation(
     site: Option<Site>,
 ) -> Result<Allocation, Error> {
     let device = &core.device;
-    let id = allocation_number(&mut core.pool.lock())?;
+    let (id, freed_at) = {
+        let mut state = core.pool.lock();
+        (
+            allocation_number(&mut state)?,
+            state.freed_at[class.index()],
+        )
+    };
     let info = vk::BufferCreateInfo::default()
         .size(len)
         .usage(floor::BUFFER_USAGE)
@@ -1604,6 +1621,9 @@ fn make_allocation(
     };
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);
+    if freed_at != 0 && crate::host_time().saturating_sub(freed_at) < REMADE_WITHIN_NANOS {
+        (core.counters).remade_after_free(class == MemoryClass::Shared);
+    }
     core.counters.rise_by(class.allocation_gauge(), len);
     if spilled {
         core.counters.rise_by(Gauge::SpilledBytes, len);

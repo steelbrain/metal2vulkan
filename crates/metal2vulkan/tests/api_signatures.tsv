@@ -2309,6 +2309,7 @@ field	metal2vulkan-rt::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock
 field	metal2vulkan-rt::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
+field	metal2vulkan-rt::Metrics.private_remade_after_frees	pub private_remade_after_frees: u64
 field	metal2vulkan-rt::Metrics.private_take_allocations	pub private_take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
@@ -2322,6 +2323,7 @@ field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-rt::Metrics.scheduled_to_gpu_start	pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS]
 field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
+field	metal2vulkan-rt::Metrics.shared_remade_after_frees	pub shared_remade_after_frees: u64
 field	metal2vulkan-rt::Metrics.shared_take_allocations	pub shared_take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.sparse_binds	pub sparse_binds: u64
 field	metal2vulkan-rt::Metrics.staging_buffer_allocations	pub staging_buffer_allocations: SiteAllocations
@@ -2332,6 +2334,7 @@ field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_call_max_nanos	pub submit_call_max_nanos: u64
 field	metal2vulkan-rt::Metrics.submit_call_nanos	pub submit_call_nanos: u64
+field	metal2vulkan-rt::Metrics.submit_call_nanos_during_frees	pub submit_call_nanos_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_calls_over_100_ms	pub submit_calls_over_100_ms: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
 field	metal2vulkan-rt::Metrics.surface_wait_max_nanos	pub surface_wait_max_nanos: u64

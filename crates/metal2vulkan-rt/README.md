@@ -171,6 +171,11 @@ nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time 
 driver (`submit_call_nanos`, with the calls over 100 ms counted) and the submit thread's wait
 for the queue's lock before a submission's calls (`queue_lock_wait_nanos`), which on a family of
 one queue is also the wait behind the consumer's presents (`Device::with_present_queue`);
+the `vkQueueSubmit2` calls that met one of the block-maker thread's frees, made during it or
+inside the driver as it began (`submissions_during_frees`), and their time inside the driver
+(`submit_call_nanos_during_frees`), the time a driver may have held them behind the frees; the
+pool's allocations made within a second after a free of an idle allocation of their class
+(`shared_remade_after_frees`, `private_remade_after_frees`), memory given back and taken again;
 four histograms of each command buffer's stages, in 23 power-of-two buckets from under 2 us to
 2^22 us (about 4.19 s) or more, filled from the times the command buffer already reports: commit
 to scheduled (`commit_to_scheduled`, counted as it is scheduled), scheduled to GPU start, the GPU
@@ -956,8 +961,8 @@ the Direct3D 11 texture's payload until it is freed.
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
   at its idle age, whatever the queues are doing. `Metrics::allocations_freed` counts the frees,
-  and `Metrics::submissions_during_frees` the submits made while one of the block-maker thread's
-  frees was in progress.
+  `Metrics::submissions_during_frees` the submit calls that met one of the block-maker thread's
+  frees, and `Metrics::submit_call_nanos_during_frees` their time.
 - NVIDIA's Linux driver holds a submit made while another thread is inside `vkAllocateMemory` or
   `vkFreeMemory` until that call returns, device-local memory included, and calls made back to
   back hold it through all of them. So as each of its allocations and frees returns, the

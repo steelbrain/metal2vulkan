@@ -496,6 +496,9 @@ struct Atomics {
     attachment_loop_reads: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
+    submit_call_nanos_during_frees: AtomicU64,
+    shared_remade_after_frees: AtomicU64,
+    private_remade_after_frees: AtomicU64,
     idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
     idle_reuses_by_age: [AtomicU64; REUSE_AGES_MS.len() + 1],
     managed_bytes_captured: AtomicU64,
@@ -951,6 +954,24 @@ impl Counters {
         atomic.fetch_add(1, Relaxed);
     }
 
+    /// A `vkQueueSubmit2` call of `nanos` nanoseconds that met one of the block-maker thread's
+    /// frees ([`Metrics::submit_call_nanos_during_frees`]).
+    pub(crate) fn submit_call_during_free(&self, nanos: u64) {
+        (self.atomics.submit_call_nanos_during_frees).fetch_add(nanos, Relaxed);
+    }
+
+    /// An allocation of the pool, of the Shared class where `shared`, made within a second after
+    /// the block-maker thread freed one of its class ([`Metrics::shared_remade_after_frees`]).
+    pub(crate) fn remade_after_free(&self, shared: bool) {
+        let a = &self.atomics;
+        let atomic = if shared {
+            &a.shared_remade_after_frees
+        } else {
+            &a.private_remade_after_frees
+        };
+        atomic.fetch_add(1, Relaxed);
+    }
+
     /// An allocation the consumer's hook mapped, inside a take where `on_take`
     /// ([`Metrics::allocations_mapped`]).
     pub(crate) fn mapped(&self, on_take: bool) {
@@ -1283,6 +1304,9 @@ impl Counters {
             attachment_loop_reads: a.attachment_loop_reads.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
+            submit_call_nanos_during_frees: a.submit_call_nanos_during_frees.load(Relaxed),
+            shared_remade_after_frees: a.shared_remade_after_frees.load(Relaxed),
+            private_remade_after_frees: a.private_remade_after_frees.load(Relaxed),
             idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
             idle_reuses_by_age: std::array::from_fn(|at| a.idle_reuses_by_age[at].load(Relaxed)),
             managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
@@ -1830,11 +1854,25 @@ pub struct Metrics {
     /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
     /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,
-    /// Submissions made while the block-maker thread was inside one of its `vkFreeMemory` calls:
-    /// an idle allocation's, an imported or exported block's given back, or one it made and could
-    /// not use. A driver may hold such a submission until the free returns: on the NVIDIA cards
-    /// measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
+    /// `vkQueueSubmit2` calls that met one of the block-maker thread's `vkFreeMemory` calls: made
+    /// while it was inside one, or inside the driver as one began. Its frees are an idle
+    /// allocation's, an imported or exported block's given back, and one it made and could not
+    /// use. A driver may hold such a call until the free returns: on the NVIDIA cards
+    /// measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory. A call
+    /// made during a free is counted as it enters the driver, one that a free began beside as it
+    /// returns.
     pub submissions_during_frees: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) those calls took, from each call to its
+    /// return, in total: the time the driver may have held them behind the frees, with their own
+    /// time in the driver. Each call's time is added as it returns.
+    pub submit_call_nanos_during_frees: u64,
+    /// Allocations of the pool's Shared class, unit or long, made within a second after the
+    /// block-maker thread freed an idle allocation of the class: memory given back and taken
+    /// again, the pool looping. Each such allocation costs its own `vkAllocateMemory` and, a
+    /// second or more later, its free.
+    pub shared_remade_after_frees: u64,
+    /// As [`shared_remade_after_frees`](Self::shared_remade_after_frees), of the Private class.
+    pub private_remade_after_frees: u64,
     /// The frees of [`allocations_freed`](Self::allocations_freed) by how long each allocation had
     /// been idle when its free began, in buckets of under 250 ms (a spilled allocation that
     /// emptied, freed at once), 250 to 275 ms, 275 to 350 ms, 350 to 500 ms, 500 ms to 1 s, and

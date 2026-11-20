@@ -2166,9 +2166,6 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         (core.work.asking).store(true, Ordering::SeqCst);
         let queue = lock(&core.queues.runtime);
         (core.counters).queue_lock_wait(times::host_time().saturating_sub(asked));
-        if core.submit_calls.freeing() {
-            core.counters.count(Metric::SubmissionsDuringFrees);
-        }
         // A bind of an import over several dma-bufs since the last submission: this one waits for
         // it, and every later command, in this submission and after it, is ordered after that
         // wait (`crate::import::Sparse`).
@@ -2199,14 +2196,25 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             core.counters.count(Metric::Submissions);
             core.counters.submitted_infos(infos.len() as u64);
             // Inside the driver from here until the call returns, for the block-maker thread's
-            // wait after its memory calls (`crate::submit_calls`).
+            // wait after its memory calls (`crate::submit_calls`). One made during a free is
+            // counted before the call too; one a free began beside, as it returns.
             let call = core.submit_calls.enter();
+            if call.entered_in_free() {
+                core.counters.count(Metric::SubmissionsDuringFrees);
+            }
             let began = times::host_time();
             // SAFETY: every command buffer is executable and in no other pending submission;
             // every wait is on a signal submitted earlier, and every signal raises its semaphore;
             // the queue is held.
             ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
-            (core.counters).submit_call(times::host_time().saturating_sub(began));
+            let nanos = times::host_time().saturating_sub(began);
+            core.counters.submit_call(nanos);
+            if call.met_free() {
+                if !call.entered_in_free() {
+                    core.counters.count(Metric::SubmissionsDuringFrees);
+                }
+                core.counters.submit_call_during_free(nanos);
+            }
             drop(call);
             if !ok {
                 break;
