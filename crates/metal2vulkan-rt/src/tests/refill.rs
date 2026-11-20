@@ -695,37 +695,67 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            // Offsets inside the buffers, one off every argument's alignment, one past their end.
-            const OFFSETS: [u64; 5] = [0, 16, 48, 2, 4096];
+            // The buffers each state's kernel reads: a bind's slot is one of them or the one past.
+            const BUFFERS: [usize; 3] = [30, 12, 2];
+            // Offsets inside the buffers and one past their end, and, a sixteenth of the time, one
+            // off every argument's alignment.
+            const OFFSETS: [u64; 4] = [0, 16, 48, 4096];
+            let offset = |k: usize| match k {
+                0 => 2,
+                k => OFFSETS[k % 4],
+            };
             let mut sequence = Sequence(0x2545_f491_4f6c_dd1d);
             let (mut dispatched, mut refused) = (0, 0);
+            // Each slot's offset where it holds a buffer; the slots `set_buffer_offset` moved
+            // since their bind or the state; and the dispatches that ran over a moved one.
+            let (mut offsets, mut moved, mut moves) = ([None; 31], 0u32, 0);
             let call = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            call(encoder.set_compute_pipeline_state(&states[0]));
+            let mut current = 0;
+            call(encoder.set_compute_pipeline_state(&states[current]));
             for step in 0..1_200 {
                 match sequence.below(12) {
-                    0 => call(encoder.set_compute_pipeline_state(&states[sequence.below(3)])),
+                    0 => {
+                        let next = sequence.below(3);
+                        call(encoder.set_compute_pipeline_state(&states[next]));
+                        if next != current {
+                            moved = 0;
+                        }
+                        current = next;
+                    }
                     1..=3 => {
-                        let slot = sequence.below(31) as u32;
+                        let slot = sequence.below(BUFFERS[current] + 1);
                         let buffer = (sequence.below(8) != 0).then(|| &bound[sequence.below(4)]);
-                        let offset = OFFSETS[sequence.below(5)];
-                        call(encoder.set_buffer(buffer, offset, slot));
+                        let offset = offset(sequence.below(16));
+                        call(encoder.set_buffer(buffer, offset, slot as u32));
+                        offsets[slot] = buffer.map(|_| offset);
+                        moved &= !(1 << slot);
                     }
-                    4 => {
+                    4..=5 => {
+                        let slot = sequence.below(BUFFERS[current] + 1);
+                        let offset = offset(sequence.below(16));
                         // Refused where the slot holds no buffer, as Metal's.
-                        let (slot, offset) =
-                            (sequence.below(31) as u32, OFFSETS[sequence.below(5)]);
-                        let _ = encoder.set_buffer_offset(offset, slot);
-                    }
-                    5 => {
-                        let slot = sequence.below(31) as u32;
-                        call(encoder.set_bytes(&[step as u8; 96], slot));
+                        let result = encoder.set_buffer_offset(offset, slot as u32);
+                        assert_eq!(
+                            result.is_ok(),
+                            offsets[slot].is_some(),
+                            "{name}: step {step}"
+                        );
+                        if result.is_ok() && offsets[slot].replace(offset) != Some(offset) {
+                            moved |= 1 << slot;
+                        }
                     }
                     6 => {
+                        let slot = sequence.below(BUFFERS[current] + 1);
+                        call(encoder.set_bytes(&[step as u8; 96], slot as u32));
+                        offsets[slot] = None;
+                        moved &= !(1 << slot);
+                    }
+                    7 => {
                         let texture =
                             (sequence.below(6) != 0).then(|| &textures[sequence.below(3)]);
                         call(encoder.set_texture(texture, sequence.below(2) as u32));
                     }
-                    7 => {
+                    8 => {
                         let buffer = Resource::Buffer(&bound[sequence.below(4)]);
                         call(encoder.use_resource(buffer, ResourceUsage::READ));
                     }
@@ -749,6 +779,10 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
                                     "{name}: step {step}: the command buffer's push bytes"
                                 );
                                 dispatched += 1;
+                                if moved & ((1 << BUFFERS[current]) - 1) != 0 {
+                                    moves += 1;
+                                }
+                                moved = 0;
                             }
                             Err(error) => {
                                 assert_eq!(
@@ -762,15 +796,15 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
                     }
                 }
             }
-            // A misaligned offset left in any of the 30 buffer kernel's slots refuses its
-            // dispatches until a bind moves it: lavapipe dispatched 98 and refused 293.
+            // A misaligned offset left in a slot the kernel reads refuses its dispatches until a
+            // bind moves it. A dispatch over a moved offset checks that the move refilled its field.
             assert!(
-                dispatched > 50 && refused > 10,
-                "{name}: {dispatched} dispatched, {refused} refused"
+                dispatched > 50 && refused > 10 && moves > 5,
+                "{name}: {dispatched} dispatched, {refused} refused, {moves} over moved offsets"
             );
             encoder.end_encoding();
             println!(
-                "{name}: {dispatched} dispatches equal a whole find and fill, {refused} refused alike"
+                "{name}: {dispatched} dispatches equal a whole find and fill, {moves} of them over moved offsets, {refused} refused alike"
             );
         });
     }
