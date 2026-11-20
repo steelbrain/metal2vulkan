@@ -128,8 +128,9 @@ fact-table row, a device check or a ledger row.
   `FALLBACK`). Never emit wrong-but-valid SPIR-V to silence a gate.
 - **Scope.** The new runtime has a floor: one Vulkan version plus a fixed extension list
   (`crates/metal2vulkan-rt/README.md`); a device below it gets a typed refusal. Above the floor,
-  refuse only what the device truly lacks, and implement the rest. A Metal feature that no replay
-  stream uses is a typed refusal until a stream needs it. A near-equivalent, the device's native
+  refuse only what the device truly lacks, and implement the rest. A Metal feature that no guest
+  has used, in a replay stream or a live session, is a typed refusal until one does; a refusal a
+  guest meets is a bug, ranked by how often guests meet it. A near-equivalent, the device's native
   answer included, is allowed only when the operation carries its static note (rule 1).
 - **Unknown stays unknown.** Do not invent semantics for unsupported opcodes, types or layouts.
   Fail visibly and leave a test or a doc note.
