@@ -459,7 +459,10 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 ///   reads and stores a signed lowest code as the code above it);
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
-///   alpha-to-coverage (`device-alpha-coverage`).
+///   alpha-to-coverage (`device-alpha-coverage`);
+/// - **lines**: the device's own line rule, the one form a state that enables alpha to coverage or
+///   alpha to one draws its lines in, Vulkan's Bresenham mode taking neither
+///   (`device-line-rasterization`), announced by every such state whether or not it draws lines.
 ///
 /// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
@@ -511,6 +514,7 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::NativeLogicOperation,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,
+        D::DeviceLineRasterization,
     ]
 };
 
