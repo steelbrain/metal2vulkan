@@ -1913,6 +1913,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   a pointer to an address nothing maps, and took a store 64 TiB past a buffer without a fault. A
   bad address that faults ends the GPU's work for every guest process on NVIDIA and RADV: the
   consequence of one device and direct addresses, which the owner accepted.
+- A pointer the guest supplies, loaded from memory or made from an integer, null included, is a
+  device address used as given: no binding bounds its accesses. Metal leaves an access through one
+  that names no live buffer undefined; here it reads or writes whatever the device holds at that
+  address, or faults, and a fault ends as the device ends it, up to a device loss that every guest
+  process shares (above). What is bounded is a buffer argument's access at a byte offset that is
+  not a translation-time constant: outside its buffer a load reads zero and a store does nothing
+  (below). An access at a constant offset is not checked.
 - No guest word indexes a set 1 array past its length. A slot's texture or sampler, and a
   constexpr sampler, are read at the runtime's own placement (texture indices 1 to 65,535, sampler
   indices 1 to 3,999; a placement outside them is refused). An argument buffer's texture is read at

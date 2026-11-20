@@ -111,7 +111,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   translation-time constant is checked against the slot's buffer (`PushField::SlotBounds`), from
   the buffer's start to its end, as Metal's domain is the buffer: an offset before the bind
   offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a
-  store or atomic does nothing (section 5). An access at a constant offset is not checked. A slot
+  store or atomic does nothing (section 5). An access at a constant offset is not checked. A
+  pointer loaded from memory or made from an integer, null included, is used as given: no binding
+  bounds its accesses, so the containment and isolation of the default domains do not hold for
+  it. A slot
   whose argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from
   that address as it is: each access is at the pushed word plus its 32-bit byte offset plus 2^31,
   modulo 2^32, zero-extended, which is the address plus the offset read as signed, exact as the
