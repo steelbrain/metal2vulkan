@@ -510,7 +510,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | tolerances in all | 26 |
 | modules declaring a notice (loosening no value) | 145 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
-| justifications named | `Degradation`, `NewRuntimeAccepted`, `AcceptedDifference`, `NewRuntimeNotice`, `WithoutCompression` |
+| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 133 |
 | `Side` methods the Metal leg reaches an SDK item through | 127 |
@@ -530,7 +530,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `alpha_coverage_pairs` | 17 | 17 | every field | 113 |
 | `argument_encoder_crossings` | 4 | 4 | every field | 41 |
 | `argument_encoders` | 5 | 5 | every field | 57 |
-| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation`, `NewRuntimeNotice` | 41 |
+| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation` | 41 |
 | `attribute_formats` | 2 | 2 | every field | 48 |
 | `attribute_strides` | 4 | 4 | every field | 46 |
 | `bicubic_texel_classes` | 1 | 1 | every field | 31 |
@@ -544,7 +544,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `buffer_blits` | 4 | 4 | every field | 21 |
 | `buffer_depth_samples` | 5 | 5 | every field | 59 |
 | `buffer_tails` | 2 | 2 | every field | 50 |
-| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 58 |
+| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 58 |
 | `buffer_texture_blits` | 2 | 2 | every field | 38 |
 | `buffer_textures` | 3 | 2 | every field | 44 |
 | `chroma_pairs` | 6 | 6 | every field | 66 |
@@ -552,7 +552,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `command_buffer_facts` | 1 | 1 | every field | 23 |
 | `command_queues` | 1 | 1 | every field | 5 |
 | `compressed_blits` | 4 | 4 | every field | 40 |
-| `compressed_decode` | 10 | 10 | 1 tolerance(s): `NewRuntimeNotice` | 41 |
+| `compressed_decode` | 10 | 10 | 1 tolerance(s): `Degradation` | 41 |
 | `compressed_moves` | 14 | 14 | every field | 31 |
 | `compressed_views` | 14 | 14 | every field | 39 |
 | `compute_encoder_commands` | 8 | 8 | every field | 62 |
@@ -571,7 +571,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `dynamic_libraries` | 3 | 3 | every field | 6 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
 | `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 41 |
-| `event_orders` | 5 | 5 | 2 tolerance(s): `NewRuntimeAccepted` | 27 |
+| `event_orders` | 5 | 5 | 2 tolerance(s): `AcceptedDifference` | 27 |
 | `extended_range_blends` | 18 | 18 | every field | 124 |
 | `extended_range_gamut` | 39 | 39 | every field | 115 |
 | `extended_range_gradients` | 8 | 8 | every field | 116 |
@@ -579,10 +579,10 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `extended_range_targets` | 22 | 22 | every field | 121 |
 | `extended_range_two_planes` | 2 | 2 | every field | 32 |
 | `extended_swizzles` | 15 | 15 | every field | 58 |
-| `fence_orders` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
+| `fence_orders` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 27 |
 | `fetch_ordered` | 6 | 6 | every field | 116 |
 | `format_copies` | 16 | 16 | every field | 39 |
-| `format_footprints` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 19 |
+| `format_footprints` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 19 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
 | `frame_chains` | 1 | 1 | every field | 138 |
 | `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 41 |
@@ -596,7 +596,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `half_write_nans` | 7 | 7 | every field | 31 |
 | `handler_waits` | 3 | 0 | every field | 0 |
 | `heap_facts` | 5 | 5 | every field | 5 |
-| `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `NewRuntimeAccepted` | 14 |
+| `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `AcceptedDifference` | 14 |
 | `host_detach` | 1 | 1 | every field | 18 |
 | `host_page_writes` | 4 | 4 | every field | 123 |
 | `indirect_command_depth` | 6 | 6 | every field | 147 |
@@ -621,7 +621,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `pass_attachment_pairs` | 2 | 2 | every field | 116 |
 | `pass_bound_pairs` | 1 | 1 | every field | 117 |
 | `pass_bytes` | 4 | 4 | every field | 25 |
-| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 132 |
+| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 132 |
 | `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 122 |
 | `pipeline_descriptors` | 3 | 3 | every field | 75 |
 | `pipeline_facts` | 9 | 9 | every field | 67 |
@@ -680,7 +680,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `texture_accesses` | 1 | 1 | every field | 20 |
 | `texture_buffer_fills` | 3 | 0 | every field | 0 |
 | `texture_buffer_tails` | 1 | 1 | every field | 49 |
-| `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
+| `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `AcceptedDifference` | 27 |
 | `texture_fills` | 54 | 2 | 1 tolerance(s): `Degradation` | 42 |
 | `texture_view_casts` | 5 | 5 | every field | 77 |
 | `texture_views` | 4 | 4 | every field | 37 |
@@ -705,7 +705,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `wide_points` | 1 | 1 | every field | 116 |
 | `ycbcr_gathers` | 4 | 4 | every field | 50 |
 | `ycbcr_minify` | 2 | 2 | every field | 50 |
-| `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 39 |
+| `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 39 |
 
 ## Every implemented item
 
@@ -2043,40 +2043,35 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | case | waiting on |
 |---|---|
 | `a2c-on-1-alpha-50` | The device's own answer (rule 1): alpha-to-coverage at one sample. Metal's covers the pixel only above an alpha of 1/2, so the draw's 0.5 covers nothing and the… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-a8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
@@ -2087,12 +2082,17 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-bgra8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
@@ -2103,87 +2103,87 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-bgra8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-r8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rg8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba16float` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `argument-encoder-array-element` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `argument-encoder-mixed-descriptors` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `argument-encoder-ranges` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
@@ -2237,22 +2237,17 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-stride-plural-buffers` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `attribute-stride-vertex-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `attribute-stride-vertex-bytes` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
@@ -2263,9 +2258,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to bor… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
-| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the new runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zer… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
+| `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
