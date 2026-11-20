@@ -318,9 +318,10 @@ for info in sampling.functions() {
   undetermined slot reads as neither writable nor read-only.
 - `function.argument_buffer_layout(index, &constants, &budget)` gives the layout of the argument
   buffer the function takes at a buffer index, as `newArgumentEncoderWithBufferIndex:` encodes it:
-  its length, alignment, and each argument's offset and type by `[[id(n)]]`. Each argument is
-  8 bytes: a buffer's address plus offset, or a
-  resource ID.
+  its length, alignment, and each argument's offset and type by `[[id(n)]]`.
+  `ArgumentBufferLayout::from_descriptors` gives the layout `newArgumentEncoderWithArguments:`
+  makes of a list of `ArgumentDescriptor`s. Each argument is 8 bytes: a buffer's address plus
+  offset, or a resource ID.
 - `function.properties(&budget)` answers what `MTLFunction` states about the function.
 
 ### One entry of a bare module

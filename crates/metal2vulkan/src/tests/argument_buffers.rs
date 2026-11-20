@@ -1,12 +1,35 @@
-//! Argument-buffer layouts: where `MTLArgumentEncoder` writes each argument, from a function's
-//! `air.struct_type_info`. Every expected offset, length and
+//! Argument-buffer layouts: where `MTLArgumentEncoder` writes each argument, from argument
+//! descriptors and from a function's `air.struct_type_info`. Every expected offset, length and
 //! alignment here is what Metal's encoder answered on an M3 Max and an M4 (probes, CPU only: the
 //! bytes each setter changed in a buffer).
 
-use crate::bind::{ArgumentBufferLayout, ArgumentLayoutError, ArgumentType as T};
+use crate::bind::{
+    ArgumentBufferLayout, ArgumentDescriptor, ArgumentLayoutError, ArgumentType as T,
+};
 use crate::budget::Budget;
 use crate::library::{FunctionConstantValues, Library};
+use crate::metal::DataType as D;
 use crate::pipeline::testing::AssembleError;
+
+fn one(data_type: D, index: u32) -> ArgumentDescriptor {
+    ArgumentDescriptor::new(data_type, index)
+}
+
+fn array(data_type: D, index: u32, length: u32) -> ArgumentDescriptor {
+    let mut d = ArgumentDescriptor::new(data_type, index);
+    d.array_length = length;
+    d
+}
+
+fn aligned(data_type: D, index: u32, alignment: u32) -> ArgumentDescriptor {
+    let mut d = ArgumentDescriptor::new(data_type, index);
+    d.constant_block_alignment = alignment;
+    d
+}
+
+fn layout(descriptors: &[ArgumentDescriptor]) -> ArgumentBufferLayout {
+    ArgumentBufferLayout::from_descriptors(descriptors).expect("a layout")
+}
 
 /// Argument `index`'s offset and type.
 fn at(layout: &ArgumentBufferLayout, index: u32) -> (u64, T) {
@@ -19,6 +42,260 @@ fn at(layout: &ArgumentBufferLayout, index: u32) -> (u64, T) {
 /// `(encodedLength, alignment)`.
 fn sized(layout: &ArgumentBufferLayout) -> (u64, u64) {
     (layout.encoded_length, layout.alignment)
+}
+
+#[test]
+fn descriptors_lay_out_as_a_c_struct_in_the_order_given() {
+    // probe d1: a pointer, a texture, a sampler, a float and a float4.
+    let l = layout(&[
+        one(D::Pointer, 0),
+        one(D::Texture, 1),
+        one(D::Sampler, 2),
+        one(D::Float, 3),
+        one(D::Float4, 4),
+    ]);
+    assert_eq!(sized(&l), (48, 16));
+    assert_eq!(at(&l, 0), (0, T::Buffer));
+    assert_eq!(at(&l, 1), (8, T::Texture));
+    assert_eq!(at(&l, 2), (16, T::Sampler));
+    assert_eq!(at(&l, 3), (24, T::Constant));
+    assert_eq!(at(&l, 4), (32, T::Constant));
+    // probe d2: constants first.
+    let l = layout(&[
+        one(D::Float, 0),
+        one(D::Pointer, 1),
+        one(D::Char, 2),
+        one(D::Texture, 3),
+    ]);
+    assert_eq!(sized(&l), (32, 8));
+    assert_eq!(
+        [at(&l, 0).0, at(&l, 1).0, at(&l, 2).0, at(&l, 3).0],
+        [0, 8, 16, 24]
+    );
+    // probe d3: the order given, not the indices', with gaps between indices.
+    let l = layout(&[one(D::Texture, 9), one(D::Float, 2), one(D::Pointer, 5)]);
+    assert_eq!(sized(&l), (24, 8));
+    assert_eq!([at(&l, 9).0, at(&l, 2).0, at(&l, 5).0], [0, 8, 16]);
+    assert!(l.argument(3).is_none());
+    // probes d10 and d18: every object is 8 bytes.
+    let l = layout(&[
+        one(D::IndirectCommandBuffer, 0),
+        one(D::ComputePipeline, 1),
+        one(D::RenderPipeline, 2),
+        one(D::VisibleFunctionTable, 3),
+        one(D::Char, 4),
+    ]);
+    assert_eq!(sized(&l), (40, 8));
+    assert_eq!(at(&l, 3), (24, T::VisibleFunctionTable));
+    assert_eq!(at(&l, 4), (32, T::Constant));
+    let l = layout(&[
+        one(D::InstanceAccelerationStructure, 0),
+        one(D::PrimitiveAccelerationStructure, 1),
+        one(D::IntersectionFunctionTable, 2),
+    ]);
+    assert_eq!(sized(&l), (24, 8));
+}
+
+#[test]
+fn descriptor_arrays_take_an_index_per_element() {
+    // probe d4.
+    let l = layout(&[
+        array(D::Texture, 0, 3),
+        array(D::Pointer, 3, 2),
+        array(D::Float, 5, 4),
+        array(D::Sampler, 9, 2),
+    ]);
+    assert_eq!(sized(&l), (72, 8));
+    let offsets: Vec<u64> = (0..11).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [0, 8, 16, 24, 32, 40, 44, 48, 52, 56, 64]);
+    assert!(l.argument(11).is_none());
+    // probes d13 and d15: an array of 1 is one argument; a constant array is packed.
+    let l = layout(&[array(D::Pointer, 0, 1), array(D::Texture, 1, 1)]);
+    assert_eq!(sized(&l), (16, 8));
+    let l = layout(&[array(D::UChar, 0, 3), one(D::Float, 3)]);
+    assert_eq!(sized(&l), (8, 4));
+    assert_eq!([at(&l, 1).0, at(&l, 2).0, at(&l, 3).0], [1, 2, 4]);
+}
+
+#[test]
+fn constants_take_msl_sizes_and_alignments() {
+    // probe 4's type cases, `[texture, type, char]`: (type, the type's offset, the char's offset,
+    // length, alignment).
+    let cases = [
+        (D::BFloat3, 8, 16, 24, 8),
+        (D::Long3, 32, 64, 96, 32),
+        (D::ULong4, 32, 64, 96, 32),
+        (D::Half2x3, 8, 24, 32, 8),
+        (D::Half3x3, 8, 32, 40, 8),
+        (D::Short3, 8, 16, 24, 8),
+        (D::Char3, 8, 12, 16, 8),
+        (D::Bool3, 8, 12, 16, 8),
+        (D::Float3x2, 8, 32, 40, 8),
+        (D::Float4x3, 16, 80, 96, 16),
+        (D::Int3, 16, 32, 48, 16),
+        (D::DepthStencilState, 8, 16, 24, 8),
+    ];
+    for (ty, offset, next, length, alignment) in cases {
+        let l = layout(&[one(D::Texture, 0), one(ty, 1), one(D::Char, 2)]);
+        assert_eq!(l.argument(1).map(|p| p.offset), Some(offset), "{ty:?}");
+        assert_eq!(at(&l, 2).0, next, "{ty:?}");
+        assert_eq!(sized(&l), (length, alignment), "{ty:?}");
+    }
+    let l = layout(&[
+        one(D::Char, 0),
+        one(D::Float4, 1),
+        one(D::Char, 2),
+        one(D::Float3, 3),
+        one(D::Half, 4),
+    ]);
+    assert_eq!(sized(&l), (80, 16));
+    let offsets: Vec<u64> = (0..5).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [0, 16, 32, 48, 64]);
+    let l = layout(&[
+        one(D::Float2x3, 0),
+        one(D::Half3, 1),
+        one(D::Long, 2),
+        one(D::UChar4, 3),
+        one(D::Bool2, 4),
+        one(D::Float3x3, 5),
+    ]);
+    assert_eq!(sized(&l), (112, 16));
+    let offsets: Vec<u64> = (0..6).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [0, 32, 40, 48, 52, 64]);
+    // probes d8 and d8c.
+    let l = layout(&[
+        one(D::Float4x4, 0),
+        one(D::Int2, 1),
+        one(D::Bool, 2),
+        one(D::UShort3, 3),
+    ]);
+    assert_eq!(sized(&l), (96, 16));
+    let offsets: Vec<u64> = (0..4).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [0, 64, 72, 80]);
+    let l = layout(&[one(D::Char, 0), one(D::ULong2, 1)]);
+    assert_eq!((at(&l, 1).0, sized(&l)), (16, (32, 16)));
+    // probe d7.
+    let l = layout(&[one(D::Char, 0)]);
+    assert_eq!(sized(&l), (1, 1));
+}
+
+#[test]
+fn a_constant_block_alignment_moves_only_its_block() {
+    // probes d6a, d6b, d6e to d6h, a12 to a48, f4a20 to f4a40 and fa6: (layout, index, offset,
+    // length, alignment). An alignment that is no power of two steps as `(o + a - 1) & !(a - 1)`.
+    let tex = || one(D::Texture, 0);
+    let cases: Vec<(Vec<ArgumentDescriptor>, u32, u64, u64, u64)> = vec![
+        (vec![aligned(D::Char, 0, 64), one(D::Float, 1)], 1, 4, 8, 4),
+        (
+            vec![
+                one(D::Pointer, 0),
+                aligned(D::Char, 1, 64),
+                one(D::Float, 2),
+            ],
+            2,
+            68,
+            72,
+            8,
+        ),
+        (
+            vec![tex(), aligned(D::Int, 1, 32), one(D::Int, 2)],
+            1,
+            32,
+            40,
+            8,
+        ),
+        (vec![tex(), aligned(D::Char, 1, 3)], 1, 8, 16, 8),
+        (vec![aligned(D::Char, 0, 1024)], 0, 0, 1, 1),
+        (
+            vec![aligned(D::Float4, 0, 4), one(D::Char, 1)],
+            1,
+            16,
+            32,
+            16,
+        ),
+        (vec![tex(), aligned(D::Char, 1, 12)], 1, 16, 24, 8),
+        (vec![tex(), aligned(D::Char, 1, 20)], 1, 8, 16, 8),
+        (vec![tex(), aligned(D::Char, 1, 24)], 1, 8, 16, 8),
+        (vec![tex(), aligned(D::Char, 1, 48)], 1, 16, 24, 8),
+        (vec![tex(), aligned(D::Float4, 1, 24)], 1, 8, 32, 16),
+        (vec![tex(), aligned(D::Float4, 1, 20)], 1, 8, 32, 16),
+        (vec![tex(), aligned(D::Float4, 1, 40)], 1, 8, 32, 16),
+        (vec![tex(), aligned(D::Float, 1, 6)], 1, 8, 16, 8),
+    ];
+    for (descriptors, index, offset, length, alignment) in cases {
+        let l = layout(&descriptors);
+        assert_eq!(at(&l, index).0, offset, "{descriptors:?}");
+        assert_eq!(sized(&l), (length, alignment), "{descriptors:?}");
+    }
+    // Two blocks (d6c): a pointer ends the first.
+    let l = layout(&[
+        one(D::Pointer, 0),
+        one(D::Char, 1),
+        one(D::Pointer, 2),
+        aligned(D::Char, 3, 32),
+        one(D::Char, 4),
+    ]);
+    assert_eq!(sized(&l), (40, 8));
+    let offsets: Vec<u64> = (0..5).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [0, 8, 16, 32, 33]);
+    // A block's alignment below its type's (a2-float4), and an aligned array (a16-array).
+    let l = layout(&[
+        tex(),
+        one(D::Char, 1),
+        one(D::Texture, 2),
+        aligned(D::Float4, 3, 2),
+    ]);
+    assert_eq!((at(&l, 3).0, sized(&l)), (32, (48, 16)));
+    let mut chars = array(D::Char, 1, 3);
+    chars.constant_block_alignment = 16;
+    let l = layout(&[tex(), chars, one(D::Float, 4)]);
+    let offsets: Vec<u64> = (1..5).map(|i| at(&l, i).0).collect();
+    assert_eq!(offsets, [16, 17, 18, 20]);
+    assert_eq!(sized(&l), (24, 8));
+}
+
+#[test]
+fn descriptors_metal_refuses_are_refused() {
+    assert_eq!(
+        ArgumentBufferLayout::from_descriptors(&[]),
+        Err(ArgumentLayoutError::NoDescriptors)
+    );
+    for ty in [
+        D::None,
+        D::Struct,
+        D::Array,
+        D::R8Unorm,
+        D::RGBA16Unorm,
+        D::Tensor,
+    ] {
+        assert_eq!(
+            ArgumentBufferLayout::from_descriptors(&[one(D::Texture, 0), one(ty, 1)]),
+            Err(ArgumentLayoutError::DataType {
+                position: 1,
+                data_type: ty
+            })
+        );
+    }
+    // Only a block's first constant may set the alignment (probe d6d); a 0 later is no setting.
+    assert_eq!(
+        ArgumentBufferLayout::from_descriptors(&[one(D::Char, 0), aligned(D::Float4, 1, 4)]),
+        Err(ArgumentLayoutError::ConstantBlockAlignment { position: 1 })
+    );
+    let l = layout(&[one(D::Char, 0), one(D::Float, 1)]);
+    assert_eq!((at(&l, 1).0, sized(&l)), (4, (8, 4)));
+}
+
+#[test]
+fn an_index_two_descriptors_claim_is_the_later_ones() {
+    // probe d11: the same index twice; probe d16: an index inside an earlier array.
+    let l = layout(&[one(D::Float, 0), one(D::Pointer, 0)]);
+    assert_eq!(sized(&l), (16, 8));
+    assert_eq!(at(&l, 0), (8, T::Buffer));
+    let l = layout(&[array(D::Texture, 0, 3), one(D::Pointer, 1)]);
+    assert_eq!(sized(&l), (32, 8));
+    assert_eq!(at(&l, 0), (0, T::Texture));
+    assert_eq!(at(&l, 1), (24, T::Buffer));
+    assert_eq!(at(&l, 2), (16, T::Texture));
 }
 
 /// Synthetic AIR (opaque pointers, empty bodies). Kernels `kA` and `kH` state the

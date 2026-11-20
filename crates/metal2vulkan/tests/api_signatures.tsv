@@ -7615,6 +7615,7 @@ method	metal2vulkan::CancelToken::cancel	pub fn cancel(&self)
 method	metal2vulkan::CancelToken::is_cancelled	pub fn is_cancelled(&self) -> bool
 method	metal2vulkan::CancelToken::new	pub fn new() -> CancelToken
 method	metal2vulkan::bind::ArgumentBufferLayout::argument	pub fn argument(&self, index: u32) -> Option<ArgumentPlace>
+method	metal2vulkan::bind::ArgumentBufferLayout::from_descriptors	pub fn from_descriptors(descriptors: &[ArgumentDescriptor]) -> Result<ArgumentBufferLayout, ArgumentLayoutError>
 method	metal2vulkan::bind::ArgumentBufferLayout::id_span	pub fn id_span(&self) -> u32
 method	metal2vulkan::bind::ArgumentDescriptor::new	pub fn new(data_type: DataType, index: u32) -> ArgumentDescriptor
 method	metal2vulkan::bind::ArgumentFunctionTable::at_address	pub fn at_address(self, address: u64) -> ArgumentFunctionTable

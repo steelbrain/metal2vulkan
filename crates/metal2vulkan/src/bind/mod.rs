@@ -127,7 +127,8 @@
 //! ([`RateMapRegions`]). A [`SparseTileMap`] mirrors a sparse texture's tile mappings where the
 //! device has no shader residency: a plan binds its bytes where a function reads the texture's
 //! residency. An [`ArgumentBufferLayout`] says where an argument encoder (`MTLArgumentEncoder`)
-//! writes each argument of an argument buffer: a function's (`Function::argument_buffer_layout`).
+//! writes each argument of an argument buffer: a function's (`Function::argument_buffer_layout`),
+//! or one of [`ArgumentDescriptor`]s ([`ArgumentBufferLayout::from_descriptors`]).
 //!
 //! The frozen surface is the items named at this root; the submodules are crate-private.
 

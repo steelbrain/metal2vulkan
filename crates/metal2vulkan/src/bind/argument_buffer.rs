@@ -9,7 +9,7 @@
 //! says where each argument goes, by its Metal argument index (`[[id(n)]]`), so an encoder over it
 //! writes exactly the bytes the function reads.
 //!
-//! A layout comes from a function's argument buffer, by Metal's own rule:
+//! A layout comes from one of two sources, each Metal's own rule:
 //!
 //! - **A function's argument buffer** (`newArgumentEncoderWithBufferIndex:`,
 //!   [`Function::argument_buffer_layout`](crate::library::Function::argument_buffer_layout)): the
@@ -23,6 +23,17 @@
 //!   pointer to a struct that holds arguments is a nested argument buffer
 //!   (`newArgumentEncoderForBufferAtIndex:`), with the pointee's layout; a pointer to any other
 //!   struct is a plain buffer, for which Metal answers no nested encoder.
+//! - **Argument descriptors** (`newArgumentEncoderWithArguments:`,
+//!   [`ArgumentBufferLayout::from_descriptors`]): the descriptors in the order given (not by
+//!   index), each at the next offset its type's alignment allows, as a C struct of MSL types. A
+//!   run of consecutive constants is a constant block: its first constant may set
+//!   `constantBlockAlignment`, which then aligns it as `(offset + a - 1) & !(a - 1)` for `a` the
+//!   larger of the alignment set and its type's. The encoder's `alignment` is the largest type
+//!   alignment (never the block alignment), and `encodedLength` the end rounded up to it. Every
+//!   rule here is measured on an M3 Max and an M4 (probes).
+//!
+//! An index that two descriptors claim (the same index, or one inside another's array) is
+//! resolved to the later descriptor, as Metal's encoder resolves it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -194,7 +205,144 @@ impl From<Error> for ArgumentLayoutError {
     }
 }
 
+/// `(offset + a - 1) & !(a - 1)`: Metal's alignment step, which equals rounding up to a multiple
+/// of `a` when `a` is a power of two (a probe measured other values too).
+fn metal_align(offset: u64, a: u64) -> Option<u64> {
+    let a = a.max(1);
+    Some(offset.checked_add(a - 1)? & !(a - 1))
+}
+
+/// The bytes and alignment of one element of `ty` in an argument buffer: 8 for every handle,
+/// and for a constant its MSL size and alignment (a 3-vector as a 4-vector; a matrix its columns'
+/// vectors). `None` for a type no argument has.
+fn type_size_align(ty: DataType) -> Option<(u64, u64, ArgumentType)> {
+    use DataType as D;
+    let handle = |t| Some((ARGUMENT_HANDLE_BYTES, ARGUMENT_HANDLE_BYTES, t));
+    let (scalar, columns, rows) = match ty {
+        D::Pointer => return handle(ArgumentType::Buffer),
+        D::Texture => return handle(ArgumentType::Texture),
+        D::Sampler => return handle(ArgumentType::Sampler),
+        D::IndirectCommandBuffer => return handle(ArgumentType::IndirectCommandBuffer),
+        D::ComputePipeline => return handle(ArgumentType::ComputePipelineState),
+        D::RenderPipeline => return handle(ArgumentType::RenderPipelineState),
+        D::VisibleFunctionTable => return handle(ArgumentType::VisibleFunctionTable),
+        D::IntersectionFunctionTable => return handle(ArgumentType::IntersectionFunctionTable),
+        D::PrimitiveAccelerationStructure | D::InstanceAccelerationStructure => {
+            return handle(ArgumentType::AccelerationStructure)
+        }
+        D::DepthStencilState => return handle(ArgumentType::DepthStencilState),
+        D::Float => (4, 1, 1),
+        D::Float2 => (4, 1, 2),
+        D::Float3 => (4, 1, 3),
+        D::Float4 => (4, 1, 4),
+        D::Float2x2 => (4, 2, 2),
+        D::Float2x3 => (4, 2, 3),
+        D::Float2x4 => (4, 2, 4),
+        D::Float3x2 => (4, 3, 2),
+        D::Float3x3 => (4, 3, 3),
+        D::Float3x4 => (4, 3, 4),
+        D::Float4x2 => (4, 4, 2),
+        D::Float4x3 => (4, 4, 3),
+        D::Float4x4 => (4, 4, 4),
+        D::Half => (2, 1, 1),
+        D::Half2 => (2, 1, 2),
+        D::Half3 => (2, 1, 3),
+        D::Half4 => (2, 1, 4),
+        D::Half2x2 => (2, 2, 2),
+        D::Half2x3 => (2, 2, 3),
+        D::Half2x4 => (2, 2, 4),
+        D::Half3x2 => (2, 3, 2),
+        D::Half3x3 => (2, 3, 3),
+        D::Half3x4 => (2, 3, 4),
+        D::Half4x2 => (2, 4, 2),
+        D::Half4x3 => (2, 4, 3),
+        D::Half4x4 => (2, 4, 4),
+        D::BFloat => (2, 1, 1),
+        D::BFloat2 => (2, 1, 2),
+        D::BFloat3 => (2, 1, 3),
+        D::BFloat4 => (2, 1, 4),
+        D::Int | D::UInt => (4, 1, 1),
+        D::Int2 | D::UInt2 => (4, 1, 2),
+        D::Int3 | D::UInt3 => (4, 1, 3),
+        D::Int4 | D::UInt4 => (4, 1, 4),
+        D::Short | D::UShort => (2, 1, 1),
+        D::Short2 | D::UShort2 => (2, 1, 2),
+        D::Short3 | D::UShort3 => (2, 1, 3),
+        D::Short4 | D::UShort4 => (2, 1, 4),
+        D::Char | D::UChar | D::Bool => (1, 1, 1),
+        D::Char2 | D::UChar2 | D::Bool2 => (1, 1, 2),
+        D::Char3 | D::UChar3 | D::Bool3 => (1, 1, 3),
+        D::Char4 | D::UChar4 | D::Bool4 => (1, 1, 4),
+        D::Long | D::ULong => (8, 1, 1),
+        D::Long2 | D::ULong2 => (8, 1, 2),
+        D::Long3 | D::ULong3 => (8, 1, 3),
+        D::Long4 | D::ULong4 => (8, 1, 4),
+        _ => return None,
+    };
+    // A vector of 3 takes the room of 4; a vector is aligned to its size.
+    let vector = scalar * if rows == 3 { 4 } else { rows };
+    Some((vector * columns, vector, ArgumentType::Constant))
+}
+
 impl ArgumentBufferLayout {
+    /// The layout `newArgumentEncoderWithArguments:` makes of `descriptors` (the module docs).
+    /// Refused as Metal refuses: no descriptors, a data type no argument has, and a constant block
+    /// alignment on a constant that does not start its block.
+    pub fn from_descriptors(
+        descriptors: &[ArgumentDescriptor],
+    ) -> Result<ArgumentBufferLayout, ArgumentLayoutError> {
+        if descriptors.is_empty() {
+            return Err(ArgumentLayoutError::NoDescriptors);
+        }
+        let mut cursor = 0u64;
+        let mut alignment = 1u64;
+        let mut in_block = false;
+        let mut members = Vec::with_capacity(descriptors.len());
+        for (position, d) in descriptors.iter().enumerate() {
+            let (size, natural, ty) =
+                type_size_align(d.data_type).ok_or(ArgumentLayoutError::DataType {
+                    position,
+                    data_type: d.data_type,
+                })?;
+            let mut align = natural;
+            if ty == ArgumentType::Constant {
+                if d.constant_block_alignment != 0 {
+                    if in_block {
+                        return Err(ArgumentLayoutError::ConstantBlockAlignment { position });
+                    }
+                    align = align.max(u64::from(d.constant_block_alignment));
+                }
+                in_block = true;
+            } else {
+                in_block = false;
+            }
+            let count = d.array_length.max(1);
+            let offset = metal_align(cursor, align).ok_or(ArgumentLayoutError::TooLarge)?;
+            cursor = size
+                .checked_mul(u64::from(count))
+                .and_then(|bytes| offset.checked_add(bytes))
+                .ok_or(ArgumentLayoutError::TooLarge)?;
+            alignment = alignment.max(natural);
+            members.push(ArgumentMember {
+                id: d.index,
+                count,
+                ids_per_element: 1,
+                offset,
+                stride: size,
+                size,
+                ty,
+                layout: None,
+            });
+        }
+        // Type alignments are powers of two, so this rounds up.
+        let encoded_length = metal_align(cursor, alignment).ok_or(ArgumentLayoutError::TooLarge)?;
+        Ok(ArgumentBufferLayout {
+            encoded_length,
+            alignment,
+            members,
+        })
+    }
+
     /// Where argument `index` lands: in the last member whose indices hold it, inside a struct
     /// member's element as that element's layout says. `None` when no member holds it.
     pub fn argument(&self, index: u32) -> Option<ArgumentPlace> {
@@ -239,8 +387,6 @@ impl ArgumentBufferLayout {
             .unwrap_or(0)
     }
 }
-
-impl ArgumentBufferLayout {}
 
 /// Why a decoded entry's argument buffer needs the specialized entry: an index or count the AIR
 /// states through a function constant, or a parameter at the index that a function constant
