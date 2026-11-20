@@ -1550,6 +1550,10 @@ pub(crate) mod on_device {
     /// The submissions a queue keeps in flight before it holds a group ([`IN_FLIGHT`]).
     const AHEAD: u64 = IN_FLIGHT as u64;
 
+    /// The expected GPU run [`behind_busy`] sets on its queue: 1 ms, so up to sixteen held command
+    /// buffers join one group within `submit::GROUP_RUN`.
+    pub(crate) const BODY_RUN: u64 = 1_000_000;
+
     /// Runs `body` with as many busy command buffers committed on `queue` as a queue keeps in
     /// flight ([`IN_FLIGHT`]), each a submission of its own ([`Busy::commit`]), so its next commit
     /// is held while they wait for the host. `body` takes the busy work, the submissions counted
@@ -1558,8 +1562,13 @@ pub(crate) mod on_device {
     /// body opens the busy work ([`Busy::open`]) and the completion thread sees a busy one
     /// complete, and a held group goes no earlier than that. The busy work is opened after `body`
     /// where it did not, and waited for. First a command buffer of the queue with no commands of
-    /// its own runs and retires, so the queue's expected GPU run is known and the command buffers
-    /// held behind the busy work may join one group (`submit::GROUP_RUN`).
+    /// its own runs and retires, and the completion thread waits on the GPU again
+    /// (`Done::busy`), so a commit in `body` is held rather than sent as that round ends. Then
+    /// the queue's expected GPU run is set to [`BODY_RUN`], the test's own input, so the command
+    /// buffers held behind the busy work join one group (`submit::GROUP_RUN`) however long that
+    /// command buffer's run measured on a loaded host. A group sent after the busy work opens is
+    /// sent at the run its retirements leave, which a loaded host can raise past the bound: a
+    /// body that counts a group's submissions sends it first (`CommandQueue::send_now`).
     pub(crate) fn behind_busy(
         name: &str,
         device: &Device,
@@ -1570,6 +1579,8 @@ pub(crate) mod on_device {
         (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
         first.commit().expect("a commit");
         finished(name, &first);
+        within(name, || !device.core().done.busy());
+        first.queue().set_run_for_test(BODY_RUN);
         let before = device.counters().metrics().submissions;
         let seen = device.core().done.completed();
         let mut busy = Busy::new(device);
@@ -1851,9 +1862,10 @@ pub(crate) mod on_device {
     /// A command buffer joins a held group only while the group's expected GPU runs, summed, stay
     /// within `GROUP_RUN`, each its queue's expected run: behind three running submissions, three
     /// fills on a queue whose command buffers ran 1 ms go as one group, and on a queue whose
-    /// command buffers ran past the bound as three submissions, the first two before the busy
-    /// work ends. The expected run is set behind the busy work as a retiring command buffer's GPU
-    /// times set it (`QueueInner::ran`); the busy work retires only after the fills were staged,
+    /// command buffers ran past the bound as three submissions, the first two as they are
+    /// staged, the last held until the queue sends it (`send_now`), all before the busy work
+    /// ends. The expected run is set behind the busy work as a retiring command buffer's GPU
+    /// times set it (`QueueInner::ran`); the busy work retires only after the fills were sent,
     /// and the retirements move it.
     #[test]
     fn every_device_joins_a_held_group_only_within_its_expected_run() {
@@ -1882,14 +1894,23 @@ pub(crate) mod on_device {
                         AHEAD + early,
                         "{name}: {run} ns, sent behind the busy work"
                     );
+                    // The held group goes before the busy work ends, at the run set here: sent
+                    // once a busy one retires, it would go at the run their own runs leave.
+                    queue.send_now(held.last().expect("a fill"));
+                    let groups = if alone { 3 } else { 1 };
+                    within(name, || sent() >= AHEAD + groups);
                     busy.open();
                     for command_buffer in &held {
                         finished(name, command_buffer);
                     }
                     assert_eq!(word(&buffer), 3, "{name}");
                     let all = device.counters().metrics().submissions - before;
-                    let groups = if alone { 3 } else { 1 };
-                    assert_eq!(all, AHEAD + groups, "{name}: {run} ns, submissions");
+                    assert_eq!(
+                        all,
+                        AHEAD + groups,
+                        "{name}: {run} ns, submissions, the queue's expected run {:?} ns",
+                        held[0].queue().expected_run()
+                    );
                 });
                 // The busy work and the fills retired since, each moving the expected run toward
                 // its own GPU run.
@@ -2071,6 +2092,11 @@ pub(crate) mod on_device {
                 ended.enqueue().expect("an enqueue");
                 queue.abandon();
                 ended.commit().expect("a commit");
+                // Sent before the busy work ends, at the run `behind_busy` set: sent once a busy
+                // one retires, it would go at the run their own runs leave.
+                within(name, || {
+                    device.counters().metrics().submissions - before > AHEAD
+                });
                 busy.open();
                 for command_buffer in [&first].into_iter().chain(&rest).chain([&ended]) {
                     finished(name, command_buffer);

@@ -28,7 +28,9 @@
 mod on_device {
     use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
-    use crate::tests::command::on_device::{behind_busy, each_device, finished, Busy, PATIENCE};
+    use crate::tests::command::on_device::{
+        behind_busy, each_device, finished, within, Busy, PATIENCE,
+    };
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, Error,
@@ -636,7 +638,8 @@ mod on_device {
     /// Two copies into one texture in two uploads of one submission: the first made before the
     /// commit of a command buffer its queue holds in a group behind busy work, the second after
     /// it, before the commit of the next, which joins that group and copies the texture out. The
-    /// two calls record into two uploads, the submission of the group carries both, and the later
+    /// two calls record into two uploads, the submission of the group, sent before the busy work
+    /// ends (`behind_busy`), carries both, and the later
     /// copy's bytes are the texture's: each copy orders itself after every earlier write of the
     /// image with a barrier of its own, as command buffer boundaries add no order.
     #[test]
@@ -660,6 +663,7 @@ mod on_device {
             let queue = device.new_command_queue(8).expect("a queue");
             let mut points = Vec::new();
             let mut held = Vec::new();
+            let mut run = None;
             behind_busy(name, &device, &queue, |busy, _, _| {
                 replace(name, &texture, side, 0xC3);
                 points.push(core.work.ready_point());
@@ -671,6 +675,13 @@ mod on_device {
                 let next = queue.command_buffer().expect("a command buffer");
                 copy_out(name, &next, &texture, side, &out);
                 next.commit().expect("a commit");
+                // The group goes before the busy work ends, at the run `behind_busy` set: sent
+                // once a busy one retires, it would go at the run their own runs leave, member by
+                // member where a loaded host measured them long.
+                run = next.queue().expected_run();
+                let sent = device.counters().metrics().submissions;
+                queue.send_now(&next);
+                within(name, || device.counters().metrics().submissions > sent);
                 busy.open();
                 held.extend([first, next]);
             });
@@ -687,7 +698,8 @@ mod on_device {
             println!("upload copy after copy: {name}: the uploads went in submissions {carried:?}");
             assert_eq!(
                 carried[0], carried[1],
-                "{name}: the two uploads went in one submission"
+                "{name}: the two uploads went in one submission: they went in submissions \
+                 {carried:?}, the queue's expected run {run:?} ns as the group went"
             );
             assert!(
                 read(&out) == vec![0xD4; len as usize],

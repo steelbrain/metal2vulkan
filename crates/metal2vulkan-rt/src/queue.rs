@@ -165,6 +165,13 @@ impl QueueInner {
         Some(self.run.load(Ordering::Relaxed)).filter(|&run| run != u64::MAX)
     }
 
+    /// For the device tests: sets the expected run to `nanos` exactly, the test's own input in
+    /// place of what its command buffers' GPU times measured.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn set_run_for_test(&self, nanos: u64) {
+        self.run.store(nanos, Ordering::Relaxed);
+    }
+
     /// One of its command buffers ran `nanos` on the GPU: the expected run rises to a longer one
     /// at once and halves toward a shorter one ([`next_run`]).
     pub(crate) fn ran(&self, nanos: u64) {
