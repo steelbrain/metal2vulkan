@@ -1034,8 +1034,6 @@ pub enum Mechanism {
     KeyProjection,
     /// `NumWorkgroups` for single-region dispatches, push fields for multi-region ones.
     RegionSelected,
-    /// The indirect-clamp prepass.
-    IndirectClamp,
     /// A synthetic binding: the `ExecutionStatus` fact on a device that does not address buffers.
     SyntheticBinding,
     /// Graphics state plus the render-pass contract.

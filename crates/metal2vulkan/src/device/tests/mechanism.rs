@@ -470,13 +470,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::TileThreadgroup { .. }
                 | RuntimeFact::PartialObjectThreadgroups
                 | RuntimeFact::GridTiles => Mechanism::RegionSelected,
-                RuntimeFact::IndirectGroupCount => {
-                    if f.limits.max_compute_work_group_count == [u32::MAX; 3] {
-                        Mechanism::None
-                    } else {
-                        Mechanism::IndirectClamp
-                    }
-                }
+                RuntimeFact::IndirectGroupCount => Mechanism::None,
                 RuntimeFact::StorageTextureFormat { .. }
                 | RuntimeFact::StorageTextureNumericType { .. }
                 | RuntimeFact::EmulatedSimdgroups
@@ -592,10 +586,10 @@ fn profile_dependent_rows_differ_where_the_design_says() {
         mechanism(&stride, addressed.profile()),
         Mechanism::DynamicStateOrPushConstant
     );
-    // Vulkan 1.2 minimum group counts are 65535 per axis: indirect dispatches are clamped.
+    // The device reads GPU-written group counts where Metal wrote them.
     assert_eq!(
         mechanism(&RuntimeFact::IndirectGroupCount, floor.profile()),
-        Mechanism::IndirectClamp
+        Mechanism::None
     );
     assert_eq!(
         mechanism(&RuntimeFact::BaseVertexInstance, floor.profile()),

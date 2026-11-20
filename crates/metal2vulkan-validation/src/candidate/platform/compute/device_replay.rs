@@ -662,7 +662,7 @@ fn prepare(
         commands.regions.as_slice(),
         [region] if region.indirect == Some(IndirectArgs::Replay)
     );
-    if !replayed || commands.root_table.is_some() || commands.indirect_clamp.is_some() {
+    if !replayed || commands.root_table.is_some() {
         return Err(fail(format!(
             "the binder instantiated {} region(s), not one replayed region without a root \
              table",

@@ -38,7 +38,6 @@ fn modules() -> Vec<Build> {
         flat_dispatch_module,
         index_bounds_fill_module,
         index_bounds_plan_module,
-        indirect_clamp_module,
         mesh_object_arguments_module,
         mesh_scan_module,
         replay_preprocess_module,

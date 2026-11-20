@@ -669,7 +669,7 @@ fn execute(
     let commands = plan
         .instantiate_dispatch(&state, &case.dispatch)
         .map_err(|e| bind_refusal(&e))?;
-    if commands.indirect_clamp.is_some() || commands.regions.iter().any(|r| r.indirect.is_some()) {
+    if commands.regions.iter().any(|r| r.indirect.is_some()) {
         return Err(not_implemented("indirect dispatches"));
     }
     let status = allocate(

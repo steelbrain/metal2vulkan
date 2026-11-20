@@ -3,7 +3,7 @@
 //! One 32-byte buffer per command buffer, shared by every plan in it. The consumer initializes it
 //! with [`ExecutionStatus::initial`] before the command buffer's first use and reads it back with
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
-//! the resident-set miss counter, the indirect clamp, the device replay's preprocess, the index
+//! the resident-set miss counter, the device replay's preprocess, the index
 //! bounds pass, an absent argument's read, the mesh and tessellation scans, a sample through a
 //! cubic argument sampler, and a sequentially consistent fence write the words
 //! named here.
@@ -23,8 +23,8 @@ impl ExecutionStatus {
         [0; ExecutionStatus::BYTES]
     }
 
-    /// What the buffer's bytes report after the command buffer ran. The consumer maps `overflow`, a
-    /// replay fault, an index pool overflow, an absent argument read, a mesh records fault, a mesh
+    /// What the buffer's bytes report after the command buffer ran. The consumer maps a replay
+    /// fault, an index pool overflow, an absent argument read, a mesh records fault, a mesh
     /// grid Metal's GPU discards or the device cannot launch, and a cubic argument sampler's sample
     /// to a command-buffer execution error, and treats resident-set misses by its own policy.
     pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport {
@@ -36,7 +36,6 @@ impl ExecutionStatus {
         let tessellation_first = bits.contains(StatusBits::TESSELLATION_RECORDS_OVERFLOW)
             && word(StatusWord::MeshFaultObjects) == 0;
         StatusReport {
-            overflow: bits.contains(StatusBits::OVERFLOW),
             resident_miss: bits.contains(StatusBits::RESIDENT_MISS),
             resident_misses: word(StatusWord::ResidentMisses),
             replay_fault: bits.contains(StatusBits::REPLAY_FAULT),
@@ -76,8 +75,6 @@ impl ExecutionStatus {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct StatusReport {
-    /// The indirect clamp reduced a GPU-written group count.
-    pub overflow: bool,
     /// An access missed the resident set.
     pub resident_miss: bool,
     /// The number of resident-set misses counted (a `u32` the device increments, wrapping after
@@ -213,8 +210,6 @@ impl StatusWord {
 pub struct StatusBits(pub u32);
 
 impl StatusBits {
-    /// The indirect clamp reduced a group count.
-    pub const OVERFLOW: StatusBits = StatusBits(1 << 0);
     /// An access missed the resident set.
     pub const RESIDENT_MISS: StatusBits = StatusBits(1 << 1);
     /// The device replay's preprocess refused a command; [`StatusWord::ReplayFaults`] holds why.
@@ -345,7 +340,6 @@ mod tests {
     #[test]
     fn status_bits_are_distinct() {
         let bits = [
-            StatusBits::OVERFLOW,
             StatusBits::RESIDENT_MISS,
             StatusBits::REPLAY_FAULT,
             StatusBits::INDEX_POOL_OVERFLOW,
@@ -359,8 +353,8 @@ mod tests {
             assert_eq!(all & b.0, 0);
             all |= b.0;
         }
-        assert!(StatusBits(all).contains(StatusBits::OVERFLOW));
-        assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::OVERFLOW));
+        assert!(StatusBits(all).contains(StatusBits::REPLAY_FAULT));
+        assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::REPLAY_FAULT));
     }
 
     /// The initial bytes are all zero, and `decode` of them reports nothing.
@@ -374,23 +368,23 @@ mod tests {
     #[test]
     fn decode_reports_every_bit_and_counter() {
         let mut bytes = [0u8; 32];
-        let bits = StatusBits::OVERFLOW.0 | StatusBits::RESIDENT_MISS.0;
+        let bits = StatusBits::INDEX_POOL_OVERFLOW.0 | StatusBits::RESIDENT_MISS.0;
         bytes[0..4].copy_from_slice(&bits.to_le_bytes());
         bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.overflow && r.resident_miss);
+        assert!(r.index_pool_overflow && r.resident_miss);
         assert_eq!(r.resident_misses, 7);
         bytes = [0u8; 32];
-        bytes[0..4].copy_from_slice(&StatusBits::OVERFLOW.0.to_le_bytes());
+        bytes[0..4].copy_from_slice(&StatusBits::INDEX_POOL_OVERFLOW.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.overflow && !r.resident_miss);
+        assert!(r.index_pool_overflow && !r.resident_miss);
         assert_eq!(r.resident_misses, 0);
         bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
         let faults = ReplayFaults::VARIANT.0 | ReplayFaults::RECORD.0;
         bytes[8..12].copy_from_slice(&faults.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.replay_fault && !r.overflow);
+        assert!(r.replay_fault && !r.index_pool_overflow);
         assert!(r.replay_faults.contains(ReplayFaults::VARIANT));
         assert!(r.replay_faults.contains(ReplayFaults::RECORD));
         assert!(!r.replay_faults.contains(ReplayFaults::ENCODING));
@@ -398,7 +392,7 @@ mod tests {
         bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&StatusBits::INDEX_POOL_OVERFLOW.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.index_pool_overflow && !r.overflow && !r.replay_fault);
+        assert!(r.index_pool_overflow && !r.replay_fault);
         assert!(!r.absent_argument_read);
         bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&StatusBits::ABSENT_ARGUMENT_READ.0.to_le_bytes());
@@ -408,7 +402,7 @@ mod tests {
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
         assert!(c.cubic_argument_sampler && !c.absent_argument_read && !c.overflow);
-        assert!(r.absent_argument_read && !r.index_pool_overflow && !r.overflow);
+        assert!(r.absent_argument_read && !r.index_pool_overflow);
         assert_eq!(r.mesh_records_overflow, None);
         bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&StatusBits::MESH_RECORDS_OVERFLOW.0.to_le_bytes());
@@ -425,7 +419,7 @@ mod tests {
                 mesh_threadgroups: u32::MAX,
             })
         );
-        assert!(!r.index_pool_overflow && !r.overflow);
+        assert!(!r.index_pool_overflow);
     }
 
     #[test]

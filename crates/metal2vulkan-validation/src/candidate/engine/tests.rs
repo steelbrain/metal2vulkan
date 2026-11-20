@@ -90,12 +90,8 @@ fn the_status_starts_zero_and_stops_non_evidence() {
         bytes[..4].copy_from_slice(&bits.to_le_bytes());
         bytes
     };
-    for bits in [
-        metal2vulkan::bind::StatusBits::OVERFLOW,
-        metal2vulkan::bind::StatusBits::RESIDENT_MISS,
-    ] {
-        assert!(status_verdict(&with_status(bits.0)).is_err(), "{bits:?}");
-    }
+    let missed_bit = with_status(metal2vulkan::bind::StatusBits::RESIDENT_MISS.0);
+    assert!(status_verdict(&missed_bit).is_err());
     let mut missed = bytes;
     let at = metal2vulkan::bind::StatusWord::ResidentMisses.byte_offset() as usize;
     missed[at..at + 4].copy_from_slice(&3u32.to_le_bytes());
@@ -1720,7 +1716,6 @@ fn the_binder_plans_the_executors_state() {
             let plan = pipeline.plan(&device, &state.shape()).unwrap();
             let commands = plan.instantiate_dispatch(&state, &case.dispatch).unwrap();
             assert!(!commands.regions.is_empty(), "{stem}");
-            assert!(commands.indirect_clamp.is_none());
             assert!(plan.descriptors.iter().all(|write| matches!(
                 write.source,
                 WriteSource::Buffer { .. }

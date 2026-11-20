@@ -17,19 +17,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::LocalSizeLimits => Mechanism::PlanTimeCheck,
         // NumWorkgroups for single-region dispatches, push fields for multi-region ones.
         RuntimeFact::DispatchGrid => Mechanism::RegionSelected,
-        // GPU-written group counts need the clamp prepass only when some axis limit is below
-        // what an indirect argument can hold.
-        RuntimeFact::IndirectGroupCount => {
-            if f.limits
-                .max_compute_work_group_count
-                .iter()
-                .any(|&axis| axis < u32::MAX)
-            {
-                Mechanism::IndirectClamp
-            } else {
-                Mechanism::None
-            }
-        }
+        // GPU-written group counts are read where Metal wrote them.
+        RuntimeFact::IndirectGroupCount => Mechanism::None,
         RuntimeFact::ResourcePresence { .. } => Mechanism::Specialization,
         RuntimeFact::SampleCount => Mechanism::Specialization,
         // Keyed by a per-slot StorageImageChoice, a separate per-function compile.

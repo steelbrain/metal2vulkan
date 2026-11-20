@@ -114,12 +114,6 @@ assoc-const	metal2vulkan::bind::IndexRewritePass::POOL_HEADER_BYTES	pub const PO
 assoc-const	metal2vulkan::bind::IndexRewriteRun::MAX_DRAWS	pub const MAX_DRAWS: u32
 assoc-const	metal2vulkan::bind::IndexRewriteRun::SLOT_BYTES	pub const SLOT_BYTES: u64
 assoc-const	metal2vulkan::bind::IndexRewriteRun::SLOT_WORDS	pub const SLOT_WORDS: u32
-assoc-const	metal2vulkan::bind::IndirectClamp::SCRATCH_BYTES	pub const SCRATCH_BYTES: u32
-assoc-const	metal2vulkan::bind::IndirectClampModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::IndirectClampModule::SCRATCH_BINDING	pub const SCRATCH_BINDING: u32
-assoc-const	metal2vulkan::bind::IndirectClampModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::IndirectClampModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
-assoc-const	metal2vulkan::bind::IndirectClampModule::STATUS_BINDING	pub const STATUS_BINDING: u32
 assoc-const	metal2vulkan::bind::InstanceRecord::BYTES	pub const BYTES: usize
 assoc-const	metal2vulkan::bind::InterleaveMergeModules::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::InterleaveMergeModules::WIDE_BINDING	pub const WIDE_BINDING: u32
@@ -182,7 +176,6 @@ assoc-const	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	pub const INDEX_
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	pub const MESH_GRID_DISCARDED: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH_GRID_PAST_LIMITS: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_RECORDS_OVERFLOW	pub const MESH_RECORDS_OVERFLOW: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::OVERFLOW	pub const OVERFLOW: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::RECORDS_FAULTS	pub const RECORDS_FAULTS: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::REPLAY_FAULT	pub const REPLAY_FAULT: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::RESIDENT_MISS	pub const RESIDENT_MISS: StatusBits
@@ -420,12 +413,6 @@ assoc-const-value	metal2vulkan::bind::IndexRewritePass::POOL_HEADER_BYTES	IndexB
 assoc-const-value	metal2vulkan::bind::IndexRewriteRun::MAX_DRAWS	65535
 assoc-const-value	metal2vulkan::bind::IndexRewriteRun::SLOT_BYTES	4 * Self::SLOT_WORDS as u64
 assoc-const-value	metal2vulkan::bind::IndexRewriteRun::SLOT_WORDS	36
-assoc-const-value	metal2vulkan::bind::IndirectClamp::SCRATCH_BYTES	12
-assoc-const-value	metal2vulkan::bind::IndirectClampModule::PUSH_BYTES	4
-assoc-const-value	metal2vulkan::bind::IndirectClampModule::SCRATCH_BINDING	1
-assoc-const-value	metal2vulkan::bind::IndirectClampModule::SET	0
-assoc-const-value	metal2vulkan::bind::IndirectClampModule::SOURCE_BINDING	0
-assoc-const-value	metal2vulkan::bind::IndirectClampModule::STATUS_BINDING	2
 assoc-const-value	metal2vulkan::bind::InstanceRecord::BYTES	64
 assoc-const-value	metal2vulkan::bind::InterleaveMergeModules::SET	0
 assoc-const-value	metal2vulkan::bind::InterleaveMergeModules::WIDE_BINDING	0
@@ -488,7 +475,6 @@ assoc-const-value	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	StatusBits
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<10)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<9)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_RECORDS_OVERFLOW	StatusBits(1 <<5)
-assoc-const-value	metal2vulkan::bind::StatusBits::OVERFLOW	StatusBits(1 <<0)
 assoc-const-value	metal2vulkan::bind::StatusBits::RECORDS_FAULTS	StatusBits(StatusBits::MESH_RECORDS_OVERFLOW.0 | StatusBits::TESSELLATION_RECORDS_OVERFLOW.0)
 assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<2)
 assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<1)
@@ -2276,7 +2262,6 @@ field	metal2vulkan::bind::DescriptorWrite.ty	pub ty: vk::DescriptorType
 field	metal2vulkan::bind::DispatchCommands.descriptor_bytes	pub descriptor_bytes: Vec<DescriptorBytes>
 field	metal2vulkan::bind::DispatchCommands.descriptor_ranges	pub descriptor_ranges: Vec<DescriptorRange>
 field	metal2vulkan::bind::DispatchCommands.extents	pub extents: Vec<BufferExtent>
-field	metal2vulkan::bind::DispatchCommands.indirect_clamp	pub indirect_clamp: Option<IndirectClamp>
 field	metal2vulkan::bind::DispatchCommands.push_holes	pub push_holes: Vec<PushHole>
 field	metal2vulkan::bind::DispatchCommands.region_record	pub region_record: Option<[u8; 32]>
 field	metal2vulkan::bind::DispatchCommands.regions	pub regions: Vec<DispatchRegion>
@@ -2393,13 +2378,6 @@ field	metal2vulkan::bind::IndexRewritePass.arguments_range	pub arguments_range: 
 field	metal2vulkan::bind::IndexRewritePass.groups	pub groups: u32
 field	metal2vulkan::bind::IndexRewritePass.indices_range	pub indices_range: Option<BufferRange>
 field	metal2vulkan::bind::IndexRewritePass.parameters	pub parameters: [u32; IndexRewritePass::PARAMETER_WORDS]
-field	metal2vulkan::bind::IndirectClamp.limits	pub limits: [u32; 3]
-field	metal2vulkan::bind::IndirectClamp.push_constants	pub push_constants: [u8; 4]
-field	metal2vulkan::bind::IndirectClamp.source	pub source: IndirectRef
-field	metal2vulkan::bind::IndirectClamp.source_range	pub source_range: BufferRange
-field	metal2vulkan::bind::IndirectClampModule.limits	pub limits: [u32; 3]
-field	metal2vulkan::bind::IndirectClampModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::IndirectClampModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::IndirectRef.offset	pub offset: u64
 field	metal2vulkan::bind::IndirectRef.token	pub token: u32
 field	metal2vulkan::bind::InheritedBytes.index	pub index: u32
@@ -2570,7 +2548,6 @@ field	metal2vulkan::bind::StatusReport.index_pool_overflow	pub index_pool_overfl
 field	metal2vulkan::bind::StatusReport.mesh_grid_discarded	pub mesh_grid_discarded: bool
 field	metal2vulkan::bind::StatusReport.mesh_grid_past_limits	pub mesh_grid_past_limits: bool
 field	metal2vulkan::bind::StatusReport.mesh_records_overflow	pub mesh_records_overflow: Option<MeshRecordsFault>
-field	metal2vulkan::bind::StatusReport.overflow	pub overflow: bool
 field	metal2vulkan::bind::StatusReport.replay_fault	pub replay_fault: bool
 field	metal2vulkan::bind::StatusReport.replay_faults	pub replay_faults: ReplayFaults
 field	metal2vulkan::bind::StatusReport.resident_miss	pub resident_miss: bool
@@ -3723,7 +3700,6 @@ fn	metal2vulkan::bind::index_bounds_plan_module	pub fn index_bounds_plan_module(
 fn	metal2vulkan::bind::index_bounds_plan_run_module	pub fn index_bounds_plan_run_module(device: &Device) -> Result<IndexBoundsPlanModule, Error>
 fn	metal2vulkan::bind::index_rewrite_module	pub fn index_rewrite_module(device: &Device, program: RewriteProgram, phase: RewritePhase) -> Result<IndexRewriteModule, Error>
 fn	metal2vulkan::bind::index_rewrite_run_module	pub fn index_rewrite_run_module(device: &Device, program: RewriteProgram) -> Result<IndexRewriteModule, Error>
-fn	metal2vulkan::bind::indirect_clamp_module	pub fn indirect_clamp_module(device: &Device) -> Result<IndirectClampModule, Error>
 fn	metal2vulkan::bind::indirect_commands::records_address	pub const fn records_address(id: u64) -> u64
 fn	metal2vulkan::bind::indirect_commands::written_flag_offset	pub const fn written_flag_offset(capacity: u32, index: u32) -> u64
 fn	metal2vulkan::bind::instance_record	pub fn instance_record(instance: &MetalInstance, reference: u64, geometry_table_offset: u32) -> Result<InstanceRecord, Unsupported>
@@ -7195,7 +7171,6 @@ method	metal2vulkan::bind::IndexRewriteRun::push	pub fn push(&mut self, draw: Re
 method	metal2vulkan::bind::IndexRewriteRun::words	pub fn words(&self) -> Vec<u8>
 method	metal2vulkan::bind::IndexRewriteRun::workgroups	pub fn workgroups(&self) -> u32
 method	metal2vulkan::bind::IndexRewriteRun::written	pub fn written(&self) -> u32
-method	metal2vulkan::bind::IndirectClamp::new	pub fn new(source: IndirectRef, limits: [u32; 3], alignment: u64) -> Option<IndirectClamp>
 method	metal2vulkan::bind::IndirectRef::new	pub fn new(token: u32, offset: u64) -> IndirectRef
 method	metal2vulkan::bind::InstanceRecord::bytes	pub fn bytes(&self) -> &[u8; InstanceRecord::BYTES]
 method	metal2vulkan::bind::MergedLayout::draw_offset	pub fn draw_offset(&self, index: u32) -> u64
@@ -8093,8 +8068,6 @@ struct	metal2vulkan::bind::IndexBufferRef	#[cfg_attr(feature = "serde", derive(s
 struct	metal2vulkan::bind::IndexRewriteModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexRewriteModule
 struct	metal2vulkan::bind::IndexRewritePass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndexRewritePass
 struct	metal2vulkan::bind::IndexRewriteRun	#[derive(Clone, Debug, PartialEq, Eq)] pub struct IndexRewriteRun
-struct	metal2vulkan::bind::IndirectClamp	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectClamp
-struct	metal2vulkan::bind::IndirectClampModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndirectClampModule
 struct	metal2vulkan::bind::IndirectRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectRef
 struct	metal2vulkan::bind::InheritedBytes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InheritedBytes
 struct	metal2vulkan::bind::InstanceRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct InstanceRecord([u8; InstanceRecord::BYTES])
@@ -10064,7 +10037,6 @@ variant	metal2vulkan::bind::ImageSource::Texture	Texture { slot: SlotRef, view: 
 variant	metal2vulkan::bind::IndexOverrun::Clamped	Clamped { past_end: u32 }
 variant	metal2vulkan::bind::IndexOverrun::Robust	Robust { past_end: u32 }
 variant	metal2vulkan::bind::IndirectArgs::Buffer	Buffer(IndirectRef)
-variant	metal2vulkan::bind::IndirectArgs::ClampScratch	ClampScratch
 variant	metal2vulkan::bind::IndirectArgs::Replay	Replay
 variant	metal2vulkan::bind::MergePhase::Blocks	Blocks
 variant	metal2vulkan::bind::MergePhase::Starts	Starts
@@ -11356,7 +11328,6 @@ variant	metal2vulkan::pipeline::Mechanism::BinderView	BinderView
 variant	metal2vulkan::pipeline::Mechanism::Builtin	Builtin
 variant	metal2vulkan::pipeline::Mechanism::DynamicState	DynamicState
 variant	metal2vulkan::pipeline::Mechanism::DynamicStateOrPushConstant	DynamicStateOrPushConstant
-variant	metal2vulkan::pipeline::Mechanism::IndirectClamp	IndirectClamp
 variant	metal2vulkan::pipeline::Mechanism::KeyProjection	KeyProjection
 variant	metal2vulkan::pipeline::Mechanism::None	None
 variant	metal2vulkan::pipeline::Mechanism::PipelineStateOrPushConstant	PipelineStateOrPushConstant

@@ -102,7 +102,6 @@ fn template() -> ComputeTemplate {
         push_range: Some((0, 36)),
         table: None,
         root_first: None,
-        storage_alignment: 64,
         resources: Default::default(),
         stage_in_region: false,
         stage_in_grid: Vec::new(),
@@ -162,50 +161,24 @@ fn a_threadgroups_indirect_plan_has_no_cpu_argument_dependency() {
     assert_eq!(
         (ra.indirect, rb.indirect),
         (
-            Some(IndirectArgs::ClampScratch),
-            Some(IndirectArgs::ClampScratch)
+            Some(IndirectArgs::Buffer(IndirectRef::new(1, 0))),
+            Some(IndirectArgs::Buffer(IndirectRef::new(9, 4096)))
         )
     );
     // The region field is written anyway (VUID-vkCmdDispatch-maintenance4-08602): base 0,
     // the nominal size packed, the unknown grid 0.
     let w = push_words(ra);
     assert_eq!(&w[..8], &[0, 0, 0, 7 | 3 << 10 | 1 << 20, 0, 0, 0, 0]);
-    let (ca, cb) = (
-        a.indirect_clamp.expect("clamp"),
-        b.indirect_clamp.expect("clamp"),
-    );
-    assert_eq!((ca.source.token, cb.source.token), (1, 9));
-    assert_eq!(ca.limits, [65535; 3]);
-    // The arguments are a use of the dispatch: the clamp prepass reads them as a storage buffer.
-    let args = |class, stages| ResourceUse {
-        resource: UseTarget::Indirect,
-        access: AccessSet::READ,
-        class,
-        stages,
-        range: Some(ByteRange { offset: 0, len: 12 }),
-    };
+    // The arguments are a use of the dispatch: `vkCmdDispatchIndirect` reads them.
     assert_eq!(
         a.uses,
-        vec![args(
-            AccessClass::Storage,
-            vk::PipelineStageFlags2::COMPUTE_SHADER
-        )]
-    );
-    // A device whose limit is the full `u32` range dispatches from Metal's buffer directly.
-    let mut t = template();
-    t.local.max_count = [u32::MAX; 3];
-    let c = instantiate(&t, &state(0), &d(5, 64)).expect("unclamped");
-    assert_eq!(c.indirect_clamp, None);
-    assert_eq!(
-        c.regions[0].indirect,
-        Some(IndirectArgs::Buffer(IndirectRef::new(5, 64)))
-    );
-    assert_eq!(
-        c.uses,
-        vec![args(
-            AccessClass::Indirect,
-            vk::PipelineStageFlags2::DRAW_INDIRECT
-        )]
+        vec![ResourceUse {
+            resource: UseTarget::Indirect,
+            access: AccessSet::READ,
+            class: AccessClass::Indirect,
+            stages: vk::PipelineStageFlags2::DRAW_INDIRECT,
+            range: Some(ByteRange { offset: 0, len: 12 }),
+        }]
     );
     // A direct dispatch has no uses of its own.
     let direct = Dispatch::Threadgroups {

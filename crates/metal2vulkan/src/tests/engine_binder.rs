@@ -18,7 +18,7 @@
 //! - Loaded pointers resolve through the binder's root table (resident set from bound buffers and
 //!   `used_resources`); a miss is counted in the `ExecutionStatus`; a parameter merged with a
 //!   loaded pointer is reached through its root entry, which needs a device address.
-//! - An indirect dispatch runs through the clamp prepass and its scratch.
+//! - An indirect dispatch reads its group counts from Metal's buffer.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -26,7 +26,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::indirect_clamp;
 use crate::bind::{
     BindState, BoundBuffer, Dispatch, DispatchCommands, ExecutionStatus, IndirectArgs, IndirectRef,
     PushHole, ResourceClass, RootTable, StageTable, StatusReport, StatusWord, UsedResource,
@@ -385,7 +384,7 @@ pub(super) fn execute_with(
         }
         let workgroups = match region.indirect {
             None => region.group_count,
-            Some(IndirectArgs::ClampScratch) => run_clamp(dev, &cmds, world),
+            Some(IndirectArgs::Buffer(_)) => INDIRECT_ARGS,
             Some(other) => panic!("{other:?}"),
         };
         let res = Resources {
@@ -431,42 +430,7 @@ pub(super) fn execute_with(
 }
 
 /// The indirect arguments the harness keeps for `ThreadgroupsIndirect` (token 0).
-static INDIRECT_ARGS: [u32; 3] = [10, 1, 1];
-
-/// Run the clamp prepass of `cmds` on the interpreter over [`INDIRECT_ARGS`]; the clamped counts.
-fn run_clamp(dev: &Device, cmds: &DispatchCommands, world: &mut World) -> [u32; 3] {
-    let c = cmds.indirect_clamp.expect("a clamp for a scratch region");
-    let module = indirect_clamp::typed_module(c.limits).expect("clamp module");
-    assert!(indirect_clamp::indirect_clamp_module(dev).is_ok());
-    let source: Vec<u8> = INDIRECT_ARGS.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let res = Resources {
-        buffers: vec![
-            Buffer {
-                slot: Some(indirect_clamp::SOURCE),
-                address: None,
-                bytes: source,
-            },
-            Buffer {
-                slot: Some(indirect_clamp::SCRATCH),
-                address: None,
-                bytes: vec![0; 12],
-            },
-            Buffer {
-                slot: Some(indirect_clamp::STATUS),
-                address: None,
-                bytes: world.status.to_vec(),
-            },
-        ],
-        push: c.push_constants.to_vec(),
-        spec: BTreeMap::new(),
-    };
-    let out = run(&module, &Config::default(), res)
-        .expect("clamp")
-        .buffers;
-    world.status.copy_from_slice(&out[2]);
-    let w = |i: usize| u32::from_le_bytes(out[1][4 * i..4 * i + 4].try_into().expect("word"));
-    [w(0), w(1), w(2)]
-}
+static INDIRECT_ARGS: [u32; 3] = [3, 1, 1];
 
 pub(super) fn words(bytes: &[u8]) -> Vec<u32> {
     bytes
@@ -604,23 +568,26 @@ fn dispatch_threads_edges_and_group_splits_compute_metal_grid_builtins() {
         let c = execute(&dev, &pipe, &m, &mut w, &d).expect(stem);
         assert_eq!(c.regions.len(), 3, "{stem}");
         assert_eq!(&words(&w.buffers[&0].bytes)[..40], expect(40, 4), "{stem}");
-        // Indirect: the clamp reduces Metal's 10 groups to the limit 4 and reports it.
+        // Indirect: the dispatch reads Metal's 3 groups from its buffer.
         let mut w = World::new([(0, Alloc::new(4 * 64, 0))]);
         let d = Dispatch::ThreadgroupsIndirect {
             indirect: IndirectRef::new(0, 0),
             threads_per_group: [4, 1, 1],
         };
         let c = execute(&dev, &pipe, &m, &mut w, &d).expect(stem);
-        assert!(c.indirect_clamp.is_some());
-        assert!(w.report().overflow, "{stem}: the clamp reported");
-        let got = words(&w.buffers[&0].bytes);
-        let want: Vec<u32> = (0..16).map(|t| (16 << 16) | (t / 4)).collect();
         assert_eq!(
-            &got[..16],
-            want,
-            "{stem}: NumWorkgroups grid of the clamped counts"
+            c.regions[0].indirect,
+            Some(IndirectArgs::Buffer(IndirectRef::new(0, 0))),
+            "{stem}"
         );
-        assert!(got[16..].iter().all(|&x| x == 0));
+        let got = words(&w.buffers[&0].bytes);
+        let want: Vec<u32> = (0..12).map(|t| (12 << 16) | (t / 4)).collect();
+        assert_eq!(
+            &got[..12],
+            want,
+            "{stem}: NumWorkgroups grid of the buffer's counts"
+        );
+        assert!(got[12..].iter().all(|&x| x == 0));
     }
 }
 
@@ -1030,7 +997,6 @@ fn loaded_pointers_resolve_through_the_binders_root_table() {
                 let r = w.report();
                 assert_eq!(r.resident_miss, miss, "{stem} k={k}");
                 assert_eq!(r.resident_misses, u32::from(miss), "{stem} k={k}");
-                assert!(!r.overflow);
             }
         }
     }

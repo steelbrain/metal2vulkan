@@ -31,10 +31,10 @@
 //! shape. Refusals are [`BindError`](crate::error::BindError)s.
 //!
 //! Per command buffer, bind one [`ExecutionStatus`] buffer: initialize it with [`ExecutionStatus::initial`], and read it
-//! back with [`ExecutionStatus::decode`], which reports clamped indirect counts and resident-set
-//! misses. A command reaches it by its device address where the device addresses buffers, and
+//! back with [`ExecutionStatus::decode`], which reports resident-set misses and the other faults
+//! [`StatusReport`] names. A command reaches it by its device address where the device addresses buffers, and
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
-//! dispatch can carry an [`IndirectClamp`] prepass of [`indirect_clamp_module`] to record first.
+//! dispatch reads its group counts from Metal's buffer itself ([`IndirectArgs::Buffer`]).
 //! An indexed indirect draw whose index fetch
 //! nothing bounds (`DrawCommands::index_bounds_pass`) can bound it on the GPU instead of reading
 //! its arguments: an [`IndexBoundsPass`] of [`index_bounds_plan_module`] and
@@ -104,7 +104,6 @@ pub(crate) mod graphics;
 pub(crate) mod heap;
 pub(crate) mod index_bounds;
 pub(crate) mod index_rewrite;
-pub(crate) mod indirect_clamp;
 pub mod indirect_commands;
 pub(crate) mod instantiate;
 pub(crate) mod mesh_arguments;
@@ -164,7 +163,6 @@ pub use index_rewrite::{
     IndexRewriteRun, RewriteOrder, RewriteOutput, RewritePhase, RewriteProgram, RewriteRunDraw,
     RewriteSource,
 };
-pub use indirect_clamp::{indirect_clamp_module, IndirectClamp, IndirectClampModule};
 pub use instantiate::{
     BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, IndexBufferRef, IndirectRef,
     PushConstantWrite, PushHole, ResidentRange, ResidentSet, RootTable,

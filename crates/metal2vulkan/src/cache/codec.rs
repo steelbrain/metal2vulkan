@@ -1337,7 +1337,7 @@ codec_enum! {
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {
         Specialization, Variant, PushConstant, DynamicState, DynamicStateOrPushConstant,
-        Builtin, PlanTimeCheck, BinderView, KeyProjection, RegionSelected, IndirectClamp,
+        Builtin, PlanTimeCheck, BinderView, KeyProjection, RegionSelected,
         SyntheticBinding, RenderPassContract, None, PipelineStateOrPushConstant,
     }
 }

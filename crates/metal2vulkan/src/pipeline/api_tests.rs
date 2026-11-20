@@ -1280,12 +1280,11 @@ mod bind_serde_round_trips {
             }],
             region_record: Some([7; 32]),
             root_table: None,
-            indirect_clamp: IndirectClamp::new(IndirectRef::new(1, 16), [65535; 3], 64),
             uses: vec![ResourceUse {
                 resource: UseTarget::Indirect,
                 access: AccessSet::READ,
-                class: AccessClass::Storage,
-                stages: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                class: AccessClass::Indirect,
+                stages: vk::PipelineStageFlags2::DRAW_INDIRECT,
                 range: Some(ByteRange { offset: 0, len: 12 }),
             }],
         });

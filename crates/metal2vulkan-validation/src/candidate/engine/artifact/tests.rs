@@ -129,7 +129,7 @@ fn the_runtime_sources_are_the_committed_ones() {
 
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
-    let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests, and the indirect clamp, which the executor refuses to run";
+    let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests";
     let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's YCbCr write takes that file's sRGB encode (srgb_encode), which reaches none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),

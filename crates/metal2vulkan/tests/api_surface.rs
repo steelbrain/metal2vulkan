@@ -485,9 +485,6 @@ surface! {
         const HANDLE_ENTRY_BYTES;
         const HANDLE_TABLE_CAPACITY;
         const NEUTRAL_HEAP_ELEMENT;
-        fn indirect_clamp_module;
-        struct IndirectClamp N;
-        struct IndirectClampModule N;
         struct BufferExtent N;
         struct BufferRange N;
         struct DescriptorBytes N;

@@ -145,8 +145,6 @@ pub struct ComputeTemplate {
     pub(crate) table: Option<(u32, u32, u32)>,
     /// The first root of the resident set (`R0`), when the function reads the root table.
     pub(crate) root_first: Option<u32>,
-    /// `minStorageBufferOffsetAlignment` (the indirect clamp's source range).
-    pub(crate) storage_alignment: u64,
     /// The texel buffers the dispatch binds.
     pub(crate) resources: ResourceTemplate,
     /// Whether the kernel reads the stage-in region (`RuntimeFact::StageInRegion`): a dispatch

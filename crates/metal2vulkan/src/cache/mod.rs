@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2218;
+pub const SEMANTICS_VERSION: u32 = 2219;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,12 +71,12 @@ pub const SEMANTICS_VERSION: u32 = 2218;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 562;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 563;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
-/// tables, dispatch regions and draws), the device replay and its preprocess, resident sets, the
-/// indirect clamp, status decoding, and the other run-time data the binder computes. Independent of
+/// tables, dispatch regions and draws), the device replay and its preprocess, resident sets, status
+/// decoding, and the other run-time data the binder computes. Independent of
 /// [`SEMANTICS_VERSION`] (what is compiled) and [`ARTIFACT_FORMAT_VERSION`] (how it is encoded):
 /// two runs of byte-identical artifacts and plans under one runtime version do the same thing. A
 /// consumer that keeps records of what runs of an artifact did (its own regression records, or what
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 562;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2542;
+pub const RUNTIME_VERSION: u32 = 2543;
 
 /// Writes a digest as lowercase hex.
 pub(crate) fn write_hex(f: &mut fmt::Formatter<'_>, name: &str, hash: &Hash256) -> fmt::Result {

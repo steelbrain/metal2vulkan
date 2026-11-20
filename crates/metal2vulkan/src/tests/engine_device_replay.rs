@@ -407,10 +407,7 @@ fn replay_variants_run(
             Some(IndirectArgs::Replay),
             "{stem}"
         );
-        assert!(
-            cmds.root_table.is_none() && cmds.indirect_clamp.is_none(),
-            "{stem}"
-        );
+        assert!(cmds.root_table.is_none(), "{stem}");
         let token = NonZeroU64::new(TOKEN).expect("token");
         variants.push(match flat {
             Some(max) => ReplayVariant::flat(token, local, max),
@@ -663,7 +660,7 @@ fn replayed_commands_compute_what_metal_computes() {
         assert_eq!(words(&mem.out), expected, "{stem}");
         let report = mem.report();
         assert!(
-            !report.replay_fault && !report.overflow && !report.resident_miss,
+            !report.replay_fault && !report.resident_miss,
             "{stem}: {report:?}"
         );
     }
@@ -1120,7 +1117,6 @@ fn host_replay(
                 1,
                 "{stem}: a flat or folded dispatch is one region"
             );
-            assert!(cmds.indirect_clamp.is_none(), "{stem}: no clamp prepass");
         }
         for region in &cmds.regions {
             let expected =
@@ -1352,7 +1348,7 @@ fn a_ragged_thread_grid_replays_as_the_host_replay_runs_it() {
             );
             let report = mem.report();
             assert!(
-                !report.replay_fault && !report.overflow && !report.resident_miss,
+                !report.replay_fault && !report.resident_miss,
                 "{stem} {path:?}: {report:?}"
             );
             generated += usize::from(path == Route::Generated);
@@ -1418,7 +1414,7 @@ fn a_group_count_past_the_limit_replays_as_the_host_replay_runs_it() {
             );
             let report = mem.report();
             assert!(
-                !report.replay_fault && !report.overflow && !report.resident_miss,
+                !report.replay_fault && !report.resident_miss,
                 "{stem} {path:?}: {report:?}"
             );
 
@@ -1910,7 +1906,7 @@ fn a_flat_variant_runs_every_grid_of_its_pipeline() {
             assert_eq!(words(&mem.out), words(&metal), "{stem} {path:?}");
             let report = mem.report();
             assert!(
-                !report.replay_fault && !report.overflow && !report.resident_miss,
+                !report.replay_fault && !report.resident_miss,
                 "{stem} {path:?}: {report:?}"
             );
             generated += usize::from(path == Route::Generated);
@@ -1967,7 +1963,6 @@ fn a_flat_variant_dispatches_outside_a_replay() {
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         assert_eq!(cmds.regions.len(), 1, "{stem}");
         assert_eq!(cmds.regions[0].indirect, None, "{stem}");
-        assert!(cmds.indirect_clamp.is_none(), "{stem}");
         // 10 x 3 threads is 30, which 4 threadgroups of 8 cover.
         assert_eq!(cmds.regions[0].group_count, [4, 1, 1], "{stem}");
         assert_eq!(

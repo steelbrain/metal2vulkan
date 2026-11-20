@@ -1108,11 +1108,6 @@ pub fn report_verdict(report: StatusReport) -> Result<StatusReport, ExecutorErro
             report.replay_faults.0
         )));
     }
-    if report.overflow {
-        return Err(ExecutorError::Failed(
-            "the indirect clamp reduced a group count; the output is not evidence".into(),
-        ));
-    }
     if report.resident_miss || report.resident_misses != 0 {
         return Err(ExecutorError::Failed(format!(
             "{} access(es) missed the resident set; the output is not evidence",

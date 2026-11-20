@@ -458,7 +458,7 @@ fn a_draw_the_pool_cannot_hold_draws_nothing_and_says_so() {
     assert_eq!(drawn(&r, &buffer, 0, 16, true), Vec::<i64>::new());
     assert_eq!(r.pool[0], 48, "the counter stays");
     assert!(r.report.index_pool_overflow);
-    assert!(!r.report.overflow && !r.report.replay_fault);
+    assert!(!r.report.replay_fault);
     let r = ran(&pass, &arguments(u32::MAX, 2, 0), &buffer, 0);
     assert_eq!(drawn(&r, &buffer, 0, 16, true), Vec::<i64>::new());
     assert!(r.report.index_pool_overflow);

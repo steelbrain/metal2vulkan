@@ -92,12 +92,11 @@
 //! offset ([`stage_in_reach`]). It is false where none can, which drops the fetch's reach check,
 //! so only a dispatch that can reach takes the `VkPipeline` that keeps it.
 //!
-//! **Indirect.** When any axis of `maxComputeWorkGroupCount` is below `2^32 - 1`, an indirect
-//! dispatch carries an [`IndirectClamp`] prepass and its region reads the clamp's scratch
-//! ([`IndirectArgs::ClampScratch`]).
+//! **Indirect.** An indirect dispatch's region reads Metal's group counts from its buffer
+//! ([`IndirectArgs::Buffer`]): a count above the device's `maxComputeWorkGroupCount` is the GPU's
+//! to read, which Vulkan leaves undefined.
 
 use crate::bind::graphics::zeroed;
-use crate::bind::indirect_clamp::IndirectClamp;
 use crate::bind::instantiate::{
     bind_buffers, put, slot_field, texel_ranges, BufferExtent, DescriptorBytes, DescriptorRange,
     FieldBytes, IndirectRef, PushConstantWrite, PushHole, RootEntry, RootTable,
@@ -185,8 +184,7 @@ impl Dispatch {
 
 /// What the consumer records for one dispatch: upload `descriptor_bytes` and `root_table`, bind
 /// every plan descriptor (buffer descriptors over exactly `descriptor_ranges`), fill the
-/// `push_holes` in every region's push bytes, record the `indirect_clamp` prepass when present,
-/// and then each region in order.
+/// `push_holes` in every region's push bytes, and then record each region in order.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -210,13 +208,9 @@ pub struct DispatchCommands {
     pub region_record: Option<[u8; 32]>,
     /// The resident root table, when the function reads it.
     pub root_table: Option<RootTable>,
-    /// The indirect-clamp prepass to record before the regions, when group counts are GPU-written
-    /// and the device's group-count limit is below `2^32 - 1`.
-    pub indirect_clamp: Option<IndirectClamp>,
     /// The dispatch's own resources beyond the plan's `uses`: the 12 bytes of its indirect
-    /// arguments, read by the clamp prepass as a storage buffer in `COMPUTE_SHADER`, or by
-    /// `vkCmdDispatchIndirect` in `DRAW_INDIRECT` without one. The range is relative to the
-    /// arguments' offset.
+    /// arguments, read by `vkCmdDispatchIndirect` in `DRAW_INDIRECT`. The range is relative to
+    /// the arguments' offset.
     pub uses: Vec<ResourceUse>,
 }
 
@@ -231,7 +225,6 @@ impl DispatchCommands {
             push_holes: Vec::new(),
             region_record: None,
             root_table: None,
-            indirect_clamp: None,
             uses: Vec::new(),
         }
     }
@@ -244,8 +237,6 @@ impl DispatchCommands {
 pub enum IndirectArgs {
     /// Metal's arguments, directly (`vkCmdDispatchIndirect` from this buffer and offset).
     Buffer(IndirectRef),
-    /// The scratch the `DispatchCommands.indirect_clamp` prepass wrote, at its start.
-    ClampScratch,
     /// The device replay's arguments for the replayed command and this variant, which its
     /// preprocess wrote (`ReplayLayout::argument_offset` in the replay's scratch).
     Replay,
@@ -1424,7 +1415,6 @@ fn instantiate(
         push_holes,
         region_record: region_record_out,
         root_table: root_table_out,
-        indirect_clamp: indirect_clamp_out,
         uses,
     } = out;
     let replay = records == Records::Replay;
@@ -1607,13 +1597,7 @@ fn instantiate(
         region_specialization_into(t, (r.local, r.multi, reach), &mut out.specialization);
         out.indirect = match *dispatch {
             Dispatch::ThreadgroupsIndirect { .. } if replay => Some(IndirectArgs::Replay),
-            Dispatch::ThreadgroupsIndirect { indirect, .. } => {
-                Some(if records == Records::Binder && needs_clamp(&t.local) {
-                    IndirectArgs::ClampScratch
-                } else {
-                    IndirectArgs::Buffer(indirect)
-                })
-            }
+            Dispatch::ThreadgroupsIndirect { indirect, .. } => Some(IndirectArgs::Buffer(indirect)),
             _ => None,
         };
         out.group_count = r.groups;
@@ -1621,23 +1605,6 @@ fn instantiate(
         out.required_subgroup_size = t.local.required_subgroup_size;
     }
 
-    // A preprocess checks its group counts against the limit.
-    *indirect_clamp_out = match *dispatch {
-        Dispatch::ThreadgroupsIndirect { indirect, .. }
-            if records == Records::Binder && needs_clamp(&t.local) =>
-        {
-            Some(
-                IndirectClamp::new(indirect, t.local.max_count, t.storage_alignment).ok_or_else(
-                    || {
-                        BindError::Unsupported(Unsupported::not_representable(
-                            Feature::GroupCount { axis: None },
-                        ))
-                    },
-                )?,
-            )
-        }
-        _ => None,
-    };
     // A direct dispatch on a flat variant reads its region from the record the consumer writes
     // (base 0, the dispatch's threadgroup size, and the grid in threads), since the flat lowering
     // reads the record by address wherever its group counts come from.
@@ -1652,35 +1619,16 @@ fn instantiate(
     descriptor_bytes.extend(crate::bind::heap::table_bytes(&t.resources, state)?);
     uses.clear();
     if let Dispatch::ThreadgroupsIndirect { .. } = *dispatch {
-        let (class, stages) = if indirect_clamp_out.is_some() {
-            (
-                AccessClass::Storage,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-            )
-        } else {
-            (
-                AccessClass::Indirect,
-                vk::PipelineStageFlags2::DRAW_INDIRECT,
-            )
-        };
+        // Metal's three words of group counts, which `vkCmdDispatchIndirect` reads.
         uses.push(ResourceUse {
             resource: UseTarget::Indirect,
             access: AccessSet::READ,
-            class,
-            stages,
-            range: Some(ByteRange {
-                offset: 0,
-                len: u64::from(IndirectClamp::SCRATCH_BYTES),
-            }),
+            class: AccessClass::Indirect,
+            stages: vk::PipelineStageFlags2::DRAW_INDIRECT,
+            range: Some(ByteRange { offset: 0, len: 12 }),
         });
     }
     Ok(())
-}
-
-/// Whether an indirect dispatch needs the clamp prepass: some axis of the device's group-count
-/// limit is below Metal's `2^32 - 1`.
-fn needs_clamp(rules: &LocalRules) -> bool {
-    rules.max_count.iter().any(|&c| c < u32::MAX)
 }
 
 #[cfg(test)]

@@ -951,7 +951,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             push_range: placement.and_then(|pl| pl.push_range),
             table,
             root_first,
-            storage_alignment: limits.min_storage_buffer_offset_alignment,
             resources: template,
             stage_in_region: p
                 .dependencies
