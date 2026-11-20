@@ -207,11 +207,15 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             }
             let state = (device.new_render_pipeline_state(&d, |samplers| {
+                // Its constexpr sampler, then its texture write's.
                 assert!(
-                    matches!(samplers, [NumberedSampler::Constexpr(_)]),
+                    matches!(
+                        samplers,
+                        [NumberedSampler::Constexpr(_), NumberedSampler::Write]
+                    ),
                     "{name}: {samplers:?}"
                 );
-                Ok(vec![SAMPLER])
+                Ok(vec![SAMPLER, 0])
             }))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             // A 4x4 texture of one texel, (40, 80, 120, 255): every sample reads 40 / 255 in red.
