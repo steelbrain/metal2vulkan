@@ -12,16 +12,12 @@
 //! not write is that byte rather than a zero nobody can tell from a written one, and the site's
 //! layout compares the gaps ([`Gaps::Compared`]).
 //!
-//! **What the port adds to the lane.** The lane asserts *rules*: a fresh texture reads zero, the
-//! bytes come back, the padding is untouched, a format Metal describes none of is stopped. It holds no Metal value at all, and it walks all 301 formats in one test, so a
-//! format the venue has no texture of leaves the test green with nothing compared. Here Metal's own
-//! bytes are recorded per format, and a format the venue honestly lacks stops that format's case
-//! alone and counts as [`LacksFeature`](crate::verdict::Verdict::LacksFeature) — neither a pass nor
-//! a failure, and visible in the matrix.
+//! **Metal's bytes, per format.** Metal's own bytes are recorded per format, and a format the venue
+//! honestly lacks stops that format's case alone and counts as
+//! [`LacksFeature`](crate::verdict::Verdict::LacksFeature) — neither a pass nor a failure, and
+//! visible in the matrix.
 //!
-//! **What is left in the lane.** Whether a texture of each of the 301 formats is made at all, which
-//! the lane checks against two rules (the formats Metal describes, and the formats Metal answers
-//! nil for). One case per format would record Metal's answer for each, but the suite's
+//! **What is not a case.** Whether a texture of each of the 301 formats is made at all. The suite's
 //! `LacksFeature` outcome arrives only when a case stops, so a case covering many formats would
 //! have to swallow a venue's gap to keep going. That is a verdict-model question, not something to
 //! decide inside a case, so this family covers the formats whose texels are Metal's own bytes and
@@ -46,7 +42,7 @@ use crate::case::{Abort, Case, Input, MetalSource, Side, TextureRole, TextureSpe
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
 
-/// The texture's side in texels, which is the lane's extent.
+/// The texture's side in texels.
 const SIDE: u32 = 8;
 
 /// The byte every read-back destination holds before the copy, so a byte the copy did not write is
@@ -147,7 +143,7 @@ const FORMATS: [(PixelFormat, u32, &str); 76] = [
 
 /// The bytes of one texel of `pf`, for the uncompressed colour formats this family round-trips:
 /// none for a format whose image does not hold Metal's bytes, whose host copies the runtime
-/// refuses. The lane's own predicate, over the translator's public format table. A format held
+/// refuses. The predicate is over the translator's public format table. A format held
 /// for copies alone (`metal::format::copies_only`) is
 /// [`format_footprints`](crate::cases::format_footprints)'s, which records the same host round
 /// trip of it beside the footprints and texture types Metal answers for it, so it is none here.
@@ -166,7 +162,7 @@ fn texel_bytes(pf: PixelFormat) -> Option<u32> {
     (block.color.is_some() && !compressed).then_some(block.size)
 }
 
-/// `n` bytes of the lane's pattern, seeded by `seed`.
+/// `n` bytes of the case's pattern, seeded by `seed`.
 fn pattern(n: usize, seed: u8) -> Vec<u8> {
     (0..n)
         .map(|at| (at as u8).wrapping_mul(31).wrapping_add(seed))
@@ -210,14 +206,14 @@ impl TextureRoundTrip {
         vec![BEFORE; (self.pitch() * SIDE) as usize]
     }
 
-    /// The bytes `replace_region` writes: the lane's pattern over the whole destination, padding
+    /// The bytes `replace_region` writes: the case's pattern over the whole destination, padding
     /// included, so what lands in the gaps is the copy's business and not the case's.
     fn written(&self) -> Vec<u8> {
         pattern((self.pitch() * SIDE) as usize, self.format.as_raw() as u8)
     }
 
     /// The texture the case makes: one level, `Shader_Read` usage and `Shared` storage, which is
-    /// what `MTLTextureDescriptor`'s own defaults give and what the lane's descriptor holds.
+    /// what `MTLTextureDescriptor`'s own defaults give.
     fn spec(&self) -> TextureSpec {
         TextureSpec::new(self.format, [SIDE, SIDE], self.pitch(), TextureRole::Read)
     }
@@ -262,7 +258,7 @@ impl TextureRoundTrip {
 ///
 /// What it costs: our typed error is not in the record, so a `known-gaps-rt.tsv` row for such a
 /// format reads `Err(NotMade)` and cannot tell one refusal of ours from another at the same site.
-/// The reason is one call away in the runtime and the lane keeps it, so the cost is a reader's
+/// The reason is one call away in the runtime, so the cost is a reader's
 /// convenience rather than a fact nobody holds — and it buys the alternative's absence: an error
 /// payload in the record would read as a divergence on the day Metal refuses a format too, when
 /// the two sides in fact agree.
@@ -399,8 +395,7 @@ mod tests {
 
     /// The layout a read-back compares under covers every byte the read fills, names the byte as
     /// its element, and compares the padding. A layout that stopped at the rows would let a copy
-    /// scribble between them unnoticed, which is the assertion the lane makes and this port must
-    /// keep.
+    /// scribble between them unnoticed.
     #[test]
     fn the_layout_covers_the_padding() {
         for case in all() {

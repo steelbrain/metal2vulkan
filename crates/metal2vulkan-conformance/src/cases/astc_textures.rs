@@ -73,7 +73,7 @@ const FIXTURE: &str = "format_scout";
 /// The entry point that reads a 16 x 16 texture whole, one thread a texel.
 const ENTRY: &str = "scout_read_f";
 
-/// Each texture's side, which the kernel's indexing is written for, and the lane's own.
+/// Each texture's side, which the kernel's indexing is written for.
 const SIDE: u32 = 16;
 
 /// The texels of one texture.
@@ -93,13 +93,13 @@ const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
 const DEVICE_DECODE_BOUND: f64 = 1.0 / 2048.0 + f32::EPSILON as f64 / 2.0;
 
 /// An LDR void-extent block of red, green, blue and alpha `0x4000`, `0x8000`, `0xc000` and
-/// `0xffff`: every texel of the block that colour. The lane's own, since the seeded stream puts its
-/// first eight bytes in every fourth block.
+/// `0xffff`: every texel of the block that colour. The seeded stream puts its first eight bytes in
+/// every fourth block.
 const VOID_EXTENT: [u8; 16] = [
     0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x40, 0x00, 0x80, 0x00, 0xc0, 0xff, 0xff,
 ];
 
-/// One format the lane reads: the case's name and the `MTLPixelFormat`. Its footprint follows
+/// One format the case reads: its name and the `MTLPixelFormat`. Its footprint follows
 /// from the format ([`metal2vulkan::metal::format::block_extent`]) and its profile from whether
 /// the decoder has an answer for it ([`AstcDecode::of`]), so there is no second spelling of either
 /// to keep in step.
@@ -108,8 +108,8 @@ struct Format {
     format: PixelFormat,
 }
 
-/// Every ASTC format, in the lane's order, because the seed of a round is the format's place in
-/// that order and the bytes must stay the bytes the lane measured: the fourteen linear footprints,
+/// Every ASTC format, in a fixed order, because the seed of a round is the format's place in that
+/// order and the bytes must stay the bytes the recordings hold: the fourteen linear footprints,
 /// then the fourteen sRGB ones, then the fourteen HDR ones.
 ///
 /// The HDR fourteen are appended rather than interleaved for exactly that reason — a place in this
@@ -286,8 +286,8 @@ const FORMATS: [Format; 42] = [
     },
 ];
 
-/// `count` 16-byte blocks of the lane's own seeded xorshift, so a round's blocks are the lane's
-/// blocks: random bits, of which most are error blocks and the rest decode through every mode,
+/// `count` 16-byte blocks of a seeded xorshift, so a round's blocks are the same on every run:
+/// random bits, of which most are error blocks and the rest decode through every mode,
 /// every fourth an LDR void-extent block of a random colour.
 fn seeded_blocks(seed: u64, count: usize) -> Vec<u8> {
     let mut state = seed | 1;
@@ -317,7 +317,7 @@ fn blocks_across_and_down(extent: [u32; 2]) -> [u32; 2] {
 }
 
 /// The blocks of round `round` of the format at place `at`: zeros, which are error blocks, then
-/// the lane's own seeded stream at the lane's own seed for that format's place.
+/// the seeded stream at the seed for that format's place.
 fn blocks(at: usize, round: usize, extent: [u32; 2]) -> Vec<u8> {
     let [across, down] = blocks_across_and_down(extent);
     let count = (across * down) as usize;
@@ -330,7 +330,7 @@ fn blocks(at: usize, round: usize, extent: [u32; 2]) -> Vec<u8> {
 /// The `float4` Metal reads of each texel of a `SIDE` x `SIDE` level of `decode`'s `blocks`, as
 /// the decoder under test computes it.
 ///
-/// This is the lane's own `metal_texels`, kept as a **cross-check against the recording** rather
+/// This is `metal_texels`, kept as a **cross-check against the recording** rather
 /// than as any case's expectation: the recordings hold Metal's answer, and the test
 /// `every_recorded_texel_is_the_decoders` holds the two against each other.
 pub fn decoders_texels(decode: AstcDecode, blocks: &[u8]) -> Vec<[f32; 4]> {
@@ -352,7 +352,7 @@ pub struct AstcTextures {
     at: usize,
 }
 
-/// Every format's case, in the lane's order.
+/// Every format's case, in [`FORMATS`] order.
 pub fn all() -> Vec<AstcTextures> {
     (0..FORMATS.len()).map(|at| AstcTextures { at }).collect()
 }
@@ -669,7 +669,7 @@ mod tests {
         }
     }
 
-    /// The seeded stream puts the lane's void-extent block's first eight bytes in every fourth
+    /// The seeded stream puts the void-extent block's first eight bytes in every fourth
     /// block, so a round's blocks are not error blocks throughout and the cross-check reads
     /// decoded colour as well as magenta.
     #[test]
@@ -727,10 +727,9 @@ mod tests {
 
     /// Every texel of every committed recording is `metal2vulkan::bind::AstcDecode`'s.
     ///
-    /// **This is the cross-check the port exists for.** The recordings hold what Metal answered on
-    /// this M3 Max; the decoder is what every guest shader on a device without the ASTC block
-    /// actually reads. Until this test there was no comparison of the two that did not run through
-    /// the decoder on both sides. A difference is a finding rather than something to edit away:
+    /// The recordings hold what Metal answered on an Apple M3 Max; the decoder is what every guest
+    /// shader on a device without the ASTC block actually reads. A difference is a finding rather
+    /// than something to edit away:
     /// either Apple's decode is not what we implement, or it moved.
     ///
     /// A case with no recording yet is named, so a missing recording is record mode's work rather

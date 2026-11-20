@@ -1,6 +1,6 @@
 //! A swizzled texture read and written through a **storage** slot.
 //!
-//! What plain Metal does (the lane: an Apple M4 on macOS 27.0.1, plain twice alike) with a 2 by 2
+//! What plain Metal does (an Apple M4 on macOS 27.0.1, plain twice alike) with a 2 by 2
 //! texture whose every texel is `(10, 20, 30, 40)` in bytes — `RG8Unorm` `(10, 20)`, `R32Float`
 //! 7.5, `R32Uint` 1000 — either **viewed** with a swizzle or **made** with one:
 //!
@@ -11,10 +11,10 @@
 //!   whose source is `c`, and lane `c` where no lane names it — the swizzle undone;
 //! - `atomic_fetch_add` adds to red and answers the texel **unswizzled**.
 //!
-//! **The port re-measures it on this M3 Max**, because the lane's one row is the M4's and that
-//! machine is gone. Record mode runs the case and the recordings hold Metal's own bytes; the three
-//! rules above are committed cross-checks over them (`every_recorded_read_is_the_lanes_rule`,
-//! `every_recorded_store_is_the_lanes_rule`, `every_recorded_atomic_ignores_the_swizzle`).
+//! **Measured again on an Apple M3 Max**: record mode runs the case and the recordings hold Metal's
+//! own bytes; the three rules above are committed cross-checks over them
+//! (`every_recorded_read_is_the_read_rule`, `every_recorded_store_is_the_store_rule`,
+//! `every_recorded_atomic_ignores_the_swizzle`).
 //!
 //! The kernels are the owned fixture `rrp_swizzled_storage`'s, all binding the texture at
 //! `[[texture(0)]]`: `rrp_sw_read_f` (`access::read`), `rrp_sw_rwread_f` and `rrp_sw_rwread_u`
@@ -249,7 +249,7 @@ pub struct SwizzledStorage {
     asks: Asks,
 }
 
-/// Every case of the family, in the order the lane sweeps them.
+/// Every case of the family, in order.
 pub fn all() -> Vec<SwizzledStorage> {
     vec![
         SwizzledStorage {
@@ -708,11 +708,11 @@ mod tests {
         })
     }
 
-    /// Every recorded read is the texel swizzled, as the lane's rule gives it — an 8-bit
+    /// Every recorded read is the texel swizzled, as the rule gives it — an 8-bit
     /// normalized channel's code `c` as `c / 255` correctly rounded, so no channel may sit an ulp
     /// from it.
     #[test]
-    fn every_recorded_read_is_the_lanes_rule() {
+    fn every_recorded_read_is_the_read_rule() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -750,7 +750,7 @@ mod tests {
         unrecorded.dedup();
         assert!(
             differ.is_empty(),
-            "{checked} reads checked; Metal's recorded reads differ from the lane's rule:\n{}",
+            "{checked} reads checked; Metal's recorded reads differ from the rule:\n{}",
             differ.join("\n")
         );
         assert!(
@@ -762,7 +762,7 @@ mod tests {
 
     /// Every recorded store is the value with the swizzle undone, in every texel.
     #[test]
-    fn every_recorded_store_is_the_lanes_rule() {
+    fn every_recorded_store_is_the_store_rule() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -806,7 +806,7 @@ mod tests {
         unrecorded.dedup();
         assert!(
             differ.is_empty(),
-            "{checked} texels checked; Metal's recorded stores differ from the lane's rule:\n{}",
+            "{checked} texels checked; Metal's recorded stores differ from the rule:\n{}",
             differ.join("\n")
         );
         assert!(
@@ -939,7 +939,7 @@ mod tests {
     }
 
     /// A made-with-a-swizzle case states `Unknown` usage and a viewed one does not, and only the
-    /// viewed ones make a view: the two shapes the lane measured, kept apart in the request.
+    /// viewed ones make a view: the two shapes measured, kept apart in the request.
     #[test]
     fn a_made_case_states_unknown_usage_and_makes_no_view() {
         for case in all() {

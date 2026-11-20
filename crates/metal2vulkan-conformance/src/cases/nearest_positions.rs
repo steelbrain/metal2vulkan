@@ -21,7 +21,7 @@
 //! The other sixteen words a thread writes — the two constexpr clamp-to-zero samples and the uint
 //! and int reads — are **recorded and not compared**, and the reason is a measured one rather than
 //! tidiness. At the three coordinates one to three units in the last place below `+0.0`
-//! (`0x8000_0001` to `0x8000_0003`, lanes 289, 291 and 293 of the lane's own set), Metal's
+//! (`0x8000_0001` to `0x8000_0003`, lanes 289, 291 and 293 of the fitted set), Metal's
 //! constexpr `clamp_to_zero` samplers read texel `(0, 5)`, 80, and its linear one 40, where a
 //! Vulkan device reads the border, 0; MoltenVK matches Metal and lavapipe does not. That is a
 //! difference of the clamp-to-zero addressing mode, not of where a nearest filter lands, it is
@@ -87,7 +87,7 @@ const SAMPLED_WORDS: u32 = 4;
 const _: () = assert!(SAMPLED_AT + SAMPLED_WORDS * 4 <= LANE_BYTES);
 
 /// The byte the output buffer holds before a row runs, so a word no thread wrote is a recorded
-/// value rather than whatever the allocator left. The lane's own fill.
+/// value rather than whatever the allocator left.
 const FILL: u8 = 0xab;
 
 /// One row of the case: the address mode both axes take, under the name its sites carry.
@@ -116,11 +116,11 @@ impl Row {
     }
 }
 
-/// The lane's own coordinates: each texel edge of the 13-texel axis, shifted by -3 to 3 whole
+/// The fitted coordinates: each texel edge of the 13-texel axis, shifted by -3 to 3 whole
 /// periods (0 left out, since inside `[0, 1)` scaling before the wrap and wrapping before the scale
 /// agree), and one to three units in the last place either side of each edge.
 ///
-/// These are the coordinates the lane's fitted rule was fitted over, so they are the ones the
+/// These are the coordinates the rule was fitted over, so they are the ones the
 /// rule's cross-check reads.
 fn lane_us() -> Vec<f32> {
     let mut out = Vec::new();
@@ -187,7 +187,7 @@ const SUBNORMAL_BRACKET: [f32; 8] = [
     1.0e-44,
 ];
 
-/// Every coordinate the case samples at: the lane's own, then the edge ladders.
+/// Every coordinate the case samples at: the fitted ones, then the edge ladders.
 fn us() -> Vec<f32> {
     let mut out = lane_us();
     out.extend(edge_us());
@@ -212,7 +212,7 @@ fn float_texels() -> Vec<u8> {
         .collect()
 }
 
-/// The uint and int textures' bytes: every texel 1, as the lane bound them.
+/// The uint and int textures' bytes: every texel 1.
 fn small_texels() -> Vec<u8> {
     (0..SMALL * SMALL)
         .flat_map(|_| 1u32.to_le_bytes())
@@ -453,7 +453,7 @@ mod tests {
         u32::try_from(inside).expect("a texel inside the level")
     }
 
-    /// The texel the runtime lane's fitted rule says Metal's nearest filter reads at `u`: wrapped
+    /// The texel the fitted rule says Metal's nearest filter reads at `u`: wrapped
     /// into one period first, that subtraction rounded up, then scaled with ties away from zero.
     ///
     /// This is the cross-check, not the expectation. The case's expectation is the recording, which
@@ -528,8 +528,8 @@ mod tests {
     /// Metal's recorded samples are the texel the fitted rule names, lane for lane and bit for bit,
     /// on both address modes.
     ///
-    /// This is the cross-check the port owes the lane: the lane carried a rule, the case carries
-    /// Metal's bytes, and this test says whether the two agree. It reads the recording rather than
+    /// The rule is fitted, the case carries Metal's bytes, and this test says whether the two
+    /// agree. It reads the recording rather than
     /// a device, so it runs where there is no GPU at all; where no recording is in the tree yet it
     /// says so and stops, since a test that silently passes on a missing file proves nothing.
     #[test]
@@ -582,7 +582,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{} of {checked} recorded samples differ from the lane's fitted rule",
+            "{} of {checked} recorded samples differ from the fitted rule",
             differ.len()
         );
     }
@@ -737,7 +737,7 @@ mod tests {
             .filter(|(_, &u)| u < 0.0 && u > -1.0e-44)
             .map(|(lane, _)| lane)
             .collect();
-        // The three subnormal coordinates come from the lane's own set; the edge ladder's rungs
+        // The three subnormal coordinates come from the fitted set; the edge ladder's rungs
         // are all normal floats, so they are not among them.
         assert_eq!(below_zero.len(), 3, "{below_zero:?}");
         let mut rows = 0usize;

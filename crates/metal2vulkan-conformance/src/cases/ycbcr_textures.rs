@@ -27,25 +27,20 @@
 //! side, must answer the same 5,760 bytes. That is the strongest check the case can carry, and it
 //! is what says the IOSurface this side builds is the surface the probe built.
 //!
-//! # What the port changes
+//! # The record
 //!
-//! The lane compares its reads with that file **and** with `metal2vulkan::bind::ycbcr_texel`'s
-//! model, which is the right thing for a lane to do. What it does not do is keep Metal's values in
-//! a shape anything else can read: the comparison is a `Vec<[u16; 3]>` built inside one test
-//! function, and the only artifact that survives a failure is the first differing texel. This case
-//! records all 960 texels as a region whose rows are the texture's rows, so a diff names the texel
-//! by its row and its channel, and the file's own SHA-256 is part of the case's input fingerprint:
-//! a change to the measurement makes the case `Unrecorded` rather than quietly comparing against
-//! other bytes.
+//! This case records all 960 texels as a region whose rows are the texture's rows, so a diff names
+//! the texel by its row and its channel, and the file's own SHA-256 is part of the case's input
+//! fingerprint: a change to the measurement makes the case `Unrecorded` rather than quietly
+//! comparing against other bytes.
 //!
 //! # Why neither case can fault a GPU
 //!
-//! [`FormatDescriptors`] runs no GPU work at all. The multisample descriptors of the lane's own
-//! sweep are **left out by construction**: the runtime answers them `Error::Invalid`, which is its
-//! word for "Metal's validation stops it, ending the process", and the suite's standing rule is
-//! that no case may end Metal's process. [`TexelReads`] is one 40 x 24 texture, one 4 KiB surface
-//! and one dispatch of 960 threads, and the one pair it hands Metal — format 500 over a `420v`
-//! surface — is the pair the committed probe already ran on this machine.
+//! [`FormatDescriptors`] runs no GPU work at all. The multisample descriptors are **left out by
+//! construction**: Metal's validation stops them, ending the process, and the suite's standing rule
+//! is that no case may end Metal's process. [`TexelReads`] is one 40 x 24 texture, one 4 KiB
+//! surface and one dispatch of 960 threads, and the one pair it hands Metal — format 500 over a
+//! `420v` surface — is the pair the committed probe already ran on this machine.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{made, Abort, Bindings, Case, Failure, Input, MetalSource, PlaneTexture, Side};
@@ -79,10 +74,10 @@ fn family() -> Vec<PixelFormat> {
         .collect()
 }
 
-/// The texture extent every descriptor of the sweep names, as the lane's does.
+/// The texture extent every descriptor of the sweep names.
 const SIZE: [u32; 2] = [40, 24];
 
-/// The slices the array descriptor names, as the lane's does.
+/// The slices the array descriptor names.
 const SLICES: u32 = 2;
 
 /// The site a descriptor's answers sit under.
@@ -100,13 +95,13 @@ impl FormatDescriptors {
     /// The descriptors the case asks about, in order: each format's 2D descriptor in each
     /// storage, and its 2D array descriptor in each storage.
     ///
-    /// The 2D multisample and multisample-array descriptors of the lane's sweep are not here:
+    /// The 2D multisample and multisample-array descriptors are not here:
     /// Metal's own validation stops them, which ends its process.
     fn queries(&self) -> Vec<(Q, bool)> {
         let mut queries = Vec::new();
         for format in family() {
             for storage in [Storage::Shared, Storage::Private] {
-                // The 2D descriptor is the one the lane asks `newTextureWithDescriptor:` of, and
+                // The 2D descriptor is the one the case asks `newTextureWithDescriptor:` of, and
                 // Metal answers nil for it, so asking allocates nothing.
                 queries.push((Q::texture_2d(format, SIZE, storage), true));
             }
@@ -186,8 +181,8 @@ impl Case for FormatDescriptors {
 // The texel reads of one measured `420v` surface.
 // ---------------------------------------------------------------------------------------------
 
-/// The surface's extent in texels, and its planes' layout, exactly as the lane lays its stand-in
-/// buffer out and as the probe laid the IOSurface it measured.
+/// The surface's extent in texels, and its planes' layout, exactly as the probe laid the IOSurface
+/// it measured.
 const W: u64 = 40;
 const H: u64 = 24;
 /// The bytes between rows of either plane.
@@ -227,7 +222,7 @@ const GROUP: u32 = 64;
 /// The byte the read-back buffer holds before the dispatch.
 const BLANK: u8 = 0xab;
 
-/// The lane's and the probes' generator of the surface's bytes.
+/// The probes' generator of the surface's bytes.
 struct Random(u64);
 
 impl Random {
@@ -508,7 +503,7 @@ mod tests {
         assert_eq!(FORMAT, PixelFormat::YCBCR84202P);
     }
 
-    /// The surface the case feeds is the one the probe measured: the lane pins its SHA-256, and a
+    /// The surface the case feeds is the one the probe measured: its SHA-256 is pinned, and a
     /// generator that drifts would compare our reads against another surface's answer.
     #[test]
     fn the_surface_is_the_one_metal_read() {
@@ -521,7 +516,7 @@ mod tests {
     }
 
     /// The committed probe's measurement is the one it has always been, by its length and its
-    /// SHA-256, which the lane pins too.
+    /// SHA-256.
     #[test]
     fn the_probes_reads_are_the_committed_measurement() {
         let bytes = measured().expect("the committed measurement");

@@ -20,10 +20,10 @@
 //! first word of each kept texel and nothing else. The note derives no tolerance, so those sites
 //! are `known-gaps-rt.tsv` rows scoped to the width.
 //!
-//! Thirteen fragment functions, one row each: the shapes the lane measured for where Metal's
-//! compiler places the sum. Record mode runs every one of them on native Metal, so the recording
-//! holds Metal's own target rather than the lane's two-valued table, and the lane's table becomes a
-//! cross-check this module's tests apply to the recorded targets.
+//! Thirteen fragment functions, one row each: the shapes measured for where Metal's compiler places
+//! the sum. Record mode runs every one of them on native Metal, so the recording holds Metal's own
+//! target, and a two-valued table is a cross-check this module's tests apply to the recorded
+//! targets.
 //!
 //! A row's site is the whole target under a layout whose row is a row of texels and whose element
 //! is one 32-bit signed word, so a diff names the pixel and the channel: "row 1, index 0" of the
@@ -82,7 +82,7 @@ const CLEAR: i32 = -7;
 /// `(0..2, 0..2)` alone.
 const KEPT_QUADS: u32 = 1;
 
-/// The thirteen fragment functions, in the order the lane lists them.
+/// The thirteen fragment functions, in order.
 const SHAPES: [&str; 13] = [
     "hoisted_known",
     "counted_dependent",
@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// What a kept thread's simdgroup counted ahead of the discard, as the lane names it.
+    /// What a kept thread's simdgroup counted ahead of the discard.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Answer {
         /// `(0, 0, 0, 0)`: the lanes that survive the discard alone, so the sum moved past it.
@@ -452,11 +452,11 @@ mod tests {
         }
     }
 
-    /// Every target Metal recorded answers as the lane's table says Metal answers, shape for
+    /// Every target Metal recorded answers as the table says Metal answers, shape for
     /// shape, and every texel outside the kept quad holds the clear value.
     ///
-    /// This is the cross-check the port owes the lane: the lane carried a two-valued table, the
-    /// case carries Metal's targets, and this says whether the two agree. It reads the recording,
+    /// The table is two-valued, the case carries Metal's targets, and this says whether the two
+    /// agree. It reads the recording,
     /// so it runs where there is no GPU.
     #[test]
     fn metal_s_recorded_targets_answer_as_the_lane_s_table() {
@@ -482,9 +482,9 @@ mod tests {
                     checked += 1;
                     match answer(bytes) {
                         Ok(got) if got == expected => {}
-                        Ok(got) => differ.push(format!(
-                            "{shape}: Metal {got:?}, the lane's table {expected:?}"
-                        )),
+                        Ok(got) => {
+                            differ.push(format!("{shape}: Metal {got:?}, the table {expected:?}"))
+                        }
                         Err(why) => differ.push(format!("{shape}: {why}")),
                     }
                 }
@@ -496,7 +496,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{} of {checked} recorded targets differ from the lane's table",
+            "{} of {checked} recorded targets differ from the table",
             differ.len()
         );
     }

@@ -14,40 +14,26 @@
 //! them as 32-bit words, the drawn texel count, the calls of the pass, and the command buffer's
 //! status and error.
 //!
-//! The second case here is [`unordered_draws`], the lane's racy row: two commands with no barrier
+//! The second case here is [`unordered_draws`], the racy row: two commands with no barrier
 //! between them, whose Metal answer is a **set** of outcomes with the runs behind each.
 //!
-//! ## What of the lane is **not** ported, and why
-//!
-//! This lane is the largest of the nine probe-line files, and these rows of it are still the
-//! lane's:
+//! ## What is **not** a case, and why
 //!
 //! - **Rows that end Metal's process**: the CPU's mesh draw on a buffer of draws of primitives,
 //!   and a pipeline state set on a command of a buffer whose command types hold no draw of its
-//!   kind. These are **not** recorded-only material, because there is no answer to carry: Metal
-//!   never returned from the call, so the lane's table holds no line for them and the only Metal
-//!   fact is "the process ended in this call". That is an outcome kind the suite does not have and
-//!   the plan leaves unbuilt on purpose, exactly as `texture_buffer_fills` says of the fill
-//!   pattern one byte past Metal's longest. Its shape, written down and unbuilt: a third
-//!   `MetalSource` whose recording names the call and says Metal did not return, comparing against
-//!   our typed refusal at that site as its own verdict — neither exact (Metal has no value) nor
-//!   divergent (Metal has no behaviour to diverge from). Building it means a new verdict, so it
-//!   waits for the user's word.
+//!   kind. Metal never returns from the call, so the only Metal fact is "the process ended in this
+//!   call", the form [`MetalSource::did_not_return`] records.
 //! - **Rows where Metal's GPU faults**: a kernel's mesh draw on a buffer of draws of primitives,
-//!   which the lane records as `status=5` with nothing drawn and no mark written. These *are*
-//!   recorded-only material — Metal's answer is written down — but every one of them is encoded by
-//!   a kernel, so they wait on the vocabulary below rather than on the safety flag, which the
-//!   suite already has.
+//!   which Metal answers with `status=5`, nothing drawn and no mark written. Every one of them is
+//!   encoded by a kernel, so they wait on the vocabulary below.
 //! - **Rows a kernel encodes** (`kernel_own`, `enc_own`, `kernel_<kind>_on_<kind>`, `enc_barrier`,
 //!   `kernel_reset`): a kernel writes the commands through the buffer's and each pipeline state's
 //!   **GPU resource ID**, passed in an argument buffer, with the buffer made resident for writing.
 //!   Three calls the [`Side`] vocabulary does not have — the resource ID of an indirect command
 //!   buffer, the resource ID of a mesh pipeline state, and a dispatch that makes a resource
 //!   resident — each needing an implementation on both sides and a forwarding arm in
-//!   `validated::Announcing`. That reaches into `case.rs`, `metal_side.rs` and `runtime_side.rs`
-//!   at once, which is the shared core three porting streams are editing, so it is named here and
-//!   left. (A resource ID is a device-local 64-bit value and must never enter a transcript; it is
-//!   an input to the kernel and nothing else.)
+//!   `validated::Announcing`. (A resource ID is a device-local 64-bit value and must never enter a
+//!   transcript; it is an input to the kernel and nothing else.)
 
 use crate::case::{
     Abort, Case, CommandDraw, Failure, Input, MeshCommand, MeshFunctions, MetalSource, Side,
@@ -77,15 +63,14 @@ const FRAGMENT: &str = "mesh_draws_fragment";
 /// The object function's control words, as the probe wrote them.
 const CONTROL: [u32; 4] = [2, 1, 0, 0];
 
-/// Command 0's draw: 3 threadgroups of 4 object threads and 2 mesh threads (the lane's
-/// `OBJECT_DRAW`).
+/// Command 0's draw: 3 threadgroups of 4 object threads and 2 mesh threads.
 const OBJECT_DRAW: CommandDraw = CommandDraw::Threadgroups {
     groups: [3, 1, 1],
     object: [4, 1, 1],
     mesh: [2, 1, 1],
 };
 
-/// Command 1's draw: 12 by 4 threads in mesh threadgroups of 4 by 2 (the lane's `GRID_THREADS`).
+/// Command 1's draw: 12 by 4 threads in mesh threadgroups of 4 by 2.
 const GRID_DRAW: CommandDraw = CommandDraw::Threads {
     threads: [12, 4, 1],
     object: [1, 1, 1],
@@ -338,20 +323,19 @@ impl Case for MeshCommands {
     }
 }
 
-/// The lane's racy row: two mesh commands with no barrier between them.
+/// The racy row: two mesh commands with no barrier between them.
 ///
 /// Command 0's mesh function stores the control words `(3, 2, 1, 7)` and its fragment function
 /// covers texel (7, 7) with `0xAAAA`; command 1's object function reads the control words and
 /// launches `x` by `y` mesh threadgroups, each covering its own texel. No barrier stands between
-/// them, so **nothing in Metal orders the write before the read**, and the lane says as much: it
-/// accepts either order's words and prints which it saw.
+/// them, so **nothing in Metal orders the write before the read**.
 ///
 /// ## What is compared, and why it is not the reader's texels
 ///
 /// Measured here, which is the point of the row: over **30 runs** on this M3 Max (macOS 27.0.1),
 /// plain Metal produced **one** outcome, every run — the reader read the words the host wrote, so
 /// it drew its single threadgroup at (0, 0) with `(0, 0, 1, 0)` and `drawn` was 2. That matches
-/// the lane's M4 table for the row. The runtime builds no mesh pipeline (its README, the known
+/// an Apple M4's answer for the row. The runtime builds no mesh pipeline (its README, the known
 /// gaps of render pipeline states), so no run of it reaches this case's rows.
 ///
 /// A recording can only sample an order Metal's own contract leaves open, and comparing against
@@ -373,7 +357,7 @@ const BARRIER_FIXTURE: &str = "mesh_barrier";
 /// The fragment function both of the row's pipelines write their attachment through.
 const BARRIER_FRAGMENT: &str = "mesh_barrier_fragment";
 
-/// The control words the host writes before the pass, as the lane wrote them: the reader's own
+/// The control words the host writes before the pass: the reader's own
 /// grid if it reads them, `(3, 2, 1, 7)` if it reads the writer's.
 const BARRIER_CONTROL: [u32; 4] = [1, 1, 1, 0];
 
@@ -387,7 +371,7 @@ const ONE_DRAW: CommandDraw = CommandDraw::Threadgroups {
     mesh: ONE,
 };
 
-/// The row's site name, as the lane named the case.
+/// The row's site name.
 const UNORDERED_ROW: &str = "cpu_nobarrier";
 
 /// The texel the writer's fragment function covers, whichever order the two draws run in.
