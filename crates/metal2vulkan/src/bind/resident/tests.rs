@@ -460,36 +460,3 @@ fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
         assert_eq!(apart.shape(), state.shape());
     }
 }
-
-/// Ranges of every shape a list of buffers holds, in an order a list may take: clustered so that
-/// nesting, partial overlap, one start shared at different lengths and hosts, empty ones and
-/// records past `RECORDS_ADDRESS_BASE` all occur; sorted by Metal address where `sorted`, else
-/// with some starting below the ones before them, as a no-copy buffer's range starts below its
-/// address.
-fn list_ranges(rng: &mut Rng, sorted: bool) -> Vec<crate::bind::ResidentRange> {
-    use crate::bind::ResidentRange;
-    let n = rng.below(120) as usize;
-    let mut ranges: Vec<ResidentRange> = (0..n)
-        .map(|_| {
-            let base = match rng.below(8) {
-                0 => RECORDS_ADDRESS_BASE,
-                _ => 0x1_0000,
-            };
-            let guest = base + 8 * rng.below(512);
-            let length = match rng.below(6) {
-                0 => 0,
-                1 => 8 * rng.below(400),
-                _ => 1 + rng.below(96),
-            };
-            let host = match rng.below(3) {
-                0 => rng.next(),
-                _ => guest.wrapping_add(0x40_0000),
-            };
-            ResidentRange::new(host, guest, length)
-        })
-        .collect();
-    if sorted {
-        ranges.sort_by_key(|range| range.guest);
-    }
-    ranges
-}

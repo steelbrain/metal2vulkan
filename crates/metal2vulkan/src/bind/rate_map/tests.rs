@@ -825,13 +825,6 @@ fn unmeasured_descriptors_are_refused() {
     .contains("3 layers"));
 }
 
-/// FNV-1a, 64 bits, of `bytes`: a short name for Metal's measured parameter data.
-fn fnv(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    })
-}
-
 /// An axis of no screen pixels has one tile of no screen and no physical pixels, whatever its
 /// quality samples, so the layer's physical extent on it is 0 and the map compiles (Metal's API
 /// validation stops the descriptor; plain Metal compiles it, and `apple_tests` holds its bytes).

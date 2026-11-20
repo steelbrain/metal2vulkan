@@ -26,7 +26,7 @@ use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
 use crate::error::{Capability, DescriptorError, Error, Feature, Unsupported};
 use crate::metal::{
-    PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
+    PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage,
 };
 use crate::pipeline::lower_inputs::{
     AliasView, ChannelWrite, StorageImageChoice, StorageImageClass,
@@ -548,57 +548,6 @@ impl ExtendedRange {
         }
     }
 
-    /// The code Metal's straight clear route ([`ClearRoute::Straight`]) stores in a `BGR10_XR`
-    /// or `BGRA10_XR` channel, or its alpha where `alpha`, for the `float` `v` (an Apple M4 under
-    /// macOS 27.0.1: every channel of 2,574 colors of each form; the consumer's M3 Max under 26.7
-    /// alike). A linear channel's: `(v + 384/510) · 510`, each step a `float` rounded to nearest
-    /// even, rounded to the nearest code with ties up, clamped to `[0, 1023]`, a NaN 0 (`0.25` is
-    /// 511 and `-0.25` is 257, where a write stores 512 and 256); alpha's that of `v` clamped to
-    /// `[0, 1]` first, a NaN 384. An `_sRGB` color channel's: the offset from code 384, toward the
-    /// sign of `v`, of the thresholds of Metal's own encode of that sign at most `|v|`
-    /// (`extended_srgb::STRAIGHT_SRGB_FIRST`), a NaN 384.
-    fn straight_code(self, v: f32, alpha: bool) -> u32 {
-        if self.srgb() && !alpha {
-            let bits = v.abs().to_bits();
-            let at = |thresholds: &[u32]| thresholds.partition_point(|&t| t <= bits) as u32;
-            return match (v.is_nan(), v < 0.0) {
-                (true, _) => 384,
-                (false, true) => 384 - at(&extended_srgb::STRAIGHT_SRGB_FIRST_NEGATIVE),
-                (false, false) => 384 + at(&extended_srgb::STRAIGHT_SRGB_FIRST),
-            };
-        }
-        let v = match (v.is_nan(), alpha) {
-            (true, true) => 0.0,
-            (true, false) => return 0,
-            (false, true) => v.clamp(0.0, 1.0),
-            (false, false) => v,
-        };
-        let x = (v + 384.0 / 510.0) * 510.0;
-        // Ties up, of the `float`: its sum with a half is exact in `f64`.
-        (f64::from(x) + 0.5).floor().clamp(0.0, 1023.0) as u32
-    }
-
-    /// The value a padded form's code `code` of a color channel, or of alpha where `alpha`, reads:
-    /// `code / 1023`, `RGB10A2Unorm_sRGB`'s alpha `code / 3`, the color of `R10Unorm_X6_sRGB` and
-    /// `RGB10A2Unorm_sRGB` through the sRGB transfer function (`RG10Unorm_X12_sRGB` reads its codes
-    /// as `RG10Unorm_X12` does), in `f64` and then rounded to `f32`.
-    fn padded_code_value(self, code: u32, alpha: bool) -> f32 {
-        let linear = |d: f64| f64::from(code) / d;
-        let v = match self {
-            ExtendedRange::Rgb10A2Srgb if alpha => linear(3.0),
-            ExtendedRange::R10X6Srgb | ExtendedRange::Rgb10A2Srgb => {
-                let c = linear(1023.0);
-                if c <= 0.04045 {
-                    c / 12.92
-                } else {
-                    ((c + 0.055) / 1.055).powf(2.4)
-                }
-            }
-            _ => linear(1023.0),
-        };
-        v as f32
-    }
-
     /// The `float` value Metal reads from the code `code` (below 1024) of a color channel, or of
     /// alpha where `alpha`, of a `BGR10_XR`, `BGRA10_XR` or two-plane format or an `_sRGB` twin
     /// (an Apple M3 Max and an M4): `(code - 384) / 510` correctly rounded, an `_sRGB` color
@@ -697,59 +646,6 @@ impl ExtendedRange {
         code.clamp(0, 1023) as u32
     }
 
-    /// The raw texel of the red, green, blue and alpha codes `rgba` (alpha the two-plane
-    /// formats' byte there), with the bits Metal does not read as its writes write them:
-    /// `BGR10_XR`'s bits 30 and 31 ones, plane 0's zero, `BGRA10_XR`'s low 6 bits of each field
-    /// zero.
-    fn texel(self, rgba: [u32; 4]) -> [u32; 4] {
-        let word = rgba[0] << 20 | rgba[1] << 10 | rgba[2];
-        match self {
-            ExtendedRange::Bgr10 { .. } => [0xC000_0000 | word, 0, 0, 0],
-            ExtendedRange::Planes { .. } => [word, rgba[3], 0, 0],
-            ExtendedRange::Bgra10 { .. } => {
-                [rgba[2] << 6, rgba[1] << 6, rgba[0] << 6, rgba[3] << 6]
-            }
-            // Each code in its word's top 10 bits, the low 6 bits zero.
-            ExtendedRange::R10X6 | ExtendedRange::R10X6Srgb => [rgba[0] << 6, 0, 0, 0],
-            ExtendedRange::Rgb10A2Srgb => [
-                rgba[3] << 30 | rgba[2] << 20 | rgba[1] << 10 | rgba[0],
-                0,
-                0,
-                0,
-            ],
-            ExtendedRange::Rg10X12 | ExtendedRange::Rg10X12Srgb => {
-                [rgba[0] << 6, rgba[1] << 6, 0, 0]
-            }
-            // A bfloat code a word.
-            ExtendedRange::R16Bfloat => [rgba[0], 0, 0, 0],
-            ExtendedRange::Rg16Bfloat => [rgba[0], rgba[1], 0, 0],
-            ExtendedRange::Rgba16Bfloat => rgba,
-        }
-    }
-}
-
-/// The bfloat code of `v` by [`ClearRoute::Straight`]: its `float` rounded to nearest even
-/// (Rust's conversion), then [`bfloat_nearest_even`]; a NaN the `float` NaN of its sign and top
-/// 23 payload bits, quieted, cut to its top 16 bits.
-fn bfloat_of_double(v: f64) -> u32 {
-    if v.is_nan() {
-        let bits = v.to_bits();
-        let sign = ((bits >> 63) as u32) << 31;
-        let payload = ((bits >> 29) & 0x7f_ffff) as u32;
-        return (sign | 0x7fc0_0000 | payload) >> 16;
-    }
-    bfloat_nearest_even(v as f32)
-}
-
-/// The bfloat code nearest `v`, ties to even (an overflow past the largest finite code the
-/// infinity), a NaN the quiet NaN `0x7fc0`.
-pub(crate) fn bfloat_nearest_even(v: f32) -> u32 {
-    if v.is_nan() {
-        return 0x7fc0;
-    }
-    // No sum passes `u32`: the largest non-NaN bits, `0xff80_0000`, plus `0x8000`.
-    let b = v.to_bits();
-    (b + 0x7fff + ((b >> 16) & 1)) >> 16
 }
 
 /// The layout of a two-plane YCbCr format ([`ycbcr_format`]): Metal's texture over an IOSurface's
@@ -1734,31 +1630,6 @@ pub fn vk_format(
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
     Err(Unsupported::needs_any_of(Feature::Format, alternatives).into())
-}
-
-/// The swizzle that reads as component mapping `m` (in `TextureSwizzleChannels::compose`'s
-/// canonical form over a format's own channels): each channel from the one `m` names, from itself
-/// where `m` names none, or a constant.
-fn swizzle_of(m: vk::ComponentMapping) -> TextureSwizzleChannels {
-    use crate::metal::TextureSwizzle as T;
-    use vk::ComponentSwizzle as S;
-    let named = [
-        (S::ZERO, T::Zero),
-        (S::ONE, T::One),
-        (S::R, T::Red),
-        (S::G, T::Green),
-        (S::B, T::Blue),
-        (S::A, T::Alpha),
-    ];
-    let channel = |c: vk::ComponentSwizzle, own: T| {
-        named.iter().find(|(s, _)| *s == c).map_or(own, |&(_, t)| t)
-    };
-    TextureSwizzleChannels::new(
-        channel(m.r, T::Red),
-        channel(m.g, T::Green),
-        channel(m.b, T::Blue),
-        channel(m.a, T::Alpha),
-    )
 }
 
 /// What `profile` lacks to make an image view whose component mapping is `components`:

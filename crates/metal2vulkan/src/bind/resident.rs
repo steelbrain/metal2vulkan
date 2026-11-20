@@ -96,64 +96,6 @@ fn coalesce(out: &mut Vec<RootEntry>, mut e: RootEntry) -> bool {
     false
 }
 
-/// [`resident_set`] of the allocations of `parts` in their order, each part `(sorted, set)`: its
-/// allocations as [`sorted`] gives them and their resident set. Where no part's allocations sort
-/// before another's ahead of it, the parts' sets are joined as they are, each coalesced with the
-/// ones before it only at its head: an entry of a part's set that goes in whole leaves the rest of
-/// that set whole too, as the set is sorted and disjoint. Parts whose allocations interleave are
-/// sorted and coalesced together again, as one.
-pub(crate) fn joined<'a>(
-    parts: impl IntoIterator<Item = (&'a [RootEntry], &'a [RootEntry])>,
-) -> Vec<RootEntry> {
-    let parts: Vec<(&[RootEntry], &[RootEntry])> = parts
-        .into_iter()
-        .filter(|(sorted, _)| !sorted.is_empty())
-        .collect();
-    // Runs of parts, each `(first, end, greatest)`: its parts, and its greatest allocation in
-    // `order`, at or below every allocation of the runs after it.
-    let mut runs: Vec<(usize, usize, RootEntry)> = Vec::with_capacity(parts.len());
-    for (at, (sorted, _)) in parts.iter().enumerate() {
-        let (Some(&least), Some(&greatest)) = (sorted.first(), sorted.last()) else {
-            continue;
-        };
-        let mut run = (at, at + 1, greatest);
-        while let Some(&(first, _, before)) = runs.last() {
-            if order(&before, &least) != Ordering::Greater {
-                break;
-            }
-            runs.pop();
-            run.0 = first;
-            if order(&before, &run.2) == Ordering::Greater {
-                run.2 = before;
-            }
-        }
-        runs.push(run);
-    }
-    let len = parts.iter().map(|(_, set)| set.len()).sum();
-    let mut out: Vec<RootEntry> = Vec::with_capacity(len);
-    for (first, end, _) in runs {
-        let merged;
-        let set = match end - first {
-            1 => parts[first].1,
-            _ => {
-                let all = parts[first..end]
-                    .iter()
-                    .flat_map(|(sorted, _)| sorted.iter());
-                let mut together: Vec<RootEntry> = all.copied().collect();
-                together.sort_by(order);
-                merged = coalesced_of_sorted(&together);
-                &merged[..]
-            }
-        };
-        let whole = set
-            .iter()
-            .position(|&e| coalesce(&mut out, e))
-            .map_or(set.len(), |at| at + 1);
-        out.extend_from_slice(&set[whole..]);
-    }
-    out
-}
-
 /// The coalesced resident set of `state`: every bound buffer with a device address (every stage)
 /// and every `Buffer`/`Heap` used resource with both addresses, at their padded sizes.
 pub(crate) fn resident_entries(state: &BindState) -> Vec<RootEntry> {

@@ -183,9 +183,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // A separate compile of the pipeline, which an amplification multiview does not express
         // asks for; the binder writes each amplification's words before its draw.
         RuntimeFact::AmplificationDraws { .. } => Mechanism::Variant,
-        // A separate compile of the pipeline, which a viewport Vulkan's cannot be asks for; the
-        // binder writes the draw's compensation.
-        RuntimeFact::ViewportCompensation { .. } => Mechanism::Variant,
         // A pipeline compiled under the folded-groups variant; its plans state it.
         RuntimeFact::FoldedGroups => Mechanism::Variant,
         // A render pipeline compiled under the replay-bindings variant; its plans state it.

@@ -16,14 +16,12 @@ use crate::lower::arith::legal::{form_on, refuse_bfloat_color, refuse_int64_inte
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::select::SelectCx;
 use crate::lower::stage_io::{
-    fetch, not_lowered, AmplifiedOutput, Compensation, DepthClamp, IoObject, MergedRead,
-    MergedValue, PlannedOutput, PlannedParam, Returned, RotatedSecond, Source, StageIoPlan,
+    fetch, not_lowered, AmplifiedOutput, DepthClamp, IoObject, MergedRead, MergedValue,
+    PlannedOutput, PlannedParam, Returned, RotatedSecond, Source, StageIoPlan,
 };
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::lower_inputs::{
-    FactorLane, RotatedBlendForm, VertexFetch, ViewportCompensation,
-};
+use crate::pipeline::lower_inputs::{FactorLane, RotatedBlendForm, VertexFetch};
 use crate::pipeline::stage_io::{
     DepthMode, Interpolation, IoNumeric, IoRole, IoType, IoVariable, Sampling, StageBuiltin,
 };
@@ -1237,7 +1235,7 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
 /// first vertex. So does a draw replay's of one draw per command (`replay_bindings`), whose
 /// buffers are in the slot table at its push: its draws' indices are their own. A function that
 /// writes its own viewport or slice index, and one under another field that moves its indices or
-/// position (`amplification_draws`, `viewport_compensation`), or that runs behind the
+/// position (`amplification_draws`), or that runs behind the
 /// tessellator, is `NotImplemented(RasterizationRateMap)`: the runtime draws those region by
 /// region. A device that cannot store `ViewportIndex` from a vertex function,
 /// read `DrawIndex` or take several viewports refuses it, naming the three features. A function
@@ -1255,11 +1253,7 @@ fn region_viewport(
         )
     });
     let tessellated = matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) });
-    if indexed
-        || tessellated
-        || i.amplification_draws.is_some()
-        || i.viewport_compensation.is_some()
-    {
+    if indexed || tessellated || i.amplification_draws.is_some() {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
     let f = cx.profile.fields();
@@ -2705,14 +2699,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.inputs.region_copies && cx.stage == Stage::Vertex {
         region_copy(cx, &outputs, returned)?;
     }
-    // A viewport Vulkan's cannot be: the position compensated for it.
-    if let Some(c) = cx
-        .inputs
-        .viewport_compensation
-        .filter(|_| cx.stage == Stage::Vertex)
-    {
-        compensate(cx, c)?;
-    }
     // The window depth of the position the function stores, for a fragment function that
     // computes each sample's depth from it. A function that writes no position rasterizes
     // nothing.
@@ -2997,58 +2983,6 @@ pub(crate) fn finish_merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Plan a vertex function's viewport compensation `c` (`LoweringInputs::viewport_compensation`):
-/// its `Position` is stored compensated by `PushField::ViewportCompensation`, and under
-/// [`ViewportCompensation::depth`] two `ClipDistance` elements follow the function's own, which
-/// Metal's near and far planes clip at. Under [`ViewportCompensation::point_guard`] the position
-/// is scaled by `PushField::PointGuard` too, and four more elements follow, Metal's guard band
-/// for points. Under [`ViewportCompensation::vertex_clamp`] the compensated depth is clamped by
-/// `PushField::VertexDepthClamp` before the interpolation. A function that writes no position
-/// rasterizes nothing and is compensated in nothing. Refused: the clip distances on a device
-/// without `shaderClipDistance`, or past its `maxClipDistances` or
-/// `maxCombinedClipAndCullDistances`.
-fn compensate(cx: &mut SelectCx<'_>, c: ViewportCompensation) -> Result<(), Error> {
-    cx.facts.insert(RuntimeFact::ViewportCompensation {
-        depth: c.depth,
-        point_guard: c.point_guard,
-        mirrors: c.mirrors,
-        vertex_clamp: c.vertex_clamp,
-    });
-    let is = |o: &IoObject, b| matches!(o, IoObject::Builtin { builtin, dir: IoDir::Output, .. } if *builtin == b);
-    let sp = &cx.families.stage_io;
-    let Some(position) = sp.objects.iter().position(|o| is(o, B::Position)) else {
-        return Ok(());
-    };
-    cx.push.insert(PushField::ViewportCompensation);
-    if c.point_guard {
-        cx.push.insert(PushField::PointGuard);
-    }
-    if c.mirrors {
-        cx.push.insert(PushField::ViewportMirrors);
-    }
-    // Each vertex's depth clamped, which only a compensated depth takes.
-    if c.vertex_clamp && c.depth {
-        cx.push.insert(PushField::VertexDepthClamp);
-    }
-    let added = 2 * u32::from(c.depth) + 4 * u32::from(c.point_guard);
-    let clips = match added {
-        0 => None,
-        _ => Some(added_clip_distances(cx, added, Feature::ClipDistance)?),
-    };
-    let clip = clips.filter(|_| c.depth);
-    let guard = clips
-        .filter(|_| c.point_guard)
-        .map(|(object, first)| (object, first + 2 * u32::from(c.depth)));
-    cx.families.stage_io.compensation = Some(Compensation {
-        position,
-        clip,
-        guard,
-        mirrors: c.mirrors,
-        vertex_clamp: c.vertex_clamp && c.depth,
-    });
-    Ok(())
-}
-
 /// Add `added` clip distances past a vertex function's own, for `feature`: its `ClipDistance`
 /// object, `added` elements longer, or a new one, and the first of the added elements. Refused as
 /// `feature` where the device writes no clip distances or the count passes its limits.
@@ -3127,7 +3061,7 @@ fn added_clip_distances(
 /// from their own first vertex, and its region its `DrawIndex`'s; so does a draw replay's of one
 /// draw per command (`replay_bindings`), whose buffers are in the slot table at its push. A
 /// function that writes its own viewport or slice index, one under another field that moves its
-/// indices or position (`amplification_draws`, `viewport_compensation`), runs behind the
+/// indices or position (`amplification_draws`), runs behind the
 /// tessellator or returns no outputs is `NotImplemented(RasterizationRateMap)`: the runtime draws those through each
 /// region's viewport. A device that cannot store `ViewportIndex` from a vertex function, read
 /// `DrawIndex` or write four more clip distances refuses it.
@@ -3159,12 +3093,7 @@ fn region_copy(
         Some(p) if returned != Returned::Void => p,
         _ => return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into()),
     };
-    if indexed
-        || tessellated
-        || i.amplification_draws.is_some()
-        || i.viewport_compensation.is_some()
-        || i.region_viewports
-    {
+    if indexed || tessellated || i.amplification_draws.is_some() || i.region_viewports {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
     let f = cx.profile.fields();
@@ -3665,7 +3594,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // The alpha test: the alpha's extracts, its clamp and code, the reference, the
         // comparison and the kill.
         + 40 * u64::from(sp.alpha_test.is_some())
-        + compensation_stores(sp.compensation)
         + sp.depth_clamp.map_or(0, |d| match (d.range, d.clamps) {
             // The `[0, 1]` selects, the range's two clamps and the negative NaN's select.
             (true, _) => 14,
@@ -3729,17 +3657,6 @@ fn float_color(e: &crate::air::Entry, ty: AirTypeId) -> bool {
         other => other,
     };
     matches!(scalar, Some(Type::Float))
-}
-
-/// The stores' worth of words a compensated position adds to each return: the field's lanes and
-/// `x`'s product, under the depth's compensation its sum of products and the two clip distances'
-/// selects and stores, and under the point guard band its two lanes and products, the band, and the
-/// four clip distances' sums and stores.
-fn compensation_stores(c: Option<Compensation>) -> u64 {
-    let Some(c) = c else { return 0 };
-    let depth = if c.clip.is_some() { 9 } else { 0 };
-    let guard = if c.guard.is_some() { 13 } else { 0 };
-    3 + depth + guard
 }
 
 /// Whether a fragment function's depth output is clamped to `[0, 1]` as Metal stores it

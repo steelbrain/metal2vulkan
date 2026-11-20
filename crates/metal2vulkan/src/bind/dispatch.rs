@@ -97,7 +97,6 @@
 //! ([`IndirectArgs::ClampScratch`]).
 
 use crate::bind::graphics::zeroed;
-use crate::bind::heap::HeapSource;
 use crate::bind::indirect_clamp::IndirectClamp;
 use crate::bind::instantiate::{
     bind_buffers, put, slot_field, texel_ranges, BufferExtent, DescriptorBytes, DescriptorRange,

@@ -164,19 +164,12 @@ pub const fn shape(f: PushField) -> FieldShape {
         // Region base `xyz` and grid `xyz`, one 4-vector each (`w` unused); a stage-in region's
         // origin and size the same way.
         PushField::DispatchRegion | PushField::StageInRegion => FieldShape::UVec4Array(2),
-        // A draw's viewport compensation, four `f32`s' bits.
-        PushField::ViewportCompensation => FieldShape::UVec4Array(1),
-        // A draw's point guard band, two `f32`s' bits.
-        PushField::PointGuard => FieldShape::UVec2,
+        // A draw's depth clamp range, two `f32`s' bits.
         PushField::DepthClampRange => FieldShape::UVec2,
-        // A draw's mirrored viewports, one bit each.
-        PushField::ViewportMirrors => FieldShape::U32,
         // Which of a snapshot variant's draws runs.
         PushField::SnapshotPhase => FieldShape::U32,
         // The alpha test reference's code.
         PushField::AlphaTestReference => FieldShape::U32,
-        // A draw's clamp of each vertex's depth, two `f32`s' bits.
-        PushField::VertexDepthClamp => FieldShape::UVec2,
         // The blend color and one minus it, four `f32`s' bits each.
         // The blend color as the encoder set it, four `f32`s' bits.
         PushField::HalfBlendColor => FieldShape::UVec4Array(1),
@@ -942,7 +935,6 @@ mod tests {
             PushField::AmplificationLayerOffset,
             PushField::AmplificationViewportOffset,
             PushField::BaseVertexInstance,
-            PushField::ViewportCompensation,
             PushField::CaptureLayout,
         ]);
         for i in 0..31 {

@@ -234,7 +234,6 @@ mod serde_round_trips {
             replay_bindings: true,
             merged_draws: true,
             amplification_draws: Some(AmplificationDraws::new(true, false)),
-            viewport_compensation: Some(ViewportCompensation::new(true)),
             folded_groups: true,
             partial_threadgroups: true,
             extended_range: BTreeMap::from([(
@@ -427,7 +426,6 @@ mod serde_round_trips {
                 VaryingKey::viewport_index(),
             ]),
             absent_varyings: BTreeSet::from([VaryingKey::user(b"generated(5colorDv4_f)")]),
-            viewport_compensation: Some(ViewportCompensation::new(false)),
             folded_groups: true,
             partial_threadgroups: true,
             extended_range: BTreeMap::from([(
@@ -1061,14 +1059,6 @@ mod bind_serde_round_trips {
             viewport_count: 3,
             function_tables: vec![crate::bind::ArgumentFunctionTable::new(0x7ab1_0001, 9)],
             tile_threadgroup: tile_threadgroup(),
-            // Clip mode's vertex clamp, unbounded above, which JSON holds as `null`.
-            viewport_compensation: Some(
-                crate::bind::CompensatedViewport::new(
-                    ViewportCompensation::new(true).with_vertex_clamp(true),
-                    [-1.0, 0.5, 1.5, 1.0],
-                )
-                .with_vertex_clamp([0.0, f32::INFINITY]),
-            ),
             zeroed_colors: BTreeMap::from([(1, metal::PixelFormat::R32Uint)]),
             dropped_colors: BTreeSet::from([4]),
             kept_imageblock_bytes: Some(4),
@@ -1143,7 +1133,6 @@ mod bind_serde_round_trips {
                 crate::bind::ArgumentFunctionTable::new(3, 0),
             ]),
             tile_threadgroup: tile_threadgroup(),
-            viewport_compensation: Some(ViewportCompensation::new(false)),
             zeroed_colors: BTreeMap::from([(1, metal::PixelFormat::R32Uint)]),
             dropped_colors: BTreeSet::from([4]),
             kept_imageblock_bytes: Some(4),

@@ -11,7 +11,6 @@
 //! texel buffers), except typed storage images, which must use exactly their declared format and
 //! are listed only where the profile's format table supports it.
 
-use std::collections::BTreeSet;
 
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::FormatUsage;
@@ -246,52 +245,6 @@ pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
                     out.push(class(ty, false, ImageAccess::Storage, format));
                 }
             }
-        }
-    }
-    out
-}
-
-/// The image classes a texture slot of Metal's `ulong` texel can declare on `profile` (never a heap
-/// class): 1D, 1D array, 2D, 2D array, 3D, and buffer, sampled, or storage of the `RG32` unsigned
-/// format Metal binds (declared, or formatless as a binder's class names it), and storage
-/// `R64_UINT`, the view of a slot a `ulong` atomic updates, where the profile has what such a slot
-/// needs (`DeviceProfile::ulong_atomic_gaps`).
-pub fn ulong_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
-    let shapes = [
-        (ImageDim::D1, false),
-        (ImageDim::D1, true),
-        (ImageDim::D2, false),
-        (ImageDim::D2, true),
-        (ImageDim::D3, false),
-        (ImageDim::Buffer, false),
-    ];
-    let mut out = Vec::new();
-    for (dim, arrayed) in shapes {
-        let atomic = profile
-            .ulong_atomic_gaps(dim == ImageDim::Buffer)
-            .is_empty()
-            .then_some((
-                ImageAccess::Storage,
-                StorageFormatClass::Format(vk::Format::R64_UINT),
-            ));
-        let classes = [
-            (ImageAccess::Sampled, StorageFormatClass::NotStorage),
-            (ImageAccess::Storage, StorageFormatClass::Unknown),
-            (
-                ImageAccess::Storage,
-                StorageFormatClass::Format(vk::Format::R32G32_UINT),
-            ),
-        ];
-        for (access, format) in classes.into_iter().chain(atomic) {
-            out.push(ImageHandleClass {
-                dim,
-                arrayed,
-                multisampled: false,
-                sampled_type: SampledType::Uint64,
-                depth_compare: false,
-                access,
-                format,
-            });
         }
     }
     out

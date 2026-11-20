@@ -911,18 +911,6 @@ pub enum PatchDomain {
 }
 
 impl PipelineInterface {
-    /// The buffer slots of `stage` (bit `i` for index `i`, below 64) whose form `takes`.
-    fn buffers_where(&self, stage: Stage, takes: impl Fn(BufferForm) -> bool) -> u64 {
-        let mut slots = 0;
-        for (slot, interface) in &self.slots {
-            if let SlotInterface::Buffer(b) = interface {
-                if slot.stage == stage && slot.index < u64::BITS && takes(b.form) {
-                    slots |= 1 << slot.index;
-                }
-            }
-        }
-        slots
-    }
 }
 
 impl StageInterface {

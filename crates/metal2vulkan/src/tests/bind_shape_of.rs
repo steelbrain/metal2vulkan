@@ -5,14 +5,13 @@
 
 use crate::bind::{
     ArgumentFunctionTable, ArgumentSampler, BindState, BoundBuffer, BoundSampler, BoundTexture,
-    BufferRanges, CompensatedViewport, FragmentTests, ImageblockSize, ResourceClass,
-    SamplerDescriptor, StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
-    TileThreadgroupArgument, TileThreadgroupMemory, UsedResource, VertexAmplification,
+    BufferRanges, FragmentTests, ImageblockSize, ResourceClass, SamplerDescriptor, StageTable,
+    TessellationFactorBuffer, TessellationFactors, TextureFacts, TileThreadgroupArgument,
+    TileThreadgroupMemory, UsedResource, VertexAmplification,
 };
 use crate::metal::{
     CompareFunction, PixelFormat, RenderStages, ResourceUsage, SamplerMinMagFilter, TextureType,
 };
-use crate::pipeline::lower_inputs::ViewportCompensation;
 use crate::pipeline::sym::Stage;
 
 /// A buffer of `length` bytes bound at `offset`.
@@ -239,15 +238,6 @@ fn states() -> Vec<BindState> {
                 .arguments
                 .insert(0, TileThreadgroupArgument::new(64, 0));
             s.tile_threadgroup = memory;
-        }),
-        with(|s| {
-            s.viewport_compensation = Some(CompensatedViewport {
-                compensation: ViewportCompensation {
-                    depth: true,
-                    ..ViewportCompensation::default()
-                },
-                ..CompensatedViewport::default()
-            });
         }),
         with(|s| {
             s.zeroed_colors.insert(1, PixelFormat::RGBA8Unorm);

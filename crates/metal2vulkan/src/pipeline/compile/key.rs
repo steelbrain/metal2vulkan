@@ -379,22 +379,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.absent_varyings).as_bytes());
     }
     // Appended only when set.
-    if let Some(c) = inputs.viewport_compensation {
-        h.bytes(b"viewport-compensation").u64(u64::from(c.depth));
-        // Appended only when set.
-        if c.point_guard {
-            h.bytes(b"point-guard");
-        }
-        // Appended only when set.
-        if c.mirrors {
-            h.bytes(b"viewport-mirrors");
-        }
-        // Appended only when set.
-        if c.vertex_clamp {
-            h.bytes(b"viewport-vertex-clamp");
-        }
-    }
-    // Appended only when set.
     if inputs.folded_groups {
         h.bytes(b"folded-groups");
     }

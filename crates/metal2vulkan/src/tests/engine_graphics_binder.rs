@@ -29,7 +29,7 @@ use std::path::Path;
 use crate::bind::{
     sampler_desc, AccessClass, BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture,
     Dispatch, DrawCall, DrawCommands, FieldLocation, ImageSource, IndexBufferRef, IndexOverrun,
-    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource, SlotRebinds,
+    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource,
     StageTable, TextureFacts, UseTarget, WriteSource,
 };
 use crate::budget::Budget;
@@ -1471,7 +1471,7 @@ fn sampled_textures_and_runtime_samplers() {
         let plan = p.plan(&dev, &empty.shape()).expect("unbound");
         match combined(&plan)[0] {
             (
-                ImageSource::Neutral(n @ NeutralResource::Image { view_type, .. }),
+                ImageSource::Neutral(NeutralResource::Image { view_type, .. }),
                 SamplerSource::Neutral(NeutralResource::Sampler { compare: false }),
             ) => {
                 assert_eq!(view_type, vk::ImageViewType::TYPE_2D, "{stem}");

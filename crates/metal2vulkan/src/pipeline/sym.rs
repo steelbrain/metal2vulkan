@@ -1183,32 +1183,11 @@ pub enum PushField {
     /// `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` fetches at
     /// (`RuntimeFact::StageInStride`).
     StageInStride(u32),
-    /// The draw's viewport compensation for a vertex function compiled under
-    /// `LoweringInputs::viewport_compensation` (`RuntimeFact::ViewportCompensation`): one
-    /// `uvec4` holding the bits of four `f32`s, `[sx, a, b, clip]`, which the function applies to
-    /// its position as `(sx x, y, a w + b z, w)`, clipping at `z` and `w - z` where `clip` is 1
-    /// (`BindState::viewport_compensation`).
-    ViewportCompensation,
-    /// The draw's point guard band for a vertex function compiled under
-    /// `ViewportCompensation::point_guard`: one `uvec2` holding the bits of two `f32`s,
-    /// `[gx, gy]`, the inverse powers of two its Vulkan viewports are widened by, which the
-    /// function scales its position's `x` and `y` by (`CompensatedViewport::guard`).
-    PointGuard,
     /// The draw's depth clamp range for a fragment function compiled under
     /// `LoweringInputs::depth_clamp_range` (`RuntimeFact::DepthClampRange`): one `uvec2` holding
     /// the bits of two `f32`s, `[low, high]`, which the function clamps the depth it writes to
     /// after Metal's `[0, 1]` (`BindState::depth_clamp_range`).
     DepthClampRange,
-    /// The draw's mirrored viewports for a vertex function compiled under
-    /// `ViewportCompensation::mirrors`: one `u32` whose bit `i` is set where viewport `i` has a
-    /// negative width, which the function negates its position's `x` by for the viewport it
-    /// selects (`CompensatedViewport::mirrors`).
-    ViewportMirrors,
-    /// The draw's clamp of each vertex's depth for a vertex function compiled under
-    /// `ViewportCompensation::vertex_clamp`: one `uvec2` holding the bits of two `f32`s,
-    /// `[lo, hi]`, which the function clamps its compensated depth's `z / w`, the Vulkan
-    /// viewport's normalized depth, to before the interpolation (`CompensatedViewport::vertex_clamp`).
-    VertexDepthClamp,
     /// The draw's depth state for a fragment function that runs the draw's depth test itself
     /// (`RuntimeFact::ShaderTests`), a `uvec4`: word 0 holds the depth `MTLCompareFunction` in
     /// bits 0 to 2, whether depth writes are enabled in bit 3, and whether the encoder's depth

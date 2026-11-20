@@ -27,10 +27,7 @@ use crate::cache::Hash256;
 use crate::device::{DeviceDescription, DevicePolicy};
 use crate::library::{FunctionConstantValues, Library};
 use crate::metal::PixelFormat;
-use crate::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, PrivateRenderState,
-    RenderPipelineDescriptor, StageSource, TileRenderPipelineDescriptor,
-};
+use crate::pipeline::FunctionDescriptor;
 
 /// The device a runtime bundle's command compiles for, as `device.json` holds it and the command
 /// line's `--device` reads it: the description and policy the runtime's compile device was built
@@ -112,56 +109,6 @@ impl<'a> ReproBundle<'a> {
     pub fn failure(mut self, text: impl Into<String>) -> ReproBundle<'a> {
         self.failure = text.into();
         self
-    }
-
-    /// The bundle of `library`'s bytes, which its content hash names.
-    fn of_library(library: &'a Library) -> ReproBundle<'a> {
-        let bytes = library.bytes();
-        ReproBundle::hashed(input_name(bytes).to_owned(), bytes, *library.content_hash())
-    }
-
-    /// The bundle of the stage `function`'s library, naming the function and its constant
-    /// values, on the device of `device`.
-    fn of_function(device: &[u8], function: &'a FunctionDescriptor) -> ReproBundle<'a> {
-        let FunctionDescriptor {
-            function,
-            constants,
-            specialized: _,
-            linked,
-            libraries,
-        } = function;
-        let mut bundle = ReproBundle::of_library(function.library())
-            .device(device)
-            .options(["--function", function.info().name]);
-        let mut unreplayed = Unreplayed::default();
-        bundle = bundle.options(constant_options(constants, &mut unreplayed));
-        unreplayed.links(
-            function.info().name,
-            linked.is_empty(),
-            libraries.is_empty(),
-        );
-        bundle.unreplayed.extend(unreplayed.0);
-        bundle
-    }
-
-    /// This bundle with `device` its `device.json`, which its command reads.
-    fn device(self, device: &[u8]) -> ReproBundle<'a> {
-        self.file("device.json", device.to_vec())
-            .options(["--device", "device.json"])
-    }
-
-    /// This bundle with `value` as JSON in the file `name`, which its command names with `flag`.
-    fn json(self, flag: &str, name: &str, value: &impl serde::Serialize) -> ReproBundle<'a> {
-        match serde_json::to_vec_pretty(value) {
-            Ok(bytes) => self.file(name, bytes).options([flag, name]),
-            Err(e) => {
-                let mut bundle = self;
-                bundle
-                    .unreplayed
-                    .push(format!("{flag}: not serialized: {e}"));
-                bundle
-            }
-        }
     }
 
     /// The command that replays the failure, run in the bundle's directory.
@@ -278,103 +225,6 @@ impl<'a> ReproBundle<'a> {
         )?;
         make_executable(&script)?;
         fs::write(dir.join("failure.txt"), self.failure_text())
-    }
-}
-
-/// What a command does not replay of a request.
-#[derive(Default)]
-struct Unreplayed(Vec<String>);
-
-impl Unreplayed {
-    /// `field`, where its `value` is not Metal's default `default`.
-    fn field<T: PartialEq + std::fmt::Debug>(&mut self, field: &str, value: &T, default: &T) {
-        if value != default {
-            self.0.push(format!("{field}: {value:?}"));
-        }
-    }
-
-    fn note(&mut self, note: impl Into<String>) {
-        self.0.push(note.into());
-    }
-
-    /// The linked functions and dynamic libraries of the stage function `function`, where it has
-    /// them: the command line links none.
-    fn links(&mut self, function: &str, no_linked: bool, no_libraries: bool) {
-        if !no_linked {
-            self.note(format!("`{function}`'s linked functions"));
-        }
-        if !no_libraries {
-            self.note(format!("`{function}`'s dynamic libraries"));
-        }
-    }
-}
-
-/// The command line's `--constant` options of `constants`: `ID:TYPE:COMPONENTS`, each component
-/// its raw bits (`0x`). A value the option cannot state is noted in `unreplayed`.
-fn constant_options(
-    constants: &FunctionConstantValues,
-    unreplayed: &mut Unreplayed,
-) -> Vec<String> {
-    let FunctionConstantValues { by_index, by_name } = constants;
-    // The command line reads an ID of digits as an index: a name of digits is not stated.
-    let ids = by_index
-        .iter()
-        .map(|(index, value)| (index.to_string(), value, false))
-        .chain(
-            by_name
-                .iter()
-                .map(|(name, value)| (name.clone(), value, name.parse::<u32>().is_ok())),
-        );
-    let mut options = Vec::new();
-    for (id, value, named_as_index) in ids {
-        let name = value.ty.name();
-        let ty = name.strip_prefix("MTLDataType").unwrap_or(name);
-        let lanes = match ty.as_bytes().last() {
-            Some(digit @ b'2'..=b'4') => usize::from(digit - b'0'),
-            _ => 1,
-        };
-        let width = value.bytes.len() / lanes;
-        if named_as_index
-            || id.contains(':')
-            || value.bytes.len() != width * lanes
-            || !matches!(width, 1 | 2 | 4 | 8)
-        {
-            unreplayed.note(format!("constant `{id}`: {value:?}"));
-            continue;
-        }
-        let components: Vec<String> = value
-            .bytes
-            .chunks(width)
-            .map(|chunk| {
-                let mut word = [0u8; 8];
-                word[..width].copy_from_slice(chunk);
-                format!("0x{:x}", u64::from_le_bytes(word))
-            })
-            .collect();
-        options.push("--constant".to_owned());
-        options.push(format!("{id}:{ty}:{}", components.join(",")));
-    }
-    options
-}
-
-/// The command line's `INDEX:FORMAT` of color attachment `index`.
-fn color_format(index: usize, format: PixelFormat) -> String {
-    format!("{index}:{}", format_name(format))
-}
-
-/// A pixel format's Metal name without its `MTLPixelFormat` prefix.
-fn format_name(format: PixelFormat) -> &'static str {
-    let name = format.name();
-    name.strip_prefix("MTLPixelFormat").unwrap_or(name)
-}
-
-/// The input file's name for `bytes`: a metallib's, AIR bitcode's (wrapped or raw), or other
-/// bytes'.
-fn input_name(bytes: &[u8]) -> &'static str {
-    match bytes.get(..4) {
-        Some(b"MTLB") => "input.metallib",
-        Some([0xde, 0xc0, 0x17, 0x0b]) | Some([b'B', b'C', 0xc0, 0xde]) => "input.air",
-        _ => "input.bin",
     }
 }
 

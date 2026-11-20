@@ -2350,44 +2350,6 @@ fn a_pass_renders_only_the_ycbcr_formats_whose_store_is_matched() {
     }
 }
 
-/// The probe's clear colors: each 10-bit code's value and each tie between two
-/// codes, 512 values of its generator, and the specials; color `i` is values `i` to `i + 3`.
-fn straight_clear_colors() -> Vec<[f64; 4]> {
-    let mut values = Vec::new();
-    for k in 0..1024 {
-        values.push((f64::from(k) - 384.0) / 510.0);
-        values.push((f64::from(k) + 0.5 - 384.0) / 510.0);
-    }
-    let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
-    for _ in 0..512 {
-        seed = seed
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        let u = (seed >> 11) as f64 / (1u64 << 53) as f64;
-        values.push(-0.9 + 2.3 * u);
-    }
-    values.extend([
-        f64::NEG_INFINITY,
-        -1e30,
-        -65504.0,
-        -2.0,
-        -0.0,
-        0.0,
-        1e-40,
-        6e-8,
-        1e-30,
-        65504.0,
-        1e30,
-        f64::INFINITY,
-        f64::NAN,
-        -f64::NAN,
-    ]);
-    let n = values.len();
-    (0..n)
-        .map(|i| std::array::from_fn(|c| values[(i + c) % n]))
-        .collect()
-}
-
 /// The table [`repr`] reads holds [`make_repr`]'s entry of every format, at its raw value.
 #[test]
 fn the_format_table_holds_each_format_s_entry() {

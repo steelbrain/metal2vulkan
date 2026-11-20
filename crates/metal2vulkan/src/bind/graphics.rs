@@ -89,13 +89,6 @@
 //!   (`RuntimeFact::ViewportCount`) stores `ViewportIndex` as 0 for an index at or past its
 //!   `PushField::ViewportCount`, the encoder's viewport count (`BindState::viewport_count`), which
 //!   each draw writes: Metal draws such an index through viewport 0.
-//! - **Viewport compensation**. A draw through a viewport Vulkan's cannot be (a negative width, or
-//!   a depth range past `[0, 1]` the device does not take; `BindShape::viewport_compensation`) runs
-//!   the variant whose vertex function compensates its position
-//!   (`VariantKey::viewport_compensation`), from the draw's `PushField::ViewportCompensation`
-//!   (`BindState::viewport_compensation`); the plan of the pipeline compiled under another
-//!   compensation is `BindError::NeedsVariant`. A mesh pipeline has no vertex function to
-//!   compensate: not implemented.
 //! - **Zeroed colors**. A draw into a pass with color attachments its pipeline has no pixel format
 //!   for (`BindShape::zeroed_colors`), where plain Metal stores zero bytes at every sample the draw
 //!   covers, runs the variant whose pipeline has them, written whole and unblended, and whose
@@ -193,7 +186,7 @@
 //!   at a time: the plan's variant says which. A draw of a rate-mapped pass's triangles fanned
 //!   out to their regions (`BindShape::region_fan_out`) runs the variant whose triangle stage does
 //!   so (`VariantKey::region_fan_out`) where its pipeline is such a pipeline of no amplification,
-//!   drawn without a viewport compensation, whose stages synthesize no geometry stage of their own
+//!   whose stages synthesize no geometry stage of their own
 //!   (`RuntimeFact::SynthesizedGeometry`), draw no band and choose no slice or viewport; it binds
 //!   the region table (`WriteSource::RateMapRegions`) and, for a probe, the flags
 //!   (`WriteSource::RateMapFlags`), and a probe pushes its flag's index to the geometry stage. A
@@ -367,7 +360,7 @@ use crate::pipeline::sym::{
     Axis, DispatchKeys, PushField, SlotClass, SlotRef, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::vertex::{VertexAttribute, VertexStride};
-use crate::pipeline::{AmplificationDraws, RegionFanOut, ViewportCompensation};
+use crate::pipeline::{AmplificationDraws, RegionFanOut};
 use crate::vk;
 
 /// A Metal draw call.
@@ -467,8 +460,7 @@ pub struct DrawCommands {
     /// One write per stage with push fields, covering the stage's whole push range.
     pub push_constants: Vec<PushConstantWrite>,
     /// Each stage's `ArgumentTable` contents, then the plan's heap tables (its handle tables,
-    /// sampler tables and function-table directories), which
-    /// [`BindingPlan::instantiate_draw_apart_into`] leaves out.
+    /// sampler tables and function-table directories).
     pub descriptor_bytes: Vec<DescriptorBytes>,
     /// Vertex-buffer offsets by Vulkan vertex binding (`vkCmdBindVertexBuffers`).
     pub buffer_offsets: Vec<(u32, u64)>,
@@ -1209,7 +1201,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && views.view_mask == 0;
     // A draw of a rate-mapped pass's triangles once, the variant's triangle stage fanning each out
     // to the regions it touches, where the pipeline is such a vertex pipeline of no amplification,
-    // drawn without a compensation, whose stages synthesize no geometry stage of their own, draw
+    // whose stages synthesize no geometry stage of their own, draw
     // no band and choose no slice or viewport; it draws no regions several at a time.
     let synthesized =
         (p.dependencies.iter()).any(|d| matches!(d.fact, RuntimeFact::SynthesizedGeometry { .. }));
@@ -1219,7 +1211,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             && amplification_draws.is_none()
             && views.view_mask == 0
             && p.graphics.max_vertex_amplification_count <= 1
-            && shape.viewport_compensation.is_none()
             && shape.line_band.is_none()
             && !synthesized
             && !p.graphics.writes_viewport_index
@@ -1269,29 +1260,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // `Layer` output there, and only there. A mesh function writes `Layer` in every variant.
     let dropped_vertex_layer =
         vertex_layer.is_some() && !mesh && shape.render_target_array_length <= 1;
-    // A viewport Vulkan's cannot be: the vertex function compensates its position, and the
-    // pipeline compiled under another compensation (or none) is the other variant.
-    let viewport_compensation = shape.viewport_compensation;
-    let compiled_compensation = p.dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::ViewportCompensation {
-            depth,
-            point_guard,
-            mirrors,
-            vertex_clamp,
-        } => Some(
-            ViewportCompensation::new(depth)
-                .with_point_guard(point_guard)
-                .with_mirrors(mirrors)
-                .with_vertex_clamp(vertex_clamp),
-        ),
-        _ => None,
-    });
     let profile = device.profile();
     let limits = &profile.fields().limits;
-    // A mesh pipeline has no vertex function to compensate.
-    if viewport_compensation.is_some() && !stages.contains(&Stage::Vertex) {
-        return Err(not_implemented(Feature::MeshShading));
-    }
     // The pass's colors the pipeline lacks, which plain Metal zeroes where the draw covers them:
     // the variant whose pipeline has them and whose fragment function writes the zero. A mesh
     // pipeline's is not built; a pipeline without a fragment function rasterizes into no color,
@@ -1820,15 +1790,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // A folded object function's region record (`bind::mesh_arguments`): the
                 // consumer's hole.
                 PushField::ReplayRegionAddress if stage == Stage::Object => {}
-                // The draw's viewport compensation, which instantiation reads from the state.
-                PushField::ViewportCompensation if stage == Stage::Vertex => {}
-                // The draw's point guard band, which instantiation reads from the state.
-                PushField::PointGuard if stage == Stage::Vertex => {}
-                // The draw's mirrored viewports, which instantiation reads from the state.
-                PushField::ViewportMirrors if stage == Stage::Vertex => {}
-                // The draw's clamp of each vertex's depth, which instantiation reads from the
-                // state.
-                PushField::VertexDepthClamp if stage == Stage::Vertex => {}
                 // The draw's depth clamp range, which instantiation reads from the state.
                 PushField::DepthClampRange if stage == Stage::Fragment => {}
                 // The encoder's alpha test reference, which instantiation reads from the state.
@@ -2624,7 +2585,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.pulled_vertex_buffers = pulled_vertex_buffers;
     variant.dropped_vertex_layer = dropped_vertex_layer;
     variant.amplification_draws = amplification_draws;
-    variant.viewport_compensation = viewport_compensation;
     // A pipeline compiled for a draw replay's bindings states its variant.
     variant.replay_bindings = replayed;
     variant.merged_draws = p
@@ -2693,7 +2653,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             other_layer_variant: vertex_layer
                 .is_some_and(|dropped| dropped != dropped_vertex_layer)
                 || compiled_draws != amplification_draws
-                || compiled_compensation != viewport_compensation
                 || other_colors
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
@@ -2913,7 +2872,7 @@ impl BindingPlan {
         draw: &DrawCall,
         commands: &mut DrawCommands,
     ) -> Result<(), BindError> {
-        instantiate(self.drawn(draw)?, state, draw, commands, Heap::Written)
+        instantiate(self.drawn(draw)?, state, draw, commands)
     }
 
     /// The render template `draw` instantiates: this plan's, where the draw runs on its variant.
@@ -2943,20 +2902,6 @@ impl BindingPlan {
         Ok(t)
     }
 
-    /// [`slot_rebinds`](Self::slot_rebinds) of `slots`, made in `into` in place of what it held,
-    /// keeping its lists' room: whether the plan rebinds them so (`into` then holds the same
-    /// rebinds `slot_rebinds` answers), else `into` serves no rebind. A caller that makes rebinds
-    /// again for other slots or another plan allocates nothing where `into` had room for them.
-    pub fn slot_rebinds_into(&self, slots: &[SlotRef], into: &mut SlotRebinds) -> bool {
-        match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => rebinds_into(t, slots, into),
-            _ => {
-                into.slots.clear();
-                into.slots.extend_from_slice(slots);
-                false
-            }
-        }
-    }
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the
@@ -4389,23 +4334,14 @@ fn deindexed_draw(
     })
 }
 
-/// Whether a draw's commands hold the plan's heap tables (`BindingPlan::instantiate_draw_into`)
-/// or leave them to the consumer (`BindingPlan::instantiate_draw_apart_into`).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Heap {
-    Written,
-    Apart,
-}
-
 /// The commands of `draw` of `state`, written over `out` (`BindingPlan::instantiate_draw_into`):
 /// each of its fields set, its vectors cleared or their values overwritten in place, never
-/// replaced; the heap tables among its descriptor bytes where `heap` writes them.
+/// replaced; the heap tables among its descriptor bytes.
 fn instantiate(
     t: &GraphicsTemplate,
     state: &BindState,
     draw: &DrawCall,
     out: &mut DrawCommands,
-    heap: Heap,
 ) -> Result<(), BindError> {
     let DrawCommands {
         push_constants,
@@ -4451,10 +4387,7 @@ fn instantiate(
     extents.clear();
     let bound = bind_buffers(&t.buffers, state, descriptor_ranges, extents)?;
     descriptor_ranges.extend(crate::bind::instantiate::texel_ranges(&t.resources, state)?);
-    let tables = match heap {
-        Heap::Written => crate::bind::heap::table_bytes(&t.resources, state)?,
-        Heap::Apart => Vec::new(),
-    };
+    let tables = crate::bind::heap::table_bytes(&t.resources, state)?;
     // A patch draw: a native pipeline's control stage's writes, or an emulated one's scan.
     let (control, scan) = match t.tessellation.map(|t| t.site) {
         Some(FactorSite::Scan { kernel, .. }) => {
@@ -4572,34 +4505,6 @@ fn instantiate(
                 PushField::RenderTargetArrayLength => {
                     FieldBytes::of(&state.render_target_array_length.to_le_bytes())
                 }
-                // The identity where the state holds none: a plan states its variant, so
-                // instantiation under another shape asks for the other one first.
-                PushField::ViewportCompensation => state
-                    .viewport_compensation
-                    .map_or([1.0, 0.0, 1.0, 0.0], |c| c.values)
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect(),
-                PushField::PointGuard => state
-                    .viewport_compensation
-                    .map_or([1.0, 1.0], |c| c.guard)
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect(),
-                // No viewport mirrored where the state holds none.
-                PushField::ViewportMirrors => FieldBytes::of(
-                    &state
-                        .viewport_compensation
-                        .map_or(0, |c| c.mirrors)
-                        .to_le_bytes(),
-                ),
-                // No vertex's depth clamped where the state holds none.
-                PushField::VertexDepthClamp => state
-                    .viewport_compensation
-                    .map_or([f32::NEG_INFINITY, f32::INFINITY], |c| c.vertex_clamp)
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect(),
                 // Metal's own `[0, 1]` where the state holds none.
                 PushField::DepthClampRange => state
                     .depth_clamp_range
@@ -4908,437 +4813,6 @@ fn pulled_stride(
         }
     };
     Ok(FieldBytes::of(&stride.to_le_bytes()))
-}
-
-/// Where a push field a slot rebind writes lies: its stage's push write among the commands'
-/// (`DrawCommands::push_constants`), that write's range start, and the field's place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FieldAt {
-    push: usize,
-    push_start: u32,
-    loc: PushLoc,
-}
-
-/// One changed buffer slot of a [`SlotRebinds`]: its place among the template's buffer slots, its
-/// descriptor range's place among the commands' and its `(set, binding)` where the plan binds it
-/// a descriptor-form buffer, and the ranges of [`SlotRebinds::words`] that hold the push fields
-/// reading its residual (`SlotBindOffset`) and its guest address (`SlotGuestBase`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SlotRebind {
-    buffer: usize,
-    place: Option<(usize, (u32, u32))>,
-    offsets: (usize, usize),
-    bases: (usize, usize),
-}
-
-/// A push field of a changed slot that no changed buffer slot of the template holds: its word is
-/// worked out apart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LooseWord {
-    /// `SlotBindOffset`: no residual, 0.
-    Offset,
-    /// `SlotGuestBase` of the slot.
-    Base(SlotRef),
-    /// `VertexBufferStride` of the pulled layout.
-    Stride(u32),
-}
-
-/// What [`BindingPlan::rebind_draw_slots_into`] of some slots works out of a render plan alone
-/// ([`BindingPlan::slot_rebinds`]): each changed buffer slot's descriptor range place, the push
-/// fields that read the slots and where they lie, and the fixed-function vertex buffers they bind.
-/// Made once for a plan and its slots, it serves each rebind of them
-/// ([`BindingPlan::rebind_draw_slots_with`]), which looks at the state and the commands alone;
-/// made again in place for other slots or another plan
-/// ([`BindingPlan::slot_rebinds_into`]), it keeps its lists' room, so a rebinds made again of no
-/// more slots and fields allocates nothing. Its default is made of nothing. Opaque.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SlotRebinds {
-    /// The slots they were made for.
-    slots: Vec<SlotRef>,
-    /// Each changed buffer slot, in the template's order of buffer slots.
-    buffers: Vec<SlotRebind>,
-    /// The push fields of the entries of `buffers`, each entry's at its ranges.
-    words: Vec<FieldAt>,
-    /// The push fields of changed slots no entry of `buffers` holds, in placement order.
-    loose: Vec<(FieldAt, LooseWord)>,
-    /// Each changed fixed-function vertex buffer's place among the template's.
-    vertex: Vec<usize>,
-}
-
-#[cfg(debug_assertions)]
-thread_local! {
-    /// The rebinds [`BindingPlan::rebind_draw_slots_with`] makes again to check those it is given
-    /// (builds with debug assertions), kept with their lists' room.
-    static REBINDS_MADE_AGAIN: std::cell::RefCell<SlotRebinds> =
-        std::cell::RefCell::new(SlotRebinds::default());
-}
-
-impl SlotRebinds {
-    /// The slots they were made for.
-    pub fn slots(&self) -> &[SlotRef] {
-        &self.slots
-    }
-}
-
-/// Each push field of the template `t` that reads a slot `changed` answers for, with that slot,
-/// its word and where it lies, in placement order; an item `None` where such a field cannot be
-/// rewritten alone (a changed texture's in-place planes, a field of a stage with no push range).
-fn changed_fields<'a>(
-    t: &'a GraphicsTemplate,
-    slots: &'a [SlotRef],
-    changed: impl Fn(SlotRef) -> bool + Copy + 'a,
-) -> impl Iterator<Item = Option<(SlotRef, LooseWord, FieldAt)>> + 'a {
-    let pushes = t.stages.iter().scan(0, |pushes, st| {
-        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
-        let push = (push_size != 0).then(|| {
-            *pushes += 1;
-            *pushes - 1
-        });
-        Some((st, push, push_start))
-    });
-    pushes.flat_map(move |(st, push, push_start)| {
-        st.fields.iter().filter_map(move |f| {
-            let (slot, word) = match f.field {
-                PushField::SlotBindOffset(slot) if changed(slot) => (slot, LooseWord::Offset),
-                PushField::SlotGuestBase(slot) if changed(slot) => (slot, LooseWord::Base(slot)),
-                PushField::VertexBufferStride(layout) => {
-                    let slot = SlotRef {
-                        stage: Stage::Vertex,
-                        class: SlotClass::Buffer,
-                        index: layout,
-                    };
-                    if !changed(slot) {
-                        return None;
-                    }
-                    (slot, LooseWord::Stride(layout))
-                }
-                // A changed texture's in-place planes or rows, and a changed buffer's length past
-                // its bind offset.
-                PushField::YCbCrInPlace(slot)
-                | PushField::TexelRows(slot)
-                | PushField::SlotBounds(slot)
-                    if slots.contains(&slot) =>
-                {
-                    return Some(None)
-                }
-                _ => return None,
-            };
-            let field = push.map(|push| FieldAt {
-                push,
-                push_start,
-                loc: f.loc,
-            });
-            Some(field.map(|field| (slot, word, field)))
-        })
-    })
-}
-
-/// [`BindingPlan::slot_rebinds_into`] of a render plan's template `t`.
-fn rebinds_into(t: &GraphicsTemplate, slots: &[SlotRef], into: &mut SlotRebinds) -> bool {
-    into.slots.clear();
-    into.slots.extend_from_slice(slots);
-    into.buffers.clear();
-    into.words.clear();
-    into.loose.clear();
-    into.vertex.clear();
-    let changed = |slot: SlotRef| slot.class == SlotClass::Buffer && slots.contains(&slot);
-    // What the slots decide some other way than below: a stage's argument or root table, a mesh
-    // or patch draw's own reads, a de-indexed draw's layout, and a uniform view a written slot
-    // may alias.
-    let other_reads = t
-        .stages
-        .iter()
-        .any(|st| st.root_first.is_some() || st.table.is_some())
-        || t.mesh.is_some()
-        || t.tessellation.is_some()
-        || t.deindexed.is_some()
-        || (t.buffers.iter().any(|b| b.disjoint) && t.buffers.iter().any(|b| b.access.write));
-    // A texture slot's texels a texture buffer's range bounds, which the commands hold.
-    let texel_range = |slot: &SlotRef| t.resources.texel_buffers.iter().any(|pt| pt.slot == *slot);
-    let texels = slots
-        .iter()
-        .any(|slot| slot.class == SlotClass::Texture && texel_range(slot));
-    if other_reads || texels || changed_fields(t, slots, changed).any(|f| f.is_none()) {
-        return false;
-    }
-    // Each changed slot, with its descriptor-form range's place among the bound ones' (in
-    // `bind_buffers`' order). What the plan's shape binds at a slot is what the state binds there
-    // (`bound_buffer` holds the state to it): a bound descriptor-form slot takes its place.
-    let mut at = 0;
-    for (index, pb) in t.buffers.iter().enumerate() {
-        let descriptor = match (pb.form, pb.binding) {
-            (BufferForm::Descriptor(_), Some(key)) => Some(key),
-            _ => None,
-        };
-        let bound = pb.bound != BoundKind::Unbound;
-        let place = match (bound, descriptor) {
-            (true, Some(key)) => {
-                at += 1;
-                Some((at - 1, key))
-            }
-            // A device-address slot's root entry.
-            (true, None) if changed(pb.slot) => return false,
-            _ => None,
-        };
-        if changed(pb.slot) {
-            // The push fields that read its residual, then those that read its guest address.
-            let fields = || changed_fields(t, slots, changed).flatten();
-            let from = into.words.len();
-            let offsets = fields()
-                .filter(|(slot, word, _)| *slot == pb.slot && matches!(word, LooseWord::Offset));
-            into.words.extend(offsets.map(|(_, _, field)| field));
-            let middle = into.words.len();
-            let bases = fields()
-                .filter(|(slot, word, _)| *slot == pb.slot && matches!(word, LooseWord::Base(_)));
-            into.words.extend(bases.map(|(_, _, field)| field));
-            into.buffers.push(SlotRebind {
-                buffer: index,
-                place,
-                offsets: (from, middle),
-                bases: (middle, into.words.len()),
-            });
-        }
-    }
-    // The push fields of changed slots no changed buffer slot of the template holds, or not as
-    // its residual or guest address, in placement order.
-    let buffers = &into.buffers;
-    let held = |slot: SlotRef| (buffers.iter()).any(|e| t.buffers[e.buffer].slot == slot);
-    let loose = changed_fields(t, slots, changed)
-        .flatten()
-        .filter(|(slot, word, _)| matches!(word, LooseWord::Stride(_)) || !held(*slot));
-    into.loose
-        .extend(loose.map(|(_, word, field)| (field, word)));
-    // Each changed fixed-function vertex buffer, at its binding's place (bound in
-    // `t.vertex_buffers`' order); a per-bind stride's binding, whose extent and stride may move
-    // with it, is written whole.
-    for (place, vb) in t.vertex_buffers.iter().enumerate() {
-        if !changed(vb.slot) {
-            continue;
-        }
-        if matches!(vb.stride, VertexStride::PerBind) {
-            return false;
-        }
-        into.vertex.push(place);
-    }
-    true
-}
-
-/// Write `word` at `field` of the commands' push writes: whether they hold its write.
-fn put_word<const N: usize>(
-    out: &mut DrawCommands,
-    field: FieldAt,
-    word: [u8; N],
-) -> Result<bool, BindError> {
-    let Some(write) = out.push_constants.get_mut(field.push) else {
-        return Ok(false);
-    };
-    put(
-        &mut write.bytes,
-        field.push_start,
-        &mut [],
-        field.loc,
-        &word,
-    )?;
-    Ok(true)
-}
-
-/// [`BindingPlan::rebind_draw_slots_with`] of a render plan's template `t`.
-fn rebind_with(
-    t: &GraphicsTemplate,
-    rebinds: &SlotRebinds,
-    state: &BindState,
-    out: &mut DrawCommands,
-) -> Result<bool, BindError> {
-    // An argument table's bytes or a root table: what the slots decide some other way.
-    if !out.descriptor_bytes.is_empty() || !out.root_tables.is_empty() {
-        return Ok(false);
-    }
-    let other_plan = || internal("slot rebinds another plan made");
-    // Each changed buffer slot's range and residual, and the push fields that read them.
-    for entry in &rebinds.buffers {
-        let pb = t.buffers.get(entry.buffer).ok_or_else(other_plan)?;
-        let bound = crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
-        let (bind_offset, length, base) = match bound {
-            Some(&BoundBuffer::Buffer {
-                length,
-                offset,
-                gpu_address,
-                ..
-            }) => (offset, length, gpu_address.wrapping_add(offset)),
-            Some(&BoundBuffer::Bytes { len, .. }) => (0, u64::from(len.max(1)), 0),
-            None => (0, 0, 0),
-        };
-        let base = guest_word(base, t.resources.biased_slot_words);
-        // An unbound slot has no residual: its `SlotBindOffset` reads 0.
-        let mut residual = 0;
-        if let (Some((place, key)), Some(_)) = (entry.place, bound) {
-            let views = state.uniform_views_at_residual;
-            let (range, slot_residual) =
-                crate::bind::instantiate::planned_range(pb, bind_offset, length, views).map_err(
-                    |e| match e {
-                        RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
-                            slot: pb.slot,
-                            needed,
-                            limit: pb.max_range,
-                        },
-                        RangeError::Empty => BindError::Unsupported(
-                            Unsupported::not_representable(Feature::BufferRange),
-                        ),
-                    },
-                )?;
-            let Some(written) =
-                (out.descriptor_ranges.get_mut(place)).filter(|r| (r.set, r.binding) == key)
-            else {
-                return Ok(false);
-            };
-            written.range = range;
-            residual = slot_residual;
-        }
-        let (offsets, bases) = (entry.offsets, entry.bases);
-        for &field in &rebinds.words[offsets.0..offsets.1] {
-            if !put_word(out, field, residual.to_le_bytes())? {
-                return Ok(false);
-            }
-        }
-        for &field in &rebinds.words[bases.0..bases.1] {
-            if !put_word(out, field, base.to_le_bytes())? {
-                return Ok(false);
-            }
-        }
-    }
-    for &(field, word) in &rebinds.loose {
-        let written = match word {
-            LooseWord::Offset => put_word(out, field, 0u32.to_le_bytes())?,
-            LooseWord::Base(slot) => put_word(
-                out,
-                field,
-                slot_guest_base(state, slot, t.resources.biased_slot_words),
-            )?,
-            LooseWord::Stride(layout) => {
-                let stride = pulled_stride(t, state, layout)?;
-                let Some(write) = out.push_constants.get_mut(field.push) else {
-                    return Ok(false);
-                };
-                put(
-                    &mut write.bytes,
-                    field.push_start,
-                    &mut [],
-                    field.loc,
-                    &stride,
-                )?;
-                true
-            }
-        };
-        if !written {
-            return Ok(false);
-        }
-    }
-    // Each changed fixed-function vertex buffer's offset, at its binding's place.
-    let vertex = state.stages.get(&Stage::Vertex);
-    for &place in &rebinds.vertex {
-        let vb = t.vertex_buffers.get(place).ok_or_else(other_plan)?;
-        let offset = match vertex.and_then(|v| v.buffers.get(&vb.slot.index)) {
-            Some(&BoundBuffer::Buffer { offset, .. }) => offset,
-            Some(&BoundBuffer::Bytes { .. }) => 0,
-            None => return Err(BindError::UnboundVertexBuffer { slot: vb.slot }),
-        };
-        if !fetchable(vb, &t.vertex_strides, offset_alignment(offset, 0), None) {
-            return Ok(false);
-        }
-        let Some(written) = out
-            .buffer_offsets
-            .get_mut(place)
-            .filter(|(binding, _)| *binding == vb.binding)
-        else {
-            return Ok(false);
-        };
-        written.1 = offset;
-    }
-    Ok(true)
-}
-
-/// [`BindingPlan::redraw_apart_into`] of a render plan's template `t`.
-fn redraw_with(
-    t: &GraphicsTemplate,
-    state: &BindState,
-    (from, draw): (&DrawCall, &DrawCall),
-    out: &mut DrawCommands,
-) -> Result<bool, BindError> {
-    // What the arguments decide some other way: a stage's argument or root table, a mesh or
-    // patch draw's own reads, a de-indexed draw's layout and indices.
-    let other_reads = t
-        .stages
-        .iter()
-        .any(|st| st.root_first.is_some() || st.table.is_some())
-        || t.mesh.is_some()
-        || t.tessellation.is_some()
-        || t.deindexed.is_some();
-    // Direct draws with or without indices, of any index type and buffer: the arguments decide
-    // their Vulkan draw, overrun and index use, written below. A draw with indices and one without
-    // differ too in the vertices per primitive a vertex function divides by, which a plan that
-    // reads them takes from the draw (`vertices_per_primitive`).
-    let direct = |draw: &DrawCall| match draw {
-        DrawCall::Primitives { .. } => Some(false),
-        DrawCall::Indexed { .. } => Some(true),
-        _ => None,
-    };
-    let per_primitive = || {
-        (t.stages.iter().flat_map(|st| &st.fields))
-            .any(|f| f.field == PushField::VerticesPerPrimitive)
-    };
-    let pair = match (direct(from), direct(draw)) {
-        (Some(from), Some(draw)) => from == draw || !per_primitive(),
-        _ => false,
-    };
-    if other_reads || !pair {
-        return Ok(false);
-    }
-    // Each fixed-function vertex buffer's fetch window, which its slot's extent holds: the two
-    // draws' the same, so the extents are. Inline bytes take no window.
-    let vertex = state.stages.get(&Stage::Vertex);
-    for vb in &t.vertex_buffers {
-        let stride = match (
-            vb.stride,
-            vertex.and_then(|v| v.buffers.get(&vb.slot.index)),
-        ) {
-            (VertexStride::Static(s), Some(BoundBuffer::Buffer { .. })) => s,
-            (
-                VertexStride::PerBind,
-                Some(&BoundBuffer::Buffer {
-                    attribute_stride, ..
-                }),
-            ) => attribute_stride.unwrap_or(0),
-            (_, Some(BoundBuffer::Bytes { .. })) => continue,
-            (_, None) => return Err(BindError::UnboundVertexBuffer { slot: vb.slot }),
-        };
-        if fetch_window(vb, stride, from) != fetch_window(vb, stride, draw) {
-            return Ok(false);
-        }
-    }
-    multiview_instances(t.multiview_instance_limit, draw)?;
-    let overrun = index_overrun(t.robust_index_fetch, draw);
-    let (command, base) = vk_draw(draw, overrun);
-    // The `BaseVertexInstance` fields, each at its place in its stage's push write.
-    let mut pushes = 0;
-    for st in &t.stages {
-        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
-        let push = (push_size != 0).then(|| {
-            pushes += 1;
-            pushes - 1
-        });
-        for f in (st.fields.iter()).filter(|f| f.field == PushField::BaseVertexInstance) {
-            let Some(write) = push.and_then(|push| out.push_constants.get_mut(push)) else {
-                return Ok(false);
-            };
-            let bytes = FieldBytes::words(base);
-            put(&mut write.bytes, push_start, &mut [], f.loc, &bytes)?;
-        }
-    }
-    out.uses.clear();
-    draw_uses(&mut out.uses, draw, overrun, None);
-    out.draw = command;
-    out.index_overrun = overrun;
-    Ok(true)
 }
 
 /// The `at`th value of `list`, which holds at least `at`: the one a draw before left there, else

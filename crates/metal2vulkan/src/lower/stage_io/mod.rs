@@ -468,8 +468,6 @@ pub struct StageIoPlan {
     /// The word attachments whose `float` or `half` output each return stores as the word Metal
     /// stores (`word_color::encode`), with each word's layout.
     pub words_written: BTreeMap<u32, crate::metal::format::WordAttachment>,
-    /// A vertex function's viewport compensation (`LoweringInputs::viewport_compensation`).
-    pub compensation: Option<Compensation>,
     /// A fragment function's depth output, which each return gives Metal's answer
     /// (`clamp_depth`).
     pub depth_clamp: Option<DepthClamp>,
@@ -598,7 +596,7 @@ const PRIMITIVE_ID_WORDS: u64 = 56;
 
 /// How a vertex function compiled under `LoweringInputs::window_depth_varying` writes its
 /// window depth: at each return, the `z / w` of the value it stores to its `Position` object
-/// (`position`, after any compensation or clamp) to its `IoRole::WindowDepth` varying
+/// (`position`, after any clamp) to its `IoRole::WindowDepth` varying
 /// (`object`), for a fragment function that computes each sample's depth from it
 /// (`lower::fragment`'s `depth_test`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -677,23 +675,6 @@ pub struct DepthClamp {
     pub object: usize,
     pub clamps: bool,
     pub range: bool,
-}
-
-/// How a vertex function compiled under `LoweringInputs::viewport_compensation` stores its
-/// position: its `Position` object, whose value it compensates by
-/// `PushField::ViewportCompensation` before storing it, and, where it compensates the depth, its
-/// `ClipDistance` object and the first of the two elements it writes there after its own. Under
-/// Metal's guard band for points, `guard` names the object and the first of the four elements it
-/// writes after those. Under `mirrors` it negates `x` where the viewport it selects is mirrored
-/// (`PushField::ViewportMirrors`). Under `vertex_clamp`, which only a compensated depth takes, it
-/// clamps that depth by `PushField::VertexDepthClamp`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Compensation {
-    pub position: usize,
-    pub clip: Option<(usize, u32)>,
-    pub guard: Option<(usize, u32)>,
-    pub mirrors: bool,
-    pub vertex_clamp: bool,
 }
 
 impl StageIoPlan {
@@ -1886,7 +1867,6 @@ pub fn emit_return(
     let plan = &cx.plan.families.stage_io;
     let (outputs, returned, point) = (plan.outputs.clone(), plan.returned, plan.point_size_default);
     let seconds = plan.rotated_seconds.clone();
-    let compensation = plan.compensation;
     let region_copy = plan.region_copy;
     let depth_clamp = plan.depth_clamp;
     let window_depth = plan.window_depth;
@@ -1910,11 +1890,6 @@ pub fn emit_return(
         (Some(_), _) if outputs.is_empty() => {}
         (Some(v), _) => {
             let x = cx.operand(fb, v)?;
-            // The viewport the function selects, which a compensation of mirrors reads.
-            let selected = match compensation.filter(|c| c.mirrors) {
-                Some(_) => Some(selected_viewport(cx, fb, x, returned, &outputs)?),
-                None => None,
-            };
             for o in &outputs {
                 let part = output_part(cx, fb, x, returned, o)?;
                 let part =
@@ -1922,10 +1897,6 @@ pub fn emit_return(
                         true => metal_point_size(fb, part)?,
                         false => part,
                     };
-                let part = match compensation.filter(|c| c.position == o.link.object) {
-                    Some(c) => compensate(cx, fb, c, part, selected)?,
-                    None => part,
-                };
                 let part = match region_copy.filter(|r| r.position == o.link.object) {
                     Some(r) => store_region_copy(cx, fb, r, part)?,
                     None => part,
@@ -2478,187 +2449,6 @@ fn rotated_second(
         FactorLane::Output(m) => u32::from(m),
     });
     fb.vector_shuffle(first, constants, &lanes)
-}
-
-/// The viewport a vertex function returning `x` selects, as Vulkan reads it: the `ViewportIndex`
-/// it stores (`output_part`) or the `IoRole::SelectedViewport` varying the synthesized geometry
-/// stages store it from, else the one an amplification stores (`StageIoPlan::amplified`), else
-/// the first.
-fn selected_viewport(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    x: SValue,
-    returned: Returned,
-    outputs: &[PlannedOutput],
-) -> BResult<SValue> {
-    let sp = &cx.plan.families.stage_io;
-    // The `ViewportIndex` the function stores, or the varying the synthesized geometry stages
-    // store it from (`IoRole::SelectedViewport`): either holds the index below the count.
-    let selected_key = crate::pipeline::sym::VaryingKey::selected_viewport();
-    let is_index = |o: &IoObject| match o {
-        IoObject::Builtin {
-            builtin: crate::spv::BuiltIn::ViewportIndex,
-            dir: IoDir::Output,
-            ..
-        } => true,
-        IoObject::User {
-            key,
-            dir: IoDir::Output,
-            ..
-        } => *key == selected_key,
-        _ => false,
-    };
-    let object = sp.objects.iter().position(is_index);
-    let amplified = sp
-        .amplified
-        .iter()
-        .find(|a| Some(a.link.object) == object)
-        .copied();
-    if let Some(o) = outputs.iter().find(|o| Some(o.link.object) == object) {
-        return output_part(cx, fb, x, returned, o);
-    }
-    match amplified {
-        Some(a) => {
-            let offset = cx.push_field(fb, a.offset)?;
-            below_count(cx, fb, offset, a.below)
-        }
-        None => {
-            let zero = fb.u32_const(0)?;
-            fb.module().const_value(zero)
-        }
-    }
-}
-
-/// `position`, a vertex function's `float4` position, compensated for the draw's viewport by
-/// `PushField::ViewportCompensation`'s `[sx, a, b, clip]`
-/// (`LoweringInputs::viewport_compensation`): `(sx x, y, a w + b z, w)`, or `(sx x, y, z, w)` where
-/// only `x` is compensated. Where the depth is, the two clip distances `c.clip` names are stored
-/// too: `z` and `w - z` where `clip` is 1, which clip at Metal's near and far planes as the Vulkan
-/// viewport's no longer do, and 1 where it is 0 (depth clamp mode, which clips at neither). Under
-/// the point guard band (`c.guard`) `x` and `y` are scaled by `PushField::PointGuard`'s `[gx, gy]`
-/// too, and the four clip distances `c.guard` names are stored: `1.5 w - x`, `1.5 w + x`, `1.5 w -
-/// y` and `1.5 w + y` of the function's own `x` and `y`, which cull a point where Metal does. Under
-/// `c.mirrors` `x` is negated too where the `selected` viewport's bit of
-/// `PushField::ViewportMirrors` is set. Under `c.vertex_clamp` the compensated depth is clamped to
-/// `[lo w, hi w]` of `PushField::VertexDepthClamp`'s `[lo, hi]` where `w` is positive, as Metal
-/// clamps each vertex's depth before the interpolation; a NaN depth takes the bound.
-fn compensate(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    c: Compensation,
-    position: SValue,
-    selected: Option<SValue>,
-) -> BResult<SValue> {
-    let field = cx.push_field(fb, PushField::ViewportCompensation)?;
-    let f32_ = fb.module().ty(SType::Float { width: 32 })?;
-    let lane = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<SValue> {
-        let bits = fb.composite_extract(field, &[0, i])?;
-        fb.convert(ConvOp::Bitcast, bits, f32_)
-    };
-    let x = fb.composite_extract(position, &[0])?;
-    let y = fb.composite_extract(position, &[1])?;
-    let z = fb.composite_extract(position, &[2])?;
-    let w = fb.composite_extract(position, &[3])?;
-    let sx = lane(fb, 0)?;
-    let sxx = fb.binary(BinOp::FMul, sx, x)?;
-    // Mirrored and unmirrored viewports in one draw: `x` negated where the selected viewport's
-    // bit is set.
-    let sxx = match selected.filter(|_| c.mirrors) {
-        None => sxx,
-        Some(index) => {
-            let mirrors = cx.push_field(fb, PushField::ViewportMirrors)?;
-            let bits = fb.binary(BinOp::ShiftRightLogical, mirrors, index)?;
-            let one = fb.u32_const(1)?;
-            let one = fb.module().const_value(one)?;
-            let bit = fb.binary(BinOp::BitwiseAnd, bits, one)?;
-            let zero = fb.u32_const(0)?;
-            let zero = fb.module().const_value(zero)?;
-            let mirrored = fb.binary(BinOp::INotEqual, bit, zero)?;
-            let negated = fb.unary(UnOp::FNegate, sxx)?;
-            fb.select(mirrored, negated, sxx)?
-        }
-    };
-    let f32_const = |fb: &mut FunctionBuilder<'_>, v: f32| -> BResult<SValue> {
-        let k = fb.module().constant(Constant::Scalar {
-            ty: f32_,
-            bits: ConstBits(u64::from(v.to_bits())),
-        })?;
-        fb.module().const_value(k)
-    };
-    // Metal's guard band for points: the position scaled into the widened Vulkan viewports,
-    // and the four planes at `1.5 w` of the function's own `x` and `y`.
-    let (sxx, y_out) = match c.guard {
-        None => (sxx, y),
-        Some((object, first)) => {
-            let guard = cx.push_field(fb, PushField::PointGuard)?;
-            let scale = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<SValue> {
-                let bits = fb.composite_extract(guard, &[i])?;
-                fb.convert(ConvOp::Bitcast, bits, f32_)
-            };
-            let (gx, gy) = (scale(fb, 0)?, scale(fb, 1)?);
-            let band = f32_const(fb, 1.5)?;
-            let band = fb.binary(BinOp::FMul, band, w)?;
-            let g = global(cx, object)?;
-            let base = fb.module().global_value(g)?;
-            let mut k = first;
-            for v in [x, y] {
-                for op in [BinOp::FSub, BinOp::FAdd] {
-                    let d = fb.binary(op, band, v)?;
-                    let kc = fb.u32_const(k)?;
-                    let kc = fb.module().const_value(kc)?;
-                    let p = fb.access_chain(base, &[kc])?;
-                    fb.store(p, d, MemAccess::default())?;
-                    k += 1;
-                }
-            }
-            (
-                fb.binary(BinOp::FMul, gx, sxx)?,
-                fb.binary(BinOp::FMul, gy, y)?,
-            )
-        }
-    };
-    let depth = match c.clip {
-        None => z,
-        Some((object, first)) => {
-            let (a, b, clip) = (lane(fb, 1)?, lane(fb, 2)?, lane(fb, 3)?);
-            let aw = fb.binary(BinOp::FMul, a, w)?;
-            let bz = fb.binary(BinOp::FMul, b, z)?;
-            let depth = fb.binary(BinOp::FAdd, aw, bz)?;
-            let (half, one) = (f32_const(fb, 0.5)?, f32_const(fb, 1.0)?);
-            let clips = fb.binary(BinOp::FOrdGreaterThan, clip, half)?;
-            let far = fb.binary(BinOp::FSub, w, z)?;
-            let g = global(cx, object)?;
-            let base = fb.module().global_value(g)?;
-            for (k, distance) in [(first, z), (first + 1, far)] {
-                let d = fb.select(clips, distance, one)?;
-                let kc = fb.u32_const(k)?;
-                let kc = fb.module().const_value(kc)?;
-                let p = fb.access_chain(base, &[kc])?;
-                fb.store(p, d, MemAccess::default())?;
-            }
-            // Metal clamps each vertex's depth before the interpolation: `z / w` to the draw's
-            // `[lo, hi]` where `w` is positive.
-            match c.vertex_clamp {
-                false => depth,
-                true => {
-                    let range = cx.push_field(fb, PushField::VertexDepthClamp)?;
-                    let bound = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<SValue> {
-                        let bits = fb.composite_extract(range, &[i])?;
-                        let v = fb.convert(ConvOp::Bitcast, bits, f32_)?;
-                        fb.binary(BinOp::FMul, v, w)
-                    };
-                    let (low, high) = (bound(fb, 0)?, bound(fb, 1)?);
-                    let raised = fb.glsl(GlslOp::NMax, &[depth, low])?;
-                    let clamped = fb.glsl(GlslOp::NMin, &[raised, high])?;
-                    let zero = f32_const(fb, 0.0)?;
-                    let positive = fb.binary(BinOp::FOrdGreaterThan, w, zero)?;
-                    fb.select(positive, clamped, depth)?
-                }
-            }
-        }
-    };
-    let vec4 = fb.module().ty(SType::Vector { elem: f32_, len: 4 })?;
-    fb.composite_construct(vec4, &[sxx, y_out, depth, w])
 }
 
 /// `position`, a vertex function's `float4` position, as its region's copy (`r`,

@@ -137,7 +137,6 @@ pub use lower_inputs::{
     AliasView, AmplificationDraws, BlendEquation, ChannelWrite, ColorGroup, ExtendedRangeColor,
     FactorLane, FetchedAttachment, FramebufferFetchInputs, LoweringInputs, RotatedBlendForm,
     StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
-    ViewportCompensation,
 };
 pub use table::FunctionHandle;
 // The vocabulary the pipeline surface reaches: render-pipeline keys, runtime facts and their

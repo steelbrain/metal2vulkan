@@ -153,12 +153,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             layered: true,
             viewports: false,
         },
-        RuntimeFact::ViewportCompensation {
-            depth: true,
-            point_guard: true,
-            mirrors: true,
-            vertex_clamp: true,
-        },
         RuntimeFact::FoldedGroups,
         RuntimeFact::ReplayBindings,
         RuntimeFact::MergedDraws,
@@ -362,7 +356,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::TextureSwizzle { .. } => 52,
         RuntimeFact::TileImageblock { .. } => 53,
         RuntimeFact::AmplificationDraws { .. } => 54,
-        RuntimeFact::ViewportCompensation { .. } => 55,
         RuntimeFact::FoldedGroups => 56,
         RuntimeFact::AbsentArgumentRead { .. } => 57,
         RuntimeFact::ZeroedColor { .. } => 59,
@@ -497,7 +490,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::OneRow
                 | RuntimeFact::UnitAxes { .. }
                 | RuntimeFact::AmplificationDraws { .. }
-                | RuntimeFact::ViewportCompensation { .. }
                 | RuntimeFact::FoldedGroups
                 | RuntimeFact::ReplayBindings
                 | RuntimeFact::MergedDraws

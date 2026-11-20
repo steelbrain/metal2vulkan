@@ -627,17 +627,6 @@ fn inttoptr_resolves_addresses_of_large_sets() {
     }
 }
 
-/// The entries `(host, guest, size)` of a resident set uploaded apart from its root table.
-fn resident_entries(resident: &[(u64, u64, u64)]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(32 * resident.len());
-    for &(h, g, s) in resident {
-        for v in [h, g, s, 0] {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-    }
-    bytes
-}
-
 /// A linked-list walk: the head is the `[[buffer(0)]]` parameter and each next pointer is loaded
 /// from the current node, so the loop's pointer phi merges the parameter with loaded pointers.
 /// The parameter's slot is reached through its root entry (`Psb`, `DeviceAddresses`) and the phi

@@ -230,7 +230,7 @@ pub use extended_canonical::{
 pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
     alpha_test_code, DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups,
-    MeshRecordsRegion, SlotRebinds, TessellationDispatch, TessellationRecords,
+    MeshRecordsRegion, TessellationDispatch, TessellationRecords,
 };
 pub use heap::{
     handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,
@@ -302,11 +302,11 @@ pub use replay::{
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,
-    BufferRanges, BufferShape, CompensatedViewport, FragmentTests, FunctionTablesShape,
-    HeapPlacement, ImageblockSize, ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion,
-    StageShape, StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
-    TextureShape, TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource,
-    UsedShape, VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
+    BufferRanges, BufferShape, FragmentTests, FunctionTablesShape, HeapPlacement, ImageblockSize,
+    ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion, StageShape, StageTable,
+    TessellationFactorBuffer, TessellationFactors, TextureFacts, TextureShape,
+    TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource, UsedShape,
+    VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
 };
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.

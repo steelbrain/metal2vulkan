@@ -433,22 +433,6 @@ pub enum RuntimeFact {
     /// writes no viewport index of its own (a mapping offsets the viewport). Its plans state the
     /// variant the shape's amplification asks for.
     AmplificationDraws { layered: bool, viewports: bool },
-    /// The vertex function was compiled under `VariantKey::viewport_compensation`
-    /// (`LoweringInputs::viewport_compensation` of `depth`): it negates its position's `x` and,
-    /// under `depth`, rewrites its depth and clips at Metal's planes by the draw's
-    /// `PushField::ViewportCompensation`, which the binder writes from
-    /// `BindState::viewport_compensation`. Its plans state the variant the shape asks for.
-    /// Under `point_guard` it also scales its position by the draw's `PushField::PointGuard`
-    /// and culls a point past Metal's guard band by four clip distances. Under `mirrors` it negates
-    /// `x` by the selected viewport's bit of the draw's `PushField::ViewportMirrors`. Under
-    /// `vertex_clamp` it clamps its compensated depth by the draw's `PushField::VertexDepthClamp`
-    /// before the interpolation, as Metal clamps each vertex's depth.
-    ViewportCompensation {
-        depth: bool,
-        point_guard: bool,
-        mirrors: bool,
-        vertex_clamp: bool,
-    },
     /// The kernel was compiled under `VariantKey::folded_groups`
     /// (`LoweringInputs::folded_groups`): it runs a threadgroup dispatch of its own threadgroup
     /// size whose group counts it reads from the 32-byte region record at its

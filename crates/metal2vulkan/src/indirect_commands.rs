@@ -11,7 +11,6 @@ pub use host::{BindingError, CommandBuffer, CommandBufferError, RecordView, Reso
 
 use std::fmt;
 use std::num::NonZeroU64;
-use std::ops::Range;
 
 /// Buffer namespace of an encoded command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -74,7 +74,6 @@ use crate::device::requirements::{
     ApiVersion, FormatUsage, VkExtension, VkFeature, VkLimit, VkProperty,
 };
 use crate::device::DriverWorkaround;
-use crate::metal::PixelFormat;
 use crate::pipeline::sym::{Axis, SlotRef, SpecKey, Stage};
 use crate::vk;
 
@@ -885,11 +884,6 @@ pub enum RuntimeDriverDefect {
     /// depth/stencil attachment's stencil a fragment function writes without stencil export
     /// (`Feature::StencilExport`).
     MultisampledDepthStencilColourCopies,
-    /// A primitive whose normalized depths reach past `[0, 1]` rasterizes inexact depths, where
-    /// Metal's own viewport of the same depth range draws them exactly. The runtime draws a
-    /// viewport depth range past `[0, 1]` that the device does not take natively through such
-    /// depths (the vertex stage's compensation, `Feature::ViewportDepthRange`).
-    NormalizedDepthPastUnitRange,
     /// A compressed image's memory requirements answer a size short of the memory the GPU
     /// writes its compression data through, so a resource bound right after the image loses what
     /// a command buffer that also writes the image writes into its first bytes. Nothing is
@@ -1601,10 +1595,6 @@ pub enum Feature {
     HeapTextureTiling {
         missing: LinearNeed,
     },
-    /// A viewport depth range past `[0, 1]` (`setViewport:`), which Metal takes and the runtime
-    /// draws natively (`VK_EXT_depth_range_unrestricted`) or through the vertex stage's
-    /// compensation.
-    ViewportDepthRange,
     /// A shader write to a texture made without `ShaderWrite` (or `ShaderAtomic`), or a read of
     /// one made without `ShaderRead`, which plain Metal runs, where the texture's image lacks the
     /// storage or sampled usage: the runtime adds it only where it costs the image nothing (the

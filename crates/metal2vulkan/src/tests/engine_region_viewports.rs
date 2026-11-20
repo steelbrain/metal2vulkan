@@ -13,7 +13,7 @@
 //! - A fragment function compiled under it that reads `[[viewport_array_index]]` reads 0 and
 //!   declares no `ViewportIndex`.
 //! - A vertex function that selects its own viewport, a post-tessellation one, and one under
-//!   draws of one amplification each or a viewport compensation is
+//!   draws of one amplification each is
 //!   `NotImplemented(RasterizationRateMap)`; a device without `shaderDrawParameters` names the
 //!   three features the variant needs.
 //! - A render plan whose shape asks for it states the variant, which the pipeline compiled
@@ -36,7 +36,7 @@ use crate::pipeline::descriptor::{
 };
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::{link, LinkInputs};
-use crate::pipeline::lower_inputs::{AmplificationDraws, LoweringInputs, ViewportCompensation};
+use crate::pipeline::lower_inputs::{AmplificationDraws, LoweringInputs};
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::StageBuiltin;
 use crate::pipeline::testing::{compile_with, engine_dir, llvm_assemble, AssembleError};
@@ -190,12 +190,6 @@ fn region_viewports_refuse_what_is_drawn_region_by_region() {
         viewports: true,
     });
     assert_eq!(refusal(&viewports, "rfb_full", &amplified), not_implemented);
-    let mut compensated = inputs(true);
-    compensated.viewport_compensation = Some(ViewportCompensation::new(true));
-    assert_eq!(
-        refusal(&viewports, "rfb_full", &compensated),
-        not_implemented
-    );
     let mut desc = description("lavapipe");
     assert!(desc.features.remove(&F::ShaderDrawParameters));
     let without = profile_of(desc);

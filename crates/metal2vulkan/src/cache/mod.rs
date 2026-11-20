@@ -72,7 +72,7 @@ pub const SEMANTICS_VERSION: u32 = 2207;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 556;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 557;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -301,12 +301,6 @@ pub struct VariantKey {
     /// it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub amplification_draws: Option<crate::pipeline::AmplificationDraws>,
-    /// The vertex function compensates its position for a viewport Vulkan's cannot be
-    /// (`LoweringInputs::viewport_compensation`): the variant a shape whose viewport has a
-    /// negative width, or a depth range past `[0, 1]` the device does not take, asks for
-    /// (`BindShape::viewport_compensation`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub viewport_compensation: Option<crate::pipeline::ViewportCompensation>,
     /// The kernel folds Metal's group counts into one dispatch within the device's limits
     /// (`LoweringInputs::folded_groups`): the variant a threadgroup dispatch whose group counts
     /// are GPU data runs on, for a kernel that observes its threadgroup partition, reading its
@@ -612,7 +606,6 @@ impl VariantKey {
             && !self.replay_bindings
             && !self.merged_draws
             && self.amplification_draws.is_none()
-            && self.viewport_compensation.is_none()
             && !self.folded_groups
             && !self.partial_threadgroups
             && self.extended_range.is_empty()
@@ -650,7 +643,7 @@ impl VariantKey {
     /// the fragment function the colors it writes zero to and those it drops, its depth's clamp
     /// range and whether its draws' tests are read-only, for a tile function the imageblock bytes
     /// its pass keeps, and for the vertex function the
-    /// dropped `Layer` output, the viewport compensation and the window depth
+    /// dropped `Layer` output and the window depth
     /// (a vertex function's projection is
     /// derived from the vertex descriptor and
     /// [`pulled_vertex_buffers`](VariantKey::pulled_vertex_buffers) when the pipeline compiles,
@@ -705,9 +698,6 @@ impl VariantKey {
         out.amplification_draws = self
             .amplification_draws
             .filter(|_| stage != crate::pipeline::sym::Stage::Kernel);
-        out.viewport_compensation = self
-            .viewport_compensation
-            .filter(|_| stage == crate::pipeline::sym::Stage::Vertex);
         out.region_viewports =
             self.region_viewports && stage == crate::pipeline::sym::Stage::Vertex;
         out.region_copies = self.region_fan_out

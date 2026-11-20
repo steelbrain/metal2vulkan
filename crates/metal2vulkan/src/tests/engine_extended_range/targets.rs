@@ -72,20 +72,6 @@ const FORMATS: [(PixelFormat, ExtendedRange); 6] = [
     ),
 ];
 
-/// A kernel writing `float4` `src[gid.x + 32 gid.y]` (buffer 0) to `texture2d<float,
-/// access::write>` slot 1 at `gid`.
-const WRITE: &str = r#"define void @k(ptr addrspace(1) %src, ptr addrspace(1) %w, <2 x i32> %gid) {
-  %x = extractelement <2 x i32> %gid, i64 0
-  %y = extractelement <2 x i32> %gid, i64 1
-  %row = shl i32 %y, 5
-  %n = add i32 %x, %row
-  %i = zext i32 %n to i64
-  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %src, i64 %i
-  %v = load <4 x float>, ptr addrspace(1) %p, align 16
-  call void @air.write_texture_2d.v4f32(ptr addrspace(1) %w, <2 x i32> %gid, <4 x float> %v, i32 0, i32 2)
-  ret void
-}
-
 declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32)
 
 !air.kernel = !{!0}
@@ -96,23 +82,6 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
 !4 = !{i32 1, !"air.texture", !"air.location_index", i32 1, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<float, write>", !"air.arg_name", !"w"}
 !5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"gid"}
 "#;
-
-/// The `half` bits of lane `l` of batch `b`: every fourth pattern from 0 to past 2.5, positive in
-/// the even batches and negative in the odd ones, the first lanes NaN, the infinities, the
-/// largest finite `half`s, zeros and one.
-fn half_lane(b: u32, l: u32) -> u16 {
-    const SPECIAL: [u16; 10] = [
-        0x7e00, 0x7c00, 0xfc00, 0x7bff, 0xfbff, 0x0000, 0x8000, 0x3c00, 0x3e00, 0x4000,
-    ];
-    if b == 0 && (l as usize) < SPECIAL.len() {
-        return SPECIAL[l as usize];
-    }
-    let bits = ((b / 2) * 4 * SIDE * SIDE + 4 * l + b % 4) as u16;
-    match b % 2 {
-        0 => bits,
-        _ => bits | 0x8000,
-    }
-}
 
 fn fixture() -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join("rt6_samples.ll")) {

@@ -13,7 +13,7 @@ use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::graphics::GraphicsState;
 use crate::pipeline::interface::{LevelReads, PipelineInterface, SampledLevels, SnapshotRefusal};
 use crate::pipeline::layout::PipelineLayout;
-use crate::pipeline::sym::{SlotRef, SpecKey};
+use crate::pipeline::sym::SpecKey;
 use crate::pipeline::vertex::VertexInputState;
 use crate::vk;
 

@@ -212,9 +212,7 @@ pub struct GraphicsState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub flat_fragment_inputs: bool,
     /// The elements of the vertex function's own `[[clip_distance]]` output, 0 for none (a mesh
-    /// pipeline's too). A draw of points compiled under `ViewportCompensation::point_guard`
-    /// writes four more after them, and two more again under `ViewportCompensation::depth`,
-    /// within `maxClipDistances` and `maxCombinedClipAndCullDistances`.
+    /// pipeline's too).
     #[cfg_attr(feature = "serde", serde(default))]
     pub clip_distances: u32,
     /// Whether the fragment function writes its depth (`[[depth(...)]]`). A draw in depth clamp

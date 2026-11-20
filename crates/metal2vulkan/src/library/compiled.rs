@@ -76,30 +76,12 @@ pub struct CompiledFunction(Arc<FunctionArtifact>, Arc<LastRelocation>);
 #[derive(Default)]
 pub(crate) struct LastRelocation(std::sync::Mutex<Option<Relocated>>);
 
-/// One relocation: what link assigned, the words that came out, and a digest of those words a
-/// caller asked for.
+/// One relocation: what link assigned, and the words that came out.
 struct Relocated {
     /// The value link assigned to each of the module's relocation slots, in `relocs` order: the
     /// whole of what the words depend on besides the module itself.
     assigned: Vec<u32>,
     words: Arc<[u32]>,
-    /// The digest of `words`, with the function that derived it: a caller that hashes words some
-    /// other way derives again rather than reading a digest its own function did not make
-    /// ([`CompiledFunction::relocated_words_digest`]). Cleared with the words it describes, so
-    /// it can never name another relocation's.
-    digest: Option<(fn(&[u32]) -> Hash256, Hash256)>,
-}
-
-/// What a relocation slot can say about a digest of some words by some function
-/// ([`LastRelocation::digest_of`]).
-enum DigestOf {
-    /// It holds those very words and that function's digest of them.
-    Kept(Hash256),
-    /// It holds those very words and no digest of them by that function, so one derived now
-    /// belongs in it.
-    Wanted,
-    /// The words are not the ones it holds, so it has nothing to say about them.
-    Other,
 }
 
 impl LastRelocation {
@@ -110,47 +92,15 @@ impl LastRelocation {
         (kept.assigned == assigned).then(|| Arc::clone(&kept.words))
     }
 
-    /// Keep `words` as the relocation that assigned `assigned`, replacing what the slot held
-    /// (and the digest of the words it held).
+    /// Keep `words` as the relocation that assigned `assigned`, replacing what the slot held.
     pub(crate) fn keep(&self, assigned: Vec<u32>, words: &Arc<[u32]>) {
         let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
         *slot = Some(Relocated {
             assigned,
             words: Arc::clone(words),
-            digest: None,
         });
     }
 
-    /// What the slot has for a digest of `words` by `derive` ([`DigestOf`]). The words are the
-    /// slot's only if they are the same allocation: a relocation hands back the very `Arc` it
-    /// kept, so an equal copy of the words is a different caller's and answers `Other`.
-    fn digest_of(&self, words: &Arc<[u32]>, derive: fn(&[u32]) -> Hash256) -> DigestOf {
-        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(kept) = slot.as_ref() else {
-            return DigestOf::Other;
-        };
-        if !Arc::ptr_eq(&kept.words, words) {
-            return DigestOf::Other;
-        }
-        match kept.digest {
-            Some((made_by, digest)) if std::ptr::fn_addr_eq(made_by, derive) => {
-                DigestOf::Kept(digest)
-            }
-            _ => DigestOf::Wanted,
-        }
-    }
-
-    /// Keep `digest`, which `derive` produced over `words`, if the slot still holds those very
-    /// words; drop it if the slot has moved on, since a digest only ever describes the words
-    /// beside it.
-    fn keep_digest(&self, words: &Arc<[u32]>, derive: fn(&[u32]) -> Hash256, digest: Hash256) {
-        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(kept) = slot.as_mut() {
-            if Arc::ptr_eq(&kept.words, words) {
-                kept.digest = Some((derive, digest));
-            }
-        }
-    }
 }
 
 /// A clone of a compiled function shares its slot, so the `Debug`, equality and hashing of a

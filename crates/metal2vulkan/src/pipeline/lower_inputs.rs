@@ -439,21 +439,6 @@ pub struct LoweringInputs {
     /// attachments; empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub absent_varyings: BTreeSet<VaryingKey>,
-    /// The vertex function's position is compensated for a viewport Vulkan's cannot be
-    /// (`VariantKey::viewport_compensation`): a negative width, or, under
-    /// [`ViewportCompensation::depth`], a depth range past `[0, 1]` on a device that does not take
-    /// one. The function reads the draw's `[sx, a, b, clip]` from `PushField::ViewportCompensation`
-    /// (four `f32`s' bits) and writes `Position` as `(sx x, y, a w + b z, w)`; under `depth` it
-    /// also writes two `ClipDistance` elements after its own, `z` and `w - z` where `clip` is 1
-    /// (Metal's near and far planes) and 1 where it is 0. Under
-    /// [`ViewportCompensation::point_guard`] it reads the draw's `[gx, gy]` from
-    /// `PushField::PointGuard` (two `f32`s' bits), writes `Position` as `(gx sx x, gy y, ..)`, and
-    /// writes four `ClipDistance` elements after the others: `1.5 w - x`, `1.5 w + x`, `1.5 w - y`
-    /// and `1.5 w + y`, of the function's own `x` and `y`. It states
-    /// `RuntimeFact::ViewportCompensation`. A post-tessellation vertex function is compensated
-    /// as a vertex function is; any other function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub viewport_compensation: Option<ViewportCompensation>,
     /// The kernel runs a threadgroup dispatch whose group counts are GPU data
     /// (`dispatchThreadgroupsWithIndirectBuffer:`) as one Vulkan dispatch within the device's
     /// group-count limits, whatever the counts (`VariantKey::folded_groups`): Vulkan workgroup
@@ -903,8 +888,8 @@ pub struct LoweringInputs {
     /// (`merged_draws`) takes it too, its corner from its `VertexIndex` and `InstanceIndex` as
     /// without it, and so does a draw replay's of one draw per command (`replay_bindings`). A
     /// function that writes its own `[[viewport_array_index]]` or
-    /// `[[render_target_array_index]]`, one compiled under `amplification_draws` or
-    /// `viewport_compensation`, and a post-tessellation vertex function, is
+    /// `[[render_target_array_index]]`, one compiled under `amplification_draws`, and a
+    /// post-tessellation vertex function, is
     /// `NotImplemented(RasterizationRateMap)` under it: the
     /// runtime draws those region by region. The vertex function states `RuntimeFact::RegionViewports`. A
     /// fragment function compiled under it (behind such a vertex function, where it reads
@@ -931,7 +916,7 @@ pub struct LoweringInputs {
     /// `VertexIndex` and `InstanceIndex` as without it, and so does a draw replay's of one draw
     /// per command (`replay_bindings`). A function that writes its own
     /// `[[viewport_array_index]]` or `[[render_target_array_index]]`, one compiled under
-    /// `amplification_draws` or `viewport_compensation`, a post-tessellation vertex function and
+    /// `amplification_draws`, a post-tessellation vertex function and
     /// one that returns no outputs are `NotImplemented(RasterizationRateMap)` under it: the runtime draws those region by region
     /// through each region's viewport. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
@@ -1229,69 +1214,6 @@ impl AmplificationDraws {
     /// viewport (`viewports`).
     pub fn new(layered: bool, viewports: bool) -> AmplificationDraws {
         AmplificationDraws { layered, viewports }
-    }
-}
-
-/// How a vertex function compiled for a viewport Vulkan's cannot be compensates its position
-/// (`LoweringInputs::viewport_compensation`, `VariantKey::viewport_compensation`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ViewportCompensation {
-    /// The depth too: the function rewrites `z` and writes the two clip distances, for a depth
-    /// range past `[0, 1]` the Vulkan viewport cannot hold. Without it only `x` is negated (a
-    /// negative width), and the function declares no clip distance of its own.
-    pub depth: bool,
-    /// Metal's guard band for points too: the function scales its position's `x` and `y` by the
-    /// draw's `PushField::PointGuard`, for a draw of points through Vulkan viewports widened by the
-    /// inverse scale about their centers, and writes four clip distances after the others, which
-    /// cull a point where Metal does, its `|x|` or `|y|` past `1.5 w`.
-    pub point_guard: bool,
-    /// Mirrored and unmirrored viewports in one draw: the function negates its position's `x` where
-    /// the viewport it selects (the `ViewportIndex` it stores, or the amplification's, else the
-    /// first) has its bit set in the draw's `PushField::ViewportMirrors`, on top of `sx`.
-    pub mirrors: bool,
-    /// Metal's clamp of each vertex's depth before the interpolation, under `depth`: the function
-    /// clamps its compensated depth `a w + b z` to `[lo w, hi w]` of the draw's
-    /// `PushField::VertexDepthClamp` `[lo, hi]` where `w` is positive, so the device interpolates
-    /// the vertices' clamped depths, as Metal does, where it would clamp each sample. The clip
-    /// distances take the unclamped `z`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub vertex_clamp: bool,
-}
-
-impl ViewportCompensation {
-    /// The compensation of the position's `x`, and of its depth where `depth`.
-    pub fn new(depth: bool) -> ViewportCompensation {
-        ViewportCompensation {
-            depth,
-            point_guard: false,
-            mirrors: false,
-            vertex_clamp: false,
-        }
-    }
-
-    /// This compensation, with Metal's guard band for points where `point_guard`.
-    pub fn with_point_guard(self, point_guard: bool) -> ViewportCompensation {
-        ViewportCompensation {
-            point_guard,
-            ..self
-        }
-    }
-
-    /// This compensation, negating `x` by the selected viewport's bit of the draw's mirrors where
-    /// `mirrors`.
-    pub fn with_mirrors(self, mirrors: bool) -> ViewportCompensation {
-        ViewportCompensation { mirrors, ..self }
-    }
-
-    /// This compensation, clamping each vertex's depth by the draw's
-    /// `PushField::VertexDepthClamp` where `vertex_clamp`.
-    pub fn with_vertex_clamp(self, vertex_clamp: bool) -> ViewportCompensation {
-        ViewportCompensation {
-            vertex_clamp,
-            ..self
-        }
     }
 }
 

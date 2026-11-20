@@ -425,7 +425,6 @@ surface! {
         enum StorageImageClass N;
         enum VertexFetch N;
         struct VertexFetchProjection N;
-        struct ViewportCompensation N;
         struct FunctionHandle O;
         struct RenderPipelineKeys N;
         enum Mechanism N;
@@ -478,7 +477,6 @@ surface! {
         struct MeshDispatch N;
         enum MeshGroups N;
         enum MeshRecordsRegion N;
-        struct SlotRebinds O;
         struct TessellationDispatch N;
         enum TessellationRecords N;
         fn heap_classes;
@@ -561,7 +559,6 @@ surface! {
         struct FunctionTablesShape N;
         struct TileThreadgroupMemory N;
         struct TileThreadgroupArgument N;
-        struct CompensatedViewport N;
         enum FragmentTests N;
         struct ExecutionStatus E;
         struct MeshRecordsFault N;

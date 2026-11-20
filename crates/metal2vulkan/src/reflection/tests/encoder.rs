@@ -5,16 +5,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{diff, fixture};
-use crate::bind::{ArgumentBufferLayout, ArgumentLayoutError, ArgumentType};
+use crate::bind::{ArgumentBufferLayout, ArgumentType};
 use crate::budget::Budget;
 use crate::error::{DiagName, Error, Feature};
 use crate::library::{FunctionConstantValues, Library};
-use crate::metal::{BindingAccess, DataType};
 use crate::pipeline::testing::{fixtures_dir, AssembleError};
 use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
-use crate::reflection::{
-    Binding, BufferBinding, PointerType, StructMember, StructType, TypeDetail,
-};
+use crate::reflection::Binding;
 
 const FUNCTION: &str = "reflection_argument_buffers";
 

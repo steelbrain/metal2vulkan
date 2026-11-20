@@ -5,17 +5,13 @@
 //! from a table is unbound. [`BindShape`] is the hashable projection that can change a plan;
 //! offsets, addresses, and lengths only change per-draw bytes ([`BindState::shape`]).
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use crate::bind::ResidentRange;
 use crate::device::profile::Limits;
 use crate::metal;
-use crate::pipeline::artifact::RuntimeDependency;
-use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::lower_inputs::ViewportCompensation;
-use crate::pipeline::sym::{SlotClass, Stage};
+use crate::pipeline::sym::Stage;
 use crate::spirv::ir::intern::FxHasher;
 
 /// Everything bound for one draw or dispatch.
@@ -227,12 +223,6 @@ pub struct BindState {
     /// outside a render encoder.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tile_threadgroup: TileThreadgroupMemory,
-    /// The draw's viewport compensation (`PushField::ViewportCompensation`): `None` where the
-    /// draw's viewport is Vulkan's, as it is unless it has a negative width or a depth range past
-    /// `[0, 1]` the device does not take. Its variant is part of the shape
-    /// (`BindShape::viewport_compensation`), its values only of the draw's bytes.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub viewport_compensation: Option<CompensatedViewport>,
     /// The color attachments of the draw's render pass its render pipeline has no pixel format
     /// for, the pass's pixel format of each by color index: plain Metal stores zero bytes into
     /// each at every sample the draw covers (Metal's validation stops the draw). Its variant is
@@ -479,102 +469,6 @@ impl FragmentTests {
     }
 }
 
-/// A draw's viewport compensation (`BindState::viewport_compensation`): the variant its pipeline's
-/// vertex function compiles under, and the `[sx, a, b, clip]` it applies to the position, `(sx x,
-/// y, a w + b z, w)`, clipping at `z` and `w - z` where `clip` is 1. Under
-/// `ViewportCompensation::point_guard`, `guard` is the `[gx, gy]` it scales `x` and `y` by
-/// (`PushField::PointGuard`). Under `ViewportCompensation::mirrors`, `mirrors` has bit `i` set
-/// where viewport `i` is mirrored (`PushField::ViewportMirrors`). Under
-/// `ViewportCompensation::vertex_clamp`, `vertex_clamp` is the `[lo, hi]` the function clamps each
-/// vertex's normalized depth `z / w` to (`PushField::VertexDepthClamp`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CompensatedViewport {
-    pub compensation: ViewportCompensation,
-    pub values: [f32; 4],
-    #[cfg_attr(feature = "serde", serde(default = "unit_guard"))]
-    pub guard: [f32; 2],
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub mirrors: u32,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default = "unclamped", with = "vertex_clamp_bounds")
-    )]
-    pub vertex_clamp: [f32; 2],
-}
-
-/// The point guard band's identity, `[1, 1]`.
-#[cfg(feature = "serde")]
-fn unit_guard() -> [f32; 2] {
-    [1.0, 1.0]
-}
-
-/// The vertex depth clamp's identity, `[-inf, +inf]`: no vertex's depth clamped.
-const UNCLAMPED: [f32; 2] = [f32::NEG_INFINITY, f32::INFINITY];
-
-/// [`UNCLAMPED`], serde's default.
-#[cfg(feature = "serde")]
-fn unclamped() -> [f32; 2] {
-    UNCLAMPED
-}
-
-/// serde of [`CompensatedViewport::vertex_clamp`]: each bound, or none where that side is
-/// unbounded (`-inf` below, `+inf` above, as clip mode's `[0, +inf]` and [`UNCLAMPED`] are),
-/// since a format without infinities cannot hold one (`serde_json` writes `null`, which reads back
-/// as no `f32`).
-#[cfg(feature = "serde")]
-mod vertex_clamp_bounds {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(
-        bounds: &[f32; 2],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let [lo, hi] = *bounds;
-        [
-            (lo != f32::NEG_INFINITY).then_some(lo),
-            (hi != f32::INFINITY).then_some(hi),
-        ]
-        .serialize(serializer)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<[f32; 2], D::Error> {
-        let [lo, hi] = <[Option<f32>; 2]>::deserialize(deserializer)?;
-        Ok([lo.unwrap_or(f32::NEG_INFINITY), hi.unwrap_or(f32::INFINITY)])
-    }
-}
-
-impl CompensatedViewport {
-    /// The compensation `values` under the variant `compensation`, scaling no point (a `guard`
-    /// of `[1, 1]`).
-    pub fn new(compensation: ViewportCompensation, values: [f32; 4]) -> CompensatedViewport {
-        CompensatedViewport {
-            compensation,
-            values,
-            guard: [1.0, 1.0],
-            mirrors: 0,
-            vertex_clamp: UNCLAMPED,
-        }
-    }
-
-    /// This compensation, bit `i` of `mirrors` set where viewport `i` is mirrored.
-    pub fn with_mirrors(self, mirrors: u32) -> CompensatedViewport {
-        CompensatedViewport { mirrors, ..self }
-    }
-
-    /// This compensation, clamping each vertex's normalized depth `z / w` to `vertex_clamp`'s
-    /// `[lo, hi]` under `ViewportCompensation::vertex_clamp`.
-    pub fn with_vertex_clamp(self, vertex_clamp: [f32; 2]) -> CompensatedViewport {
-        CompensatedViewport {
-            vertex_clamp,
-            ..self
-        }
-    }
-}
-
 /// Where a command's heap arrays (set 1) hold its heap members and its argument samplers. A plan
 /// writes member `i` of every image array, and listed argument sampler `i` of every sampler array,
 /// at its planned element `i + 1` (element 0 is each array's neutral); the command's handle and
@@ -751,7 +645,6 @@ impl BindState {
             argument_samplers: ArgumentSamplersShape::of(&self.argument_samplers),
             function_tables: FunctionTablesShape::of(&self.function_tables),
             tile_threadgroup: self.tile_threadgroup.clone(),
-            viewport_compensation: self.viewport_compensation.map(|c| c.compensation),
             zeroed_colors: self.zeroed_colors.clone(),
             dropped_colors: self.dropped_colors.clone(),
             kept_imageblock_bytes: self.kept_imageblock_bytes,
@@ -841,7 +734,6 @@ impl BindState {
             argument_samplers,
             function_tables,
             tile_threadgroup,
-            viewport_compensation,
             zeroed_colors,
             dropped_colors,
             kept_imageblock_bytes,
@@ -873,7 +765,6 @@ impl BindState {
             && argument_samplers.is_of(&self.argument_samplers)
             && FunctionTablesShape::of(&self.function_tables) == *function_tables
             && self.tile_threadgroup == *tile_threadgroup
-            && self.viewport_compensation.map(|c| c.compensation) == *viewport_compensation
             && self.zeroed_colors == *zeroed_colors
             && self.dropped_colors == *dropped_colors
             && self.kept_imageblock_bytes == *kept_imageblock_bytes
@@ -1859,10 +1750,6 @@ pub struct BindShape {
     /// specialization.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tile_threadgroup: TileThreadgroupMemory,
-    /// `BindState.viewport_compensation`'s variant: the vertex function a draw through a viewport
-    /// Vulkan's cannot be runs (`VariantKey::viewport_compensation`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub viewport_compensation: Option<ViewportCompensation>,
     /// `BindState.zeroed_colors`: the variant whose pipeline has those attachments and whose
     /// fragment function writes zero to them (`VariantKey::zeroed_colors`).
     #[cfg_attr(feature = "serde", serde(default))]
@@ -1943,68 +1830,6 @@ pub struct BindShape {
 }
 
 impl BindShape {}
-
-/// One stage's slots into a shape key ([`BindShape::key_beside_used`]): the stage, then each
-/// class's count and its slots' shapes in index order, as a state's table and a shape's give them.
-fn key_stage(
-    key: &mut FxHasher,
-    stage: Stage,
-    (buffers, textures, samplers): (
-        impl ExactSizeIterator<Item = (u32, BufferShape)>,
-        impl ExactSizeIterator<Item = (u32, TextureShape)>,
-        impl ExactSizeIterator<Item = (u32, BoundSamplerShape)>,
-    ),
-) {
-    stage.hash(key);
-    key.write_usize(buffers.len());
-    buffers.for_each(|slot| slot.hash(key));
-    key.write_usize(textures.len());
-    textures.for_each(|slot| slot.hash(key));
-    key.write_usize(samplers.len());
-    samplers.for_each(|slot| slot.hash(key));
-}
-
-/// An argument sampler shape's part of a shape key: the samplers' parts are or-ed, so the
-/// shape's set of them and a state's list, which may repeat one, have one key
-/// ([`BindShape::key_beside_used`]).
-fn sampler_key(shape: &SamplerShape) -> u64 {
-    let mut key = FxHasher::default();
-    shape.hash(&mut key);
-    key.finish()
-}
-
-/// The fields of a shape beside its stages that its key holds, of the types the shape holds them
-/// in (the argument samplers as their class and their shapes' or-ed parts), so a state's key and
-/// a shape's hash them alike ([`BindShape::key_beside_used`]).
-#[derive(Hash)]
-struct KeyRest<'a> {
-    vertex_amplification: &'a VertexAmplification,
-    imageblock_size: ImageblockSize,
-    render_target_array_length: u32,
-    tessellation_factor_buffer: bool,
-    render_area: [u32; 2],
-    argument_samplers: (u8, u64),
-    function_tables: FunctionTablesShape,
-    tile_threadgroup: &'a TileThreadgroupMemory,
-    viewport_compensation: Option<ViewportCompensation>,
-    zeroed_colors: &'a BTreeMap<u32, metal::PixelFormat>,
-    dropped_colors: &'a BTreeSet<u32>,
-    kept_imageblock_bytes: Option<u32>,
-    depth_clamp_range: bool,
-    rotated_weights: bool,
-    mesh_last_first: bool,
-    line_band: Option<crate::pipeline::BandPrimitive>,
-    interlocked_colors: &'a BTreeSet<u32>,
-    fragment_tests: FragmentTests,
-    extended_shadows: &'a BTreeSet<u32>,
-    snapshot_textures: &'a BTreeSet<u32>,
-    primitive_id_indices: Option<metal::IndexType>,
-    quad_primitive_ids: bool,
-    private_list: bool,
-    far_vertex_buffers: &'a BTreeSet<u32>,
-    region_viewports: bool,
-    region_fan_out: Option<crate::pipeline::RegionFanOut>,
-}
 
 /// The projection of `BindState::argument_samplers` that can change a plan: the capacity class of
 /// the list's length, and the distinct shapes of its samplers. A plan holds

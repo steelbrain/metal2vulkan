@@ -1,30 +1,11 @@
-//! The neutral resources: a `ulong` atomic's neutral is listed exactly where its slot compiles,
-//! the zero buffer covers any uniform view, an undeclarable type has none, and their formats follow
-//! the declared type and the registry's numeric formats.
+//! The neutral resources: the zero buffer covers any uniform view, an undeclarable type has none,
+//! and their formats follow the declared type and the registry's numeric formats.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::*;
 use crate::device::{DeviceDescription, DevicePolicy};
 use crate::spirv::testing::is_moltenvk_capture;
-
-/// Formats whose use here is guaranteed by Vulkan's mandatory format support.
-const MANDATORY: &[(vk::Format, FormatUsage)] = &[
-    (vk::Format::R8G8B8A8_UNORM, FormatUsage::SampledImage),
-    (vk::Format::R8G8B8A8_SINT, FormatUsage::SampledImage),
-    (vk::Format::R8G8B8A8_UINT, FormatUsage::SampledImage),
-    (vk::Format::D16_UNORM, FormatUsage::SampledImage),
-    (vk::Format::R32_SFLOAT, FormatUsage::StorageImage),
-    (vk::Format::R32_SINT, FormatUsage::StorageImage),
-    (vk::Format::R32_UINT, FormatUsage::StorageImage),
-    (vk::Format::R32_SFLOAT, FormatUsage::UniformTexelBuffer),
-    (vk::Format::R32_SINT, FormatUsage::UniformTexelBuffer),
-    (vk::Format::R32_UINT, FormatUsage::UniformTexelBuffer),
-    (vk::Format::R32_SFLOAT, FormatUsage::StorageTexelBuffer),
-    (vk::Format::R32_SINT, FormatUsage::StorageTexelBuffer),
-    (vk::Format::R32_UINT, FormatUsage::StorageTexelBuffer),
-];
 
 /// A device for every committed profile (`validation/profiles/`, read-only), sorted by stem.
 fn committed_devices() -> Vec<(String, Device)> {
@@ -45,145 +26,6 @@ fn committed_devices() -> Vec<(String, Device)> {
     out.sort_by(|a, b| a.0.cmp(&b.0));
     assert!(out.len() >= 13, "committed profiles: {}", out.len());
     out
-}
-
-/// Whether `profile` supports `usage` on `format`: its format table decides when it lists the
-/// format; otherwise only Vulkan's mandatory support counts.
-fn supported(profile: &DeviceProfile, format: vk::Format, usage: FormatUsage) -> bool {
-    let f = profile.fields();
-    let table = match usage {
-        FormatUsage::StorageImage | FormatUsage::StorageTexelBuffer => &f.storage_formats,
-        _ => &f.image_formats,
-    };
-    match table.formats.get(&format) {
-        Some(usages) => usages.contains(&usage),
-        None => MANDATORY.contains(&(format, usage)),
-    }
-}
-
-/// The view type an image of `dim`/`arrayed` must be viewed as (VUID-vkCmdDraw-viewType-07752).
-fn view_type_for(dim: ImageDim, arrayed: bool) -> vk::ImageViewType {
-    match (dim, arrayed) {
-        (ImageDim::D1, false) => vk::ImageViewType::TYPE_1D,
-        (ImageDim::D1, true) => vk::ImageViewType::TYPE_1D_ARRAY,
-        (ImageDim::D2, false) => vk::ImageViewType::TYPE_2D,
-        (ImageDim::D2, true) => vk::ImageViewType::TYPE_2D_ARRAY,
-        (ImageDim::D3, false) => vk::ImageViewType::TYPE_3D,
-        (ImageDim::Cube, false) => vk::ImageViewType::CUBE,
-        (ImageDim::Cube, true) => vk::ImageViewType::CUBE_ARRAY,
-        other => panic!("no view type for {other:?}"),
-    }
-}
-
-/// Checks the Vulkan compatibility rules between a declared image type and its neutral.
-fn assert_compatible(stem: &str, class: &ImageHandleClass, n: &NeutralResource, p: &DeviceProfile) {
-    let ctx = format!("{stem}: {class:?} -> {n:?}");
-    let format = n.format().unwrap_or_else(|| panic!("{ctx}: no format"));
-    // The view format's numeric type matches the declared sampled type
-    // (VUID-vkCmdDraw-format-07753); a `ulong` slot's image is `RG32` unsigned.
-    assert!(serves(format, class.sampled_type), "{ctx}");
-    assert_eq!(
-        numeric_type(format),
-        Some(match class.sampled_type {
-            SampledType::Uint64 => SampledType::Uint,
-            other => other,
-        }),
-        "{ctx}"
-    );
-    let storage = class.access == ImageAccess::Storage;
-    // A typed storage image is viewed with exactly its declared format
-    // (VUID-vkCmdDraw-OpTypeImage-07027/07028); formatless ones need a storage-capable format.
-    if let StorageFormatClass::Format(declared) = class.format {
-        assert_eq!(format, declared, "{ctx}");
-    }
-    match *n {
-        NeutralResource::TexelBuffer { .. } => {
-            assert_eq!(class.dim, ImageDim::Buffer, "{ctx}");
-            let usage = if storage {
-                FormatUsage::StorageTexelBuffer
-            } else {
-                FormatUsage::UniformTexelBuffer
-            };
-            assert!(supported(p, format, usage), "{ctx}: {usage:?}");
-        }
-        NeutralResource::Image {
-            view_type,
-            depth_compare,
-            samples,
-            storage_format,
-            ..
-        } => {
-            assert_ne!(class.dim, ImageDim::Buffer, "{ctx}");
-            assert_eq!(view_type, view_type_for(class.dim, class.arrayed), "{ctx}");
-            // MS=1 needs a multisampled view and MS=0 a single-sampled one
-            // (VUID-vkCmdDraw-MS-07288 and friends).
-            assert_eq!(samples > 1, class.multisampled, "{ctx}");
-            assert_eq!(storage_format.is_some(), storage, "{ctx}");
-            assert_eq!(depth_compare, class.depth_compare, "{ctx}");
-            if depth_compare {
-                assert_eq!(format, vk::Format::D16_UNORM, "{ctx}: depth format");
-                // Depth formats are guaranteed (and Metal depth textures exist) only for 2D and
-                // cube images, so a depth neutral of another shape could fail image creation.
-                assert!(
-                    matches!(
-                        view_type,
-                        vk::ImageViewType::TYPE_2D
-                            | vk::ImageViewType::TYPE_2D_ARRAY
-                            | vk::ImageViewType::CUBE
-                            | vk::ImageViewType::CUBE_ARRAY
-                    ),
-                    "{ctx}: depth view type"
-                );
-            }
-            if view_type == vk::ImageViewType::CUBE_ARRAY {
-                assert!(p.fields().images.cube_array, "{ctx}: imageCubeArray");
-            }
-            if storage && samples > 1 {
-                assert!(p.fields().images.storage_multisample, "{ctx}");
-            }
-            let usage = if storage {
-                FormatUsage::StorageImage
-            } else {
-                FormatUsage::SampledImage
-            };
-            assert!(supported(p, format, usage), "{ctx}: {usage:?}");
-        }
-        _ => panic!("{ctx}: not an image or texel buffer"),
-    }
-}
-
-/// A `ulong` slot that a `ulong` atomic updates is declared `R64ui`: its `R64_UINT` neutral is
-/// listed exactly where the profile has what that slot needs, image and texel buffer apart, and
-/// never on MoltenVK, which has no 64-bit image atomics.
-#[test]
-fn a_ulong_atomic_neutral_is_listed_exactly_where_its_slot_compiles() {
-    let r64 = |c: &ImageHandleClass| {
-        c.sampled_type == SampledType::Uint64
-            && c.format == StorageFormatClass::Format(vk::Format::R64_UINT)
-    };
-    let mut listed = 0;
-    for (stem, device) in committed_devices() {
-        let profile = device.profile();
-        for buffer in [false, true] {
-            let compiles = profile.ulong_atomic_gaps(buffer).is_empty();
-            let n = ulong_classes(profile)
-                .iter()
-                .filter(|c| r64(c) && (c.dim == ImageDim::Buffer) == buffer)
-                .count();
-            // Five image shapes (1D, 1D array, 2D, 2D array, 3D), or the texture buffer.
-            let shapes = if buffer { 1 } else { 5 };
-            assert_eq!(
-                n,
-                if compiles { shapes } else { 0 },
-                "{stem}: buffer {buffer}"
-            );
-            listed += n;
-        }
-        if is_moltenvk_capture(&stem) {
-            assert!(!ulong_classes(profile).iter().any(r64), "{stem}");
-        }
-    }
-    assert!(listed > 0, "no committed profile lists an R64_UINT neutral");
 }
 
 #[test]
