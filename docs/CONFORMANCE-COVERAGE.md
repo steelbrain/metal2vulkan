@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7627 |
+| ledger rows (a case whose gap is recorded) | 7378 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4964,301 +4964,52 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `integer-vertex-attributes` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `integer-vertex-attributes` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `integer-vertex-attributes` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
-| `point-viewport-coverage` | Gap::Draw (Points): the rt README, Known gaps of render encoders, "Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points". |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
+| `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `vertex-format-constant-step` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
