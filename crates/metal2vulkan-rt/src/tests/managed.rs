@@ -25,6 +25,7 @@
 //! handle go right after the call.
 
 use crate::capture::{merge, taker, Captured};
+use crate::submit::put_ahead;
 
 #[test]
 fn changed_ranges_merge_where_they_overlap_or_touch() {
@@ -57,7 +58,8 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 
 /// A copy-in waits at its capture's number in the commit order: a command buffer committed before
 /// it never takes it, and the first submitted at or after it does, ahead of its own commands,
-/// whichever queue it is of and wherever the capturing one waits (`crate::capture`).
+/// whichever queue it is of and wherever the capturing one waits; in a group it lands behind the
+/// members before its taker and ahead of the taker (`crate::capture`, `crate::submit`).
 #[test]
 fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_capture() {
     assert_eq!(
@@ -104,6 +106,37 @@ fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_ca
         [(1, "thirteen"), (1, "fourteen")],
         "both ahead of the later one, in commit order"
     );
+
+    // A group of three, the capturer in the middle: its copy-in lands after the first member's
+    // segments and ahead of the capturer's first; the last member begins where it did, one on.
+    let mut captured = Captured::default();
+    captured.push(5, "copy-in 5");
+    let mut segments = vec!["3a", "3b", "5a", "7a"];
+    let mut starts = vec![0, 2, 3];
+    let taken = captured.take(&[3, 5, 7]);
+    let kept = put_ahead(&mut segments, &mut starts, taken, |copy_in| *copy_in);
+    assert_eq!(kept, ["copy-in 5"]);
+    assert_eq!(
+        segments,
+        ["3a", "3b", "copy-in 5", "5a", "7a"],
+        "after 3, ahead of 5"
+    );
+    assert_eq!(starts, [0, 2, 4], "5 begins with its copy-in, 7 one on");
+
+    // Two captures in one group: each ahead of its own taker, the group's order kept.
+    captured.push(4, "copy-in 4");
+    captured.push(6, "copy-in 6");
+    let mut segments = vec!["3a", "3b", "5a", "7a"];
+    let mut starts = vec![0, 2, 3];
+    let taken = captured.take(&[3, 5, 7]);
+    let kept = put_ahead(&mut segments, &mut starts, taken, |copy_in| *copy_in);
+    assert_eq!(kept, ["copy-in 4", "copy-in 6"]);
+    assert_eq!(
+        segments,
+        ["3a", "3b", "copy-in 4", "5a", "copy-in 6", "7a"],
+        "4 ahead of 5, 6 ahead of 7"
+    );
+    assert_eq!(starts, [0, 2, 4]);
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -1782,25 +1782,15 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
 
 impl Batch {
     /// Puts each copy-in of `taken` ahead of the command buffer that takes it (its index in
-    /// `leads`): a part of its own, with no waits, where that command buffer begins, which then
-    /// begins with it, after the copy-ins taken before it. The batch keeps them until it retires.
+    /// `leads`), as a part of its own with no waits ([`put_ahead`]). The batch keeps them until it
+    /// retires.
     fn take(&mut self, taken: Vec<(usize, CopyIn)>) {
-        for (lead, copy_in) in taken.into_iter().rev() {
-            let at = self.starts[lead];
-            self.segments.insert(
-                at,
-                Staged {
-                    command: Some(
-                        vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command),
-                    ),
-                    ..Staged::default()
-                },
-            );
-            for start in &mut self.starts[lead + 1..] {
-                *start += 1;
-            }
-            self.copy_ins.push(copy_in);
-        }
+        let part = |copy_in: &CopyIn| Staged {
+            command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command)),
+            ..Staged::default()
+        };
+        let kept = put_ahead(&mut self.segments, &mut self.starts, taken, part);
+        self.copy_ins.extend(kept);
     }
 
     /// A submission of no command buffer's: an upload alone.
@@ -1826,6 +1816,29 @@ impl Batch {
             wrote: Vec::new(),
         }
     }
+}
+
+/// Puts each of `taken`, with the index in `starts` of the command buffer of a group that takes it,
+/// where that command buffer begins among the group's `segments`, as the segment `part` makes of
+/// it, after those taken before it: behind every segment of the command buffers before it in the
+/// group, and ahead of the taker's first, which then begins with them. Returns the taken, in their
+/// order.
+pub(crate) fn put_ahead<S, C>(
+    segments: &mut Vec<S>,
+    starts: &mut [usize],
+    taken: Vec<(usize, C)>,
+    part: impl Fn(&C) -> S,
+) -> Vec<C> {
+    let mut kept = Vec::with_capacity(taken.len());
+    for (lead, item) in taken.into_iter().rev() {
+        segments.insert(starts[lead], part(&item));
+        for start in &mut starts[lead + 1..] {
+            *start += 1;
+        }
+        kept.push(item);
+    }
+    kept.reverse();
+    kept
 }
 
 /// Runs the scheduled handlers of the command buffers `joined` scheduled, in order, with no lock
