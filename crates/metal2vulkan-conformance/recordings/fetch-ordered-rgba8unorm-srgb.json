@@ -167,7 +167,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "6278580c64922806a4e1c60818e4ea3ac25ed631bfb97c2262080489485c5f4b"
+                          "hex": "538078948e5dc6c8bcbb29f0fc4e5032fab5a79c872c4afebe634425fcb9e792"
                         }
                       }
                     }
@@ -664,12 +664,7 @@
           }
         }
       ],
-      "validated": {
-        "stopped": {
-          "call": "render",
-          "message": "Set Render Pipeline State Validation\nFor stencil attachment, the renderPipelineState pixelFormat must be MTLPixelFormatInvalid, as no texture is set."
-        }
-      }
+      "validated": "ran"
     }
   ],
   "costs": [

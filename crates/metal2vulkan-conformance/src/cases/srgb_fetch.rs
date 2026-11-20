@@ -17,12 +17,15 @@
 //! `fetch_ordered` one, two or three times, every channel written, no blending. Each draw reads
 //! what the last one stored, so `N` draws apply the one-draw map `N` times.
 //!
-//! A fourth row attaches a `Depth32Float_Stencil8` attachment, cleared to 1.0 by a pass before it
-//! and loaded, under a depth state of `Always` without writes, and draws three times. Its answer
-//! is the three-draw answer: a depth test that drops no fragment changes nothing. **It is here for
-//! a second reason** -- its pipeline is the first in the suite to declare a depth and a stencil
-//! format beside a colour answer that could move if the declaration were wrong, which is the field
-//! our side was not forwarding at all until this round.
+//! A fourth row attaches a `Depth32Float_Stencil8` texture as its depth and its stencil
+//! attachment, cleared to 1.0 and 0 by a pass before it and loaded, under a depth state of `Always`
+//! without writes and no stencil test, and draws three times. Its answer is the three-draw answer:
+//! a depth test that drops no fragment changes nothing. **It is here for a second reason** -- its
+//! pipeline is the first in the suite to declare a depth and a stencil format beside a colour
+//! answer that could move if the declaration were wrong. Metal's validation stops a pipeline that
+//! declares a stencil format in a pass with no stencil texture ("For stencil attachment, the
+//! renderPipelineState pixelFormat must be MTLPixelFormatInvalid, as no texture is set"), so the
+//! texture is the stencil attachment too.
 //!
 //! Not ported: the multisampled rows, and the two depth-`Less` rows whose earlier pass writes 0.25
 //! into the target's left half under a colour mask of no channel. Those need a half-extent draw and
@@ -36,8 +39,8 @@ use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, 
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, PassColor, PassDepth, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, StageFunction, TargetSpec,
+    ColorState, PassColor, PassDepth, PassStencil, Plane, ReadAt, RenderPass, RenderPipelineSpec,
+    RenderStep, RenderWork, StageFunction, TargetSpec,
 };
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
@@ -72,6 +75,9 @@ const DEPTH_STENCIL: PixelFormat = PixelFormat::Depth32FloatStencil8;
 
 /// The depth the row's earlier pass clears to, which `Always` ignores.
 const DEPTH_CLEAR: f64 = 1.0;
+
+/// The stencil the row's earlier pass clears to, which no stencil test reads.
+const STENCIL_CLEAR: u32 = 0;
 
 /// The memory bytes every target starts at, in memory order.
 fn initial() -> Vec<u8> {
@@ -299,6 +305,7 @@ impl Case for SrgbFetch {
             &[
                 DEPTH_STENCIL.as_raw().to_le_bytes().to_vec(),
                 DEPTH_CLEAR.to_bits().to_le_bytes().to_vec(),
+                STENCIL_CLEAR.to_le_bytes().to_vec(),
             ]
             .concat(),
         ));
@@ -367,8 +374,9 @@ impl Case for SrgbFetch {
             }
             let mut pass = RenderPass::clearing(vec![PassColor::loaded(target)]).drawing(steps);
             if row.depth {
-                // The depth attachment is cleared and stored by a pass of its own first, so the
-                // drawing pass loads a depth it did not clear -- which is how the probe drew it.
+                // The depth and stencil attachments are cleared and stored by a pass of its own
+                // first, so the drawing pass loads what it did not clear -- which is how the probe
+                // drew its depth.
                 let depth = made(
                     sites,
                     &format!("target/{at}/depth"),
@@ -376,11 +384,16 @@ impl Case for SrgbFetch {
                 )?;
                 work.push(RenderWork::Pass(
                     RenderPass::clearing(Vec::new())
-                        .with_depth(PassDepth::cleared(depth, DEPTH_CLEAR)),
+                        .with_depth(PassDepth::cleared(depth, DEPTH_CLEAR))
+                        .with_stencil(PassStencil::cleared(depth, STENCIL_CLEAR)),
                 ));
                 let mut loaded = PassDepth::cleared(depth, DEPTH_CLEAR);
                 loaded.load = metal2vulkan_runtime::LoadAction::Load;
-                pass = pass.with_depth(loaded.stored(StoreAction::DontCare));
+                let mut stencil = PassStencil::cleared(depth, STENCIL_CLEAR);
+                stencil.load = metal2vulkan_runtime::LoadAction::Load;
+                pass = pass
+                    .with_depth(loaded.stored(StoreAction::DontCare))
+                    .with_stencil(stencil.stored(StoreAction::DontCare));
             }
             work.push(RenderWork::Pass(pass));
             let texels = made(
