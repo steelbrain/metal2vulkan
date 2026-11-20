@@ -2,51 +2,96 @@
 //!
 //! Harvesting, manifests, observations, and translation A/B are deliberately separate. Nothing in
 //! this crate infers execution inputs or repairs a manifest.
+//!
+//! On Windows the crate is the replay player (`command-replay`) alone: [`replay`], and [`gpu`]
+//! without its compile deadline. Every other module (the cases, the corpus and its worker, the
+//! audits and the Vulkan batch) is absent there.
 
+#[cfg(not(windows))]
 pub mod acceptance;
+#[cfg(not(windows))]
 pub mod air;
+#[cfg(not(windows))]
 pub mod air_writer;
+#[cfg(not(windows))]
 pub mod authored_compile;
+#[cfg(not(windows))]
 pub mod bitcode_audit;
+#[cfg(not(windows))]
 pub mod budgets;
+#[cfg(not(windows))]
 pub mod c1;
+#[cfg(not(windows))]
 pub mod c3;
+#[cfg(not(windows))]
 pub mod call_targets;
+#[cfg(not(windows))]
 pub mod candidate;
+#[cfg(not(windows))]
 pub mod case;
+#[cfg(not(windows))]
 pub mod census;
+#[cfg(not(windows))]
 pub mod check;
+#[cfg(not(windows))]
 pub mod companion;
+#[cfg(not(windows))]
 pub mod coverage;
+#[cfg(not(windows))]
 pub mod cutover;
+#[cfg(not(windows))]
 pub mod engine;
+#[cfg(not(windows))]
 pub mod executor_contract;
 pub mod gpu;
+#[cfg(not(windows))]
 pub mod hash;
+#[cfg(not(windows))]
 pub mod index;
+#[cfg(not(windows))]
 pub mod jsonl;
+#[cfg(not(windows))]
 pub mod l3;
+#[cfg(not(windows))]
 pub mod library_module;
+#[cfg(not(windows))]
 pub mod literal;
 #[cfg(all(test, target_os = "macos", m2v_gpu))]
 mod mesh_cases;
+#[cfg(not(windows))]
 pub mod metal;
+#[cfg(not(windows))]
 pub mod msl_portability;
+#[cfg(not(windows))]
 pub mod no_effect;
+#[cfg(not(windows))]
 pub mod observation;
+#[cfg(not(windows))]
 pub mod observation_contract;
+#[cfg(not(windows))]
 pub mod oracle_fuel;
+#[cfg(not(windows))]
 pub mod pool;
+#[cfg(not(windows))]
 pub mod refusal;
 pub mod replay;
+#[cfg(not(windows))]
 pub mod requirement;
+#[cfg(not(windows))]
 pub mod source;
+#[cfg(not(windows))]
 pub mod specialization;
+#[cfg(not(windows))]
 pub mod spirv_tools;
+#[cfg(not(windows))]
 pub mod store;
+#[cfg(not(windows))]
 pub mod translation_audit;
+#[cfg(not(windows))]
 pub mod triage;
+#[cfg(not(windows))]
 pub mod vulkan_batch;
+#[cfg(not(windows))]
 pub mod worker;
 
 // The build's own fingerprint functions (this crate's `build.rs`), so tests can show which files

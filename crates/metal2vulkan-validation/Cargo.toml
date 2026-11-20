@@ -32,6 +32,7 @@ metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
 metal2vulkan-air = { path = "../metal2vulkan-air" }
 metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
+ash = { workspace = true, features = ["loaded"] }
 base64 = "0.22"
 libc.workspace = true
 memchr = "2"
@@ -47,10 +48,6 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-metal = "0.3"
-ash = { workspace = true, features = ["loaded"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-ash = { workspace = true, features = ["loaded"] }
 
 # Device-executing tests are gated on non-default cfgs rather than features, because the ordinary
 # gate builds with `--all-features`: `--cfg m2v_gpu` (a real GPU) and `--cfg m2v_cpu_icd` (a CPU

@@ -5,6 +5,9 @@
 //! `--cfg m2v_cpu_icd` (a CPU Vulkan ICD such as lavapipe). They are cfgs, not features, because
 //! the ordinary gate builds with `--all-features`.
 
+// The Metal oracle's compile deadline, which runs its tools through the corpus worker's process
+// groups: absent on Windows, as the worker is.
+#[cfg(not(windows))]
 pub mod compile;
 mod device_type;
 pub mod tripwire;
