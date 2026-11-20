@@ -16,8 +16,10 @@ use crate::error::{Error, Gap, Limit};
 use crate::reaper::{Free, Job};
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::DeviceProfile;
 use metal2vulkan::metal::sampler::{lod_clamps_read_alike, vk_sampler, SamplerUse, SamplerWord};
 use metal2vulkan::metal::{CompareFunction, SamplerMinMagFilter};
+use metal2vulkan::pipeline::{CombinedSampler, PrecisionNote};
 use metal2vulkan::vk::{BorderColor, SamplerAddressMode, SamplerDesc};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -116,6 +118,30 @@ pub(crate) fn canonical(mut desc: SamplerDesc) -> SamplerDesc {
         desc.border_components = None;
     }
     desc
+}
+
+/// The notes of the constexpr samplers of `uses`, each decided by the sampler's own constants:
+/// where an address mode reads the border and the border colour is opaque black, the note a
+/// sampler state of the same descriptor carries ([`SamplerState::precision_note`]). A use whose
+/// sampler the translator cannot state has none: every state that numbers it is refused.
+pub(crate) fn constexpr_notes(
+    profile: &DeviceProfile,
+    uses: &[(usize, CombinedSampler)],
+) -> impl Iterator<Item = PrecisionNote> + '_ {
+    uses.iter().filter_map(move |(_, sampler)| {
+        let desc = sampler.constexpr_sampler(profile).ok().flatten()?;
+        let modes = [
+            desc.address_mode_u,
+            desc.address_mode_v,
+            desc.address_mode_w,
+        ];
+        let opaque_black = matches!(
+            desc.border_color,
+            BorderColor::FLOAT_OPAQUE_BLACK | BorderColor::INT_OPAQUE_BLACK
+        );
+        (modes.contains(&SamplerAddressMode::CLAMP_TO_BORDER) && opaque_black)
+            .then_some(PrecisionNote::SwizzledOpaqueBlackBorder)
+    })
 }
 
 /// `MTLSamplerState`: a sampler descriptor's device samplers at an index of the sampler arrays.
@@ -422,6 +448,18 @@ impl SamplerState {
     /// The descriptor it was made with.
     pub fn descriptor(&self) -> &SamplerDescriptor {
         &self.inner.descriptor
+    }
+
+    /// No Metal counterpart: the static note of a sample of its border, where an address mode
+    /// reads the border (`ClampToZero` or `ClampToBorderColor`) and the border colour is opaque
+    /// black ([`PrecisionNote::SwizzledOpaqueBlackBorder`]: through a view whose component
+    /// mapping is not the identity, on a device without `borderColorSwizzleFromImage`, the
+    /// border texel is the device's); `None` for any other state. Decided by the descriptor
+    /// alone, on every device: a state meets every view, so none of its device samplers names a
+    /// view's mapping.
+    pub fn precision_note(&self) -> Option<PrecisionNote> {
+        let opaque_black = self.inner.descriptor.shape().opaque_black_border;
+        opaque_black.then_some(PrecisionNote::SwizzledOpaqueBlackBorder)
     }
 }
 

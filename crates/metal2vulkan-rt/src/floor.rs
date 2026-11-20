@@ -1,6 +1,6 @@
 //! The floor: the Vulkan version, extensions, features, limits, queue family and memory types the
-//! runtime requires of every device, and the optional features it uses only where a device reports
-//! them, each choosing one of two forms.
+//! runtime requires of every device, the optional features it uses only where a device reports
+//! them, each choosing one of two forms, and those it enables where reported with no second form.
 //!
 //! [`PhysicalDevice::check`](crate::PhysicalDevice::check) queries a physical device and decides;
 //! the decision is a pure function of what it read, so a test can hand it any set of answers.
@@ -73,6 +73,18 @@ pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[
     ash::ext::attachment_feedback_loop_layout::NAME,
     ash::ext::attachment_feedback_loop_dynamic_state::NAME,
 ];
+
+/// The device extension of a sampler's border colour through a view's component mapping
+/// (`VK_EXT_border_color_swizzle`): device creation enables it, with both its features
+/// ([`BORDER_SWIZZLE`]), where the device lists it and reports `borderColorSwizzleFromImage`, and
+/// neither otherwise. No form differs: no sampler's create info chains
+/// `VkSamplerBorderColorComponentMappingCreateInfoEXT` on any device, since a sampler in the arrays
+/// meets every view, and the structure names one mapping. Where the feature is enabled, an
+/// opaque-black border sampled through a view whose mapping is not the identity reads through the
+/// view's mapping, as Metal's border does through the swizzle; elsewhere Vulkan leaves that texel
+/// undefined, and the sampler state's static note says so on every device
+/// ([`SamplerState::precision_note`](crate::SamplerState::precision_note)).
+pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[ash::ext::border_color_swizzle::NAME];
 
 /// The translator's name for an extension device creation enables that its shaders may use, or
 /// that its description of the device must enable: the portability subset, where the device lists
@@ -217,6 +229,10 @@ pub struct Features {
     /// and `VK_EXT_vertex_attribute_divisor` (the same structure): read and enabled only where the
     /// device lists one of them, and then only the step-rate feature.
     pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceBorderColorSwizzleFeaturesEXT`, of `VK_EXT_border_color_swizzle`: read
+    /// where the device lists it, and enabled, both features, where it reports
+    /// `borderColorSwizzleFromImage` ([`BORDER_SWIZZLE_EXTENSIONS`]).
+    pub border_swizzle: vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -261,6 +277,9 @@ macro_rules! feature {
     };
     (@structure divisor) => {
         "VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR"
+    };
+    (@structure border_swizzle) => {
+        "VkPhysicalDeviceBorderColorSwizzleFeaturesEXT"
     };
     (@translator) => {
         None
@@ -431,6 +450,15 @@ pub(crate) const ATTACHMENT_READS: &[Feature] = &[
 pub(crate) const STEP_RATES: &[Feature] = &[feature!(
     divisor.vertex_attribute_instance_rate_divisor => VertexAttributeInstanceRateDivisor
 )];
+
+/// The features of [`BORDER_SWIZZLE_EXTENSIONS`]: enabled together where the device lists the
+/// extension and reports `borderColorSwizzleFromImage` (Vulkan requires `borderColorSwizzle` of a
+/// device that lists it), and neither otherwise. No answer chooses a second form, and the
+/// translator, whose samplers chain no border mapping, is not told of them.
+pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
+    feature!(border_swizzle.border_color_swizzle),
+    feature!(border_swizzle.border_color_swizzle_from_image),
+];
 
 /// What the translator's shaders may use of what device creation enables: each enabled feature of
 /// `capabilities` the translator names, and each enabled extension it names.
@@ -615,12 +643,15 @@ pub struct Capabilities {
     /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback
     /// loop.
     pub feedback_loop: bool,
-    /// The features device creation enables: every one the floor requires, and each of the
-    /// optional and step-rate ones the device reports.
+    /// The features device creation enables: every one the floor requires, each of the optional
+    /// and step-rate ones the device reports, the attachment-read ones where
+    /// [`feedback_loop`](Self::feedback_loop) holds, and the border-swizzle ones where the device
+    /// reports both.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
-    /// [`feedback_loop`](Self::feedback_loop) holds.
+    /// [`feedback_loop`](Self::feedback_loop) holds, then [`BORDER_SWIZZLE_EXTENSIONS`] where the
+    /// device lists it and reports both its features.
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
@@ -725,6 +756,7 @@ unsafe fn query(
             listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
         let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME)
             || listed(ash::ext::vertex_attribute_divisor::NAME);
+        let border_swizzle_listed = listed(ash::ext::border_color_swizzle::NAME);
 
         let Features {
             core,
@@ -738,6 +770,7 @@ unsafe fn query(
             feedback_loop,
             feedback_loop_dynamic,
             divisor,
+            border_swizzle,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -764,6 +797,9 @@ unsafe fn query(
         if divisor_listed {
             features = features.push_next(&mut *divisor);
         }
+        if border_swizzle_listed {
+            features = features.push_next(&mut *border_swizzle);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -776,6 +812,7 @@ unsafe fn query(
         feedback_loop.p_next = std::ptr::null_mut();
         feedback_loop_dynamic.p_next = std::ptr::null_mut();
         divisor.p_next = std::ptr::null_mut();
+        border_swizzle.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -874,6 +911,13 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             *(feature.field)(&mut features) = vk::TRUE;
         }
     }
+    let border_swizzle = BORDER_SWIZZLE_EXTENSIONS.iter().all(|&name| listed(name))
+        && (BORDER_SWIZZLE.iter()).all(|feature| *(feature.field)(&mut reported) == vk::TRUE);
+    if border_swizzle {
+        for feature in BORDER_SWIZZLE {
+            *(feature.field)(&mut features) = vk::TRUE;
+        }
+    }
     Ok(Capabilities {
         float16: features.vulkan12.shader_float16 == vk::TRUE,
         storage_read_without_format: features.core.shader_storage_image_read_without_format
@@ -898,6 +942,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
                     .filter(|&&extension| listed(extension)),
             )
             .chain(ATTACHMENT_READ_EXTENSIONS.iter().filter(|_| feedback_loop))
+            .chain(BORDER_SWIZZLE_EXTENSIONS.iter().filter(|_| border_swizzle))
             .copied()
             .collect(),
         queue_family,

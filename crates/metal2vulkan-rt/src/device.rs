@@ -503,6 +503,7 @@ impl Device {
             mut feedback_loop,
             mut feedback_loop_dynamic,
             mut divisor,
+            mut border_swizzle,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -546,6 +547,9 @@ impl Device {
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
         {
             features = features.push_next(&mut divisor);
+        }
+        if enabled(ash::ext::border_color_swizzle::NAME) {
+            features = features.push_next(&mut border_swizzle);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }

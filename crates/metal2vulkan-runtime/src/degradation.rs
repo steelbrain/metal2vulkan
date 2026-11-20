@@ -2964,6 +2964,11 @@ degradations! {
         /// carries the note: the biased depth is the device's. This runtime announces its own
         /// depth bias kinds instead.
         DeviceDepthBias = "device-depth-bias";
+        /// A sampler that reads an opaque-black border on `metal2vulkan-rt`, whose sampler state,
+        /// or the pipeline of a constexpr one, carries the note: through a swizzled view, on a
+        /// device without `borderColorSwizzleFromImage`, the border texel is the device's. This
+        /// runtime makes the sampler for the view's mapping, or refuses the pair, instead.
+        SwizzledOpaqueBlackBorder = "swizzled-opaque-black-border";
     }
 }
 

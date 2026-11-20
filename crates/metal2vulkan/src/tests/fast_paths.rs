@@ -238,6 +238,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceRoundedResolve,
             CompressedTexelDecode,
             SharedExponentKept,
+            SwizzledOpaqueBlackBorder,
         ],
     }
 }

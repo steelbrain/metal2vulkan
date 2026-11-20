@@ -57,6 +57,7 @@ use crate::pipeline::{
 };
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
+use crate::sampler::constexpr_notes;
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::VariantKey;
@@ -178,7 +179,8 @@ pub(crate) struct RenderCompiled {
     primary: vk::Pipeline,
     /// The line class's, made by the first draw of lines; null until then.
     lines: Mutex<vk::Pipeline>,
-    /// The translator's notes of where the pipeline's answers may differ from Metal's.
+    /// The translator's notes of where the pipeline's answers may differ from Metal's, and its
+    /// functions' constexpr samplers' (`constexpr_notes`).
     notes: Vec<PrecisionNote>,
     /// What a draw supplies.
     pub(crate) draws: Draws,
@@ -759,7 +761,7 @@ impl RenderCompiled {
         let (draws, (numbered, constexprs)) = draws(&pipeline, nonzero_first_instance)?;
         let samples = descriptor.raster_sample_count;
         let mut stages = Vec::new();
-        let mut notes = Vec::new();
+        let mut notes: Vec<_> = constexpr_notes(translator.profile(), &constexprs).collect();
         for stage in &pipeline.stages {
             let mut constants = Vec::new();
             let mut values = Vec::new();
@@ -995,7 +997,11 @@ fn release(core: &Core, stages: &[Module]) {
 
 impl RenderPipelineState {
     /// No Metal counterpart: the translator's notes of where this pipeline's answers may differ
-    /// from Metal's, of its modules ([`PrecisionNote`]); empty where they match.
+    /// from Metal's, of its modules ([`PrecisionNote`]), and
+    /// [`PrecisionNote::SwizzledOpaqueBlackBorder`] where a function samples through a constexpr
+    /// sampler whose address mode reads an opaque-black border (decided by the sampler's own
+    /// constants, as [`SamplerState::precision_note`](crate::SamplerState::precision_note) is by
+    /// its descriptor); empty where they match.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         self.inner.compiled.notes.clone()
     }

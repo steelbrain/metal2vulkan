@@ -3,6 +3,7 @@ mod alpha_test;
 mod argument_tier;
 mod arrays;
 mod blit;
+mod border;
 mod cache;
 mod choice;
 mod command;

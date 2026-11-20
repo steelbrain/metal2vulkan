@@ -350,7 +350,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceFilteredMipmaps
         | N::DeviceRoundedResolve
         | N::CompressedTexelDecode
-        | N::SharedExponentKept => Allowance::Unbounded,
+        | N::SharedExponentKept
+        | N::SwizzledOpaqueBlackBorder => Allowance::Unbounded,
     }
 }
 

@@ -343,6 +343,15 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         let ycbcr = vulkan11.sampler_ycbcr_conversion == vk::TRUE;
         let swapchain = ash::ext::swapchain_maintenance1::NAME;
         let offered = lists(swapchain) && answer.swapchain_maintenance1 == vk::TRUE;
+        // The border swizzle's structure is read only from a device that lists its extension.
+        let border = ash::ext::border_color_swizzle::NAME;
+        let mut swizzles = vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT::default();
+        if lists(border) {
+            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut swizzles);
+            // SAFETY: as above; `swizzles` lives through the call.
+            unsafe { vk_instance.get_physical_device_features2(physical.raw(), &mut features) };
+        }
+        let from_image = swizzles.border_color_swizzle_from_image == vk::TRUE;
 
         let mut asked = vec![
             DeviceExtension::new(missing),
@@ -376,6 +385,10 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         // The attachment reads' extensions, where device creation took them.
         if device.core().feedback.is_some() {
             expected.extend(floor::ATTACHMENT_READ_EXTENSIONS);
+        }
+        // The border swizzle's, where the device reports it from the image.
+        if from_image {
+            expected.extend(floor::BORDER_SWIZZLE_EXTENSIONS);
         }
         if maintenance && offered {
             expected.push(swapchain);

@@ -1272,6 +1272,17 @@ made, with no lock, and never rewritten for layouts.
   changes: its read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
+- An opaque-black border sampled through a view whose component mapping is not the identity (a
+  swizzle, or the mapping a pixel format takes, such as `A8Unorm` held in red where the device
+  has no `A8_UNORM`) is the device's
+  answer on a device that does not report `borderColorSwizzleFromImage`
+  (`VkPhysicalDeviceBorderColorSwizzleFeaturesEXT`, `VK_EXT_border_color_swizzle`): Vulkan leaves
+  that texel undefined, and the NVIDIA driver reads `(0, 0, 0, 1)` through such a view, where
+  Metal reads the border through the swizzle. A sampler in the arrays meets every view, so no
+  sampler's create info names a view's mapping, and no exact form exists on such a device. The
+  sampler state carries the static note `PrecisionNote::SwizzledOpaqueBlackBorder`
+  (`SamplerState::precision_note`), on every device (Sampler states); so does a pipeline whose
+  function samples through a constexpr sampler of such a border, among its `precision_notes`.
 - A drawable's texture (see "Presenting") has no view of another pixel format
   (`Gap::TextureView`), and a draw that reads it as an attachment of its own pass is `Gap::Draw`
   of `AttachmentRead`: the swapchain's image lists no other format and has no feedback usage.
@@ -1294,6 +1305,13 @@ made, with no lock, and never rewritten for layouts.
   them, `Gauges::samplers` the states.
 - `SamplerState::gpu_resource_id` is its index and the translator's `SamplerWord` of its
   descriptor (`docs/RESOURCE-ID.md`).
+- A state whose descriptor reads the border (an address mode of `ClampToZero` or
+  `ClampToBorderColor`, both of which read the descriptor's colour) with an opaque-black border
+  carries the static note `PrecisionNote::SwizzledOpaqueBlackBorder` (`SamplerState::precision_note`),
+  decided by its descriptor alone on every device: sampled through a view whose component mapping
+  is not the identity, its border is the device's answer where the device does not report
+  `borderColorSwizzleFromImage` (Known gaps of textures; Floor, Border swizzle). Other states
+  carry none.
 - A state's handle holds the device; what a command buffer keeps of it does not (Teardown).
   Once its last handle and the last command buffer that used it are gone, its elements read the
   defaults again and its index is free; a device sampler no other state holds goes to the reaper.
@@ -2945,6 +2963,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
+| `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 
 ### Features
 
@@ -3165,6 +3184,22 @@ through a copy of the image into its shadow (Render encoders), a known gap.
 |---|---|---|
 | `attachmentFeedbackLoopLayout` | `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT` | the feedback layout and usage |
 | `attachmentFeedbackLoopDynamicState` | `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` | the enable as dynamic state |
+
+### Border swizzle
+
+Where the device lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage`,
+device creation enables the extension and both its features, and neither otherwise
+(`floor::BORDER_SWIZZLE_EXTENSIONS`). No form differs: no sampler's create info chains
+`VkSamplerBorderColorComponentMappingCreateInfoEXT` on any device, since a sampler in the arrays
+meets every view and that structure names one mapping. With the feature, an opaque-black border
+sampled through a view whose component mapping is not the identity (a texture's swizzle, or the
+mapping its pixel format takes) reads through that mapping, as Metal's border reads through the
+swizzle. Without it Vulkan leaves that texel undefined (Known gaps of textures).
+
+| Border-swizzle feature | Structure | Used for |
+|---|---|---|
+| `borderColorSwizzle` | `VkPhysicalDeviceBorderColorSwizzleFeaturesEXT` | Vulkan requires it of a device that lists the extension; enabled with the one below |
+| `borderColorSwizzleFromImage` | `VkPhysicalDeviceBorderColorSwizzleFeaturesEXT` | an opaque-black border through a swizzled view, read through the view's mapping with no mapping on the sampler |
 
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's

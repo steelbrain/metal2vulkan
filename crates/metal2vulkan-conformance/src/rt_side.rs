@@ -18,10 +18,11 @@
 //!
 //! The runtime announces no degrade notice: where a kernel's answers may differ from Metal's, its
 //! state carries static precision notes ([`metal2vulkan_rt::ComputePipelineState::precision_notes`],
-//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]), and so does a texture of a
-//! block-compressed format ([`metal2vulkan_rt::Texture::precision_note`]). This side announces the
-//! notes of each state its case dispatched or drew with, and of each texture it made, by the codes
-//! the suite's allowances name (`metal2vulkan-degrade-<kind>`).
+//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]), and so do a texture of a
+//! block-compressed format ([`metal2vulkan_rt::Texture::precision_note`]) and a sampler state that
+//! reads an opaque-black border ([`metal2vulkan_rt::SamplerState::precision_note`]). This side
+//! announces the notes of each state its case dispatched or drew with, and of each texture and
+//! sampler state it made, by the codes the suite's allowances name (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
     Answer, ArgumentSlot, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side,
@@ -372,8 +373,9 @@ pub struct RtSide<'a> {
     drawn: BTreeSet<usize>,
     /// The static notes of what a pass the case encoded set beside its pipeline states: a depth
     /// bias other than 0 (`RenderCommandEncoder::DEPTH_BIAS_NOTE`) and each depth-stencil state's
-    /// (`DepthStencilState::precision_note`); and of each texture the case made
-    /// (`Texture::precision_note`), which [`Side::announced`] answers too.
+    /// (`DepthStencilState::precision_note`); and of each texture and sampler state the case made
+    /// (`Texture::precision_note`, `SamplerState::precision_note`), which [`Side::announced`]
+    /// answers too.
     encoder_notes: BTreeSet<rt::PrecisionNote>,
     /// Each argument buffer the case made ([`Side::argument_buffer`]), with the textures its
     /// resource IDs name, which a dispatch that binds it makes resident.
@@ -1339,6 +1341,7 @@ impl Side for RtSide<'_> {
         let index = self.on.next_index(rt::IndexClass::Sampler);
         let sampler = (self.on.device.new_sampler_state(&descriptor, index))
             .map_err(|error| Failure::of_rt(&error))?;
+        self.encoder_notes.extend(sampler.precision_note());
         Ok(keep(&mut self.samplers, sampler))
     }
 

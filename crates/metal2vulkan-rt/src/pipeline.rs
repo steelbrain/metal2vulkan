@@ -49,7 +49,7 @@ use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
-use crate::sampler::{canonical, hold_constexpr, release_constexpr};
+use crate::sampler::{canonical, constexpr_notes, hold_constexpr, release_constexpr};
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
@@ -107,7 +107,7 @@ pub(crate) struct Compiled {
     /// groups, lowered at the first dispatch that needs it.
     pub(crate) emulated: Option<Later>,
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
-    /// modules made with the content.
+    /// modules made with the content, and its constexpr samplers' (`constexpr_notes`).
     notes: Vec<PrecisionNote>,
     /// What Metal's state answers of the content, beside its threads.
     answers: Answers,
@@ -808,6 +808,9 @@ impl Compiled {
         let required = descriptor.required_threads_per_threadgroup;
         let mut notes = whole.stage.precision_notes.clone();
         let whole = Kernel::new(&core, whole, required)?;
+        // The variants sample no constexpr sampler the whole module does not (`covers`).
+        let profile = core.translator.profile();
+        notes.extend(constexpr_notes(profile, &whole.interface.constexprs));
         notes.sort_unstable();
         notes.dedup();
         // A module that runs only whole SIMD groups has its emulated variant for the others.
@@ -1329,7 +1332,11 @@ impl ComputePipelineState {
     /// the state (an observing kernel's one-row module among them), and once a dispatch needed
     /// them, its variants: the emulated-SIMD-group module that runs threadgroups of partial SIMD
     /// groups and an observing kernel's partial-threadgroups module. Metal's answers are its own
-    /// GPU's.
+    /// GPU's. [`PrecisionNote::SwizzledOpaqueBlackBorder`] is among them where the kernel samples
+    /// through a constexpr sampler whose address mode reads an opaque-black border (decided by
+    /// the sampler's own constants, as
+    /// [`SamplerState::precision_note`](crate::SamplerState::precision_note) is by its
+    /// descriptor).
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         let compiled = &self.inner.compiled;
         let mut notes = compiled.notes.clone();

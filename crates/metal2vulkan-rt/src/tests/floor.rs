@@ -4,10 +4,10 @@
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS,
-    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
-    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS,
-    VERSION,
+    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BORDER_SWIZZLE,
+    BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
+    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY, PRIVATE_MEMORY, REQUIRED,
+    RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -1100,6 +1100,52 @@ fn the_step_rate_feature_is_enabled_where_reported() {
         .contains(&VkExtension::ExtVertexAttributeDivisor));
 }
 
+/// A device that lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage` is
+/// given the extension and both its features; one that lists it with `borderColorSwizzle` alone
+/// (as Vulkan requires of every device that lists it), or reports the features without listing
+/// it, is given neither. The translator is told of neither feature.
+#[test]
+fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        let enabled = (BORDER_SWIZZLE_EXTENSIONS.iter())
+            .filter(|name| capabilities.extensions.contains(name))
+            .count();
+        let features = (BORDER_SWIZZLE.iter())
+            .filter(|feature| holds(&capabilities.features, feature))
+            .count();
+        let enables = shader_enables(&capabilities);
+        assert!(!enables.features.contains(&VkFeature::BorderColorSwizzle));
+        assert!(!(enables.features).contains(&VkFeature::BorderColorSwizzleFromImage));
+        assert!(!(enables.extensions).contains(&VkExtension::ExtBorderColorSwizzle));
+        (enabled, features)
+    };
+    let listed = |device: &mut Queried| {
+        (device.extensions).extend(
+            BORDER_SWIZZLE_EXTENSIONS
+                .iter()
+                .map(|&name| name.to_owned()),
+        );
+        device.features.border_swizzle.border_color_swizzle = vk::TRUE;
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (0, 0), "at the floor");
+    listed(&mut device);
+    assert_eq!(answer(&device), (0, 0), "listed, without from-image");
+    device
+        .features
+        .border_swizzle
+        .border_color_swizzle_from_image = vk::TRUE;
+    assert_eq!(answer(&device), (1, 2), "listed, with from-image");
+    let mut device = at_the_floor();
+    let reported = &mut device.features.border_swizzle;
+    reported.border_color_swizzle = vk::TRUE;
+    reported.border_color_swizzle_from_image = vk::TRUE;
+    assert_eq!(answer(&device), (0, 0), "reported, not listed");
+}
+
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
 /// elements: through the attachment feedback loop where it lists both extensions and reports both
 /// features, which device creation then enables, and through a copy of the image where it does
@@ -1317,6 +1363,11 @@ fn the_readme_states_the_floor() {
                 .iter()
                 .map(|name| (name, "device, with the feedback loop")),
         )
+        .chain(
+            BORDER_SWIZZLE_EXTENSIONS
+                .iter()
+                .map(|name| (name, "device, where reported from the image")),
+        )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
     assert_eq!(stated, code, "the README's extensions");
@@ -1333,6 +1384,10 @@ fn the_readme_states_the_floor() {
             ATTACHMENT_READS,
         ),
         (["Step-rate feature", "Structure", "Used for"], STEP_RATES),
+        (
+            ["Border-swizzle feature", "Structure", "Used for"],
+            BORDER_SWIZZLE,
+        ),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
             .into_iter()
@@ -1426,6 +1481,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut feedback_loop,
             mut feedback_loop_dynamic,
             mut divisor,
+            mut border_swizzle,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1452,6 +1508,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
         {
             features = features.push_next(&mut divisor);
+        }
+        if enabled(ash::ext::border_color_swizzle::NAME) {
+            features = features.push_next(&mut border_swizzle);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

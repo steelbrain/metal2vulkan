@@ -2533,6 +2533,24 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     SharedExponentKept,
+    /// A sampler, a sampler state or a constexpr sampler, that reads its border (`ClampToZero` or
+    /// `ClampToBorderColor` on an axis, both of which read the sampler's colour) with an
+    /// opaque-black border colour: its border texel sampled through a view whose Vulkan component
+    /// mapping is not the identity (the texture's swizzle, or the mapping its pixel format takes)
+    /// is the device's answer on a device without `borderColorSwizzleFromImage`, not Metal's,
+    /// which is the border colour in the format's channels and then the swizzle. Vulkan leaves
+    /// that texel undefined there unless the sampler names the view's mapping
+    /// (`VkSamplerBorderColorComponentMappingCreateInfoEXT`), which a sampler that meets every view
+    /// cannot; the NVIDIA driver reads `(0, 0, 0, 1)`. Where the device has the feature, the texel
+    /// is read through the view's mapping, as Metal's is. Static, decided on every device by the
+    /// sampler alone: no translated stage records it; on `metal2vulkan-rt` a sampler state carries
+    /// it by its descriptor (`SamplerState::precision_note`), and a pipeline whose function samples
+    /// through such a constexpr sampler carries it among its notes by the sampler's constants
+    /// (`precision_notes`).
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    SwizzledOpaqueBlackBorder,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

@@ -5626,6 +5626,21 @@ bound.
   largest depth exponent for a float depth attachment and the device's for a fixed-point one (at
   most `2 × 2^-n`). Apple's documentation states neither the slope measure nor the unit. A draw of
   lines is not biased, as Metal biases triangles alone.
+- `metal2vulkan-degrade-swizzled-opaque-black-border` (precision).
+  `PrecisionNote::SwizzledOpaqueBlackBorder`: A sampler on `metal2vulkan-rt` that reads its
+  border (`ClampToZero` or `ClampToBorderColor` on an axis, both of which read the sampler's
+  colour) with an opaque-black border colour. A sampler state carries it as a static note
+  (`SamplerState::precision_note`), decided by its descriptor alone on every device; a compute or
+  render pipeline whose function samples through such a constexpr sampler carries it among its
+  notes (`precision_notes`), decided by the sampler's own constants. Sampled
+  through a view whose Vulkan component mapping is not the identity (the texture's swizzle, or the
+  mapping its pixel format takes), its border texel is the device's answer on a device without
+  `borderColorSwizzleFromImage` (`VK_EXT_border_color_swizzle`): Vulkan leaves it undefined unless
+  the sampler names the view's mapping, which a sampler that meets every view cannot, and the
+  NVIDIA driver reads `(0, 0, 0, 1)`, where Metal reads the border colour in the format's channels
+  through the swizzle. A device with the feature reads Metal's texel. `metal2vulkan-runtime`
+  announces none: it makes the sampler for the view's mapping where it can, and refuses the pair
+  otherwise (`metal::sampler::check_border_view`).
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,
