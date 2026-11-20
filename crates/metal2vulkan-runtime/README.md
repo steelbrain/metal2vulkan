@@ -1112,12 +1112,16 @@ made, with no lock, and never rewritten for layouts.
 - `Device::new_texture(descriptor, index)` is `newTextureWithDescriptor:` at `index`: an
   optimal-tiling image of the descriptor in device-local memory, which reads zero until written
   (Memory blocks and buffers, above). The image is placed in a texture block: a Private block the
-  device takes from its pool, at the first place with room at the image's alignment, so a texture
-  makes no allocation. It has an allocation of its own only where the device requires one for it
-  (`requiresDedicatedAllocation`; preferring one is no reason), where it is larger than a Private
-  block (64 MiB), or where the blocks' memory type does not serve it. A place is free again once
-  the image is freed; one empty texture block is kept, and another that empties goes back to the
-  pool. `index` is given exactly where shaders reach the texture (`Refusal::TextureIndex`
+  device takes from its pool. An image of 16 MiB or less goes at the first place with room at its
+  alignment in the 16 MiB texture blocks, in the order they were taken; a longer one in a texture
+  block of its own length, which holds no other image, so its memory goes back to the pool with
+  it. So a texture makes no allocation of its own. It has one only where the device requires one
+  for it (`requiresDedicatedAllocation`; preferring one is no reason), where the blocks' memory
+  type does not serve it, or where device-local memory has no texture block left. A place is free
+  again once the image is freed; one empty 16 MiB texture block is kept, and another that empties
+  goes back to the pool. Nothing moves a live image, so a 16 MiB texture block goes back only once
+  its last image is freed (`Gauges::texture_block_sparse_bytes` counts the blocks holding less
+  than a sixteenth of their length). `index` is given exactly where shaders reach the texture (`Refusal::TextureIndex`
   otherwise): shader-read or shader-write usage, or render-target usage of a colour pixel format
   (one with no depth or stencil), which a fragment function reads through its attachment, as
   Metal gives every texture a `gpuResourceID`; from a live `IndexClass::Texture` grant, whatever

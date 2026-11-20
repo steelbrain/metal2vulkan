@@ -2,12 +2,14 @@
 //! blocks. A texture block holds images alone, so no buffer lies beside an optimal image in one
 //! block.
 //!
-//! A place is a resource's bytes at a multiple of its alignment: the first that fits, in the
-//! blocks in the order they were taken; where none fits, the next block comes from the pool: of
-//! the class's block length ([`MemoryClass::block_len`]), or of the place's own length where that
-//! is longer. A place is free again once its resource is freed, after every command buffer and
-//! upload that used it retired. One empty block of the block length is kept for the next place;
-//! another block that empties goes back to the pool, whose free ranges its bytes join.
+//! A place is a resource's bytes at a multiple of its alignment. One no longer than the class's
+//! block length ([`MemoryClass::block_len`]) is the first that fits in the blocks of that length,
+//! in the order they were taken; where none fits, the next such block comes from the pool. A
+//! longer one takes a block of its own length from the pool, which holds no other place, not even
+//! in the bytes past it, so its memory goes back with it. A place is free again once its resource
+//! is freed, after every command buffer and upload that used it retired. One empty block of the
+//! block length is kept for the next place; another block that empties goes back to the pool,
+//! whose free ranges its bytes join.
 //! A place's bytes are what its last resource left; a new texture's move home zeroes its image
 //! ([`crate::texture::Zero`]), unless the place answers that its bytes read zero: a place in a
 //! block the pool handed out zeroed, past every place the block held before.
@@ -101,7 +103,8 @@ impl Places {
         }
     }
 
-    /// A place of `len` bytes at a multiple of `align`, a power of two, and its block. Where no
+    /// A place of `len` bytes at a multiple of `align`, a power of two, and its block: in a block
+    /// of the block length, or, where `len` is longer, alone in the block taken for it. Where no
     /// block has room, a Private block is taken from the pool, without the lock: of the block
     /// length, or of `len` where that is longer.
     ///
@@ -112,9 +115,15 @@ impl Places {
         len: u64,
         align: u64,
     ) -> Result<(Place, Memory), Error> {
+        // A place no longer than the block length goes in a block of that length; a longer one
+        // only in an empty block, the one taken for it, whose bytes past it then stay free.
+        let serves = |block: &PlaceBlock| match len <= BLOCK_LEN {
+            true => block.memory.len == BLOCK_LEN,
+            false => block.live == 0,
+        };
         let mut blocks = lock(&self.blocks);
         loop {
-            for block in blocks.iter_mut() {
+            for block in blocks.iter_mut().filter(|block| serves(block)) {
                 // The image's alignment holds in the allocation the block is a range of.
                 if let Some(offset) = block.free.take_from(len, align, block.memory.base()) {
                     block.count(core, len, true);

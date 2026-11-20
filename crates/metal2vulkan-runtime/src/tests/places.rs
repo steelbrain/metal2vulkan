@@ -381,4 +381,193 @@ mod on_device {
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
     }
+
+    /// A texture longer than a block holds its texture block alone, on every device: a small
+    /// texture made while the long block has free bytes past the long texture goes in a block of
+    /// the block length, and the long block's allocation is freed at its idle age after the long
+    /// texture's release, while the small texture lives.
+    #[test]
+    fn every_device_frees_a_long_texture_block_with_its_texture() {
+        let unit = MemoryClass::Private.block_len();
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            core.pool.await_internals();
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // 16 MiB and 16 KiB of texels: its block, of its length rounded up to the pool's
+            // granule, has free bytes past it.
+            let d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4096, 1025);
+            let long = (device.new_texture(&d, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: a long texture: {error}"));
+            let held = counters.gauges().texture_block_held_bytes;
+            assert!(held > unit, "{name}: a long texture block of {held} bytes");
+            let free = held - long.image_size();
+            let tiny = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 32, 32);
+            let small = (device.new_texture(&tiny, Some(4097)))
+                .unwrap_or_else(|error| panic!("{name}: a small texture: {error}"));
+            let size = small.image_size();
+            println!(
+                "places: {name}: a long texture of {} bytes in a block of {held}, {free} free \
+                 past it; a small texture of {size} bytes",
+                long.image_size()
+            );
+            let (long_block, _) = long.place().expect("the long texture's place");
+            let (small_block, _) = small.place().expect("the small texture's place");
+            assert_ne!(
+                small_block, long_block,
+                "{name}: the small texture of {size} bytes in the long block's {free} free bytes"
+            );
+            assert_eq!(
+                texture_blocks(&counters.gauges()),
+                [held + unit, long.image_size() + size, unit, 1],
+                "{name}: the long block, and the small texture's block of the block length"
+            );
+            // The small texture took the reserve: its next unit, so the allocations settle.
+            wait_until("the next unit", || core.pool.stocked(MemoryClass::Private));
+            let allocated = counters.gauges().private_allocation_bytes;
+            let frees = core.pool.frees().len();
+            drop(long);
+            wait_until("the long block's allocation freed", || {
+                counters.gauges().private_allocation_bytes == allocated - held
+            });
+            let freed = core.pool.frees();
+            assert_eq!(freed.len(), frees + 1, "{name}: one free");
+            let (since, began, _) = freed[frees];
+            let age = began - since;
+            assert!(
+                (crate::memory::IDLE_AGE_NANOS..crate::memory::IDLE_AGE_NANOS + 1_000_000_000)
+                    .contains(&age),
+                "{name}: the long block freed {age} ns after it came back"
+            );
+            assert_eq!(
+                (
+                    counters.gauges().textures,
+                    texture_blocks(&counters.gauges())
+                ),
+                (1, [unit, size, unit, 1]),
+                "{name}: the small texture still live in its block"
+            );
+            drop(small);
+            wait_until("the small texture freed", || {
+                counters.gauges().textures == 0
+            });
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
+
+    /// An idle device returns to its fixed Private memory within a second of the release of all
+    /// it held, with no call, on every device: textures of many lengths, some longer than a
+    /// block, and Private blocks of many lengths, some longer than a unit, all released, leave the
+    /// class's reserve and the texture block kept for the next place, 16 MiB each, and no other
+    /// Private allocation.
+    #[test]
+    fn every_device_returns_to_its_fixed_private_memory_within_a_second_of_going_idle() {
+        let unit = MemoryClass::Private.block_len();
+        let count = 160;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            core.pool.await_internals();
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, count)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut state = 0x2545_F491_4F6C_DD1D_u64;
+            let mut next = move || {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state
+            };
+            let mut textures = Vec::new();
+            for index in 0..count {
+                // Sides of 64 to 2,048 texels, and every fortieth longer than a block.
+                let (width, height) = match index % 40 {
+                    0 => (4096, 1025 + (next() % 1024) as u32),
+                    _ => (64 << (next() % 6), 64 << (next() % 6)),
+                };
+                let d = TextureDescriptor::new(
+                    TextureType::Type2D,
+                    PixelFormat::RGBA8Unorm,
+                    width,
+                    height,
+                );
+                textures.push(
+                    (device.new_texture(&d, Some(4096 + index)))
+                        .unwrap_or_else(|error| panic!("{name}: texture {index}: {error}")),
+                );
+            }
+            let mut blocks = Vec::new();
+            for take in 0..64 {
+                let len = (64 << 10) << (next() % 7);
+                blocks.push(
+                    (device.take_block(MemoryClass::Private, len))
+                        .unwrap_or_else(|error| panic!("{name}: block {take}: {error}")),
+                );
+            }
+            blocks.push(
+                (device.take_block(MemoryClass::Private, unit + 1))
+                    .unwrap_or_else(|error| panic!("{name}: a long block: {error}")),
+            );
+            let most = counters.gauges().private_allocation_bytes;
+            drop(textures);
+            for block in blocks {
+                (device.release_block(block))
+                    .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
+            }
+            let released = Instant::now();
+            // The allocations, the idle ones, the reserve, and the texture blocks.
+            let fixed = [2 * unit, unit, unit, unit];
+            let read = || {
+                let gauges = counters.gauges();
+                [
+                    gauges.private_allocation_bytes,
+                    gauges.private_idle_bytes,
+                    gauges.private_reserve_bytes,
+                    gauges.texture_block_held_bytes,
+                ]
+            };
+            while read() != fixed && released.elapsed() < Duration::from_secs(1) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let took = released.elapsed();
+            println!(
+                "places: {name}: {most} bytes of Private allocations at the most, {:?} {took:?} \
+                 after the release",
+                read()
+            );
+            assert_eq!(
+                read(),
+                fixed,
+                "{name}: a second after the release of {most} bytes of Private allocations"
+            );
+            let gauges = counters.gauges();
+            assert_eq!(
+                (gauges.textures, takes(&gauges), texture_blocks(&gauges)),
+                (0, [0; 4], [unit, 0, 0, 0]),
+                "{name}: nothing placed"
+            );
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
 }
