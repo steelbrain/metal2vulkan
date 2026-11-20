@@ -787,14 +787,22 @@ impl Compiled {
         let compiled = |function: CompiledFunction| {
             let mut compiled = descriptor.clone();
             compiled.kernel = StageSource::Compiled(function);
-            translator.compile_compute_pipeline(&compiled, &budget)
+            translating(&core, || {
+                translator.compile_compute_pipeline(&compiled, &budget)
+            })
         };
         let (whole, partial, image_only, source, answers) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
-                let plain = translator
-                    .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, entries)
-                    .map_err(Error::Translation)?;
+                let plain = translating(&core, || {
+                    translator.kernel_inputs_read(
+                        function,
+                        &descriptor.lowering_inputs(),
+                        &budget,
+                        entries,
+                    )
+                })
+                .map_err(Error::Translation)?;
                 let mut emulated = plain.clone();
                 emulated.emulated_simdgroups = true;
                 let source = (function, emulated);
@@ -863,9 +871,10 @@ impl Compiled {
             }
             // A kernel the consumer compiled: the variant it was compiled under.
             StageSource::Compiled(function) => {
-                let pipeline = translator
-                    .compile_compute_pipeline(descriptor, &budget)
-                    .map_err(Error::Translation)?;
+                let pipeline = translating(&core, || {
+                    translator.compile_compute_pipeline(descriptor, &budget)
+                })
+                .map_err(Error::Translation)?;
                 // Only a non-observer's partial variant runs its grid in tiles. It has no
                 // emulated variant: the kernel keeps the variant it was compiled under. The
                 // translator links a compiled kernel only for its own profile
@@ -1039,7 +1048,9 @@ fn lower_variant(
     };
     let mut descriptor = descriptor.clone();
     descriptor.kernel = StageSource::Compiled(compiled);
-    let pipeline = match translator.compile_compute_pipeline(&descriptor, &budget) {
+    let pipeline = match translating(core, || {
+        translator.compile_compute_pipeline(&descriptor, &budget)
+    }) {
         Ok(pipeline) => pipeline,
         Err(TranslationError::Unsupported(_)) => return Lowered::Refused,
         Err(error) => return Lowered::Translation(error),
@@ -1083,23 +1094,39 @@ pub(crate) fn lower(
     let translator = &core.translator;
     let key = translator.function_compile_key(function, inputs);
     core.counters.count(Metric::Translations);
-    let lowered = translator.compile_function_from_entries(function, inputs, budget, entries);
+    let lowered = translating(core, || {
+        translator.compile_function_from_entries(function, inputs, budget, entries)
+    });
     core.note_entries();
     let lowered = lowered?;
     cache::keep_translation(core, key.digest(), lowered.to_bytes());
     Ok(lowered)
 }
 
+/// `call`, a call into the translator, its time counted ([`Metrics::translation_nanos`]).
+///
+/// [`Metrics::translation_nanos`]: crate::Metrics::translation_nanos
+pub(crate) fn translating<T>(core: &Core, call: impl FnOnce() -> T) -> T {
+    let began = host_time();
+    let answer = call();
+    core.counters.translation(host_time().saturating_sub(began));
+    answer
+}
+
 /// The one `VkPipeline` that `create` makes through the cache it is given: the device's one
 /// `VkPipelineCache` (`crate::cache`), which a creation before the reaper made it empty waits for.
-/// `call` names `create`'s Vulkan call. Counted as made.
+/// `call` names `create`'s Vulkan call. Counted as made, and its call's time
+/// (`Metrics::pipeline_creation_nanos`).
 pub(crate) fn made_through_cache(
     core: &Core,
     call: &'static str,
     create: impl FnOnce(vk::PipelineCache) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
 ) -> Result<vk::Pipeline, Error> {
     let creation = cache::creation(core);
+    let began = host_time();
     let made = create(creation.handle());
+    core.counters
+        .pipeline_creation(host_time().saturating_sub(began));
     drop(creation);
     let pipeline = made.map_err(|(_, result)| Error::Vulkan { call, result })?[0];
     core.counters.count(Metric::PipelinesCreated);

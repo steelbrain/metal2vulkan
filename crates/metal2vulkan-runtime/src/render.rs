@@ -59,7 +59,7 @@ use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
 use crate::pipeline::{
     access, loaded, lower, made_through_cache, number_samplers, of_the_device, texture_access,
-    FieldValue, Numbered, PUSH_BYTES,
+    translating, FieldValue, Numbered, PUSH_BYTES,
 };
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
@@ -308,9 +308,15 @@ impl crate::Device {
                     Some(lowered) => lowered,
                     None => {
                         let entries = &core.entries;
-                        let keys = (core.translator)
-                            .render_variant_key(descriptor, &VariantKey::new(), &budget, entries)
-                            .map_err(Error::Translation)?;
+                        let keys = translating(core, || {
+                            (core.translator).render_variant_key(
+                                descriptor,
+                                &VariantKey::new(),
+                                &budget,
+                                entries,
+                            )
+                        })
+                        .map_err(Error::Translation)?;
                         let lowered = lower_stages(core, descriptor, &keys, &budget, entries);
                         core.note_entries();
                         let (lowered, lowerings) = lowered?;
@@ -819,8 +825,8 @@ impl RenderCompiled {
         budget: &Budget,
     ) -> Result<RenderCompiled, Error> {
         let translator = &core.translator;
-        let pipeline =
-            (translator.compile_render_pipeline(lowered, budget)).map_err(Error::Translation)?;
+        let pipeline = translating(core, || translator.compile_render_pipeline(lowered, budget))
+            .map_err(Error::Translation)?;
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
         }

@@ -751,6 +751,44 @@ mod on_device {
         });
     }
 
+    /// A state's make counts the time of its `vkCreateComputePipelines` calls in
+    /// `Metrics::pipeline_creation_nanos` and of its calls into the translator in
+    /// `translation_nanos`: each above 0, and the two, made on the make's own thread, within the
+    /// make's time.
+    #[test]
+    fn every_device_times_a_make_s_pipeline_creation_apart_from_its_translation() {
+        let Some(descriptor) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        each_device("compute_make_times", |name, _, device| {
+            crate::tests::blit::on_device::settled(&device);
+            let counters = device.counters();
+            let before = counters.metrics();
+            let began = host_time();
+            let made = state(name, &device, &descriptor);
+            let wall = host_time() - began;
+            let after = counters.metrics();
+            let creation = after.pipeline_creation_nanos - before.pipeline_creation_nanos;
+            let translation = after.translation_nanos - before.translation_nanos;
+            assert!(
+                after.pipelines_created > before.pipelines_created,
+                "{name}: the make created a pipeline"
+            );
+            assert!(
+                creation > 0 && translation > 0,
+                "{name}: creation {creation} ns, translation {translation} ns"
+            );
+            assert!(
+                creation + translation < wall,
+                "{name}: creation {creation} ns and translation {translation} ns within {wall} ns"
+            );
+            println!(
+                "{name}: the make took {wall} ns: creation {creation} ns, translation {translation} ns"
+            );
+            drop((made, device));
+        });
+    }
+
     /// `ComputePipelineState::dispatch_variant`'s keys name exactly the `VkPipeline`s the
     /// dispatches run: over a table of dispatches of `icb_replay_grid_template`, an observing
     /// kernel with a threadgroup memory argument, two keys are equal exactly when the entries run

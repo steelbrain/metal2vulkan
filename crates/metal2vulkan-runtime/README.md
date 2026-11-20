@@ -173,6 +173,9 @@ nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time 
 driver (`submit_call_nanos`, with the calls over 100 ms counted) and the submit thread's wait
 for the queue's lock before a submission's calls (`queue_lock_wait_nanos`), which on a family of
 one queue is also the wait behind the consumer's presents (`Device::with_present_queue`);
+a pipeline make's two sides, the time inside `vkCreateComputePipelines` and
+`vkCreateGraphicsPipelines` (`pipeline_creation_nanos`) and inside the translator's calls, its
+lowerings from AIR to SPIR-V and its links and plans (`translation_nanos`);
 the `vkQueueSubmit2` calls that met one of the block-maker thread's frees, made during it or
 inside the driver as it began (`submissions_during_frees`), and their time inside the driver
 (`submit_call_nanos_during_frees`), the time a driver may have held them behind the frees; the

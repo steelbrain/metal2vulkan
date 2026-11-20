@@ -2273,6 +2273,7 @@ field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipel
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock_waits: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
+field	metal2vulkan-runtime::Metrics.pipeline_creation_nanos	pub pipeline_creation_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-runtime::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-runtime::Metrics.private_remade_after_frees	pub private_remade_after_frees: u64
@@ -2320,6 +2321,7 @@ field	metal2vulkan-runtime::Metrics.texture_block_allocations	pub texture_block_
 field	metal2vulkan-runtime::Metrics.texture_clear_barriers	pub texture_clear_barriers: u64
 field	metal2vulkan-runtime::Metrics.texture_clear_bytes	pub texture_clear_bytes: u64
 field	metal2vulkan-runtime::Metrics.texture_clears	pub texture_clears: u64
+field	metal2vulkan-runtime::Metrics.translation_nanos	pub translation_nanos: u64
 field	metal2vulkan-runtime::Metrics.translations	pub translations: u64
 field	metal2vulkan-runtime::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-runtime::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64

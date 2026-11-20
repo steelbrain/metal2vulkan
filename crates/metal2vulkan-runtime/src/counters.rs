@@ -436,6 +436,8 @@ struct Atomics {
     submit_infos: AtomicU64,
     submit_call_nanos: AtomicU64,
     submit_call_max_nanos: AtomicU64,
+    pipeline_creation_nanos: AtomicU64,
+    translation_nanos: AtomicU64,
     submit_calls_over_100_ms: AtomicU64,
     queue_lock_wait_nanos: AtomicU64,
     queue_lock_wait_max_nanos: AtomicU64,
@@ -748,6 +750,19 @@ impl Counters {
         if nanos > LONG_SUBMIT_CALL {
             a.submit_calls_over_100_ms.fetch_add(1, Relaxed);
         }
+    }
+
+    /// A `vkCreateComputePipelines` or `vkCreateGraphicsPipelines` call that took `nanos`
+    /// nanoseconds ([`Metrics::pipeline_creation_nanos`]).
+    pub(crate) fn pipeline_creation(&self, nanos: u64) {
+        self.atomics
+            .pipeline_creation_nanos
+            .fetch_add(nanos, Relaxed);
+    }
+
+    /// A call into the translator that took `nanos` nanoseconds ([`Metrics::translation_nanos`]).
+    pub(crate) fn translation(&self, nanos: u64) {
+        self.atomics.translation_nanos.fetch_add(nanos, Relaxed);
     }
 
     /// A submission that waited `nanos` nanoseconds for the runtime's queue lock before its
@@ -1248,6 +1263,8 @@ impl Counters {
             submit_infos: a.submit_infos.load(Relaxed),
             submit_call_nanos: a.submit_call_nanos.load(Relaxed),
             submit_call_max_nanos: a.submit_call_max_nanos.load(Relaxed),
+            pipeline_creation_nanos: a.pipeline_creation_nanos.load(Relaxed),
+            translation_nanos: a.translation_nanos.load(Relaxed),
             submit_calls_over_100_ms: a.submit_calls_over_100_ms.load(Relaxed),
             queue_lock_wait_nanos: a.queue_lock_wait_nanos.load(Relaxed),
             queue_lock_wait_max_nanos: a.queue_lock_wait_max_nanos.load(Relaxed),
@@ -1619,6 +1636,11 @@ pub struct Metrics {
     /// ([`first_use_waits`](Self::first_use_waits)). A state of a content the device holds makes
     /// none, a call still inside the driver is not counted yet, and one that failed is not counted.
     pub pipelines_created: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the `vkCreateComputePipelines` and
+    /// `vkCreateGraphicsPipelines` calls took, from each call to its return, in total, those that
+    /// failed among them: the driver's side of a pipeline's make. Calls on several threads at once
+    /// each count their own time, so where they overlap the total passes the time that went by.
+    pub pipeline_creation_nanos: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
     /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
     /// than one deep) or threadgroup memory lengths no state of the kernel's content had run with
@@ -1762,6 +1784,15 @@ pub struct Metrics {
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the runtime's calls into the translator
+    /// took, in total, those refused among them: the translation's side of a pipeline's make.
+    /// They are the reads of a kernel's inputs and of a render descriptor's variant, which decode
+    /// their functions, the lowerings of functions from AIR to SPIR-V
+    /// ([`translations`](Self::translations)), and the links and plans of a pipeline's lowered
+    /// functions. The digests that key the device's caches count none, and so does a lowering
+    /// taken from the cache directory. Calls on several threads at once each count their own
+    /// time.
+    pub translation_nanos: u64,
     /// Render contents a state took by their record in the cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]): the keys of the content's lowerings, kept under the
     /// translator's key of its descriptor, which reads no function, so the state read the
