@@ -10,7 +10,7 @@ use crate::fence::Fences;
 use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
-use crate::over::{self, Overs};
+use crate::over::{self, Overs, Reached};
 use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
@@ -1325,15 +1325,15 @@ impl Building {
         self.device.core().copied_overs.load(Ordering::Relaxed) > 0
     }
 
-    /// Before a command that makes `accesses` (by hazard id), `unbound` where it reaches memory
-    /// through an address outside its resources: records the copies its textures over a buffer
-    /// in an image of their own need first (`crate::over`), in the segment the command goes in,
-    /// ordered as a blit's copy is.
+    /// Before a command that reaches `reached`, `unbound` where it reaches memory through an
+    /// address outside its resources: records the copies its textures over a buffer in an image
+    /// of their own need first (`crate::over`), in the segment the command goes in, ordered as a
+    /// blit's copy is.
     ///
     /// Err: [`Error::Vulkan`] where the command buffer cannot record.
-    pub(crate) fn overs_before(
+    pub(crate) fn overs_before<'a>(
         &mut self,
-        accesses: &[(u32, Access)],
+        reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
         unbound: bool,
     ) -> Result<(), Error> {
         if !self.copies_over() {
@@ -1342,24 +1342,31 @@ impl Building {
         if !self.last().signals.is_empty() {
             self.split()?;
         }
-        let copies = self.overs_owed(accesses, unbound);
+        let copies = self.overs_owed(reached, unbound);
         self.record_overs(copies)
     }
 
-    /// The copies a command that makes `accesses` (by hazard id), `unbound` where it reaches
-    /// memory through an address outside its resources, needs first (`crate::over`), in the
-    /// current segment, which the caller records ([`record_overs`](Self::record_overs)): a draw's,
-    /// which ends its pass's rendering to record them. None while no texture over a buffer in an
-    /// image of its own lives.
-    pub(crate) fn overs_owed(&mut self, accesses: &[(u32, Access)], unbound: bool) -> over::Copies {
+    /// The copies a command that reaches `reached`, `unbound` where it reaches memory through an
+    /// address outside its resources, needs first (`crate::over`), in the current segment, which
+    /// the caller records ([`record_overs`](Self::record_overs)): a draw's, which ends its pass's
+    /// rendering to record them. None while no texture over a buffer in an image of its own
+    /// lives.
+    pub(crate) fn overs_owed<'a>(
+        &mut self,
+        reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
+        unbound: bool,
+    ) -> over::Copies {
         if !self.copies_over() {
             return over::Copies::default();
         }
-        let segments = &mut self.gpu.segments;
-        let last = segments.len() - 1;
-        segments[last]
-            .overs
-            .before(accesses, self.gpu.kept.textures.as_slice(), unbound)
+        self.last().overs.before(reached, unbound)
+    }
+
+    /// Whether a texture over a buffer in an image of its own that the current segment used has
+    /// its image ahead of its buffer ([`Overs::ahead`]): while none has, a command's reads of
+    /// buffers owe no copy.
+    pub(crate) fn overs_ahead(&self) -> bool {
+        (self.gpu.segments.last()).is_some_and(|segment| segment.overs.ahead())
     }
 
     /// Records `copies`, ordered as a blit's copy is; nothing where there are none.
@@ -1428,21 +1435,18 @@ impl Building {
         }
     }
 
-    /// After a command that made `accesses` (by hazard id), `unbound` where it wrote through an
-    /// address outside its resources (`crate::over`); a command recorded while no texture over a
-    /// buffer in an image of its own lived is untracked.
-    pub(crate) fn overs_after(&mut self, accesses: &[(u32, Access)], unbound: bool) {
+    /// After a command that reached `reached` (what it writes is what counts), `unbound` where it
+    /// wrote through an address outside its resources (`crate::over`); a command recorded while
+    /// no texture over a buffer in an image of its own lived is untracked.
+    pub(crate) fn overs_after<'a>(
+        &mut self,
+        reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
+        unbound: bool,
+    ) {
         match self.copies_over() {
-            true => self.last().overs.after(accesses, unbound),
-            false => self.overs_untracked(),
+            true => self.last().overs.after(reached, unbound),
+            false => self.last().overs.after([], true),
         }
-    }
-
-    /// After a command whose writes were not tracked: a texture over a buffer in an image of its
-    /// own first used later takes its bytes in again first, as after a write through an address
-    /// outside its resources (`crate::over`).
-    pub(crate) fn overs_untracked(&mut self) {
-        self.last().overs.after(&[], true);
     }
 
     /// Keeps `state` until the command buffer retires, and lends it for a binding slot.

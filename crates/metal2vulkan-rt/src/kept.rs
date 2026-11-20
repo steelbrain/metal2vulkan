@@ -187,11 +187,6 @@ impl<T: Handle> Kept<T> {
         self.list.iter()
     }
 
-    /// The objects kept, as a slice.
-    pub(crate) fn as_slice(&self) -> &[T::Kept] {
-        &self.list
-    }
-
     /// The objects the list has room for.
     pub(crate) fn capacity(&self) -> usize {
         self.list.capacity()

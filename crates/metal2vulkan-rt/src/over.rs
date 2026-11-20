@@ -29,6 +29,10 @@
 //! and `Metrics::bytes_copied`; a copy over a buffer in an imported block in
 //! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). The tracking is
 //! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
+//!
+//! A command hands over what it reaches ([`Reached`]): each texture says itself whether it is such
+//! a texture, and a buffer it only reads owes nothing while no texture the segment used has an
+//! image ahead of its buffer ([`Overs::ahead`]), so a command looks at nothing else.
 
 use crate::buffer::BufferObject;
 use crate::copy_out;
@@ -41,24 +45,53 @@ use ash::vk;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
+/// A resource a command reaches, as the copies read it: a texture, which says itself whether it
+/// lives in an image of its own over a buffer, or a buffer, by its id.
+#[derive(Clone, Copy)]
+pub(crate) enum Reached<'a> {
+    /// A texture: one in place over a buffer reaches the buffer.
+    Texture(&'a Arc<TextureInner>),
+    /// A buffer, by its id ([`BufferObject::id`]).
+    Buffer(u32),
+}
+
+/// 1 for a texture over a buffer in an image of its own that the Shared rules copy, 0 for any
+/// other or none: what an encoder's count of the ones bound takes for a slot.
+pub(crate) fn copied(texture: Option<&Arc<TextureInner>>) -> u32 {
+    u32::from(texture.is_some_and(|texture| texture.copied_shared()))
+}
+
 /// What a segment does to its textures over a buffer in an image of their own. Once it has
-/// ended ([`Overs::end`]), what the submit thread reads of it: the textures whose images the
-/// leading copy fills, and the buffers it wrote.
+/// ended ([`Overs::end`]), what the submit thread reads of it: the copies the leading copy makes,
+/// and the buffers it wrote.
 #[derive(Default)]
 pub(crate) struct Overs {
     /// The textures it used; once it has ended, those that lean on the leading copy alone.
     used: Vec<Used>,
     /// The buffers the segment's commands wrote, by id, each with the texture whose copy back
-    /// wrote it, `None` for any other write.
+    /// wrote it, `None` for any other write: each pair once.
     written: Vec<(u32, Option<u32>)>,
     /// A command of the segment wrote through an address outside its resources, or was recorded
     /// while no such texture lived, its writes untracked.
     unbound: bool,
+    /// The textures used whose images a command wrote since their bytes last went back
+    /// (`Used::buffer_stale`).
+    ahead: usize,
+}
+
+/// Adds `write` to `written` where it is not there yet.
+fn note(written: &mut Vec<(u32, Option<u32>)>, write: (u32, Option<u32>)) {
+    if !written.contains(&write) {
+        written.push(write);
+    }
 }
 
 /// A texture over a buffer in an image of its own that a segment used.
 struct Used {
-    texture: Arc<TextureInner>,
+    /// The texture's id, which its views share.
+    texture: u32,
+    /// The copy between its buffer and its image.
+    copy: OverCopy,
     /// Its buffer's id.
     buffer: u32,
     /// Its first use in the segment came before any write of the buffer in it: the image holds
@@ -82,10 +115,9 @@ impl Leans {
     /// for a buffer these wrote: where so, it leads a new group.
     pub(crate) fn conflicts(&self, later: &Overs) -> bool {
         (later.used.iter()).any(|used| {
-            let id = used.texture.id();
             self.unbound
                 || (self.written.iter())
-                    .any(|&(written, by)| written == used.buffer && by != Some(id))
+                    .any(|&(written, by)| written == used.buffer && by != Some(used.texture))
         })
     }
 
@@ -111,92 +143,120 @@ impl Copies {
 }
 
 impl Overs {
-    /// The copies a command that makes `accesses` (by hazard id) needs first, its textures over a
-    /// buffer in an image of their own found among `kept` by id: each such texture's image in
-    /// where a command of the segment wrote its buffer since, and each buffer the command reaches
-    /// back where a command wrote a texture over it since, every one where `unbound` (the command
-    /// reaches memory through an address outside its resources).
-    pub(crate) fn before(
+    /// The copies a command that reaches `reached` needs first, in order: each texture over a
+    /// buffer in an image of its own taking its image in where a command of the segment wrote its
+    /// buffer since, and each buffer reached (a texture in place over one reaches it) taking back
+    /// the images of the textures over it a command wrote since, every one where `unbound` (the
+    /// command reaches memory through an address outside its resources). While no image is ahead
+    /// of its buffer ([`ahead`](Self::ahead)), a buffer reached owes nothing.
+    pub(crate) fn before<'a>(
         &mut self,
-        accesses: &[(u32, Access)],
-        kept: &[Arc<TextureInner>],
+        reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
         unbound: bool,
     ) -> Copies {
         let mut copies = Copies::default();
-        for &(id, _) in accesses {
-            if let Some(used) = self.used.iter_mut().find(|used| used.texture.id() == id) {
-                if used.image_stale {
-                    copies
-                        .into
-                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
-                    used.image_stale = false;
-                }
-                continue;
-            }
-            let found = (kept.iter().rev())
-                .find(|texture| texture.id() == id)
-                .and_then(|texture| Some((texture, texture.copied_shared()?)));
-            if let Some((texture, (buffer, copy))) = found {
-                let buffer = buffer.id();
-                let wrote = self.unbound || self.written.iter().any(|&(b, _)| b == buffer);
-                if wrote {
-                    copies.into.push(copy);
-                }
-                self.used.push(Used {
-                    texture: texture.clone(),
-                    buffer,
-                    leans: !wrote,
-                    image_stale: false,
-                    buffer_stale: false,
-                });
-                continue;
-            }
-            for used in &mut self.used {
-                if used.buffer_stale && (unbound || used.buffer == id) {
-                    copies
-                        .back
-                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
-                    used.buffer_stale = false;
-                    self.written.push((used.buffer, Some(used.texture.id())));
-                }
+        for (reached, _) in reached {
+            let id = match reached {
+                Reached::Texture(texture) => match self.uses(texture, &mut copies) {
+                    true => continue,
+                    false => texture.hazard_id(),
+                },
+                Reached::Buffer(id) => id,
+            };
+            if self.ahead > 0 {
+                self.backs(&mut copies.back, |used| unbound || used.buffer == id);
             }
         }
-        if unbound {
-            for used in &mut self.used {
-                if used.buffer_stale {
-                    copies
-                        .back
-                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
-                    used.buffer_stale = false;
-                    self.written.push((used.buffer, Some(used.texture.id())));
-                }
-            }
+        if unbound && self.ahead > 0 {
+            self.backs(&mut copies.back, |_| true);
         }
         copies
     }
 
-    /// After a command that made `accesses`: a texture it wrote is to go back to its buffer, and
-    /// a buffer it wrote is to go into every texture over it, all where it wrote through an
-    /// address outside its resources (`unbound`).
-    pub(crate) fn after(&mut self, accesses: &[(u32, Access)], unbound: bool) {
-        for &(id, access) in accesses {
+    /// A command uses `texture`: where it is a texture over a buffer in an image of its own, its
+    /// copy in where its image is stale, or, at its first use in the segment, where a command of
+    /// the segment wrote its buffer; false for any other texture.
+    fn uses(&mut self, texture: &Arc<TextureInner>, copies: &mut Copies) -> bool {
+        if !texture.copied_shared() {
+            return false;
+        }
+        let id = texture.id();
+        if let Some(used) = self.used.iter_mut().rev().find(|used| used.texture == id) {
+            if used.image_stale {
+                copies.into.push(used.copy);
+                used.image_stale = false;
+            }
+            return true;
+        }
+        let Some((buffer, copy)) = texture.copied_over() else {
+            return false;
+        };
+        let buffer = buffer.id();
+        let wrote = self.unbound || self.written.iter().any(|&(b, _)| b == buffer);
+        if wrote {
+            copies.into.push(copy);
+        }
+        self.used.push(Used {
+            texture: id,
+            copy,
+            buffer,
+            leans: !wrote,
+            image_stale: false,
+            buffer_stale: false,
+        });
+        true
+    }
+
+    /// Each used texture's copy back, into `back`, where its image is ahead of its buffer and
+    /// `reaches` holds of it.
+    fn backs(&mut self, back: &mut Vec<OverCopy>, reaches: impl Fn(&Used) -> bool) {
+        for used in &mut self.used {
+            if used.buffer_stale && reaches(used) {
+                back.push(used.copy);
+                used.buffer_stale = false;
+                self.ahead -= 1;
+                note(&mut self.written, (used.buffer, Some(used.texture)));
+            }
+        }
+    }
+
+    /// After a command that reached `reached`: a texture it wrote is to go back to its buffer,
+    /// and a buffer it wrote (a texture in place over one writes it) is to go into every texture
+    /// over it, all where it wrote through an address outside its resources (`unbound`).
+    pub(crate) fn after<'a>(
+        &mut self,
+        reached: impl IntoIterator<Item = (Reached<'a>, Access)>,
+        unbound: bool,
+    ) {
+        for (reached, access) in reached {
             if !access.writes() {
                 continue;
             }
-            if let Some(used) = self.used.iter_mut().find(|used| used.texture.id() == id) {
-                used.buffer_stale = true;
-                continue;
-            }
-            let mut over = false;
+            let buffer = match reached {
+                Reached::Texture(texture) => {
+                    let id = texture.id();
+                    if texture.copied_shared() {
+                        let used = self.used.iter_mut().rev().find(|used| used.texture == id);
+                        if let Some(used) = used.filter(|used| !used.buffer_stale) {
+                            used.buffer_stale = true;
+                            self.ahead += 1;
+                        }
+                        continue;
+                    }
+                    // A texture of an image of its own writes no buffer.
+                    match texture.hazard_id() {
+                        hazard if hazard == id => continue,
+                        buffer => buffer,
+                    }
+                }
+                Reached::Buffer(id) => id,
+            };
             for used in &mut self.used {
-                if used.buffer == id {
+                if used.buffer == buffer {
                     used.image_stale = true;
-                    over = true;
                 }
             }
-            if over || !self.written.iter().any(|&(b, by)| b == id && by.is_none()) {
-                self.written.push((id, None));
-            }
+            note(&mut self.written, (buffer, None));
         }
         if unbound {
             self.unbound = true;
@@ -206,24 +266,24 @@ impl Overs {
         }
     }
 
+    /// Whether a texture the segment used has an image ahead of its buffer: a command wrote it
+    /// since its bytes last went back. While none has, a command's reads of buffers owe nothing.
+    pub(crate) fn ahead(&self) -> bool {
+        self.ahead > 0
+    }
+
     /// At the segment's end: every image a command wrote goes back to its buffer (the copies,
     /// which the caller records), and the textures kept are those that lean on the leading copy.
     pub(crate) fn end(&mut self) -> Vec<OverCopy> {
         let mut back = Vec::new();
-        for used in &mut self.used {
-            if used.buffer_stale {
-                back.extend(used.texture.copied_shared().map(|(_, copy)| copy));
-                used.buffer_stale = false;
-                self.written.push((used.buffer, Some(used.texture.id())));
-            }
-        }
+        self.backs(&mut back, |_| true);
         self.used.retain(|used| used.leans);
         back
     }
 
-    /// Of an ended segment: the textures whose images the leading copy fills.
-    pub(crate) fn leaning(&self) -> impl Iterator<Item = &Arc<TextureInner>> {
-        self.used.iter().map(|used| &used.texture)
+    /// Of an ended segment: the copies of the textures whose images the leading copy fills.
+    pub(crate) fn leaning(&self) -> impl Iterator<Item = OverCopy> + '_ {
+        self.used.iter().map(|used| used.copy)
     }
 }
 

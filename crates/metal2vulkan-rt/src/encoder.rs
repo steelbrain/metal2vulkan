@@ -10,7 +10,7 @@ use crate::floor;
 use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
-use crate::over;
+use crate::over::{self, Reached};
 use crate::pipeline::{
     address_word, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Which,
     PUSH_BYTES, PUSH_STAGES, SQUARE,
@@ -183,14 +183,18 @@ pub struct ComputeCommandEncoder {
     slots: Vec<Slot>,
     /// The texture argument table.
     textures: Vec<Option<Lent<Texture>>>,
+    /// The textures bound or declared that are over a buffer in an image of their own
+    /// (`crate::over`).
+    copied: u32,
     /// The sampler argument table.
     samplers: Vec<Option<Lent<SamplerState>>>,
     /// Threadgroup memory lengths by index, as set.
     threadgroup_lengths: Vec<(u32, u32)>,
     /// The lengths of the last variant looked up, in its kernel's order, kept to reuse.
     lengths: Vec<u32>,
-    /// `use_resource` declarations, by resource id: its own and its id in the hazard sets.
-    declared: Vec<([u32; 2], Access)>,
+    /// `use_resource` declarations, by resource id: its own and its id in the hazard sets; with
+    /// the texture, where the resource is one.
+    declared: Vec<([u32; 2], Access, Option<Lent<Texture>>)>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
     /// The pixel format of the first texture a `use_resource` declaration writes that has no
@@ -623,6 +627,7 @@ impl CommandBuffer {
             pipeline: None,
             slots: vec![Slot::Empty; BUFFER_SLOTS as usize],
             textures: vec![None; TEXTURE_SLOTS as usize],
+            copied: 0,
             samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
             lengths: Vec::new(),
@@ -742,7 +747,9 @@ impl ComputeCommandEncoder {
             }
             None => None,
         };
-        self.textures[index as usize] = lent;
+        let held = &mut self.textures[index as usize];
+        self.copied = self.copied - over::copied(held.as_deref()) + over::copied(lent.as_deref());
+        *held = lent;
         self.rebound.textures |= 1 << index;
         self.facts.held = false;
         Ok(())
@@ -892,25 +899,33 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, shared, unstored) = match resource {
+        let (id, shared, unstored, texture) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer);
-                ([buffer.id(), buffer.tracked_id()], buffer.is_shared(), None)
+                (
+                    [buffer.id(), buffer.tracked_id()],
+                    buffer.is_shared(),
+                    None,
+                    None,
+                )
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep_texture(texture);
+                // SAFETY: the encoder's declarations hold the borrow, and they end before its
+                // command buffer commits.
+                let lent = unsafe { building.lend_texture(texture) };
                 // The host reads a texture's bytes through a copy that makes them visible to it
                 // itself (`Texture::get_bytes`), but for a texture over a Shared buffer.
                 (
                     [texture.hazard_id(), texture.tracked_id()],
                     texture.host_reads(),
                     texture.unstored(),
+                    Some(lent),
                 )
             }
         };
@@ -926,10 +941,13 @@ impl ComputeCommandEncoder {
         match self
             .declared
             .iter_mut()
-            .find(|(declared, _)| *declared == id)
+            .find(|(declared, ..)| *declared == id)
         {
-            Some((_, declared)) => *declared = merge(*declared, access),
-            None => self.declared.push((id, access)),
+            Some((_, declared, _)) => *declared = merge(*declared, access),
+            None => {
+                self.copied += over::copied(texture.as_deref());
+                self.declared.push((id, access, texture));
+            }
         }
         Ok(())
     }
@@ -1268,12 +1286,14 @@ impl ComputeCommandEncoder {
             };
             let building = recording(&mut self.building);
             // Textures over a buffer in an image of their own take their copies first
-            // (`crate::over`).
-            let overs = (building.copies_over())
-                .then(|| accesses.each(interface, false).collect::<Vec<_>>());
-            if let Some(overs) = &overs {
-                let unbound = interface.reads_unbound || interface.writes_unbound;
-                building.overs_before(overs, unbound)?;
+            // (`crate::over`): looked for where one is bound or declared, the kernel reaches
+            // memory outside its resources, or such an image is ahead of its buffer, and among
+            // the buffers it reaches only in the last two.
+            let unbound = interface.reads_unbound || interface.writes_unbound;
+            let ahead = building.overs_ahead();
+            if building.copies_over() && (unbound || self.copied > 0 || ahead) {
+                let reached = accesses.overs(interface, unbound || ahead, false);
+                building.overs_before(reached, unbound)?;
             }
             if self.facts.managed.any() {
                 // A binding of a Managed buffer with textures over its device copy takes their
@@ -1301,10 +1321,8 @@ impl ComputeCommandEncoder {
                 }
             }
             let wrote = building.dispatch_hazards(self.serial, interface, &accesses)?;
-            match &overs {
-                Some(overs) => building.overs_after(overs, interface.writes_unbound),
-                None => building.overs_untracked(),
-            }
+            let written = accesses.overs(interface, true, true);
+            building.overs_after(written, interface.writes_unbound);
             // Marked after the hazards' barrier, which may have split the recording at a signal:
             // the mark is the dispatch's own segment's.
             if host {
@@ -1677,26 +1695,21 @@ fn merge(a: Access, b: Access) -> Access {
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
     textures: &'a [Option<Lent<Texture>>],
-    declared: &'a [([u32; 2], Access)],
+    declared: &'a [([u32; 2], Access, Option<Lent<Texture>>)],
     indirect: Option<[u32; 2]>,
 }
 
 impl Accesses<'_> {
-    /// Each resource the dispatch of a kernel of `interface` touches, with its access: by its own
-    /// id ([`Buffer::id`], [`Texture::hazard_id`]), which the copies over buffers name it by, or,
-    /// where `tracked`, by its id in the hazard sets ([`Buffer::tracked_id`],
-    /// [`Texture::tracked_id`]: a heap's resources take the heap's).
+    /// Each resource the dispatch of a kernel of `interface` touches, with its access, by its id
+    /// in the hazard sets ([`Buffer::tracked_id`], [`Texture::tracked_id`]: a heap's resources
+    /// take the heap's).
     pub(crate) fn each<'b>(
         &'b self,
         interface: &'b Interface,
-        tracked: bool,
     ) -> impl Iterator<Item = (u32, Access)> + 'b {
-        let at = usize::from(tracked);
         let slots = interface.buffers.iter().filter_map(move |&(slot, access)| {
             match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, .. }) => {
-                    Some(([buffer.id(), buffer.tracked_id()][at], access))
-                }
+                Some(Slot::Buffer { buffer, .. }) => Some((buffer.tracked_id(), access)),
                 _ => None,
             }
         });
@@ -1705,16 +1718,50 @@ impl Accesses<'_> {
             .iter()
             .filter_map(move |&(slot, access)| {
                 let texture = self.textures.get(slot as usize)?.as_ref()?;
-                Some(([texture.hazard_id(), texture.tracked_id()][at], access))
+                Some((texture.tracked_id(), access))
             });
         slots
             .chain(textures)
             .chain(
                 self.declared
                     .iter()
-                    .map(move |&(ids, access)| (ids[at], access)),
+                    .map(move |&(ids, access, _)| (ids[1], access)),
             )
-            .chain(self.indirect.map(|ids| (ids[at], Access::Read)))
+            .chain(self.indirect.map(|ids| (ids[1], Access::Read)))
+    }
+
+    /// Each resource the dispatch of a kernel of `interface` reaches, as the copies over buffers
+    /// read it (`crate::over`), in [`each`](Self::each)'s order: the buffers among them where
+    /// `buffers`, and every texture; with `written`, those it writes alone.
+    pub(crate) fn overs<'b>(
+        &'b self,
+        interface: &'b Interface,
+        buffers: bool,
+        written: bool,
+    ) -> impl Iterator<Item = (Reached<'b>, Access)> + 'b {
+        let kept = move |access: Access| !written || access.writes();
+        let slots = (interface.buffers.iter())
+            .filter(move |&&(_, access)| buffers && kept(access))
+            .filter_map(move |&(slot, access)| match self.slots.get(slot as usize) {
+                Some(Slot::Buffer { buffer, .. }) => Some((Reached::Buffer(buffer.id()), access)),
+                _ => None,
+            });
+        let textures = (interface.textures.iter())
+            .filter(move |&&(_, access)| kept(access))
+            .filter_map(move |&(slot, access)| {
+                let texture = self.textures.get(slot as usize)?.as_deref()?;
+                Some((Reached::Texture(texture), access))
+            });
+        let declared = (self.declared.iter())
+            .filter(move |(_, access, texture)| (buffers || texture.is_some()) && kept(*access))
+            .map(|(ids, access, texture)| match texture {
+                Some(texture) => (Reached::Texture(texture), *access),
+                None => (Reached::Buffer(ids[0]), *access),
+            });
+        let indirect = (self.indirect)
+            .filter(|_| buffers && !written)
+            .map(|ids| (Reached::Buffer(ids[0]), Access::Read));
+        slots.chain(textures).chain(declared).chain(indirect)
     }
 }
 
@@ -1733,7 +1780,7 @@ impl Building {
         let hazards = self.hazards();
         let conflict = serial
             && (accesses
-                .each(interface, true)
+                .each(interface)
                 .any(|(id, access)| hazards.conflicts(id, access))
                 || (interface.reads_unbound && hazards.wrote())
                 || (interface.writes_unbound && hazards.touched()));
@@ -1745,7 +1792,7 @@ impl Building {
         }
         let hazards = self.hazards();
         let mut wrote = false;
-        for (id, access) in accesses.each(interface, true) {
+        for (id, access) in accesses.each(interface) {
             hazards.mark(id, access);
             wrote |= access.writes();
         }

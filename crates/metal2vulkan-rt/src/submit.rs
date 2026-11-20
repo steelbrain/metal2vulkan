@@ -1491,11 +1491,9 @@ impl WorkState {
                 group.overs.extend(taken);
             }
         }
-        for texture in segment.overs.leaning() {
-            if let Some((_, copy)) = texture.copied_shared() {
-                if !group.overs.iter().any(|kept| kept.image == copy.image) {
-                    group.overs.push(copy);
-                }
+        for copy in segment.overs.leaning() {
+            if !group.overs.iter().any(|kept| kept.image == copy.image) {
+                group.overs.push(copy);
             }
         }
         let staged = stage(segment, &mut group.watch);

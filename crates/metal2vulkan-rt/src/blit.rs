@@ -39,7 +39,7 @@ use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::memory::Own;
-use crate::over;
+use crate::over::{self, Reached};
 use crate::record::{memory_barrier, Reach};
 use crate::surface::Surface;
 use crate::texture::{
@@ -163,17 +163,17 @@ impl BlitCommandEncoder {
         building.keep_texture(destination);
         building.wrote_texture_managed(destination);
         let overs = [
-            (source.hazard_id(), Access::Read),
-            (destination.hazard_id(), Access::ReadWrite),
+            (Reached::Texture(source.object()), Access::Read),
+            (Reached::Texture(destination.object()), Access::ReadWrite),
         ];
-        building.overs_before(&overs, false)?;
+        building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
         // Marked after `ordered_command`, as in `buffer_copy`: the host reads a texture over a
         // Shared buffer's bytes in the buffer.
         if destination.host_reads() {
             building.wrote_host();
         }
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         let (read, write) = (
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -311,12 +311,12 @@ impl BlitCommandEncoder {
         building.managed_backs(over::backs(destination, None, true))?;
         building.wrote_managed(destination);
         let overs = [
-            (source.id(), Access::Read),
-            (destination.id(), Access::Write),
+            (Reached::Buffer(source.id()), Access::Read),
+            (Reached::Buffer(destination.id()), Access::Write),
         ];
-        building.overs_before(&overs, false)?;
+        building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         // Marked after `ordered_command`, as a copy into a buffer is.
         if destination.is_shared() {
             building.wrote_host();
@@ -392,17 +392,17 @@ impl BlitCommandEncoder {
         }
         let overs = match into_image {
             true => [
-                (texture.hazard_id(), Access::ReadWrite),
-                (buffer.id(), Access::Read),
+                (Reached::Texture(texture.object()), Access::ReadWrite),
+                (Reached::Buffer(buffer.id()), Access::Read),
             ],
             false => [
-                (texture.hazard_id(), Access::Read),
-                (buffer.id(), Access::ReadWrite),
+                (Reached::Texture(texture.object()), Access::Read),
+                (Reached::Buffer(buffer.id()), Access::ReadWrite),
             ],
         };
-        building.overs_before(&overs, false)?;
+        building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         // Marked after `ordered_command`, which may have split the recording at a signal: the
         // mark is the copy's own segment's.
         let host = match into_image {
@@ -506,10 +506,10 @@ impl BlitCommandEncoder {
         building.keep(buffer);
         building.managed_backs(over::backs(buffer, None, true))?;
         building.wrote_managed(buffer);
-        let overs = [(buffer.id(), Access::Write)];
-        building.overs_before(&overs, false)?;
+        let overs = [(Reached::Buffer(buffer.id()), Access::Write)];
+        building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         // Marked after `ordered_command`, as a copy into a buffer is.
         if buffer.is_shared() {
             building.wrote_host();
@@ -583,13 +583,13 @@ impl BlitCommandEncoder {
         }
         building.keep_texture(texture);
         building.wrote_texture_managed(texture);
-        let overs = [(texture.hazard_id(), Access::ReadWrite)];
-        building.overs_before(&overs, false)?;
+        let overs = [(Reached::Texture(texture.object()), Access::ReadWrite)];
+        building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
         if texture.host_reads() {
             building.wrote_host();
         }
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         use vk::AccessFlags2 as A;
         use vk::PipelineStageFlags2 as S;
         let (read, write) = (
@@ -867,10 +867,10 @@ impl BlitCommandEncoder {
         let (whole, _) = block.memory.range(0);
         building.keep(buffer);
         // The textures over a buffer in the block go back to it first, as before a write of it.
-        let overs = [(buffer.id(), Access::Write)];
-        building.overs_before(&overs, false)?;
+        let overs = [(Reached::Buffer(buffer.id()), Access::Write)];
+        building.overs_before(overs, false)?;
         let command = building.release_command()?;
-        building.overs_after(&overs, false);
+        building.overs_after(overs, false);
         let release = [vk::BufferMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
@@ -924,17 +924,15 @@ impl BlitCommandEncoder {
             building.keep_texture(texture);
         }
         let buffer = surface.made_buffer();
-        let overs: Vec<(u32, Access)> = (buffer.iter())
-            .map(|buffer| (buffer.id(), Access::Write))
-            .collect();
+        let overs = || (buffer.iter()).map(|buffer| (Reached::Buffer(buffer.id()), Access::Write));
         if let Some(buffer) = &buffer {
             building.keep(buffer);
             // The textures over the buffer go back to it first, as before a write of it.
-            building.overs_before(&overs, false)?;
+            building.overs_before(overs(), false)?;
         }
         let command = building.release_command()?;
         if buffer.is_some() {
-            building.overs_after(&overs, false);
+            building.overs_after(overs(), false);
         }
         let family = surface.family();
         let buffers: Vec<vk::BufferMemoryBarrier2<'static>> = (buffer.iter())

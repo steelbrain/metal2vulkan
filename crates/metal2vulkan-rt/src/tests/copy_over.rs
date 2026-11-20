@@ -18,21 +18,40 @@
 //!   and released goes back before a kernel that reads its buffer, which sees its texels.
 //! - A kernel that declares a Managed buffer read-write and never touches it owes the texture over
 //!   its device copy no copy: the compiled interface's uses decide, not the declaration.
+//! - Over a Shared buffer, what a draw or a dispatch reaches decides, read at the command, the
+//!   counted copies read at once:
+//!   - a draw that binds the texture after a fill of its buffer in the command buffer copies it in
+//!     first, at the draw, and reads the filled texel; a second draw of the binding copies
+//!     nothing; a dispatch that only declares it (`use_resource`) after a fill copies it in
+//!     first too, and one that does not reach it copies nothing;
+//!   - a draw whose vertex function stores into the buffer makes the image stale: the next use
+//!     copies it in again, at the use, and takes the stores, whether its first use in the command
+//!     buffer came before the draw or after;
+//!   - after a blit wrote the texture, a draw that reads no buffer under it copies nothing, a draw
+//!     that reads the buffer as a vertex buffer takes the image back first, at the draw, and a
+//!     draw that reads through an argument buffer (an address outside its resources) takes every
+//!     such image back first, at the draw, as the whole segment's answer;
+//!   - 512 such textures, bound once and unbound in the command buffer before its draws, cost the
+//!     draws and dispatches that bind none of them nothing: user-space instructions a draw and a
+//!     dispatch within a tenth of those of a command buffer that keeps none, the textures alive in
+//!     both, printed where the kernel offers the counter (Linux).
 //!
-//! `llvm-as` assembles the last test's kernel; without it that test skips visibly.
+//! `llvm-as` assembles the kernels and the draws' functions; without it those tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
+    use crate::tests::draw::on_device as draw;
     use crate::texture::TextureObject;
     use crate::{
-        Buffer, BufferLayout, CommandBuffer, CommandQueue, ComputePipelineDescriptor, Device,
-        DispatchType, FunctionDescriptor, IndexClass, Library, MemoryClass, PixelFormat, Region,
-        Resource, StageSource, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        Block, Buffer, BufferLayout, ColorAttachmentDescriptor, CommandBuffer, CommandQueue,
+        ComputePipelineDescriptor, Device, DispatchType, Error, FunctionDescriptor, IndexClass,
+        Library, MemoryClass, PixelFormat, PrimitiveType, Region, RenderPipelineDescriptor,
+        Resource, ResourceUsage, StageSource, StorageMode, Texture, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
-    use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
+    use metal2vulkan_devtools::{engine_dir, fixtures_dir, llvm_assemble_text, AssembleError};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -554,6 +573,404 @@ entry:
             assert!(held(&out)[..WORDS * 4] == ran, "{name}: the kernel ran");
             used("a use after the kernel that leaves the buffer", 0);
             drop((texture, scratch, buffer, out, arena, state, queue));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
+
+    /// A Shared buffer of `LEN` bytes in a block of its own, and a texture of `usage` over it at
+    /// index 4096, one alignment past the device's own pitch: an image of its own.
+    fn copied(name: &str, device: &Device, usage: TextureUsage) -> (Block, Buffer, Texture) {
+        let cpu =
+            (device.take_block(MemoryClass::Shared, 1)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let buffer =
+            (device.new_buffer(cpu.id, 0, LEN, Some(0))).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+        let mut d = descriptor();
+        d.usage = usage;
+        let texture = (buffer.new_texture(&d, Some(4096), 0, pitch(device)))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            texture.copied_over().is_some(),
+            "{name}: an image of its own"
+        );
+        (cpu, buffer, texture)
+    }
+
+    /// Records a fill of the whole of `buffer` with `byte`.
+    fn fill_with(command_buffer: &CommandBuffer, buffer: &Buffer, byte: u8) {
+        let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+        (encoder.fill_buffer(buffer, 0..buffer.length(), byte)).expect("a fill");
+        encoder.end_encoding();
+    }
+
+    /// A draw that binds a texture over a Shared buffer in an image of its own after a fill of
+    /// the buffer copies it in at the draw and reads the filled texel; the next draw of the
+    /// binding copies nothing. A dispatch that does not reach it after a fill copies nothing, and
+    /// one that declares it (`use_resource`) copies it in at the dispatch.
+    #[test]
+    fn every_device_copies_in_a_texture_over_a_buffer_a_command_reaches_after_a_fill() {
+        let Some(library) = draw::examples() else {
+            return;
+        };
+        let d = draw::descriptor(&library, "first_texel_fragment", PixelFormat::RGBA8Unorm);
+        each_device("over reached", |name, _, device| {
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let state = draw::state(name, &device, &d);
+            let (cpu, buffer, texture) = copied(name, &device, TextureUsage::SHADER_READ);
+            let mut buffers = draw::Buffers::new(&device);
+            let (positions, colors) = draw::vertices(&device, &mut buffers);
+            let color = draw::target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill_with(&command_buffer, &buffer, 0xC3);
+            let mut encoder = (command_buffer.render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            ok(encoder.set_render_pipeline_state(&state));
+            ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            ok(encoder.set_fragment_texture(Some(&texture), 0));
+            let before = copies(&device);
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: in at the draw, after the fill"
+            );
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: nothing at the next draw"
+            );
+            encoder.end_encoding();
+            draw::run(name, &command_buffer);
+            // The first texel, 0xC3 a channel, plus the draws' blue.
+            let pixels = draw::read(&color, 4);
+            assert!(
+                pixels
+                    .chunks(4)
+                    .all(|pixel| pixel == [0xC3, 0xC3, 0xFF, 0xFF]),
+                "{name}: the filled texel read: {:?}",
+                &pixels[..4]
+            );
+
+            let mut arena = Arena::new(&device);
+            let words = arena.buffer();
+            let kernel = step(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill_with(&command_buffer, &buffer, 0x3C);
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            ok(encoder.set_compute_pipeline_state(&kernel));
+            ok(encoder.set_buffer(Some(&words), 0, 0));
+            let before = copies(&device);
+            ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+            assert_eq!(
+                copies(&device) - before,
+                0,
+                "{name}: nothing at a dispatch that does not reach it"
+            );
+            ok(encoder.use_resource(Resource::Texture(&texture), ResourceUsage::READ));
+            ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: in at the dispatch that declares it"
+            );
+            encoder.end_encoding();
+            draw::run(name, &command_buffer);
+            drop((
+                texture, buffer, words, arena, kernel, positions, colors, buffers,
+            ));
+            drop((color, state, queue));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
+
+    /// A draw whose vertex function stores into a Shared buffer (the owned fixture
+    /// `engine/rvc_draw_bases.ll`'s `draw_bases_in_a_vertex_function`, rasterization disabled)
+    /// makes the image of a texture over it stale: the next use copies it in again, at the use,
+    /// and takes the stores, whether the texture's first use in the command buffer came before
+    /// the draw or after it.
+    #[test]
+    fn every_device_copies_in_again_a_texture_over_a_buffer_a_draw_stores_into() {
+        let Some(engine) = draw::library(&engine_dir().join("rvc_draw_bases.ll")) else {
+            return;
+        };
+        let function = (engine.function("draw_bases_in_a_vertex_function")).expect("the function");
+        let mut d =
+            RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        d.rasterization_enabled = false;
+        each_device("over stored", |name, _, device| {
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let state = draw::state(name, &device, &d);
+            let (cpu, buffer, texture) = copied(name, &device, TextureUsage::SHADER_READ);
+            let pitch = pitch(&device);
+            let scratch = plain(name, &device, &texels(0));
+            let color = draw::target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (round, first) in [(0u8, true), (1, false)] {
+                let mut now: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8 ^ round).collect();
+                write(&buffer, &now);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                if first {
+                    blit(&command_buffer, &texture, &scratch);
+                }
+                let mut encoder = (command_buffer
+                    .render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+                ok(encoder.set_render_pipeline_state(&state));
+                ok(encoder.set_vertex_buffer(Some(&buffer), 0, 0));
+                // Three vertices of one instance from 0: slots 0 to 2, (vid, 0, 0, 0) each.
+                ok(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+                let before = copies(&device);
+                blit(&command_buffer, &texture, &scratch);
+                assert_eq!(
+                    copies(&device) - before,
+                    1,
+                    "{name}: round {round}: in at the use after the draw"
+                );
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: round {round}");
+                for vid in 0..3u32 {
+                    let slot = vid as usize * 16;
+                    let stored: Vec<u8> = [vid, 0, 0, 0]
+                        .iter()
+                        .flat_map(|w| w.to_le_bytes())
+                        .collect();
+                    now[slot..slot + 16].copy_from_slice(&stored);
+                }
+                assert!(
+                    held(&buffer) == now,
+                    "{name}: round {round}: the draw's stores in the buffer"
+                );
+                assert!(
+                    image(name, &scratch) == rows(&now, 0, pitch),
+                    "{name}: round {round}: the use after the draw takes its stores"
+                );
+            }
+            drop((texture, scratch, buffer, color, state, queue));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
+
+    /// After a blit wrote a texture over a Shared buffer in an image of its own: a draw that reads
+    /// no buffer under it copies nothing; one that reads the buffer as a vertex buffer takes the
+    /// image back first, at the draw, once; and, after a second blit wrote it, a draw that reads
+    /// through an argument buffer (the owned fixture `examples/heap_draws.ll`'s
+    /// `read_argument_fragment`, an address outside its resources) takes it back first, at the
+    /// draw, the whole segment's answer. The buffer holds the second blit's texels.
+    #[test]
+    fn every_device_takes_back_a_texture_over_a_buffer_before_a_draw_reads_its_buffer() {
+        let Some(library) = draw::examples() else {
+            return;
+        };
+        let Some(heap) = draw::library(&fixtures_dir().join("examples/heap_draws.ll")) else {
+            return;
+        };
+        let colored = draw::descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                heap.function(name).expect("the function"),
+            ))
+        };
+        let mut unbound = RenderPipelineDescriptor::new(function("cover_vertex"));
+        unbound.fragment = Some(function("read_argument_fragment"));
+        unbound.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        each_device("over read", |name, _, device| {
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let colored = draw::state(name, &device, &colored);
+            let unbound = draw::state(name, &device, &unbound);
+            let (cpu, buffer, texture) = copied(name, &device, TextureUsage::SHADER_READ);
+            let pitch = pitch(&device);
+            let mut now: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
+            write(&buffer, &now);
+            let sources = [
+                plain(name, &device, &texels(0x11)),
+                plain(name, &device, &texels(0x22)),
+            ];
+            let mut buffers = draw::Buffers::new(&device);
+            let (positions, colors) = draw::vertices(&device, &mut buffers);
+            let color = draw::target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            blit(&command_buffer, &sources[0], &texture);
+            let mut encoder = (command_buffer.render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            ok(encoder.set_render_pipeline_state(&colored));
+            ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            let before = copies(&device);
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                0,
+                "{name}: nothing at a draw that reads no buffer under it"
+            );
+            ok(encoder.set_vertex_buffer(Some(&buffer), 0, 1));
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: back at the draw that reads its buffer"
+            );
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(copies(&device) - before, 1, "{name}: back once");
+            encoder.end_encoding();
+            blit(&command_buffer, &sources[1], &texture);
+            let mut encoder = (command_buffer.render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            ok(encoder.set_render_pipeline_state(&unbound));
+            // The argument buffer's texture: a nil resource ID, which reads zero.
+            ok(encoder.set_fragment_bytes(&[0; 8], 0));
+            let before = copies(&device);
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: back at the draw that reads outside its resources"
+            );
+            encoder.end_encoding();
+            draw::run(name, &command_buffer);
+            lay(&mut now, &texels(0x22), 0, pitch);
+            assert!(
+                held(&buffer) == now,
+                "{name}: the second blit's texels in the buffer"
+            );
+            drop((texture, buffer, sources, positions, colors, buffers, color));
+            drop((colored, unbound, queue));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
+
+    /// User-space instructions a draw and a dispatch that bind no texture over a buffer in an
+    /// image of their own, in a command buffer that keeps none of them and in one that keeps 512,
+    /// bound once and unbound before the draws, the textures alive in both: equal within a
+    /// tenth, as the draws and dispatches look at none of them. Printed where the kernel offers
+    /// the counter (Linux).
+    #[test]
+    fn every_device_draws_and_dispatches_past_kept_textures_over_buffers_at_no_cost() {
+        use metal2vulkan_devtools::instructions::InstructionCounter;
+        const KEPT: u32 = 512;
+        const COUNTED: u32 = 512;
+        let Some(library) = draw::examples() else {
+            return;
+        };
+        let d = draw::descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("over kept", |name, _, device| {
+            let Ok(mut counter) = InstructionCounter::new() else {
+                println!("{name}: no instruction counter here");
+                return;
+            };
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let state = draw::state(name, &device, &d);
+            let kernel = add(&device);
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let buffer = (device.new_buffer(cpu.id, 0, LEN, Some(0)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            (device.grant_indices(IndexClass::Texture, 4096, KEPT)).expect("a grant");
+            let mut sd = descriptor();
+            sd.usage = TextureUsage::SHADER_READ;
+            let pitch = pitch(&device);
+            let kept: Vec<Texture> = (0..KEPT)
+                .map(|at| {
+                    (buffer.new_texture(&sd, Some(4096 + at), 0, pitch))
+                        .unwrap_or_else(|e| panic!("{name}: {e}"))
+                })
+                .collect();
+            assert!(
+                kept.iter().all(|texture| texture.copied_over().is_some()),
+                "{name}: images of their own"
+            );
+            let mut buffers = draw::Buffers::new(&device);
+            let (positions, colors) = draw::vertices(&device, &mut buffers);
+            let mut arena = Arena::new(&device);
+            let words = [arena.buffer(), arena.buffer(), arena.buffer()];
+            let color = draw::target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut per: Vec<[u64; 2]> = Vec::new();
+            for keeps in [false, true] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer
+                    .render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+                ok(encoder.set_render_pipeline_state(&state));
+                ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                if keeps {
+                    for (at, texture) in kept.iter().enumerate() {
+                        ok(encoder.set_fragment_texture(Some(texture), at as u32 % 128));
+                    }
+                    for slot in 0..128 {
+                        ok(encoder.set_fragment_texture(None, slot));
+                    }
+                }
+                // One draw first, so the counted ones record what changed alone.
+                ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                let ((), drawn) = (counter.measure(|| {
+                    for _ in 0..COUNTED {
+                        ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                    }
+                }))
+                .expect("a count");
+                encoder.end_encoding();
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                ok(encoder.set_compute_pipeline_state(&kernel));
+                for (slot, buffer) in words.iter().enumerate() {
+                    ok(encoder.set_buffer(Some(buffer), 0, slot as u32));
+                }
+                ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+                let ((), dispatched) = (counter.measure(|| {
+                    for _ in 0..COUNTED {
+                        ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+                    }
+                }))
+                .expect("a count");
+                encoder.end_encoding();
+                draw::run(name, &command_buffer);
+                per.push([drawn, dispatched].map(|count| count / u64::from(COUNTED)));
+            }
+            let (none, keeping) = (per[0], per[1]);
+            println!(
+                "{name}: user-space instructions a draw and a dispatch: {} and {} keeping no \
+                 texture over a buffer, {} and {} keeping {KEPT} and binding none",
+                none[0], none[1], keeping[0], keeping[1]
+            );
+            for (what, at) in [("draw", 0), ("dispatch", 1)] {
+                assert!(
+                    keeping[at] * 10 <= none[at] * 11,
+                    "{name}: a {what} past {KEPT} kept textures over buffers: {} instructions \
+                     against {}",
+                    keeping[at],
+                    none[at]
+                );
+            }
+            drop((
+                kept, buffer, words, arena, positions, colors, buffers, color,
+            ));
+            drop((state, kernel, queue));
             (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }

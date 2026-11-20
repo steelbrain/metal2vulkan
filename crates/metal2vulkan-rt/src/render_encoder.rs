@@ -83,7 +83,7 @@ use crate::error::{DrawKind, Error, Gap, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
-use crate::over;
+use crate::over::{self, Reached};
 use crate::pass::{
     layout_barrier, ops, resolving, LoadAction, Pass, RenderPassDescriptor, StoreAction, Target,
 };
@@ -551,6 +551,8 @@ struct Tables {
     buffers: Vec<Bound>,
     textures: Vec<Option<Lent<Texture>>>,
     samplers: Vec<Option<Lent<SamplerState>>>,
+    /// The textures bound that are over a buffer in an image of their own (`crate::over`).
+    copied: u32,
 }
 
 impl Tables {
@@ -559,7 +561,16 @@ impl Tables {
             buffers: vec![Bound::Empty; BUFFER_SLOTS as usize],
             textures: vec![None; TEXTURE_SLOTS as usize],
             samplers: vec![None; SAMPLER_SLOTS as usize],
+            copied: 0,
         }
+    }
+
+    /// Binds `texture` at `slot`, counting it where it is over a buffer in an image of its own.
+    fn set_texture(&mut self, slot: u32, texture: Option<Lent<Texture>>) {
+        let held = &mut self.textures[slot as usize];
+        self.copied =
+            self.copied - over::copied(held.as_deref()) + over::copied(texture.as_deref());
+        *held = texture;
     }
 
     /// The buffer bound at `slot`, where a buffer is.
@@ -597,6 +608,31 @@ impl Tables {
             Some(Bound::Empty) | None => [0; 8],
         }
     }
+}
+
+/// What a draw of `draws` reaches through its slots with `tables` bound, as the copies over
+/// buffers read it (`crate::over`), in order: its buffers where `buffers`, then its textures;
+/// with `written`, those it writes alone.
+fn slots<'a>(
+    draws: &'a Draws,
+    tables: &'a [Tables; 2],
+    buffers: bool,
+    written: bool,
+) -> impl Iterator<Item = (Reached<'a>, Access)> + 'a {
+    let kept = move |&&(_, _, access): &&(usize, u32, Access)| !written || access.writes();
+    let buffers: &[(usize, u32, Access)] = match buffers {
+        true => &draws.buffers,
+        false => &[],
+    };
+    (buffers.iter().filter(kept))
+        .filter_map(move |&(table, slot, access)| {
+            Some((Reached::Buffer(tables[table].buffer(slot)?.id()), access))
+        })
+        .chain(
+            (draws.textures.iter().filter(kept)).filter_map(move |&(table, slot, access)| {
+                Some((Reached::Texture(tables[table].texture(slot)?), access))
+            }),
+        )
 }
 
 /// What a draw draws.
@@ -810,12 +846,22 @@ fn begin(
     let pass = Pass::check(core, descriptor)?;
     // The attachments, and where the pass resolves the resolve textures, which the pass writes:
     // a pass that resolves nothing walks no resolve.
-    let mut overs: Vec<(u32, Access)> = (pass.targets())
-        .map(|t| (t.texture.hazard_id(), Access::ReadWrite))
-        .collect();
-    if pass.resolving {
-        overs.extend((pass.resolves()).map(|r| (r.texture.hazard_id(), Access::ReadWrite)));
-    }
+    let resolves = || {
+        pass.resolving
+            .then(|| pass.resolves())
+            .into_iter()
+            .flatten()
+    };
+    let overs = || {
+        (pass.targets().map(|t| &t.texture))
+            .chain(resolves().map(|r| &r.texture))
+            .map(|texture| {
+                (
+                    Reached::Texture(TextureObject::object(texture)),
+                    Access::ReadWrite,
+                )
+            })
+    };
     for t in pass.targets() {
         building.keep_texture(&t.texture);
         building.wrote_texture_managed(&t.texture);
@@ -831,7 +877,7 @@ fn begin(
     if let Some(buffer) = &descriptor.visibility_result_buffer {
         building.keep(buffer);
     }
-    building.overs_before(&overs, false)?;
+    building.overs_before(overs(), false)?;
     let opens = building.opens_command_buffer();
     let command = building.ordered_command()?;
     // Marked after `ordered_command`, as a blit's copy marks it: the host reads a texture over a
@@ -841,7 +887,7 @@ fn begin(
     if host_reads {
         building.wrote_host();
     }
-    building.overs_after(&overs, false);
+    building.overs_after(overs(), false);
     building.count(Metric::Passes);
     let earlier = [memory_barrier(Reach::Commands)];
     let mut away: Vec<vk::ImageMemoryBarrier2> = (pass.targets())
@@ -1098,7 +1144,7 @@ impl RenderCommandEncoder {
             }
             None => None,
         };
-        self.tables[table].textures[index as usize] = lent;
+        self.tables[table].set_texture(index, lent);
         self.rebound_texture(table, index);
         Ok(())
     }
@@ -2010,24 +2056,29 @@ impl RenderCommandEncoder {
         let building = (self.building.as_ref())
             .expect("an encoder holds its command buffer's recording until it ends");
         // What a draw reaches that each draw looks at again: an attachment of its pass through a
-        // texture, a Managed buffer's device copy or a texture over one, or textures over a buffer
-        // in an image of their own while any lives (`crate::over`).
+        // texture, a Managed buffer's device copy or a texture over one, or, while a texture over
+        // a buffer in an image of its own lives (`crate::over`), such a texture bound, memory
+        // reached through an address outside its resources, or buffers read while such a texture
+        // the segment used has its image ahead of its buffer.
         let index_buffer = index.map(|(buffer, ..)| buffer);
         // A patch draw's factor buffer is its read as an index buffer is an indexed draw's.
         let factors = (self.factors.as_ref()).filter(|_| patches);
+        let overs = building.copies_over()
+            && (draws.reads_unbound
+                || draws.writes_unbound
+                || self.tables.iter().any(|tables| tables.copied > 0)
+                || building.overs_ahead());
         let each = reads.is_some()
             || self.facts.managed()
             || index_buffer.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
-            || building.copies_over();
+            || overs;
         match each {
-            true => self.draw_reaches(reads, index_buffer)?,
+            true => self.draw_reaches(reads, index_buffer, overs)?,
             false => {
                 self.read_shadows(Vec::new());
                 self.loop_reads(false);
-                (self.building.as_mut())
-                    .expect("an encoder holds its command buffer's recording until it ends")
-                    .overs_untracked();
+                self.overs_after();
             }
         }
         let building = (self.building.as_mut())
@@ -2316,19 +2367,21 @@ impl RenderCommandEncoder {
     }
 
     /// The part of a draw that each draw that reaches an attachment of its pass through a texture,
-    /// a Managed buffer's device copy or a texture over one, or records while a texture over a
-    /// buffer in an image of its own lives, works out again: the attachments it reads (`reads`,
+    /// a Managed buffer's device copy or a texture over one, or, with `overs`, binds a texture
+    /// over a buffer in an image of its own, reaches memory outside its resources or reads while
+    /// such an image is ahead of its buffer, works out again: the attachments it reads (`reads`,
     /// [`attachment_reads`](Self::attachment_reads)), their images moved, which orders everything
     /// before, or the barrier owed paid, and without the feedback loop what their shadows do not
     /// hold copied; then the copies it needs first, its textures over a buffer in an image of
-    /// their own (`crate::over`) and the textures over a Managed buffer's device copy it reaches
-    /// (`crate::over::ManagedOvers`), each recorded between the rendering's end and its new
-    /// beginning. `index` is its index buffer; a patch draw reads the tessellation factor buffer
-    /// as such.
+    /// their own (`crate::over`), where `overs`, and the textures over a Managed buffer's device
+    /// copy it reaches (`crate::over::ManagedOvers`), each recorded between the rendering's end
+    /// and its new beginning. `index` is its index buffer; a patch draw reads the tessellation
+    /// factor buffer as such.
     fn draw_reaches(
         &mut self,
         reads: Option<AttachmentReads>,
         index: Option<&Buffer>,
+        overs: bool,
     ) -> Result<(), Error> {
         let reads_attachment = match reads {
             Some(found) => {
@@ -2368,27 +2421,19 @@ impl RenderCommandEncoder {
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
             .chain(index.map(BufferObject::object))
             .chain(factors);
-        let accesses: Vec<(u32, Access)> = match building.copies_over() {
-            false => Vec::new(),
-            true => (draws.buffers.iter())
-                .filter_map(|&(table, slot, access)| {
-                    Some((tables[table].buffer(slot)?.id(), access))
-                })
-                .chain(
-                    (draws.textures.iter()).filter_map(|&(table, slot, access)| {
-                        Some((tables[table].texture(slot)?.hazard_id(), access))
-                    }),
-                )
-                .chain(
-                    vertex_reads
-                        .clone()
-                        .map(|buffer| (buffer.id(), Access::Read)),
-                )
-                .collect(),
+        let copies = match overs {
+            false => over::Copies::default(),
+            true => {
+                // The buffers it reads owe copies back only where it reaches memory outside its
+                // resources or such an image is ahead of its buffer.
+                let unbound = draws.reads_unbound || draws.writes_unbound;
+                let buffers = unbound || building.overs_ahead();
+                let vertex = (vertex_reads.clone())
+                    .filter(|_| buffers)
+                    .map(|buffer| (Reached::Buffer(buffer.id()), Access::Read));
+                building.overs_owed(slots(draws, tables, buffers, false).chain(vertex), unbound)
+            }
         };
-        let unbound = draws.reads_unbound || draws.writes_unbound;
-        let writes_unbound = draws.writes_unbound;
-        let copies = building.overs_owed(&accesses, unbound);
         let mut backs = Vec::new();
         for &(table, slot, access) in &draws.buffers {
             if let Some(buffer) = tables[table].buffer(slot) {
@@ -2416,10 +2461,20 @@ impl RenderCommandEncoder {
                 building.managed_backs(backs)
             })?;
         }
+        self.overs_after();
+        Ok(())
+    }
+
+    /// After a draw of the pipeline state: what it wrote, for the textures over a buffer in an
+    /// image of their own (`crate::over`).
+    fn overs_after(&mut self) {
+        let Some(state) = &self.pipeline else {
+            return;
+        };
+        let draws = &state.inner.compiled.draws;
         (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends")
-            .overs_after(&accesses, writes_unbound);
-        Ok(())
+            .overs_after(slots(draws, &self.tables, true, true), draws.writes_unbound);
     }
 
     /// Holds `slots` as the texture slots that read a shadow in the draw being recorded: where

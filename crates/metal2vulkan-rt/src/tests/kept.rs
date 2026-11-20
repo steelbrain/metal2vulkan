@@ -82,7 +82,7 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
         (1, 1),
         "clearing releases each object's one reference"
     );
-    assert!(kept.as_slice().is_empty());
+    assert!(kept.iter().next().is_none());
     assert!(kept.hold(&a), "a cleared list keeps the object again");
     assert_eq!(Arc::strong_count(&a.inner), 2);
 }

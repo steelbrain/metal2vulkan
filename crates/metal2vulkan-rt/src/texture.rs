@@ -4291,11 +4291,12 @@ pub(crate) trait TextureObject {
         }
     }
 
-    /// Of a texture over a buffer of no device copy in an image of its own, which the submissions
-    /// copy into and back by the Shared rules (`crate::over`): the buffer and the copy.
-    fn copied_shared(&self) -> Option<(&Arc<BufferInner>, OverCopy)> {
-        self.copied_over()
-            .filter(|(buffer, _)| buffer.held().1.is_none())
+    /// Whether it is a texture over a buffer of no device copy in an image of its own, which the
+    /// submissions copy into and back by the Shared rules (`crate::over`): its form and its
+    /// buffer's, read, nothing worked out.
+    fn copied_shared(&self) -> bool {
+        (self.object().named.as_ref())
+            .is_some_and(|named| named.form == Form::Copied && named.buffer.held().1.is_none())
     }
 
     /// Of a texture over a Managed buffer's device copy in an image of its own, which Metal's
