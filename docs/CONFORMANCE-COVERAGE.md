@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 3743 |
+| ledger rows (a case whose gap is recorded) | 3778 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -6017,4 +6017,39 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
 | `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
 | `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static notes `bicubic-filter-arithmetic` and `srgb-texel-decode` (rule 1). Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static notes `bicubic-filter-arithmetic` and `srgb-texel-decode` (rule 1). Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static notes `bicubic-filter-arithmetic` and `srgb-texel-decode` (rule 1). Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static notes `bicubic-filter-arithmetic` and `srgb-texel-decode` (rule 1). Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static notes `bicubic-filter-arithmetic` and `srgb-texel-decode` (rule 1). Metal's results lie on the format's grid: a sixteen… |
+| `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 
