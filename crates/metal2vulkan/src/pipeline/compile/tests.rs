@@ -3699,7 +3699,7 @@ fn a_fragment_reading_through_a_loaded_pointer_runs_at_pixel_rate() {
 /// function that reads the index compiles under `viewport_index_varying` and reads that varying, as
 /// `render_pipeline_key` names; compiled on its own under those inputs and the vertex function's
 /// push end (`CompiledFunction::fragment_push_base`), it is the pipeline's. One that does not read
-/// it keeps the key it has without the field. A reading fragment compiled for the other kind of
+/// it compiles without `viewport_index_varying`. A reading fragment compiled for the other kind of
 /// vertex function is `NeedsInput(ViewportIndex)` either way. Every module passes L3.
 #[test]
 fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
@@ -3808,9 +3808,11 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
             &budget,
         )
         .expect("keys");
+    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+    assert!(!inputs.viewport_index_varying);
     assert_eq!(
         keys.fragment,
-        Some(dev.function_compile_key(&white, &LoweringInputs::new()))
+        Some(dev.function_compile_key(&white, &inputs))
     );
 
     // Each draw writes the encoder's viewport count into the vertex push window.

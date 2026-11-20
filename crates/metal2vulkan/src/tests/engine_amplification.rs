@@ -91,7 +91,8 @@ fn device(stem: &str) -> Device {
     Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
-/// `nvidia-rtx50-linux` with `features` removed from its description.
+/// `nvidia-rtx50-linux` with `features` removed from its description (with `Multiview`, the
+/// multiview features that need it).
 fn nvidia_without(features: &[F]) -> Device {
     let mut desc = description("nvidia-rtx50-linux");
     for f in features {
@@ -187,7 +188,11 @@ fn amplification_builtins_are_the_view_index_and_a_specialized_count() {
 #[test]
 fn amplification_id_needs_multiview() {
     let Some(bc) = fixture() else { return };
-    let dev = nvidia_without(&[F::Multiview]);
+    let dev = nvidia_without(&[
+        F::Multiview,
+        F::MultiviewGeometryShader,
+        F::MultiviewTessellationShader,
+    ]);
     let p = dev.profile();
     for entry in ["amp_vertex", "amp_fragment", "amp_post_tessellation"] {
         match compile(&bc, entry, p) {
@@ -223,7 +228,11 @@ fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as: {why}"),
     };
-    let without = nvidia_without(&[F::Multiview]);
+    let without = nvidia_without(&[
+        F::Multiview,
+        F::MultiviewGeometryShader,
+        F::MultiviewTessellationShader,
+    ]);
     let cases = [
         (&bc, "amp_vertex_layer"),
         (&public, "vertex_amplification_id_layer"),
@@ -647,7 +656,11 @@ fn amplified_render_pipelines_draw_what_multiview_cannot_express_one_at_a_time()
             );
         }
     }
-    let without = nvidia_without(&[F::Multiview]);
+    let without = nvidia_without(&[
+        F::Multiview,
+        F::MultiviewGeometryShader,
+        F::MultiviewTessellationShader,
+    ]);
     assert_eq!(
         refusal(without.compile_render_pipeline(&render(&bc, "amp_vertex", None, 2), &budget)),
         Needs::AnyOf(vec![vec![Capability::Feature(F::Multiview)]])

@@ -278,8 +278,8 @@ fn a_write_through_the_left_out_summed_texture_is_dropped() {
     }
 }
 
-/// A query of the left-out texture is an absent read: Metal gives it no value, so the kernel marks
-/// the command buffer where it runs and takes zero, and the left-out texture takes no slot.
+/// A query of the left-out texture is an absent read: Metal gives it no value, so the kernel takes
+/// zero, states no fact, and the left-out texture takes no slot.
 #[test]
 fn a_read_through_the_left_out_texture_is_an_absent_read() {
     let reading = COMMON
@@ -306,7 +306,7 @@ fn a_read_through_the_left_out_texture_is_an_absent_read() {
             stage: Stage::Kernel,
         };
         assert!(
-            compiled.artifact().facts.contains(&fact),
+            !compiled.artifact().facts.contains(&fact),
             "{stem}: {:?}",
             compiled.artifact().facts
         );

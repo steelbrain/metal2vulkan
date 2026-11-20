@@ -768,39 +768,22 @@ declare void @air.write_texture_2d.v4f16(ptr addrspace(1), <2 x i32>, <4 x half>
 
 /// A `half` write through an argument buffer records `PrecisionNote::DeviceNanEncoding` under the
 /// families of the textures its handles can name (`SpecKey::HeapNanFamilies`): on every committed
-/// profile with a heap, one clause for each family whose stored NaN is the device's there (a
-/// 16-bit float format without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit one without
-/// `DriverDeviation::MetalNanMoves`, a packed small float one without
-/// `DriverDeviation::MetalSmallFloatNans`, and a float format of none of those), each family the
-/// profile takes requiring its property. A plan gives the key from the command's resident textures
-/// (`R16Float` 1, `RGBA32Float` 2, `RG11B10Float` 4, `RGBA8Unorm` and `R32Uint` 0), and the note
-/// holds under the plan's values exactly where a resident texture is of a family of a clause:
-/// on `moltenvk-m3`, which takes the 32-bit and small float deviations, an `RGBA32Float` or
-/// `RG11B10Float` texture alone holds none.
+/// profile with a heap, one clause for each family, as each stores the device's NaN (a 16-bit
+/// float format, a 32-bit one, a packed small float one, and a float format of none of those),
+/// and no `VkProperty::MetalHalfTexelWrites`, `MetalNanMoves` or `MetalSmallFloatNans` is
+/// required. A plan gives the key from the command's resident textures (`R16Float` 1,
+/// `RGBA32Float` 2, `RG11B10Float` 4, `RGBA8Unorm` and `R32Uint` 0), and the note holds under the
+/// plan's values exactly where a resident texture is of a family of a clause.
 #[test]
 fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
     use crate::bind::{ResourceClass, UsedResource};
     use crate::device::requirements::VkProperty;
-    use crate::error::DriverDeviation as D;
     use crate::pipeline::{PrecisionNote, SpecClause};
     let note = PrecisionNote::DeviceNanEncoding;
     let key = SpecKey::HeapNanFamilies(Stage::Kernel);
     let Some(bc) = assemble("heap_half_write", HALF_WRITE) else {
         return;
     };
-    // Each family's bit, and the deviation and property under which its stored NaN is Metal's.
-    let families = [
-        (
-            1,
-            Some((D::MetalHalfTexelWrites, VkProperty::MetalHalfTexelWrites)),
-        ),
-        (2, Some((D::MetalNanMoves, VkProperty::MetalNanMoves))),
-        (
-            4,
-            Some((D::MetalSmallFloatNans, VkProperty::MetalSmallFloatNans)),
-        ),
-        (8, None),
-    ];
     // The families of the note's clauses: each a test of the key's own bit.
     let noted = |specialized: &[crate::pipeline::SpecializedNote]| -> u32 {
         let when: Vec<&SpecClause> = specialized
@@ -816,7 +799,6 @@ fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
     let consts = FunctionConstantValues::defaults();
     let entry = EntryRef::Name("k");
     let mut compiled = 0;
-    let mut quiet = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
         let a = match compile_bitcode(
             &bc,
@@ -834,27 +816,21 @@ fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
             })) => continue,
             Err(e) => panic!("{stem}: {e}"),
         };
-        let bits = noted(&a.specialized);
-        for (bit, measured) in families {
-            let takes = measured.is_some_and(|(d, _)| p.takes_driver_deviation(d));
-            assert_eq!(bits & bit != 0, !takes, "{stem}: family {bit}: {bits}");
-            if let Some((_, property)) = measured {
-                assert_eq!(
-                    a.requirements.properties.contains(&property),
-                    takes,
-                    "{stem}: {property:?}"
-                );
-            }
+        assert_eq!(noted(&a.specialized), 15, "{stem}: every family");
+        for property in [
+            VkProperty::MetalHalfTexelWrites,
+            VkProperty::MetalNanMoves,
+            VkProperty::MetalSmallFloatNans,
+        ] {
+            assert!(
+                !a.requirements.properties.contains(&property),
+                "{stem}: {property:?}"
+            );
         }
-        assert_eq!(a.precision.contains(&note), bits != 0, "{stem}");
-        quiet += usize::from(bits & 6 == 0);
+        assert!(a.precision.contains(&note), "{stem}");
         compiled += 1;
     }
     assert!(compiled > 0, "no committed profile has the heap");
-    assert!(
-        quiet > 0,
-        "no committed profile stores a 32-bit or small float NaN as Metal does"
-    );
     // A command making `formats` resident, at IDs of their own.
     let state = |formats: &[PixelFormat]| BindState {
         used_resources: (formats.iter().zip(1u32..))

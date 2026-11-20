@@ -13,8 +13,7 @@
 //!   as the memory writer does, its color the last pass's (`PrecisionNote::LoopedSampleOutputs`).
 //! - `coverage_outputs`' memory writers return a color, one also a sample mask: they loop
 //!   wherever the device makes them, recording the note, the masked one storing the union of the
-//!   samples its passes keep after the loop; on MoltenVK on Apple's GPU each runs as written,
-//!   exactly, without the note.
+//!   samples its passes keep after the loop.
 //! - `rt6_mark_sample` runs per sample without reading the coverage: no loop.
 //! - `coverage_loop`'s memory writers loop at four samples wherever the device makes them; each of
 //!   its functions holding one thing the loop does not fit (early fragment tests, a discard, a
@@ -22,13 +21,9 @@
 //!   sample-qualified varying is interpolated at each pass's sample (`InterpolateAtSample`, no
 //!   `Sample` decoration), or refused as needing the interpolation functions where withheld.
 //!
-//! - `coverage_natural`'s functions read no `[[position]]` beside a sample index or varying: on a
-//!   driver that runs a memory writer once per covered sample (MoltenVK on Apple's GPU) each runs
-//!   as written, without the loop or sample shading, and never declares `FragCoord` beside
-//!   `SampleRateShading`; elsewhere each loops.
-//! - Where the driver's interpolation at a sample needs the whole quad (RADV), the looping
-//!   functions' sample-qualified varyings are read before the loop, at every sample a pipeline of
-//!   the device may have, each by a constant; elsewhere once, inside the loop.
+//! - `coverage_natural`'s functions read no `[[position]]` beside a sample index or varying: each
+//!   loops.
+//! - The looping functions' sample-qualified varyings are read once, inside the loop.
 //!
 //! Every pipeline that compiles passes L3 (`spirv-val` and requirements within the profile).
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -242,21 +237,6 @@ fn interpolated_samples(words: &[u32]) -> Vec<Option<u32>> {
     reads
 }
 
-/// The most samples a pipeline of `dev` may rasterize: its largest framebuffer sample count.
-fn most_samples(dev: &Device) -> u32 {
-    let l = &dev.profile().fields().limits;
-    let all = [
-        l.framebuffer_color_sample_counts,
-        l.framebuffer_integer_color_sample_counts,
-        l.framebuffer_depth_sample_counts,
-        l.framebuffer_stencil_sample_counts,
-        l.framebuffer_no_attachments_sample_counts,
-    ]
-    .iter()
-    .fold(0, |all, c| all | c.as_raw());
-    1 << all.max(1).ilog2()
-}
-
 /// On every committed profile, the coverage-reading memory writer at two and four samples runs
 /// once per pixel and loops over its covered samples, with no sample shading, or is refused for
 /// what the device lacks (fragment stores, lavapipe's split of a clipped triangle's fragments),
@@ -318,11 +298,11 @@ fn a_coverage_reading_memory_writer_loops_over_its_covered_samples() {
 }
 
 /// A coverage reader in a multisampled pipeline records `PrecisionNote::ClippedCoverageSplit` on
-/// every device whose rasterizer is not Apple's, where a clipped primitive is not split into the
-/// pieces Metal hands separate runs, and not on MoltenVK on Apple's GPU, which rasterizes through
-/// Metal; at one sample, where the coverage is the one sample's, it records nothing anywhere.
+/// every device, as no Vulkan query states that a clipped primitive is split into the pieces Metal
+/// hands separate runs; at one sample, where the coverage is the one sample's, it records nothing
+/// anywhere.
 #[test]
-fn a_multisampled_coverage_reader_off_apples_rasterizer_announces_the_split() {
+fn a_multisampled_coverage_reader_announces_the_split() {
     let Some(lib) = library("rt6_attachmentless") else {
         return;
     };
@@ -333,15 +313,14 @@ fn a_multisampled_coverage_reader_off_apples_rasterizer_announces_the_split() {
             .flat_map(|m| m.precision_notes.iter().copied())
             .collect()
     };
-    let (mut apple, mut other) = (0, 0);
+    let mut noted = 0;
     for stem in stems() {
         let dev = device(&stem);
-        let metals = stem.starts_with("moltenvk-");
         let d = render(&lib, function(&lib, COVERAGE), 4, false);
         match dev.compile_render_pipeline(&d, &Budget::standard()) {
             Ok(p) => {
-                assert_eq!(notes(&p).contains(&note), !metals, "{stem} at 4");
-                *if metals { &mut apple } else { &mut other } += 1;
+                assert!(notes(&p).contains(&note), "{stem} at 4");
+                noted += 1;
             }
             Err(Error::Unsupported(_)) => {}
             Err(e) => panic!("{stem} at 4: {e}"),
@@ -351,17 +330,13 @@ fn a_multisampled_coverage_reader_off_apples_rasterizer_announces_the_split() {
             assert!(!notes(&p).contains(&note), "{stem} at 1");
         }
     }
-    assert!(
-        apple >= 1 && other >= 6,
-        "{apple} on Apple's, {other} on others"
-    );
+    assert!(noted >= 7, "{noted} pipelines noted the split");
 }
 
 /// The interface states the loop: `Looped` under `multisampled`, `Unlooped` without, and link asks
 /// a function compiled without it for `multisampled` at four samples and takes it at one; a
 /// function that runs per sample without reading the coverage has no loop; one with a color output
-/// loops as well, recording `PrecisionNote::LoopedSampleOutputs`; on MoltenVK on Apple's GPU the
-/// coverage reader runs as written (`DriverRunsPerSample`).
+/// loops as well, recording `PrecisionNote::LoopedSampleOutputs`.
 #[test]
 fn the_interface_states_the_coverage_loop() {
     let (Some(attachmentless), Some(sample_rate)) =
@@ -447,30 +422,6 @@ fn the_interface_states_the_coverage_loop() {
             Feature::PixelCoverageAtSampleRate
         ))
     );
-    // On a driver that runs a memory writer once per covered sample (MoltenVK on Apple's GPU), the
-    // coverage reader runs as written whether or not it was compiled for a multisampled pipeline;
-    // link checks its other reads as any per-sample function's (its `[[position]]` asks for
-    // `multisampled`) and takes it without sample shading.
-    let mvk = device("moltenvk-m3");
-    for (inputs, made) in [(&none, false), (&multisampled, true)] {
-        let f = FunctionDescriptor::new(attachmentless.function(COVERAGE).expect("function"));
-        let compiled = mvk
-            .compile_function(&f, inputs, &budget)
-            .unwrap_or_else(|e| panic!("{COVERAGE} on moltenvk-m3: {e}"));
-        assert_eq!(
-            compiled.artifact().interface.io.coverage_loop,
-            CoverageLoop::DriverRunsPerSample
-        );
-        let p = mvk.compile_render_pipeline(
-            &render(&attachmentless, StageSource::Compiled(compiled), 4, false),
-            &budget,
-        );
-        match p {
-            Ok(p) if made => assert!(!p.graphics.sample_shading),
-            Err(Error::NeedsInput(RuntimeInput::Multisampled)) if !made => {}
-            other => panic!("multisampled {made}: {:?}", other.map(|_| ())),
-        }
-    }
     let Error::Unsupported(u) = CoverageLoopRefusal::Discard.error() else {
         panic!("not a refusal");
     };
@@ -607,23 +558,19 @@ fn the_loop_refuses_each_function_it_does_not_fit_by_its_reason() {
     assert!(varying >= 6, "{varying} profiles looped the varying");
 }
 
-/// `coverage_natural` at 2 and 4 samples on every committed profile. On a driver that runs a memory
-/// writer once per covered sample (MoltenVK on Apple's GPU) each function runs as written: no loop,
-/// no sample shading, its coverage read, and no `FragCoord` where the module declares
-/// `SampleRateShading` (SPIRV-Cross would then mask the coverage with the run's sample bit).
-/// Elsewhere each loops without sample shading, or is refused for what the device lacks (the
-/// interpolation functions among them), never for the loop.
+/// `coverage_natural` at 2 and 4 samples on every committed profile: each function loops without
+/// sample shading, its coverage read, or is refused for what the device lacks (the interpolation
+/// functions among them), never for the loop.
 #[test]
-fn a_per_sample_driver_runs_the_natural_functions_as_written() {
+fn the_natural_functions_loop_over_their_covered_samples() {
     let (Some(natural_lib), Some(vertex_lib)) =
         (library("coverage_natural"), library("coverage_loop"))
     else {
         return;
     };
-    let (mut natural, mut looped) = (0, 0);
+    let mut looped = 0;
     for stem in stems() {
         let dev = device(&stem);
-        let driver_runs = per_sample_defect(&dev).is_some();
         for (f, vertex) in NATURAL {
             for samples in [2, 4] {
                 let what = format!("{f} at {samples} on {stem}");
@@ -634,19 +581,11 @@ fn a_per_sample_driver_runs_the_natural_functions_as_written() {
                     Ok(p) => {
                         assert!(!p.graphics.sample_shading, "{what}");
                         let s = shape(fragment_words(&p));
-                        assert!(s.sample_mask, "{what}: {s:?}");
-                        assert_eq!(s.loops, !driver_runs, "{what}: {s:?}");
-                        if driver_runs {
-                            natural += 1;
-                            assert!(!(s.sample_rate_shading && s.frag_coord), "{what}: {s:?}");
-                        } else {
-                            looped += 1;
-                        }
+                        assert!(s.sample_mask && s.loops, "{what}: {s:?}");
+                        looped += 1;
                         l3(&dev, &p, &what);
                     }
-                    Err(e) if e == CoverageLoopRefusal::InterpolationFunctions.error() => {
-                        assert!(!driver_runs, "{what}");
-                    }
+                    Err(e) if e == CoverageLoopRefusal::InterpolationFunctions.error() => {}
                     Err(Error::Unsupported(u)) => {
                         assert_ne!(
                             u.feature,
@@ -659,37 +598,23 @@ fn a_per_sample_driver_runs_the_natural_functions_as_written() {
             }
         }
     }
-    assert_eq!(
-        natural,
-        NATURAL.len() * 2,
-        "the MoltenVK profile ran each as written"
-    );
     assert!(looped >= 6 * NATURAL.len(), "{looped} pipelines looped");
 }
 
-/// Where the driver's interpolation at a sample needs the whole quad (RADV,
-/// `DriverWorkaround::InterpolationNeedsTheWholeQuad`), a looping function's sample-qualified
-/// varying is read before the loop, at every sample a pipeline of the device may have, each by a
-/// constant (`coverage_loop`'s `cov_loop_varying`, and `coverage_natural`'s `nat_varying`, at 2
-/// and 4 samples); everywhere else that loops it is read once, at the pass's sample, which the
-/// loop computes. Each varying is perspective (`sample_perspective`), so on that driver, which
-/// answers a perspective read at a sample by extrapolating from the pixel center
-/// (`DriverWorkaround::PerspectiveReadsExtrapolated`), the module records
-/// `PrecisionNote::ExtrapolatedInterpolation`, and nowhere else.
+/// A looping function's sample-qualified varying (`coverage_loop`'s `cov_loop_varying`, and
+/// `coverage_natural`'s `nat_varying`, at 2 and 4 samples) is read once, at the pass's sample,
+/// which the loop computes, on every profile that loops it. Each varying is perspective
+/// (`sample_perspective`), and no module records `PrecisionNote::ExtrapolatedInterpolation`.
 #[test]
-fn where_interpolation_needs_the_whole_quad_the_varyings_are_read_before_the_loop() {
+fn a_looping_function_reads_its_sample_varying_once_inside_the_loop() {
     let (Some(loop_lib), Some(natural_lib)) =
         (library("coverage_loop"), library("coverage_natural"))
     else {
         return;
     };
-    let defect = DriverWorkaround::InterpolationNeedsTheWholeQuad;
-    let (mut before, mut inside) = (0, 0);
+    let mut inside = 0;
     for stem in stems() {
         let dev = device(&stem);
-        let whole_quad = dev.profile().fields().workarounds.contains(&defect);
-        let extrapolates = (dev.profile().fields().workarounds)
-            .contains(&DriverWorkaround::PerspectiveReadsExtrapolated);
         for (lib, f) in [(&loop_lib, COV_VARYING), (&natural_lib, "nat_varying")] {
             for samples in [2, 4] {
                 let what = format!("{f} at {samples} on {stem}");
@@ -703,31 +628,18 @@ fn where_interpolation_needs_the_whole_quad_the_varyings_are_read_before_the_loo
                 if !shape(words).loops {
                     continue;
                 }
-                let reads = interpolated_samples(words);
-                let extrapolation_noted = p.stages.iter().any(|m| {
-                    m.precision_notes
-                        .contains(&PrecisionNote::ExtrapolatedInterpolation)
-                });
-                assert_eq!(
-                    extrapolation_noted, extrapolates,
+                assert!(
+                    !p.stages.iter().any(|m| m
+                        .precision_notes
+                        .contains(&PrecisionNote::ExtrapolatedInterpolation)),
                     "{what}: the extrapolation note"
                 );
-                if whole_quad {
-                    before += 1;
-                    let every: Vec<_> = (0..most_samples(&dev)).map(Some).collect();
-                    assert_eq!(reads, every, "{what}");
-                } else {
-                    inside += 1;
-                    assert_eq!(reads, [None], "{what}");
-                }
+                inside += 1;
+                assert_eq!(interpolated_samples(words), [None], "{what}");
                 l3(&dev, &p, &what);
             }
         }
     }
-    assert!(
-        before >= 4,
-        "{before} pipelines read the varying before the loop"
-    );
     assert!(
         inside >= 6 * 4,
         "{inside} pipelines read it inside the loop"
@@ -757,18 +669,15 @@ fn sample_mask_decorations(words: &[u32]) -> usize {
 /// mask, which Metal writes per covered sample, each from that sample's run (our probe `co`). At
 /// two and four samples on every committed profile each loops, without sample shading, recording
 /// `PrecisionNote::LoopedSampleOutputs`, or is refused for what the device lacks, never as the
-/// coverage at sample rate; the masked one declares the `SampleMask` output beside the input. On
-/// a driver that runs a memory writer once per covered sample (MoltenVK on Apple's GPU) each runs
-/// as written, which is Metal's, without the loop or the note.
+/// coverage at sample rate; the masked one declares the `SampleMask` output beside the input.
 #[test]
-fn coverage_reading_color_writers_loop_or_run_as_written() {
+fn coverage_reading_color_writers_loop() {
     let Some(lib) = library("coverage_outputs") else {
         return;
     };
-    let (mut looped, mut natural) = (0, 0);
+    let mut looped = 0;
     for stem in stems() {
         let dev = device(&stem);
-        let driver_runs = per_sample_defect(&dev).is_some();
         for (name, masks) in [("cvo_color", 1), ("cvo_masked", 2)] {
             for samples in [2, 4] {
                 let what = format!("{name} on {stem} at {samples}");
@@ -784,7 +693,7 @@ fn coverage_reading_color_writers_loop_or_run_as_written() {
                         let s = shape(words);
                         assert_eq!(
                             (s.loops, s.find_lsb, s.sample_id),
-                            (!driver_runs, !driver_runs, false),
+                            (true, true, false),
                             "{what}"
                         );
                         assert_eq!(sample_mask_decorations(words), masks, "{what}");
@@ -792,16 +701,12 @@ fn coverage_reading_color_writers_loop_or_run_as_written() {
                             m.precision_notes
                                 .contains(&PrecisionNote::LoopedSampleOutputs)
                         });
-                        assert_eq!(noted, !driver_runs, "{what}");
+                        assert!(noted, "{what}");
                         for m in &p.stages {
                             check_words_valid(&m.spirv, &p.requirements, dev.profile())
                                 .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
                         }
-                        *if driver_runs {
-                            &mut natural
-                        } else {
-                            &mut looped
-                        } += 1;
+                        looped += 1;
                     }
                     Err(Error::Unsupported(u)) => {
                         assert_ne!(
@@ -815,8 +720,5 @@ fn coverage_reading_color_writers_loop_or_run_as_written() {
             }
         }
     }
-    assert!(
-        looped >= 12 && natural >= 4,
-        "{looped} looped, {natural} as written"
-    );
+    assert!(looped >= 12, "{looped} looped");
 }

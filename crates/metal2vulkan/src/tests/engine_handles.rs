@@ -851,24 +851,25 @@ fn a_heap_class_read_and_written_through_two_members_is_volatile() {
 /// A `read_write` argument-buffer texture's float read and write convert a member the heap views
 /// through its storage choice's alias (`bind::heap::storage_conversions`): on lavapipe, which
 /// stores no 8-bit sRGB format and no `A2R10G10B10`, the search carries each handle's red-blue
-/// order beside its class, and the read's decode of an sRGB member's codes notes
-/// `SrgbTexelDecode` and the write's encode `DevicePackConversion`; on the M3 Max's MoltenVK, which
-/// stores each such format itself, the module converts nothing and notes neither. Each validates.
+/// order beside its class; on the M3 Max's MoltenVK, which stores `A2R10G10B10` itself, it
+/// carries none. On both, which have no sRGB storage view, the read's decode of an sRGB member's
+/// codes through its UNORM alias notes `SrgbTexelDecode` and the write's encode
+/// `DevicePackConversion`. Each validates.
 #[test]
 fn a_heap_storage_access_converts_the_members_its_heap_views_through_an_alias() {
     let Some(bc) = assemble("heap_rw", HEAP_RW) else {
         return;
     };
-    for (stem, converts) in [("lavapipe", true), ("moltenvk-m3", false)] {
+    for (stem, red_blue) in [("lavapipe", true), ("moltenvk-m3", false)] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let (plan, _) = typed_module(&bc, "heap_rw", &p).expect("heap_rw");
-        assert_eq!(plan.families.access.heap_red_blue, converts, "{stem}");
+        assert_eq!(plan.families.access.heap_red_blue, red_blue, "{stem}");
         let a = ok(&bc, "heap_rw", &p);
         for note in [
             PrecisionNote::SrgbTexelDecode,
             PrecisionNote::DevicePackConversion,
         ] {
-            assert_eq!(a.precision.contains(&note), converts, "{stem} {note:?}");
+            assert!(a.precision.contains(&note), "{stem} {note:?}");
         }
     }
 }

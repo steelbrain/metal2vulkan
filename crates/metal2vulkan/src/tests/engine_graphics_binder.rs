@@ -662,8 +662,11 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
 /// plan's variant. `compile_render_variant` compiles it (another pipeline key, the layout's
 /// attributes pulled and recorded in `variant_pulled`), and its plan for the same shape states the
 /// same key; it keeps stating it for an aligned shape, since the pipeline pulls the layout for any
-/// bind. The variant's draw binds no vertex buffer: the layout's buffer is one storage binding the
-/// fetch reads from the bind offset at the static stride.
+/// bind. The variant's keys (`render_variant_key`) give its stages as a consumer lowers them: the
+/// vertex function under its inputs, then the fragment function under its inputs with its push
+/// fields from the vertex function's end (`CompiledFunction::fragment_push_base`), which together
+/// make the variant's pipeline. The variant's draw binds no vertex buffer: the layout's buffer is
+/// one storage binding the fetch reads from the bind offset at the static stride.
 #[test]
 fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
     let Some(bc) = fixture("stage_io") else {
@@ -708,7 +711,27 @@ fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
                 &crate::pipeline::StageEntries::new(),
             )
             .expect("variant keys");
-        assert_eq!(keys.pipeline, v.key, "{stem}");
+        let lowered = |source: &StageSource, inputs: &crate::pipeline::LoweringInputs| {
+            let StageSource::Function(f) = source else {
+                panic!("{stem}: a function stage");
+            };
+            dev.compile_function(f, inputs, &Budget::standard())
+                .unwrap_or_else(|e| panic!("{stem}: {e}"))
+        };
+        let vertex = lowered(
+            &d.vertex,
+            keys.vertex_inputs.as_ref().expect("vertex inputs"),
+        );
+        let mut fragment_inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+        fragment_inputs.push_base = vertex.fragment_push_base();
+        let fragment = lowered(d.fragment.as_ref().expect("fragment"), &fragment_inputs);
+        let mut e = d.clone();
+        e.vertex = StageSource::Compiled(vertex);
+        e.fragment = Some(StageSource::Compiled(fragment));
+        let made = dev
+            .compile_render_variant(&e, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem} lowered variant: {e}"));
+        assert_eq!(made.key, v.key, "{stem}");
         assert_ne!(v.key, p.key, "{stem}");
         assert_eq!(v.vertex_input.variant_pulled, BTreeSet::from([0]), "{stem}");
         assert!(

@@ -96,10 +96,10 @@ fn fpc_frames_compile_to_their_bounds_and_are_refused_past_them() {
 
 /// A pair's stack holds its frames uniformly, each sized for either member, as many as `k L` bytes
 /// hold of the smaller: `frames_t`'s two stacks (one for each function the kernel may call) at `k`
-/// 4, 72 frames of 268 bytes each, pass the RTX 5080's 32 KiB a thread and are refused
-/// `Unsupported{Recursion}`, where Metal runs them; at `k` 3 they fit.
+/// 4, 72 frames of 268 bytes each, pass the 16 KiB a thread every device holds and are refused
+/// `Unsupported{Recursion}`, where Metal runs them; at `k` 1 they fit.
 #[test]
-fn a_pair_s_uniform_frames_pass_32_kib_at_depth_4() {
+fn a_pair_s_uniform_frames_pass_16_kib_at_depth_4() {
     let Some(bitcode) = fixture() else {
         return;
     };
@@ -109,12 +109,12 @@ fn a_pair_s_uniform_frames_pass_32_kib_at_depth_4() {
         vec![vec![Capability::Limit {
             limit: VkLimit::FunctionStorageBytesPerThread,
             required: 2 * 72 * 268,
-            available: 32 * 1024,
+            available: 16 * 1024,
         }]],
     )));
     let r = compile_linked(&bitcode, "frames_t", T, 4, &p).map(|_| ());
     assert_eq!(r, refused);
-    let r = compile_linked(&bitcode, "frames_t", T, 3, &p).map(|_| ());
+    let r = compile_linked(&bitcode, "frames_t", T, 1, &p).map(|_| ());
     assert_eq!(r, Ok(()));
 }
 
@@ -284,9 +284,12 @@ fn activations(k: u32, (l, s): (u64, u64)) -> u32 {
     u32::try_from(a).expect("activations")
 }
 
-/// The typed module of `entry` at depth `k` with `linked` linked.
+/// The typed module of `entry` at depth `k` with `linked` linked, on `moltenvk-m3` with a thread's
+/// 192 KiB of Function storage, as the M3 Max holds: past the 16 KiB every device holds, so the
+/// deep stacks compile for the interpreter.
 fn typed(bitcode: &[u8], entry: &str, linked: &[&str], k: u32) -> TypedModule {
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let mut p = profile("moltenvk-m3", Default::default()).expect("profile");
+    p.edit(|f| f.function_storage = crate::device::profile::FunctionStorage::Assumed(192 * 1024));
     let none = FunctionConstantValues::defaults();
     let sources: Vec<LinkedSource<'_>> = linked
         .iter()

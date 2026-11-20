@@ -681,10 +681,12 @@ fn residual(i: u32) -> u32 {
     4 * (i % 3)
 }
 
-/// 31 residuals and the dispatch region overflow the 128-byte kernel window, so the last seven
-/// `SlotBindOffset`s are placed in the `ArgumentTable`. The table is one more uniform descriptor,
-/// declared at `Synthetic(ArgumentTable)`, and its fields are read exactly: every buffer, bound at
-/// its own residual, gets its stores at elements `t` and nothing else changes.
+/// On a profile that binds buffers by descriptor (`lunarg-desktop-baseline-2023`, without
+/// `bufferDeviceAddress`), 31 residuals and the dispatch region overflow the 128-byte kernel
+/// window, so the last seven `SlotBindOffset`s are placed in the `ArgumentTable`. The table is one
+/// more uniform descriptor, declared at `Synthetic(ArgumentTable)`, and its fields are read
+/// exactly: every buffer, bound at its own residual, gets its stores at elements `t` and nothing
+/// else changes.
 #[test]
 fn push_fields_in_the_argument_table_are_read_exactly() {
     let Some(bc) = assemble_text("many_slots", &many_slots_kernel()) else {
@@ -695,7 +697,7 @@ fn push_fields_in_the_argument_table_are_read_exactly() {
         kind: ResourceKind::Synthetic(SyntheticBinding::ArgumentTable),
         index: 0,
     };
-    for stem in ["lavapipe", "moltenvk-m3", "lunarg-desktop-baseline-2023"] {
+    for stem in ["lunarg-desktop-baseline-2023"] {
         for robust in [true, false] {
             let what = format!("{stem} robust={robust}");
             let p = profile_with(stem, robust);

@@ -4,9 +4,9 @@
 //! access through it reads or changes is undefined, and on Metal it varies. When the body reaches
 //! the memory only as the address of loads, stores, and atomics (at its own address, or one derived
 //! from it), specialization makes each load and atomic with a result an absent read of its type
-//! (`FunctionConstant::AbsentMemory`): it marks the command buffer's execution status where it
-//! runs and takes zero, like a removed texture's read. Each store, and each atomic without a
-//! result, is dropped and marks nothing. A run that never reaches a read is Metal's.
+//! (`FunctionConstant::AbsentMemory`): it takes zero and marks nothing, like a removed texture's
+//! read. Each store, and each atomic without a result, is dropped. A run that never reaches a read
+//! is Metal's.
 //!
 //! The kernels below are our own, each gated by `has_tg`, touching the removed memory `tg` only
 //! where the run-time flag `out[0]` is nonzero, and writing their result to `out[1]` (7 where the
@@ -16,10 +16,9 @@
 //! - `at_stores`: `tg[tid] = 5` and `atomic_store(&tg[1], 2)`, then `out[1] = 7`: only writes;
 //! - `at_compared`: `out[1] = (tg == null)`, a use that is no access.
 //!
-//! With `has_tg` false `at_accesses` compiles, on every committed profile, into a kernel that
-//! states its absent read and validates, reaching the status by address where the profile
-//! addresses buffers and through the stage's binding of it elsewhere. `at_stores` compiles
-//! everywhere without an absent read: its writes go. `at_compared` stays refused
+//! With `has_tg` false `at_accesses` and `at_stores` compile, on every committed profile, into
+//! kernels that mark nothing (no fact, no status push field or binding) and validate: the reads
+//! take zero and the writes go. `at_compared` stays refused
 //! `FunctionConstantArgument` while specializing. With `has_tg` true each kernel reads its
 //! memory, none absent.
 //!
@@ -39,7 +38,7 @@ use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::sym::Stage;
 use crate::pipeline::testing::{
-    llvm_assemble, meter, status_reach, status_reach_on, AssembleError, Scratch, StatusReach,
+    llvm_assemble, meter, status_reach, AssembleError, Scratch, StatusReach,
 };
 use crate::spirv::testing::threadgroup_profiles;
 use crate::spirv::testing::{check_words_valid, committed_profiles};
@@ -200,37 +199,25 @@ fn absent(a: &FunctionArtifact) -> bool {
     })
 }
 
-/// With `has_tg` false, the loads and the atomic of `at_accesses` are absent reads on every
-/// profile: the kernel states the status it marks, reached by address where the profile addresses
-/// buffers and through the stage's binding of it elsewhere, and validates. The writes of
-/// `at_stores` go, so it marks nothing and reaches no status.
+/// With `has_tg` false, the loads and the atomic of `at_accesses` are absent reads that take zero,
+/// and the writes of `at_stores` go: on every profile neither kernel marks anything (no fact, no
+/// status push field or binding), and both validate.
 #[test]
-fn absent_threadgroup_memory_marks_its_reads_and_drops_its_writes() {
+fn absent_threadgroup_memory_reads_zero_and_drops_its_writes() {
     let Some(bc) = module() else { return };
-    let mut bound = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        let a = compile(&bc, "at_accesses", false, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(absent(&a), "{stem}: {:?}", a.facts);
-        assert!(
-            a.facts.contains(&RuntimeFact::ExecutionStatus),
-            "{stem}: {:?}",
-            a.facts
-        );
-        let reach = status_reach(&a);
-        assert_eq!(reach, status_reach_on(&p), "{stem}");
-        bound += usize::from(reach == StatusReach::Binding);
-        validate(&a, &p);
-        let a = compile(&bc, "at_stores", false, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(!absent(&a), "{stem}: {:?}", a.facts);
-        assert!(
-            !a.facts.contains(&RuntimeFact::ExecutionStatus),
-            "{stem}: {:?}",
-            a.facts
-        );
-        assert_eq!(status_reach(&a), StatusReach::None, "{stem}");
-        validate(&a, &p);
+        for entry in ["at_accesses", "at_stores"] {
+            let a =
+                compile(&bc, entry, false, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            assert!(
+                !absent(&a) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                "{stem} {entry}: {:?}",
+                a.facts
+            );
+            assert_eq!(status_reach(&a), StatusReach::None, "{stem} {entry}");
+            validate(&a, &p);
+        }
     }
-    assert!(bound > 0, "no committed profile without buffer addresses");
 }
 
 /// Removed threadgroup memory used other than as an access's address stays refused while

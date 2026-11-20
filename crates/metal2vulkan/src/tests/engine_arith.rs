@@ -16,10 +16,10 @@
 //! (`engine_native_maths`).
 
 use crate::air::{self, SpecRequest};
-use crate::device::profile::{DeviceProfile, DriverWorkaround, FloatFunctions};
+use crate::device::profile::{DeviceProfile, FloatFunctions};
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkProperty;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Needs};
 use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
@@ -2563,7 +2563,9 @@ fn narrow_float_module_growth_is_bounded() {
 ///
 /// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. Nothing
 /// is fused: the `fast` chain's operations are the strict chain's, each in the AIR's order, so
-/// both keep seventeen roundings. On a profile whose driver's 16-bit `+ - *`, kept apart, is
+/// both keep seventeen roundings, but where the device quantizes (no `shaderFloat16`): there the
+/// `fast` chain's operations are held at `float` between its roundings (`arith::half_chain`), so it
+/// rounds twice, `%x0` and the chain's exit. On a profile whose driver's 16-bit `+ - *`, kept apart, is
 /// Metal's (moltenvk-m3), each `fadd` and `fmul` that rounds is that instruction, which reads the
 /// previous one's 16-bit result itself and narrows `%x0`, and rounds nothing itself: the
 /// conversion's rounding alone is left to the module, and the last result is widened once.
@@ -2639,6 +2641,8 @@ fn half_rounding_follows_the_operation() {
             let want = match (controlled, converted) {
                 (true, _) => (0, 1, 0),
                 (false, true) => (0, c + 2 * (q - kept) + operations, 0),
+                // The fast chain held at `float`: `%x0`'s quantize and its exit's.
+                (false, false) if kk.name == "fast_chain" => (2, c, 0),
                 (false, false) => (q, c, 0),
             };
             assert_eq!(
@@ -3959,7 +3963,13 @@ fn half_moves_are_the_devices_bits() {
                 "{what}: {:?}",
                 a.precision
             );
-            assert!(a.requirements.properties.is_empty(), "{what}");
+            // The float controls a module declares are its only properties.
+            assert!(
+                (a.requirements.properties.iter())
+                    .all(|p| matches!(p, VkProperty::FloatControl(..))),
+                "{what}: {:?}",
+                a.requirements.properties
+            );
         }
     }
 }
@@ -3967,7 +3977,7 @@ fn half_moves_are_the_devices_bits() {
 /// Every normalized format's `air.pack` and `air.unpack`, in `float` and `half`: the device's
 /// conversion, noted `DevicePackConversion` but where it reaches Metal's own function (a `float`
 /// form `GLSL.std.450` names, where the profile's `float` functions are Metal's), on every profile,
-/// requiring no property.
+/// requiring no property but the float controls the module declares.
 #[test]
 fn pack_conversions_are_the_devices() {
     // Each format's name, its lanes and its packed integer's width.
@@ -4072,7 +4082,13 @@ fn pack_conversions_are_the_devices() {
                 "{what}: {:?}",
                 a.precision
             );
-            assert!(a.requirements.properties.is_empty(), "{what}");
+            // The float controls a module declares are its only properties.
+            assert!(
+                (a.requirements.properties.iter())
+                    .all(|p| matches!(p, VkProperty::FloatControl(..))),
+                "{what}: {:?}",
+                a.requirements.properties
+            );
         }
     }
 }

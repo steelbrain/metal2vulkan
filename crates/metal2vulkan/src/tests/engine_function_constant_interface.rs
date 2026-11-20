@@ -7,19 +7,14 @@
 //!   through a gated-off sampler, is an absent read: the texture is not declared in the specialized
 //!   function, so Metal leaves the read undefined, and its compiler's answer is that undefined
 //!   behaviour's fallout (a store of the value dropped, arithmetic on it NaN, a texture write of it
-//!   zero: the write of `kernel_absent_texture_reads_zero`'s authored case). The kernel sets
-//!   `StatusBits::ABSENT_ARGUMENT_READ` where the read runs and takes zero for it, and states
-//!   `RuntimeFact::AbsentArgumentRead`, reaching the status by address where the profile addresses
-//!   buffers and through the stage's binding of it elsewhere. An element of a gated-off texture
-//!   table, and a
-//!   gated-off sampler merged with a present one before the sample, are the absent handle where the
-//!   read reaches them (`src/tests/engine_absent_handles.rs` follows the handle through memory,
-//!   aggregates and merges). A write to (or fence of) the gated-off texture itself is dropped, as
-//!   Metal drops it on every device and layer measured. Gated on, the same kernels compile, without
-//!   the fact.
-//! - A fragment function's read of a gated-off texture is the same absent read on `Device::new`'s
-//!   profiles. On `Device::from_queries`' (`AbsentReads::Nil`) it and a kernel's take the same
-//!   zero and mark nothing: no fact, no status push field or binding.
+//!   zero: the write of `kernel_absent_texture_reads_zero`'s authored case). The read takes zero
+//!   and marks nothing: no `RuntimeFact::AbsentArgumentRead`, no execution status, no status push
+//!   field or binding. An element of a gated-off texture table, and a gated-off sampler merged
+//!   with a present one before the sample, are the absent handle where the read reaches them
+//!   (`src/tests/engine_absent_handles.rs` follows the handle through memory, aggregates and
+//!   merges). A write to (or fence of) the gated-off texture itself is dropped, as Metal drops it
+//!   on every device and layer measured. Gated on, the same kernels compile.
+//! - A fragment function's read of a gated-off texture is the same absent read.
 //! - A gated-off input that only feeds an output gated by the same constant is not observed (the
 //!   return stores only declared outputs), so the entry compiles without either.
 //! - A gated-off value argument whose read nothing observes compiles (the read is `undef`); an
@@ -43,8 +38,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::{Device, DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, Feature, RuntimeInput};
+use crate::device::{DevicePolicy, DeviceProfile};
+use crate::error::{DescriptorError, Error, RuntimeInput};
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
 use crate::pipeline::artifact::PrecisionNote;
@@ -57,8 +52,8 @@ use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
 use crate::pipeline::sym::{SlotClass, Stage};
 use crate::pipeline::testing::{
-    description, engine_dir, fixtures_dir, llvm_assemble, llvm_assemble_text, meter, profile,
-    status_reach, status_reach_on, AssembleError, Scratch, StatusReach,
+    engine_dir, fixtures_dir, llvm_assemble, llvm_assemble_text, meter, profile, status_reach,
+    AssembleError, Scratch, StatusReach,
 };
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 
@@ -272,10 +267,9 @@ fn compile_result(
     )
 }
 
-/// Assert that `entry` with `bools` set compiles, on every committed profile, into a kernel that
-/// states its absent reads (`AbsentArgumentRead`, and the `ExecutionStatus` the read marks,
-/// reached by address where the profile addresses buffers and through the stage's binding of it
-/// elsewhere) and validates, or needs a storage texture's format.
+/// Assert that `entry` with `bools` set compiles, on every committed profile, into a kernel whose
+/// absent reads take zero and mark nothing (no `AbsentArgumentRead`, no `ExecutionStatus`, no
+/// status push field or binding) and validates, or needs a storage texture's format.
 fn absent_read(bc: &[u8], entry: &str, bools: &[(u32, bool)]) {
     for (stem, p) in committed_profiles().expect("profiles") {
         match compile_result(bc, entry, bools, &p) {
@@ -283,13 +277,12 @@ fn absent_read(bc: &[u8], entry: &str, bools: &[(u32, bool)]) {
                 let fact = RuntimeFact::AbsentArgumentRead {
                     stage: Stage::Kernel,
                 };
-                assert!(a.facts.contains(&fact), "{stem}: {:?}", a.facts);
                 assert!(
-                    a.facts.contains(&RuntimeFact::ExecutionStatus),
+                    !a.facts.contains(&fact) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
                     "{stem}: {:?}",
                     a.facts
                 );
-                assert_eq!(status_reach(&a), status_reach_on(&p), "{stem}: {entry}");
+                assert_eq!(status_reach(&a), StatusReach::None, "{stem}: {entry}");
                 validate(&a, &p);
             }
             Err(Error::NeedsInput(_)) => {}
@@ -852,15 +845,11 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
 !21 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
-/// With `t` gated off, each of [`ABSENT_READS`]' reads is an absent read. On `Device::new`'s
-/// profiles it marks the status: the fragment function and the kernel state the read and the
-/// `ExecutionStatus` it marks, reached by address where the profile addresses buffers and through
-/// the stage's binding of it elsewhere, or, without the stage's stores and atomics, are refused as
-/// `FunctionConstantArgument`. On `Device::from_queries`' four drivers (`AbsentReads::Nil`) each
-/// takes zero and marks nothing: no fact, no status push field or binding, and no texture slot.
-/// Each module validates.
+/// With `t` gated off, each of [`ABSENT_READS`]' reads, in the fragment function and in the
+/// kernel, takes zero and marks nothing on every committed profile: no fact, no status push field
+/// or binding, and no texture slot. Each module validates.
 #[test]
-fn an_absent_read_marks_through_device_new_and_takes_zero_alone_through_from_queries() {
+fn an_absent_read_takes_zero_and_marks_nothing() {
     let bc = match llvm_assemble_text(ABSENT_READS) {
         Ok(b) => b,
         Err(AssembleError::Missing(why)) => {
@@ -870,46 +859,13 @@ fn an_absent_read_marks_through_device_new_and_takes_zero_alone_through_from_que
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the module: {why}"),
     };
     let off = [(0, false)];
-    let queried: Vec<(&str, Device)> = [
-        "moltenvk-m3",
-        "lavapipe",
-        "amd-780m-radv",
-        "nvidia-rtx50-linux",
-    ]
-    .into_iter()
-    .map(|stem| {
-        let desc = description(stem).expect("description");
-        let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
-        (stem, device)
-    })
-    .collect();
     for (entry, stage) in [
         ("fc_fragment_absent_read", Stage::Fragment),
         ("fc_kernel_absent_read", Stage::Kernel),
     ] {
         let read = RuntimeFact::AbsentArgumentRead { stage };
-        let mut marked = 0;
         for (stem, p) in committed_profiles().expect("profiles") {
-            match compile_result(&bc, entry, &off, &p) {
-                Ok(a) => {
-                    assert!(a.facts.contains(&read), "{stem} {entry}: {:?}", a.facts);
-                    assert!(
-                        a.facts.contains(&RuntimeFact::ExecutionStatus),
-                        "{stem} {entry}: {:?}",
-                        a.facts
-                    );
-                    assert_eq!(status_reach(&a), status_reach_on(&p), "{stem} {entry}");
-                    validate(&a, &p);
-                    marked += 1;
-                }
-                Err(Error::Unsupported(u)) if u.feature == Feature::FunctionConstantArgument => {}
-                Err(e) => panic!("{stem} {entry}: {e}"),
-            }
-        }
-        assert!(marked > 0, "{entry}: no committed profile marks the read");
-        for (stem, device) in &queried {
-            let p = device.profile();
-            let a = compile_result(&bc, entry, &off, p)
+            let a = compile_result(&bc, entry, &off, &p)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
             assert!(
                 !a.facts.contains(&read) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
@@ -918,7 +874,7 @@ fn an_absent_read_marks_through_device_new_and_takes_zero_alone_through_from_que
             );
             assert_eq!(status_reach(&a), StatusReach::None, "{stem} {entry}");
             assert_eq!(texture_slots(&a), Vec::<u32>::new(), "{stem} {entry}");
-            validate(&a, p);
+            validate(&a, &p);
         }
     }
 }

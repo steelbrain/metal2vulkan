@@ -276,7 +276,9 @@ fn predication_guards_the_side_effects_after_a_site() {
 /// write, a copy. They are predicated where the profile has no demote
 /// (`lunarg-desktop-baseline-2023`); `rch_guarded_simd`'s simdgroup sum is refused there needing
 /// demote, as no whole-quad exit can be placed on a profile without fragment quad operations. A
-/// device that demotes (`moltenvk-m3`, `intel-arl-anv`) demotes each and guards nothing. No module
+/// device that demotes (`moltenvk-m3`, `intel-arl-anv`) demotes each and guards nothing; the
+/// simdgroup sum, which counts the helpers Metal runs, is refused needing `shaderQuadControl`
+/// where the device lacks it (`moltenvk-m3`), as only full quads give those helpers. No module
 /// defers a discard (`fragment.discard.deferred`) or records
 /// `PrecisionNote::DiscardDropsSimdgroupStores`. Every module passes L3.
 #[test]
@@ -315,6 +317,19 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
                         Feature::Lowering(LowerFamily::Fragment),
                         Needs::AnyOf(vec![vec![Capability::Feature(
                             VkFeature::ShaderDemoteToHelperInvocation
+                        )]])
+                    ),
+                    "{what}"
+                );
+                continue;
+            }
+            if simd && !p.fields().subgroup.quad_control {
+                assert_eq!(
+                    refusal(&bc, entry, &p),
+                    (
+                        Feature::SubgroupOperations,
+                        Needs::AnyOf(vec![vec![Capability::Feature(
+                            VkFeature::ShaderQuadControl
                         )]])
                     ),
                     "{what}"
@@ -3877,13 +3892,12 @@ fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
 /// (`FragmentTests::Stencil`) runs the variant whose function runs the stencil test itself before
 /// the depth test: at one sample on MoltenVK (M3 Max, M4), RADV and Intel's ANV, the variant states
 /// `ShaderStencilTest`, holds the stencil's stand-in as an `R8_UINT` image of the pipeline's
-/// samples, validates, and plans as a fixed point that binds both stand-ins. At four samples RADV
-/// is refused at the depth attachment: its depth test in the shader needs each sample's depth,
-/// which no profile states (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`). A
-/// draw whose stencil test drops fragments but whose tests write nothing keeps the early-tests
-/// variant. At four samples MoltenVK, whose storage images are single-sample, is refused at the
-/// stencil attachment (sample planes are not implemented), and a pass with a stencil attachment
-/// alone is refused at it.
+/// samples, validates, and plans as a fixed point that binds both stand-ins. At four samples
+/// MoltenVK and RADV are refused at the depth attachment: the depth test in the shader needs each
+/// sample's depth, which no profile states
+/// (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`). A draw whose stencil test drops
+/// fragments but whose tests write nothing keeps the early-tests variant, and a pass with a
+/// stencil attachment alone is refused at it.
 #[test]
 fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
     use crate::bind::FragmentTests;
@@ -3982,26 +3996,8 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
             "{at}"
         );
     }
-    // MoltenVK at four samples: a multisampled stencil the device's single-sample storage images
-    // would hold as sample planes, which are not implemented.
-    {
-        let stem = "moltenvk-m3";
-        let dev = device(stem);
-        let base = dev
-            .compile_render_pipeline(&descriptor(4), &Budget::standard())
-            .expect("the pipeline");
-        assert_eq!(
-            base.plan(&dev, &shape(FragmentTests::Stencil)).map(|_| ()),
-            Err(BindError::Unsupported(
-                Unsupported::not_implemented(Feature::FramebufferFetch)
-                    .at_attachment(Attachment::Stencil)
-            )),
-            "{stem}"
-        );
-    }
-    // RADV at four samples: the depth test in the shader needs each sample's depth.
-    {
-        let stem = "amd-780m-radv";
+    // At four samples: the depth test in the shader needs each sample's depth.
+    for stem in ["moltenvk-m3", "amd-780m-radv"] {
         let dev = device(stem);
         let base = dev
             .compile_render_pipeline(&descriptor(4), &Budget::standard())
@@ -5353,79 +5349,6 @@ fn helper_guards(m: &TypedModule) -> usize {
             _ => false,
         })
         .count()
-}
-
-/// The `optnone` calls of `m` an identity shuffle fences (`spirv::helper_branches`'s `Fences`):
-/// those whose result, or a member of it, an `OpGroupNonUniformShuffle` at the
-/// `SubgroupLocalInvocationId` the module loads reads.
-fn helper_fences(m: &TypedModule) -> usize {
-    use crate::spirv::ir::ValueOrigin;
-    use crate::spirv::ir::{BinOp, Contraction, GlobalKind, GlslOp, GroupInst, ShuffleOp, UnOp};
-    let defs: std::collections::HashMap<_, _> = m
-        .blocks()
-        .iter()
-        .flat_map(|b| &b.insts)
-        .filter_map(|n| n.result.map(|r| (r, &n.inst)))
-        .collect();
-    let lane = |v| match defs.get(&v) {
-        Some(Inst::Load { ptr, .. }) => match m.values().get(ptr.index()).map(|d| d.origin) {
-            Some(ValueOrigin::Global(g)) => m.globals().get(g.index()).is_some_and(|g| {
-                matches!(
-                    g.kind,
-                    GlobalKind::BuiltIn {
-                        builtin: crate::spv::BuiltIn::SubgroupLocalInvocationId,
-                        ..
-                    }
-                )
-            }),
-            _ => false,
-        },
-        _ => false,
-    };
-    let optnone = |v| {
-        matches!(
-            defs.get(&v),
-            Some(
-                Inst::Binary {
-                    op: BinOp::FAdd | BinOp::FSub | BinOp::FMul,
-                    contract: Contraction::Forbidden,
-                    ..
-                } | Inst::Binary {
-                    op: BinOp::UMulExtended | BinOp::SMulExtended,
-                    ..
-                } | Inst::Unary {
-                    op: UnOp::QuantizeToF16,
-                    ..
-                } | Inst::Glsl {
-                    op: GlslOp::Reflect,
-                    ..
-                }
-            )
-        )
-    };
-    let mut fenced = std::collections::BTreeSet::new();
-    for inst in defs.values() {
-        let Inst::Group {
-            op:
-                GroupInst::Shuffle {
-                    op: ShuffleOp::Shuffle,
-                    value,
-                    x,
-                },
-            ..
-        } = inst
-        else {
-            continue;
-        };
-        let call = match defs.get(value) {
-            Some(Inst::CompositeExtract { composite, .. }) => *composite,
-            _ => *value,
-        };
-        if lane(*x) && optnone(call) {
-            fenced.insert(call);
-        }
-    }
-    fenced.len()
 }
 
 /// A selection whose condition every invocation of a draw computes alike (a constant block's flag)

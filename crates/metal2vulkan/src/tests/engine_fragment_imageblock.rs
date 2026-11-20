@@ -815,26 +815,20 @@ fn the_binder_writes_the_storage_and_refuses_layered_passes() {
 }
 
 /// At four samples each function runs once per sample (`SampleId`) and reaches its sample's cell,
-/// layers `sample * words + w`; the pipeline links, and the graphics state records the storage. On
-/// a device without the early-tests defect a function whose only effects are its outputs and its
-/// write declares early tests as at one sample. On the M3 Max's MoltenVK, which drops every image
-/// write of an early-tests shader at more than one sample, none declares them, a function whose
-/// Metal form declares them (`imageblock_accumulate`) included: such a function states
-/// `TestedStorageWrites` without the early-tests variant, so a draw whose depth test acts runs the
-/// variant that tests depth in the shader, before the write.
+/// layers `sample * words + w`; the pipeline links, and the graphics state records the storage. A
+/// function whose only effects are its outputs and its write declares early tests as at one
+/// sample, on MoltenVK on the M3 Max and on RADV alike; a function that states
+/// `TestedStorageWrites` runs, for a draw whose depth test acts, the variant that tests depth in
+/// the shader, before the write.
 #[test]
 fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
     use crate::bind::FragmentTests;
-    use crate::device::DriverWorkaround;
     let Some(bc) = views() else {
         return;
     };
     let budget = Budget::standard();
-    let defect = DriverWorkaround::EarlyTestsDropMultisampledImageWrites;
     for stem in ["moltenvk-m3", "amd-780m-radv"] {
         let dev = device(stem);
-        let drops = dev.profile().fields().workarounds.contains(&defect);
-        assert_eq!(drops, stem == "moltenvk-m3", "{stem}");
         for e in &VIEWS {
             let what = format!("{} on {stem}", e.entry);
             let mut d = render(&bc, e.entry);
@@ -859,15 +853,7 @@ fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
                 } => Some(early_variant),
                 _ => None,
             });
-            let want = match (e.tests, drops) {
-                (Tests::Early, true) => Tests::Tested {
-                    early_variant: false,
-                },
-                (Tests::Tested { .. }, true) => Tests::Tested {
-                    early_variant: false,
-                },
-                (t, _) => t,
-            };
+            let want = e.tests;
             let got = match (early, tested) {
                 (true, None) => Tests::Early,
                 (false, Some(early_variant)) => Tests::Tested { early_variant },

@@ -345,8 +345,7 @@ fn a_uniform_view_read_at_its_bind_offset_drops_the_residual() {
     }
 }
 
-/// The committed profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`: the Iris
-/// Xe RPL-P under ANV, where the row was measured.
+/// The Iris Xe RPL-P under ANV, a profile with `uniformBufferStandardLayout`.
 const AT_BIND_PROFILE: &str = "intel-irisxe-rplp-anv";
 
 /// Whether a function of `m` reads push member `field` with the specialization constant of `key`
@@ -419,99 +418,20 @@ fn reads_push_word(m: &TypedModule, field: PushField, (key, value): (SpecKey, bo
     })
 }
 
-/// On the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`, a storage view's
-/// slot declares its `RangeAtBindOffset` specialization, as a uniform view's does: at 1, which the
-/// binder sets where the view's range starts at the bind offset (offset 0,
-/// `bind::ZERO_OFFSET_CLASS`), no value the slot's `SlotBindOffset` word reaches is read once the
-/// key is folded ([`reads_push_word`]), and a load takes the Metal offset alone whatever residual
-/// is pushed; at 0, the negative control, the word is read and a load takes the residual plus the
-/// offset, as before. A load, a sub-word store and atomics, in both encodings.
+/// On every tested profile, Intel's ANV on two GPUs among them, no storage view declares
+/// `RangeAtBindOffset`: the key a binder sets stays absent, and every access reads the slot's
+/// `SlotBindOffset` residual.
 #[test]
-fn a_storage_view_read_at_its_bind_offset_reads_no_residual() {
-    let cases = [
-        ("buffer_end_byte_load", "buffer_end_byte_load", &[0u32][..]),
-        ("buffer_end_byte_store", "buffer_end_byte_store", &[0]),
-        ("a27_ob1_buffer_atomic", "ob1_buffer_atomic", &[0, 1]),
-    ];
-    for (fixture, entry, slots) in cases {
-        let Some(bc) = assemble_file(fixture) else {
-            return;
-        };
-        for robust in [true, false] {
-            let what = format!("{fixture} robust={robust}");
-            let p = profile_with(AT_BIND_PROFILE, robust, true);
-            assert!(
-                p.workarounds()
-                    .contains(&DriverWorkaround::PushReadsLengthenThreadPayload),
-                "{what}"
-            );
-            check_l3(&bc, entry, &p, &what);
-            let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let (_, m) = typed_module(&bc, entry, &p).expect("module");
-            for &i in slots {
-                let key = SpecKey::RangeAtBindOffset(sref(i));
-                let field = PushField::SlotBindOffset(sref(i));
-                let form = match a.interface.slots.get(&sref(i)) {
-                    Some(SlotInterface::Buffer(b)) => b.form,
-                    other => panic!("{what}: {other:?}"),
-                };
-                assert_eq!(
-                    form,
-                    BufferForm::Descriptor(DescriptorView::Storage),
-                    "{what} slot {i}"
-                );
-                assert!(a.interface.read_keys().contains(&key), "{what} slot {i}");
-                assert!(
-                    !reads_push_word(&m, field, (key, true)),
-                    "{what} slot {i} at 1"
-                );
-                assert!(
-                    reads_push_word(&m, field, (key, false)),
-                    "{what} slot {i} at 0"
-                );
-            }
-        }
-    }
-    let Some(bc) = assemble_file("buffer_end_byte_load") else {
-        return;
-    };
-    let data = [1u8, 2, 3, 4, 5, 0x9C];
-    let key = SpecKey::RangeAtBindOffset(sref(0));
-    for robust in [true, false] {
-        let p = profile_with(AT_BIND_PROFILE, robust, true);
-        let (plan, m) = typed_module(&bc, "buffer_end_byte_load", &p).expect("module");
-        // The data at byte 0, a residual of 8 pushed: byte 5 when the range starts at the bind
-        // offset, byte 13 (the padding) when it does not.
-        for (at_bind, want) in [(1u64, 0x9Cu8), (0, 0x77)] {
-            let res = Resources {
-                buffers: vec![bound(0, 0, &data, 0x77), bound(1, 0, &[0; 4], 0)],
-                push: push_bytes(&plan, &[(0, 8)]),
-                spec: [(key, at_bind)].into(),
-            };
-            let out = run(&m, &Config::default(), res).expect("run");
-            assert_eq!(
-                out.buffers[1][..4],
-                [want, 0, 0, 0],
-                "robust={robust} at_bind={at_bind}"
-            );
-        }
-    }
-}
-
-/// On every other tested profile, the same driver's on another GPU among them
-/// (`intel-irisxe-anv`), no storage view declares `RangeAtBindOffset`: the key a binder sets stays
-/// absent, every access reads the slot's `SlotBindOffset` residual as before, and the plan's slot
-/// takes the class it took before (`bind::plan::slots`). The modules are the ones those profiles
-/// made before the row existed (`golden_hashes` pins every public fixture's on every committed
-/// profile).
-#[test]
-fn a_storage_view_reads_its_residual_without_the_row() {
+fn a_storage_view_reads_its_residual() {
     let Some(bc) = assemble_file("buffer_end_byte_load") else {
         return;
     };
     let key = SpecKey::RangeAtBindOffset(sref(0));
     let field = PushField::SlotBindOffset(sref(0));
-    for stem in PROFILES.into_iter().chain(["intel-irisxe-anv"]) {
+    for stem in PROFILES
+        .into_iter()
+        .chain([AT_BIND_PROFILE, "intel-irisxe-anv"])
+    {
         for robust in [true, false] {
             let what = format!("{stem} robust={robust}");
             let p = profile_with(stem, robust, true);
@@ -530,8 +450,8 @@ fn a_storage_view_reads_its_residual_without_the_row() {
 }
 
 /// A kernel's `constant` slot reads through a uniform view, and its layout binds nothing for it
-/// but that view: on the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`,
-/// with `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`), the slot's form is the
+/// but that view: on Intel's Iris Xe RPL-P under ANV, with `uniformBufferStandardLayout`
+/// (`u32[]`) and without (`uvec4[]`), the slot's form is the
 /// plain uniform view, its `RangeAtBindOffset` key is read, and set 0 holds the slot's uniform
 /// binding and the written slot's storage binding alone, numbered densely; a plan of nothing
 /// bound writes those two, a uniform buffer and a storage buffer, and nothing else in set 0. On

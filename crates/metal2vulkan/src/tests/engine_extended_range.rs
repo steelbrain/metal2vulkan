@@ -643,21 +643,17 @@ fn argb8_storage_slots_rotate_their_bytes() {
 }
 
 /// A half-float storage slot (formatless, and declared `Rgba16f`) writes each `float` channel as
-/// computed, the device's conversion rounding it and storing its NaN. The rounding is Metal's
-/// toward zero where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module
-/// requires its property), else the device's own (`PrecisionNote::DeviceColorConversion`); the
-/// NaN is Metal's `0x7e00` where it takes `DriverDeviation::MetalHalfStorageNans` (MoltenVK's: the
-/// module requires its property), else the device's (`PrecisionNote::DeviceNanEncoding`); a
-/// formatless slot's notes hold under the format bound there (`tests::engine_half_storage_notes`).
-/// A formatless slot may also reach a packed small float image, whose NaN is the device's (noted
-/// too) but where the profile takes `DriverDeviation::MetalSmallFloatNans` (the module requires
-/// its property), or a normalized one, whose conversion is the device's on every profile (noted
-/// too). The held lanes cover every tie between neighbouring halves and its
+/// computed, the device's conversion rounding it and storing its NaN, on every profile: the
+/// rounding is the device's own (`PrecisionNote::DeviceColorConversion`) and so is the NaN
+/// (`PrecisionNote::DeviceNanEncoding`), and the module requires no `VkProperty::MetalHalfStorage*`
+/// or `MetalSmallFloatNans`; a formatless slot's notes hold under the format bound there
+/// (`tests::engine_half_storage_notes`). A formatless slot may also reach a packed small float
+/// image, whose NaN is the device's (noted too), or a normalized one, whose conversion is the
+/// device's (noted too). The held lanes cover every tie between neighbouring halves and its
 /// neighbours, past the largest, the infinities and NaNs.
 #[test]
 fn half_float_storage_slots_leave_their_writes_to_the_device() {
     use crate::device::requirements::VkProperty;
-    use crate::error::DriverDeviation;
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("halves", &kernel(Source::ReadWrite, false, 0)) else {
         return;
@@ -690,7 +686,6 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
     };
     let held = move |n: u32| -> [u32; 4] { [0, 1, 2, 3].map(|c| value(n, c)) };
     let class = StorageImageClass::Identity;
-    let mut nans_seen = std::collections::BTreeSet::new();
     for choice in [
         StorageImageChoice {
             numeric: Some(crate::pipeline::sym::SampledType::Float),
@@ -738,41 +733,22 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
                 SPIRV_WORDS,
             )
             .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let rounds = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
-            let nans = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
-            nans_seen.insert(nans);
             let relied = &a.requirements.properties;
-            assert_eq!(
-                relied.contains(&VkProperty::MetalHalfStorageWrites),
-                rounds,
-                "{what}"
-            );
-            let formatless = choice.vk_format == crate::vk::Format::UNDEFINED;
-            let converted = a.precision.contains(&PrecisionNote::DeviceColorConversion);
-            assert!(converted || rounds, "{what}: {:?}", a.precision);
-            if !formatless {
-                assert_eq!(converted, !rounds, "{what}: {:?}", a.precision);
+            for property in [
+                VkProperty::MetalHalfStorageWrites,
+                VkProperty::MetalHalfStorageNans,
+                VkProperty::MetalSmallFloatNans,
+            ] {
+                assert!(!relied.contains(&property), "{what}: {property:?}");
             }
-            assert_eq!(
-                relied.contains(&VkProperty::MetalHalfStorageNans),
-                nans,
-                "{what}"
-            );
-            let small = p.takes_driver_deviation(DriverDeviation::MetalSmallFloatNans);
-            assert_eq!(
-                relied.contains(&VkProperty::MetalSmallFloatNans),
-                formatless && small,
-                "{what}"
-            );
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                !nans || (formatless && !small),
-                "{what}: {:?}",
-                a.precision
-            );
+            for note in [
+                PrecisionNote::DeviceColorConversion,
+                PrecisionNote::DeviceNanEncoding,
+            ] {
+                assert!(a.precision.contains(&note), "{what}: {:?}", a.precision);
+            }
         }
     }
-    assert_eq!(nans_seen.len(), 2, "both NaN facts: {nans_seen:?}");
 }
 
 /// The value of a `half`'s bits (not a NaN).

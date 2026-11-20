@@ -7,9 +7,9 @@
 //! way, the argument stays in the body (`Entry::absent_handles`) and lowering follows its handle
 //! as it follows a present one's: every handle it holds is the absent handle
 //! (`memory::handles::Candidate::Absent`), and each texture operation the handle reaches is an
-//! absent read: it marks the command buffer's execution status where it runs and takes zero
-//! (`texture.absent_argument`), alone or as the arm of a switch-at-use over the operation's
-//! candidates. A run that never reaches the read is Metal's exactly.
+//! absent read: it takes zero and marks nothing (`texture.absent_argument`), alone or as the arm
+//! of a switch-at-use over the operation's candidates. A run that never reaches the read is
+//! Metal's exactly.
 //!
 //! The kernels below are our own, each reading the removed texture `t` (or sampler `s`) only where
 //! the run-time flag `out[0]` is nonzero, otherwise writing 7, through one shape:
@@ -23,10 +23,9 @@
 //! - `ah_sampler_stack`: the present texture `p` sampled through the removed sampler `s`, stored
 //!   into a stack struct and loaded back.
 //!
-//! With `has_t` false each compiles, on every committed profile, into a kernel that states its
-//! absent read and validates, its absent arm marking the status: by the status buffer's address
-//! where the profile addresses buffers, through the stage's binding of it elsewhere.
-//! With `has_t` true each compiles without an absent read. Previously every one was refused
+//! With `has_t` false each compiles, on every committed profile, into a kernel whose absent arm
+//! takes zero and marks nothing (no fact, no status push field or binding), and validates.
+//! With `has_t` true each compiles too. Previously every one was refused
 //! `FunctionConstantArgument` while specializing.
 //!
 //! `llvm-as` assembles the module; without it the tests skip visibly. No GPU is used.
@@ -34,9 +33,8 @@
 use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
-use crate::error::{Capability, Error, Feature, Needs};
+use crate::error::Error;
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
@@ -46,8 +44,7 @@ use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::sym::{SlotClass, Stage};
 use crate::pipeline::testing::{
-    llvm_assemble, meter, profile_with_storage_buffers, status_reach, status_reach_on,
-    storage_buffers, AssembleError, Scratch, StatusReach,
+    llvm_assemble, meter, status_reach, AssembleError, Scratch, StatusReach,
 };
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 
@@ -335,27 +332,22 @@ fn texture_slots(a: &FunctionArtifact) -> Vec<u32> {
         .collect()
 }
 
-/// With `has_t` false, each shape compiles into an absent read on every committed profile, binds
-/// only the present texture a merge may still choose (no slot for the removed one), states the
-/// status it marks, reached by address where the profile addresses buffers and through the
-/// stage's binding of it elsewhere, and validates.
+/// With `has_t` false, each shape compiles on every committed profile into an absent read that
+/// takes zero and marks nothing (no fact, no status push field or binding), binds only the
+/// present texture a merge may still choose (no slot for the removed one), and validates.
 #[test]
 fn a_removed_handle_reached_through_any_shape_is_an_absent_read() {
     let Some(bc) = module() else { return };
-    let mut bound = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
         for entry in KERNELS {
             let a =
                 compile(&bc, entry, false, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-            assert!(absent(&a), "{stem} {entry}: {:?}", a.facts);
             assert!(
-                a.facts.contains(&RuntimeFact::ExecutionStatus),
+                !absent(&a) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
                 "{stem} {entry}: {:?}",
                 a.facts
             );
-            let reach = status_reach(&a);
-            assert_eq!(reach, status_reach_on(&p), "{stem} {entry}");
-            bound += usize::from(reach == StatusReach::Binding);
+            assert_eq!(status_reach(&a), StatusReach::None, "{stem} {entry}");
             // A merge may still choose `p`; a sample through the removed sampler is the
             // absent read whatever it samples, so it reads no texture.
             let present: &[u32] = match entry {
@@ -366,43 +358,9 @@ fn a_removed_handle_reached_through_any_shape_is_an_absent_read() {
             validate(&a, &p);
         }
     }
-    assert!(bound > 0, "no committed profile without buffer addresses");
 }
 
-/// An absent read's binding of the status counts in the stage's storage buffers: on `vk12-floor`
-/// with its limit lowered to what the kernel needs less one, the kernel is refused as
-/// `DescriptorCount`, naming the per-stage storage-buffer limit; it never compiles without its
-/// mark.
-#[test]
-fn an_absent_reads_binding_counts_against_the_storage_buffer_limit() {
-    let Some(bc) = module() else { return };
-    let stem = "vk12-floor";
-    let policy = crate::device::DevicePolicy::default();
-    let full = crate::pipeline::testing::profile(stem, policy).expect("profile");
-    for entry in KERNELS {
-        let a = compile(&bc, entry, false, &full).unwrap_or_else(|e| panic!("{entry}: {e}"));
-        assert_eq!(status_reach(&a), StatusReach::Binding, "{entry}");
-        let need = storage_buffers(&a);
-        let p = profile_with_storage_buffers(stem, policy, need - 1).expect("profile");
-        match compile(&bc, entry, false, &p) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::DescriptorCount, "{entry}");
-                assert_eq!(
-                    u.needs,
-                    Needs::AnyOf(vec![vec![Capability::Limit {
-                        limit: VkLimit::MaxPerStageDescriptorStorageBuffers,
-                        required: u64::from(need),
-                        available: u64::from(need - 1),
-                    }]]),
-                    "{entry}"
-                );
-            }
-            other => panic!("{entry}: {:?}", other.map(|a| status_reach(&a))),
-        }
-    }
-}
-
-/// With `has_t` true the same kernels read their textures and samplers: no absent read.
+/// With `has_t` true the same kernels read their textures and samplers.
 #[test]
 fn a_present_handle_through_the_same_shapes_is_read() {
     let Some(bc) = module() else { return };

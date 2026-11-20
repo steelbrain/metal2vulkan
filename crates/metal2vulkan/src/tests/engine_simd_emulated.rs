@@ -2088,9 +2088,9 @@ fn the_emulated_tiers_limits_stay_refused_for_partial_simdgroups() {
 /// A `dispatchThreads` grid whose edge is a partial simdgroup runs whole on the variant, so its
 /// interior is checked against the variant's limits, not the flattened tier's. On
 /// nvidia-rtx50-linux (`Direct`, z at most 64), an interior of `[1, 1, 96]`, past the device's z,
-/// plans and runs on both pipelines, a deep threadgroup running as one row
-/// (`SpecKey::DeepThreadgroup`); an interior of `[1, 1, 64]` asks for the variant, whose plan runs
-/// both regions.
+/// plans and runs on the flattened pipeline, a deep threadgroup running as one row
+/// (`SpecKey::DeepThreadgroup`), and the variant's plan refuses it as a `LocalSize` past z; an
+/// interior of `[1, 1, 64]` asks for the variant, whose plan runs both regions.
 #[test]
 fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
     let Some(bc) = assemble("simd_ops") else {
@@ -2134,12 +2134,16 @@ fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
     };
     assert_eq!(plan.dispatch_variant(&interior), Ok(VariantKey::new()));
     assert!(plan.instantiate_dispatch(&state, &interior).is_ok());
-    for r in [
-        plan.dispatch_variant(&mixed(96)).map(drop),
-        plan.instantiate_dispatch(&state, &mixed(96)).map(drop),
-        vplan.instantiate_dispatch(&state, &mixed(96)).map(drop),
-    ] {
-        assert_eq!(r, Ok(()));
+    assert_eq!(plan.dispatch_variant(&mixed(96)), Ok(VariantKey::new()));
+    assert!(plan.instantiate_dispatch(&state, &mixed(96)).is_ok());
+    match vplan.instantiate_dispatch(&state, &mixed(96)) {
+        Err(BindError::Unsupported(u)) => assert_eq!(
+            u.feature,
+            Feature::LocalSize {
+                axis: Some(Axis::Z)
+            }
+        ),
+        other => panic!("{:?}", other.map(drop)),
     }
     assert_eq!(plan.dispatch_variant(&mixed(64)), Ok(emulated_key()));
     let c = vplan
