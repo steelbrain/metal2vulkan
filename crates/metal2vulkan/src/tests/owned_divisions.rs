@@ -47,9 +47,7 @@ fn modules() -> Vec<Build> {
         indirect_clamp_module,
         mesh_object_arguments_module,
         mesh_scan_module,
-        predication_step_module,
         replay_preprocess_module,
-        two_plane_texels_module,
         visibility_combine_module,
         ycbcr_write_module,
     );

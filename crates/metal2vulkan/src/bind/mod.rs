@@ -80,10 +80,8 @@
 //! ([`ShadowMergeRead`]), and [`shadow_merge_kept_image_module`] reading the kept texels from an
 //! image copy of the shadow too), and where a device copies a shadow back faster by a dispatch, [`shadow_copy_back_module`] stores its texels' words at their rows, and
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
-//! A copy of 32-bit float depths into a depth image of a device that takes
-//! none outside `[0, 1]` clamps them first through [`depth_clamp_module`] ([`clamped_depth`] on
-//! the CPU). A heap's two-plane extended-range texture's texels move between its image and its two
-//! planes in the heap's bytes through [`two_plane_texels_module`]. An ASTC texture
+//! [`clamped_depth`] is a 32-bit float depth clamped into `[0, 1]`, as a copy into a depth image
+//! of a device without `VK_EXT_depth_range_unrestricted` needs it. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names); a PVRTC texture on a device without its
 //! format through a twin of its texels' codes ([`PvrtcDecode`]); an ETC2 or EAC texture on a
@@ -151,7 +149,6 @@ pub(crate) mod tessellation_scan;
 pub(crate) mod texel_parts;
 pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
-pub(crate) mod two_plane_texels;
 pub(crate) mod visibility_combine;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
@@ -174,7 +171,7 @@ pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
     ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
 };
-pub use depth_clamp::{clamped_depth, depth_clamp_module, DepthClampModule};
+pub use depth_clamp::clamped_depth;
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
@@ -251,10 +248,6 @@ pub use replay::{
     MAX_REPLAY_REGIONS, MAX_REPLAY_SLOTS, MAX_REPLAY_VARIANTS,
 };
 pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
-pub use replay::{
-    predication_step_module, PredicationCompare, PredicationOp, PredicationStep,
-    PredicationStepForm, PredicationStepModule,
-};
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,
@@ -292,7 +285,6 @@ pub use tessellation_scan::{
 pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
-pub use two_plane_texels::{two_plane_texels_module, PlaneLayout, TwoPlaneTexelsModule};
 pub use visibility_combine::{
     visibility_combine_module, ContinuedResult, VisibilityCombine, VisibilityCombineModule,
 };

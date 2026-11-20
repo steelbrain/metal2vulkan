@@ -161,12 +161,7 @@ pub use merged::{
     MERGED_CHUNK, MERGED_HEADER_BYTES, MERGED_REST_FIRST,
 };
 pub(crate) use merged::{merged_fragment_table, merged_vertex, MergedVertex};
-mod predication;
 mod rules;
-pub use predication::{
-    predication_step_module, PredicationCompare, PredicationOp, PredicationStep,
-    PredicationStepForm, PredicationStepModule,
-};
 pub use rules::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
     draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts, DrawReplayRule,

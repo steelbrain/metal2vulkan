@@ -606,12 +606,6 @@ surface! {
         enum FlatArguments N;
         struct FlatDispatchModule N;
         struct FlatIndirect N;
-        fn predication_step_module;
-        enum PredicationCompare N;
-        enum PredicationOp N;
-        struct PredicationStep N;
-        enum PredicationStepForm N;
-        struct PredicationStepModule N;
         struct FunctionTableSnapshot O;
         struct FunctionTableWords O;
         fn geometry_flags;
@@ -645,9 +639,7 @@ surface! {
         enum ShadowTexelView E;
         fn shadow_copy_in_module;
         struct ShadowCopyInModule N;
-        fn depth_clamp_module;
         fn clamped_depth;
-        struct DepthClampModule N;
         fn shadow_merge_module;
         struct ShadowMergeModule N;
         fn shadow_merge_image_module;
@@ -688,9 +680,6 @@ surface! {
         struct MipmapFilterKernel O;
         struct MipmapFilterLevel N;
         struct MipmapFilterModule N;
-        fn two_plane_texels_module;
-        struct TwoPlaneTexelsModule N;
-        struct PlaneLayout N;
         fn ycbcr_convert_module;
         fn ycbcr_convert_floats_module;
         fn ycbcr_texel;
