@@ -121,6 +121,17 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.compute_pipeline(library, entry)
     }
 
+    fn compute_pipeline_with_constants(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[crate::function_facts::ConstantValue],
+    ) -> Answer<Handle> {
+        let _span = self.watch("compute_pipeline_with_constants");
+        self.inner
+            .compute_pipeline_with_constants(library, entry, constants)
+    }
+
     fn static_threadgroup_memory_length(&mut self, pipeline: Handle) -> Answer<u64> {
         let _span = self.watch("static_threadgroup_memory_length");
         self.inner.static_threadgroup_memory_length(pipeline)

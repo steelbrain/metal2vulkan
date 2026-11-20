@@ -440,11 +440,15 @@ fn our_stage_input_attributes(
 fn constant_values(values: &[ConstantValue]) -> Retained<MTLFunctionConstantValues> {
     let built = MTLFunctionConstantValues::new();
     for value in values {
-        let bytes = std::ptr::NonNull::from(value.bytes.as_slice()).cast::<std::ffi::c_void>();
+        // The case states a vector's lanes packed (a `ushort3` in 6 bytes, as the translator
+        // takes it); zeros past them cover a setter that reads the type's aligned size.
+        let mut padded = value.bytes.clone();
+        padded.extend([0u8; 16]);
+        let bytes = std::ptr::NonNull::from(padded.as_slice()).cast::<std::ffi::c_void>();
         let data_type = MTLDataType(value.data_type.as_raw() as usize);
-        // SAFETY: each pointer is to `value.bytes`, which outlives the call, and each holds the
-        // bytes the case states for the type and the count it states. The index, the range and
-        // the name are the case's own; Metal checks them against the function's own constants
+        // SAFETY: each pointer is to `padded`, which outlives the call, and each holds the bytes
+        // the case states for the type and the count it states, then zeros. The index, the range
+        // and the name are the case's own; Metal checks them against the function's own constants
         // when the pipeline state compiles, and a value naming no constant is ignored.
         unsafe {
             match &value.at {
@@ -2281,6 +2285,32 @@ impl Side for MetalSide {
         let function = library
             .newFunctionWithName(&NSString::from_str(entry))
             .ok_or_else(|| Failure::named("NoSuchFunction", entry.to_owned()))?;
+        let pipeline = self
+            .device
+            .newComputePipelineStateWithFunction_error(&function)
+            .map_err(|error| Failure::named("NewComputePipelineState", error.to_string()))?;
+        Ok(keep(&mut self.pipelines, pipeline))
+    }
+
+    fn compute_pipeline_with_constants(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[ConstantValue],
+    ) -> Answer<Handle> {
+        let library = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let values = constant_values(constants);
+        let function = library
+            .newFunctionWithName_constantValues_error(&NSString::from_str(entry), &values)
+            .map_err(|error| {
+                Failure::named(
+                    "NewFunctionWithConstantValues",
+                    error.localizedDescription().to_string(),
+                )
+            })?;
         let pipeline = self
             .device
             .newComputePipelineStateWithFunction_error(&function)

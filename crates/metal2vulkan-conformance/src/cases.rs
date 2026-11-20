@@ -101,6 +101,7 @@ pub mod fragment_imageblock_reflection;
 pub mod frame_chains;
 pub mod fresh_contents;
 pub mod function_bindings;
+pub mod function_constants_half3;
 pub mod function_facts;
 pub mod half_output_blends;
 pub mod half_read_nans;
@@ -633,6 +634,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(buffer_bind_off_alignment::BufferBindOffAlignment));
     cases.push(Box::new(threadgroup_start::ThreadgroupStart));
     cases.push(Box::new(nan_integer_conversions::NanIntegerConversions));
+    cases.push(Box::new(function_constants_half3::FunctionConstantsHalf3));
     cases
 }
 

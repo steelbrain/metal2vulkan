@@ -796,6 +796,19 @@ pub trait Side {
     /// `newComputePipelineStateWithFunction:error:` of the library's `entry`.
     fn compute_pipeline(&mut self, library: Handle, entry: &str) -> Answer<Handle>;
 
+    /// `newComputePipelineStateWithFunction:error:` of the library's `entry` made with `constants`
+    /// (`newFunctionWithName:constantValues:error:`): a kernel its function constants specialize,
+    /// in the handle space of [`Side::compute_pipeline`].
+    fn compute_pipeline_with_constants(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[crate::function_facts::ConstantValue],
+    ) -> Answer<Handle> {
+        let _ = (library, entry, constants);
+        Err(Failure::unavailable("compute_pipeline_with_constants"))
+    }
+
     /// `staticThreadgroupMemoryLength` of a compute pipeline state: the bytes the kernel's own
     /// `threadgroup` arrays take.
     ///

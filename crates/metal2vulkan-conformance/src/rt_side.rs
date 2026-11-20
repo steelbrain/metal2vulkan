@@ -636,6 +636,24 @@ impl Side for RtSide<'_> {
         Ok(keep(&mut self.pipelines, state))
     }
 
+    fn compute_pipeline_with_constants(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[crate::function_facts::ConstantValue],
+    ) -> Answer<Handle> {
+        let function = (self.held_library(library)?.function(entry))
+            .map_err(|error| self.on.translation_failure(&error))?;
+        let mut function = rt::FunctionDescriptor::new(function);
+        function.constants = crate::function_facts::constant_values(constants);
+        let descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function));
+        let on = self.on;
+        let state = (on.device)
+            .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
+            .map_err(|error| on.failure(&error))?;
+        Ok(keep(&mut self.pipelines, state))
+    }
+
     fn static_threadgroup_memory_length(&mut self, pipeline: Handle) -> Answer<u64> {
         let state = self.held_pipeline(pipeline)?;
         Ok(u64::from(state.static_threadgroup_memory_length()))

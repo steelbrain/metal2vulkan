@@ -1800,6 +1800,31 @@ impl Side for RuntimeSide<'_> {
         Ok(keep(&mut self.pipelines, pipeline))
     }
 
+    fn compute_pipeline_with_constants(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[ConstantValue],
+    ) -> Answer<Handle> {
+        let library = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let function = library
+            .new_function_with_name_constant_values(
+                entry,
+                &crate::function_facts::constant_values(constants),
+            )
+            .map_err(|error| Failure::of(&error))?;
+        let descriptor = metal2vulkan::pipeline::ComputePipelineDescriptor::new(
+            metal2vulkan::pipeline::StageSource::Function(function.function_descriptor()),
+        );
+        let pipeline = crate::states::making_a_state(self.device)
+            .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+            .map_err(|error| Failure::of(&error))?;
+        Ok(keep(&mut self.pipelines, pipeline))
+    }
+
     fn static_threadgroup_memory_length(&mut self, pipeline: Handle) -> Answer<u64> {
         let state = self
             .pipelines
