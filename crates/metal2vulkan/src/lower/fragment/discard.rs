@@ -59,9 +59,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{LanguageVersion, Version};
 use crate::air::canon::discard_sink::{placement, Facts, Placement};
 use crate::air::intrinsics::{AirIntrinsic, GroupScope, LlvmIntrinsic, Sync, TexOp};
-use crate::air::ir::{
-    AddrSpace, BlockId, Body, Callee, Inst, InstId, InstKind, Type, TypeId, Value,
-};
+use crate::air::ir::{AddrSpace, BlockId, Body, Callee, Inst, InstId, InstKind, Type, Value};
 use crate::budget::Meter;
 use crate::device::requirements::VkFeature;
 use crate::device::subgroup::OpBits;

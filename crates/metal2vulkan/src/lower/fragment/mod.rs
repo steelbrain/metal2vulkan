@@ -154,7 +154,7 @@ pub enum FragmentStrategy {
 }
 
 impl FamilyStrategy for FragmentStrategy {
-    fn name(&self, plans: &FamilyPlans) -> Cow<'static, str> {
+    fn name(&self, _: &FamilyPlans) -> Cow<'static, str> {
         Cow::Borrowed(match self {
             FragmentStrategy::Discard => "fragment.discard",
             FragmentStrategy::NumSamples(_) => "fragment.num_samples",

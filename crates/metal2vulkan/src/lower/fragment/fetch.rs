@@ -1511,11 +1511,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // A draw may move a color the function writes through its first output into the storage
     // form: a color its render pass instance keeps out of its subpass for other draws'
     // interlocked form (`VariantKey::interlocked_colors`, single-sampled), or an extended-range
-    // color whose `half` shadow the instance holds (`VariantKey::extended_shadows`), whose
-    // variant at more than one sample [`storage_form`] refuses where the driver drops its writes
-    // under early tests. The plan of the pipeline as compiled, which stores no color so, selects
-    // the tests such a draw's variant needs from this.
-    let movable = stored_before_tests(&body, (declared_early, exports), (true, false));
+    // color whose `half` shadow the instance holds (`VariantKey::extended_shadows`). The plan of
+    // the pipeline as compiled, which stores no color so, selects the tests such a draw's variant
+    // needs from this.
+    let movable = stored_before_tests(&body, (declared_early, exports), true);
     if (movable.tested || movable.untested)
         && returns(|r| matches!(r, OutputRole::RenderTarget { index: 0, .. }))
     {

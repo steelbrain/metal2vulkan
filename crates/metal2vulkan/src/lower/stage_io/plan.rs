@@ -9,7 +9,6 @@ use crate::air::abi::{
 };
 use crate::air::intrinsics::{AirIntrinsic, Fragment as AirFragment, InterpolateAt};
 use crate::air::ir::{ArgIdx, Callee, InstKind, Type, TypeId as AirTypeId, Value};
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{VkExtension, VkFeature, VkLimit, VkProperty};
 use crate::error::{Attachment, Capability, DriverDeviation, Error, Feature, Unsupported};
 use crate::lower::arith::legal::{form_on, refuse_bfloat_color, refuse_int64_interface};

@@ -548,7 +548,7 @@ fn the_loop_refuses_each_function_it_does_not_fit_by_its_reason() {
             );
             l3(&dev, p, &what);
         }
-        fitted += usize::from(defect.is_none());
+        fitted += 1;
         for (k, (f, refusal)) in COV_REFUSED.into_iter().enumerate() {
             match coverage_loop_pipeline(&dev, &lib, COV_COVER, f).map(|_| ()) {
                 Err(e) if e == refusal.error() => refused[k] += 1,
@@ -577,8 +577,7 @@ fn the_loop_refuses_each_function_it_does_not_fit_by_its_reason() {
                 l3(&dev, &p, &what);
             }
             Err(e) => assert!(
-                e == CoverageLoopRefusal::InterpolationFunctions.error()
-                    || Some(&e) == defect.as_ref(),
+                e == CoverageLoopRefusal::InterpolationFunctions.error(),
                 "{what}: {e:?}"
             ),
         }
