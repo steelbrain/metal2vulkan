@@ -75,17 +75,9 @@ const READ_WRITE: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::S
 /// The buffer every making row is laid over: 4096 bytes, as the lane's is.
 const BUFFER: u64 = 4096;
 
-/// What the two recorded cases loosen, and what justifies it.
-///
-/// A 2D texture over a buffer whose rows the device's own linear image does not lay out as Metal
-/// does is an image the encoders copy the texels into and back — a **shadow** — and the runtime
-/// announces that once per device (`shadowed-texture`). Metal announces nothing, ever, so the
-/// notices site differs for every case of this family that holds a 2D row, and the notice is what
-/// justifies the difference. Measured on this M3 Max: the texture buffers alias their bytes and
-/// announce nothing, and it is the 2D rows that take the shadow.
-///
-/// Nothing else is loosened. Every fact and every byte of both cases compares exactly.
-fn shadow_allowances() -> Vec<crate::allowance::Allowance> {
+/// What the two recorded cases loosen: the notices, and nothing else. Every fact and every byte of
+/// both cases compares exactly.
+fn allowances() -> Vec<crate::allowance::Allowance> {
     // Every row reads its answer back through a `Shared` buffer, so on a device without
     // unified memory the runtime announces `shared-in-system-memory`
     // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -97,10 +89,7 @@ fn shadow_allowances() -> Vec<crate::allowance::Allowance> {
     // nothing else (replay-nvidia.log). On MoltenVK, where
     // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
     // recording of this suite declares it.
-    vec![
-        crate::replay::shared_memory_notice(),
-        crate::replay::notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
-    ]
+    vec![crate::replay::shared_memory_notice()]
 }
 
 /// Every case of the family.
@@ -214,7 +203,7 @@ impl Case for MadeOverBuffer {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        shadow_allowances()
+        allowances()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -618,7 +607,7 @@ impl Case for CpuAccess {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        shadow_allowances()
+        allowances()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

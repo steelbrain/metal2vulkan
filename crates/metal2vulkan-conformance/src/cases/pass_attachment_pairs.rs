@@ -84,7 +84,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -690,26 +689,13 @@ impl Case for AttachmentPairs {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every texel Metal leaves is one we must leave, and every
-        // declared code is a notice. The resolves case stores an attachment `DontCare` in two of
-        // its four cells, and a device whose `DontCare` store is not Metal's announces that it took
-        // the near-equivalent; the loads case stores every attachment and declares nothing.
+        // **No value is loosened**: every texel Metal leaves is one we must leave.
         //
         // Both cases read their attachments back through a `Shared` buffer, and a device with no
         // unified memory keeps a `Shared` allocation in system memory because that is the only
         // memory both sides can reach. That belongs to the venue's memory model rather than to
         // either crossing, so both declare it.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
-        if self.cross == Cross::Resolves {
-            allowances.extend([
-                crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-                // A device whose own `AVERAGE` resolve is not measured to be Metal's draws the
-                // colour resolve after the pass by Metal's rules instead. Every sample of every
-                // covered pixel carries one value here, so either path reaches the same texel.
-                crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
-            ]);
-        }
-        allowances
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

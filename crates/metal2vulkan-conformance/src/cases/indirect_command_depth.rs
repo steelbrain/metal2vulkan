@@ -629,16 +629,14 @@ impl Case for PatchDraws {
 ///
 /// Taken from [`super::tessellation_sweeps`], whose own documentation says why each is named:
 /// `tessellation-winding` and `tessellation-factor-edge-cases` are announced unconditionally by
-/// the control stage, and `tessellation-triangle-order` and `emulated-tessellation-draws` by the
-/// venues whose tessellator is not Apple's or which have no `tessellationShader` at all. None can
-/// move a mark, because a mark is a set member and not a position in a triangle stream; they are
-/// named because a notice our run announces that no case names is a divergence.
+/// the control stage, and `tessellation-triangle-order` by the venues whose tessellator is not
+/// Apple's. None can move a mark, because a mark is a set member and not a position in a triangle
+/// stream; they are named because a notice our run announces that no case names is a divergence.
 fn tessellation_notices() -> Vec<Allowance> {
     [
         crate::degradation::Degradation::TessellationWinding,
         crate::degradation::Degradation::TessellationFactorEdgeCases,
         crate::degradation::Degradation::TessellationTriangleOrder,
-        crate::degradation::Degradation::EmulatedTessellationDraws,
     ]
     .into_iter()
     .map(|notice| crate::replay::notice_allowance(notice.code()))

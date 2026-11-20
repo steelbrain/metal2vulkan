@@ -118,20 +118,3 @@ pub const fn plane_extent(rotation: u32, frame: [u32; 2]) -> [u32; 2] {
         _ => frame,
     }
 }
-
-/// Where Metal stores the pass texel `(x, y)` of a `frame`-sized texture of `rotation`.
-///
-/// **Measured on the oracle**: all five rotations over an 8x4 frame, every texel, on an Apple M3
-/// Max under macOS 27.0.1 (`probes/rotated_surface_planes.m`). The same rule an Apple M4 gave,
-/// re-measured here rather than carried, because a number from a chip this tree no longer has can
-/// never be checked against the oracle again.
-pub const fn stored_at(rotation: u32, frame: [u32; 2], at: [u32; 2]) -> [u32; 2] {
-    let [width, height] = frame;
-    let [x, y] = at;
-    match rotation {
-        1 | 4 => [height - 1 - y, x],
-        2 => [width - 1 - x, height - 1 - y],
-        3 => [y, width - 1 - x],
-        _ => [x, y],
-    }
-}

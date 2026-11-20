@@ -129,10 +129,8 @@
 //!
 //! `DontCare` is **not** swept, in either position. A `DontCare` **load** of an attachment the pass
 //! stores keeps its texels only in the tiles no primitive touched, and which tiles those are
-//! depends on where the GPU places the vertices — our runtime reaches Metal's answer in the tiles
-//! a draw reaches and announces a near-equivalent for the rest
-//! (`Degradation::DontCareLoadTiles`), so a cell over it would compare a device's rasterizer. A
-//! `DontCare` **store** leaves the attachment undefined on both sides.
+//! depends on where the GPU places the vertices, so a cell over it would compare a device's
+//! rasterizer. A `DontCare` **store** leaves the attachment undefined on both sides.
 //!
 //! # Why this family is safe
 //!

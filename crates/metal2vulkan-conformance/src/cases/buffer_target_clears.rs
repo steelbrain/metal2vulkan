@@ -103,32 +103,6 @@
 //! of, the `DontCare` row is the only thing distinguishing a pass that wrote nothing from one that
 //! wrote the clear.
 //!
-//! # The two venues run different code of ours, and neither sees both halves
-//!
-//! Metal's answer above is one answer. **Our own side reaches it two different ways**, and which
-//! way depends on the device, so the second venue here is not breadth over the first — it is cover
-//! for a path the first never takes.
-//!
-//! Our runtime renders a target whose rows the device's own linear image cannot lay out
-//! as Metal does into a **shadow** image and copies back (`shadowed-texture`). Where the image
-//! really does lie over the buffer's bytes and the pass stores nothing of it, it renders into a
-//! **kept image** instead so the buffer keeps its bytes (`kept_bytes`, `dont-care-stand-in`). The
-//! two are exclusive: `kept_bytes` skips an attachment that already has a shadow, and it is reached
-//! only by an attachment the pass does not store.
-//!
-//! Measured on both:
-//!
-//! - **MoltenVK on this M3 Max**: all six rows shadow, so all six announce `shadowed-texture` and
-//!   **no row reaches the kept-image path at all**.
-//! - **lavapipe**: the tight pitch of 16 aliases the buffer rather than shadowing, so
-//!   `shadowed-texture` fires for five of the six and not for `pitch-16-stored`, and
-//!   `pitch-16-dont-care` takes the kept-image path and announces `dont-care-stand-in` — a code
-//!   MoltenVK never announces for any row of this family.
-//!
-//! So a one-venue run of this family leaves one of our own two implementations of the answer
-//! unexercised, whichever venue it is. That is the reason to run both, and it is why the
-//! declarations name two codes where no single run announces more than one of them.
-//!
 //! Nothing here faults a GPU, hangs one or trips a watchdog: one 4 x 4 target a case, one clear and
 //! no draw, over two kilobytes of shared memory, committed once and read back.
 
@@ -201,20 +175,6 @@ struct Row {
     /// `bytesPerRow`: how far apart the target's rows lie in the buffer.
     pitch: u64,
     store: StoreAction,
-    /// Whether a venue has been **measured** announcing the kept-image notice
-    /// (`dont-care-stand-in`) for this row, which is what the row must declare.
-    ///
-    /// Measured rather than reasoned, and narrow on purpose. The path is reachable only by a row
-    /// the pass does not store, so a `Store` row can never need it -- but of the three `DontCare`
-    /// rows only the tight pitch has been seen to take it, on lavapipe, where its target aliases
-    /// the buffer instead of being shadowed. On MoltenVK no row of this family takes it, and on
-    /// lavapipe the two padded pitches are shadowed and do not either.
-    ///
-    /// So the padded rows declare nothing here. A declaration no run of the suite can check is the
-    /// noise the unfired tally exists to show, and the failure direction is the better one: a
-    /// device that does announce it for a padded row fails loudly as an undeclared notice, and
-    /// whoever sees that adds the declaration with the measurement that earned it.
-    kept_image: bool,
 }
 
 /// The six rows: three pitches, each stored and each thrown away.
@@ -223,37 +183,31 @@ const ROWS: [Row; 6] = [
         case: "buffer-target-clears-pitch-32-stored",
         pitch: 32,
         store: StoreAction::Store,
-        kept_image: false,
     },
     Row {
         case: "buffer-target-clears-pitch-32-dont-care",
         pitch: 32,
         store: StoreAction::DontCare,
-        kept_image: false,
     },
     Row {
         case: "buffer-target-clears-pitch-256-stored",
         pitch: 256,
         store: StoreAction::Store,
-        kept_image: false,
     },
     Row {
         case: "buffer-target-clears-pitch-256-dont-care",
         pitch: 256,
         store: StoreAction::DontCare,
-        kept_image: false,
     },
     Row {
         case: "buffer-target-clears-pitch-16-stored",
         pitch: 16,
         store: StoreAction::Store,
-        kept_image: false,
     },
     Row {
         case: "buffer-target-clears-pitch-16-dont-care",
         pitch: 16,
         store: StoreAction::DontCare,
-        kept_image: true,
     },
 ];
 
@@ -365,26 +319,7 @@ impl Case for BufferTargetClear {
         // One set of bytes is loosened: a `DontCare` row's texels, which Apple's page lets the GPU
         // replace with arbitrary data (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding and the
         // bytes before and after the target compare exactly, Metal's against ours.
-        // The rest is the **announcing**. Our runtime keeps a target
-        // whose rows the device's own linear image does not lay out as Metal does as a shadow
-        // image the pass renders into and the encoders copy back, and it announces that once per
-        // device (`shadowed-texture`); Metal announces nothing, ever, because nothing of the kind
-        // is a thing Metal has to do.
         //
-        // **One declaration per code the case announces, measured on both venues.** A code a case
-        // announces and declares nowhere is a divergence at the notices site
-        // (`DivergenceKind::UndeclaredNotice`), so this list is a measured set and not a guess.
-        // On this M3 Max through MoltenVK all six rows announce `shadowed-texture` and nothing
-        // else. On lavapipe the tight pitch of 16 announces it for no row at all and the
-        // `DontCare` one announces `dont-care-stand-in` instead, so the union is two codes and
-        // neither venue sees both.
-        //
-        // `dont-care-stand-in` is declared on the one row a venue has been **measured**
-        // announcing it for (`Row::kept_image`), not on every row that could in principle take the
-        // path. The first shape of this declared it on all three `DontCare` rows, and the M3 Max
-        // replay reported three declarations fired on no venue of which three "name nothing this
-        // run justifies either, so no run of this suite has checked them" -- two of them true of
-        // lavapipe as well, since the padded pitches are shadowed there too.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -396,17 +331,7 @@ impl Case for BufferTargetClear {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::ShadowedTexture.code(),
-            ),
-        ];
-        if self.row.kept_image {
-            named.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::DontCareStandIn.code(),
-            ));
-        }
+        let mut named = vec![crate::replay::shared_memory_notice()];
         named.extend(self.row.dont_care_texels());
         named
     }

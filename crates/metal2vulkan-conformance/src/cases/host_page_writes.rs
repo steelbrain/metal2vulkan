@@ -444,14 +444,6 @@ impl Case for HostPageWrite {
         // vertex function, which is the fixture, not this family's subject) is the suite's
         // (`crate::replay::NATIVE_NOTES`), declared by no row.
         //
-        // `copied-host-pages` is the read-only rows' alone, declared from `Row::read_only`, which
-        // is the bit it is about. On macOS a no-copy buffer with bit 24 announces nothing: the
-        // runtime imports the pages through a read-only view of them. Off macOS no import keeps
-        // the GPU's writes out, so the buffer is made over a copy of the pages whose GPU writes are
-        // dropped at each batch's completion (the runtime's `copied.rs`), and that copy is
-        // announced. It never fires on MoltenVK, which is why it is declared rather than relied
-        // on.
-        //
         // `shared-in-system-memory` is every row's and belongs to the venue, not to this family:
         // each row reads its pages back through a `Shared` buffer
         // (`crate::replay::shared_memory_notice`). Announced by all four on the 5080.
@@ -459,13 +451,7 @@ impl Case for HostPageWrite {
         // **None of these loosens a byte**, and that matters most here: the read-only rows' pages,
         // and what a later command buffer reads of them, are this family's whole subject. Those
         // bytes stay compared exactly.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.row.read_only {
-            named.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::CopiedHostPages.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

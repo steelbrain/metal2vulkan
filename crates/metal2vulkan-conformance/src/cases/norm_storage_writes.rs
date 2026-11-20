@@ -458,16 +458,10 @@ impl Case for NormStorageWrites {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Two declarations and no tolerance: the buffer each dispatch reads its words back through
-        // is `Shared`, which is what [`crate::replay::shared_memory_notice`] is for, and the held
-        // route writes a texture held in an argument buffer, whose heap set MoltenVK's layout
-        // query refuses ([`crate::replay::set_past_layout_notice`]: announced by all 7 cases on
-        // the M3 Max under MoltenVK 1.4.2, by none on lavapipe). Each loosens the notices site
-        // alone, so every value this case reads still compares exactly.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::set_past_layout_notice(),
-        ]
+        // One declaration and no tolerance: the buffer each dispatch reads its words back through
+        // is `Shared`, which is what [`crate::replay::shared_memory_notice`] is for. It loosens the
+        // notices site alone, so every value this case reads still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -247,16 +247,6 @@ const PASS_NOTICES: &[Degradation] = &[
     // static note `PrecisionNote::DevicePointSize`, which the runtime's side announces as the
     // pipeline state is made (the Iris Xe and lavapipe). Naming it loosens no byte.
     Degradation::DevicePointSize,
-    // A device that resolves the multisampled attachment through a pass of its own rather than in
-    // the store. Announced on lavapipe, where the whole resolve is emulated; MoltenVK resolves in
-    // the store and announces nothing.
-    Degradation::ShaderResolve,
-    // The multisampled attachment of a `MultisampleResolve` store is Vulkan's `DONT_CARE`, which
-    // Apple's GPU is measured to leave at the earlier texels unless its tiler overflows. Announced
-    // on MoltenVK, where that driver fact holds. Nothing of this case reads the multisampled
-    // attachment -- the resolved texel is the whole answer, and it compares exactly -- so naming
-    // the kind declares what our side announced and loosens no byte.
-    Degradation::DontCareStore,
 ];
 
 /// The three vertices of the probe's triangle, which covers what lies left of `edge`.

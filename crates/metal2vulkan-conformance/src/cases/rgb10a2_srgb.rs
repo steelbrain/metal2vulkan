@@ -737,10 +737,9 @@ impl Case for Rgb10A2Srgb {
             .collect()
     }
 
-    /// What a store case's pass announced on MoltenVK, measured: a pass that loads nothing into
-    /// the tile, and the `half` fragment's output conversion; and what a linear sample case's
-    /// pipeline announced on every venue run, its module's filter of the decoded taps. The read and write
-    /// cases name no notice of their own.
+    /// What a store case's pass announced on MoltenVK, measured: the `half` fragment's output
+    /// conversion; and what a linear sample case's pipeline announced on every venue run, its
+    /// module's filter of the decoded taps. The read and write cases name no notice of their own.
     fn allowances(&self) -> Vec<Allowance> {
         use crate::degradation::Degradation as D;
         // Every question reads its answer back through a `Shared` buffer, and a device with no
@@ -748,13 +747,9 @@ impl Case for Rgb10A2Srgb {
         // memory both sides can reach: the venue's memory model rather than this format's answer.
         let mut named = vec![crate::replay::shared_memory_notice()];
         match &self.question {
-            Question::Stores {
-                lanes: Lanes::Float,
-            } => named.push(notice_allowance(D::DontCareLoadTiles.code())),
-            Question::Stores { lanes: Lanes::Half } => named.extend([
-                notice_allowance(D::DontCareLoadTiles.code()),
-                notice_allowance(D::HalfOutputFastMathBlend.code()),
-            ]),
+            Question::Stores { lanes: Lanes::Half } => {
+                named.push(notice_allowance(D::HalfOutputFastMathBlend.code()))
+            }
             // A linear sample filters the decoded taps in the module, and that filter's sum is the
             // device's arithmetic (`bicubic-filter-arithmetic`, announced for the two linear
             // cases on the M3 Max, the RTX 5080 and lavapipe), as `two_plane_samples` declares for

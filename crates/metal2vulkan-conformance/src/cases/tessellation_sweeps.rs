@@ -56,11 +56,10 @@
 //! three readings now have a measurement behind them — the answers these cases recorded are
 //! Metal's own, on the venue they were recorded on.
 //!
-//! `tessellation-triangle-order` and `emulated-tessellation-draws` are named too, for the venues
-//! that announce them: a device whose tessellator is not Apple's orders a patch's triangles its own
-//! way, and a device without `tessellationShader` draws the emulation's. Neither can move a mark,
-//! because a mark is a set member and not a position in a triangle stream; they are named because
-//! a notice our run announces that no case names is a divergence. Neither fired on MoltenVK over an
+//! `tessellation-triangle-order` is named too, for the venues that announce it: a device whose
+//! tessellator is not Apple's orders a patch's triangles its own way. It cannot move a mark,
+//! because a mark is a set member and not a position in a triangle stream; it is named because a
+//! notice our run announces that no case names is a divergence. It did not fire on MoltenVK over an
 //! Apple M3 Max, which is what says that venue draws a patch through Metal's own tessellator.
 //!
 //! # What the recorded answers settle
@@ -329,12 +328,11 @@ fn marks_layout(offset: u64) -> ByteLayout {
 
 /// The notices every tessellation pipeline of ours can announce, which every case here names.
 ///
-/// The first two are unconditional on a tessellation pipeline. The last two are a venue's: a device
-/// whose tessellator is not Apple's announces `tessellation-triangle-order`, and one without
-/// `tessellationShader` announces `emulated-tessellation-draws`. Neither fires on MoltenVK over an
-/// Apple GPU (verified: the replay of `tessellation-patch-indices` on an Apple M3 Max fired two of
-/// the declarations and no other), and both are named so a run on a venue that does announce one
-/// reads it as declared rather than as an undeclared divergence.
+/// The first two are unconditional on a tessellation pipeline. The third is a venue's: a device
+/// whose tessellator is not Apple's announces `tessellation-triangle-order`. It does not fire on
+/// MoltenVK over an Apple GPU (verified: the replay of `tessellation-patch-indices` on an Apple M3
+/// Max fired two of the declarations and no other), and it is named so a run on a venue that does
+/// announce it reads it as declared rather than as an undeclared divergence.
 ///
 /// `tessellation-factor-instance` is **not** here: only a per-instance factor step provokes it, and
 /// only [`FactorSteps`] sets one, so naming it everywhere else would be a declaration no case could
@@ -344,7 +342,6 @@ pub(super) fn tessellation_notices() -> Vec<Allowance> {
         Degradation::TessellationWinding,
         Degradation::TessellationFactorEdgeCases,
         Degradation::TessellationTriangleOrder,
-        Degradation::EmulatedTessellationDraws,
     ]
     .into_iter()
     .map(|notice| crate::replay::notice_allowance(notice.code()))

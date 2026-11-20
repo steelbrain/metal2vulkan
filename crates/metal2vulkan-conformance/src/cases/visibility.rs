@@ -13,12 +13,8 @@
 //! the recordings against the lane's words, which is the evidence the port owes the lane. A fresh
 //! answer that disagrees with the lane is a finding about one of the two chips, not a nuisance.
 //!
-//! Every word compares exactly but a `Boolean` result's: the M3 Max writes 1 where a sample
-//! passed, and the runtime the device's own nonzero value, which it announces
-//! (`device-boolean-visibility`), whose documentation states the bound the comparison holds: zero
-//! exactly where Metal's word is zero ([`Loosening::Nonzero`] at that word alone, `boolean_words`).
-//! Not a native note of the suite's set: the note's bound is exact, so a case names it at the
-//! words it loosens.
+//! Every word compares exactly, a `Boolean` result's included: the M3 Max writes 1 where a sample
+//! passed.
 //!
 //! The shapes, each its own case so a device that lacks precise occlusion queries loses only the
 //! counted rows:
@@ -80,7 +76,6 @@ use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Valu
 use crate::values::{StoreAction, VisibilityResultMode, VisibilityResultType};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType};
-use std::collections::BTreeSet;
 
 /// The owned fixture the lane draws with: `rt6_full` takes a depth and a slope as one `float2` at
 /// vertex buffer 0, and `rt6_white` returns white.
@@ -535,41 +530,7 @@ pub fn all() -> Vec<Visibility> {
 const PASS_NOTICES: &[Degradation] = &[
     // A `Shared` buffer the device keeps in system memory, which the visibility buffer is.
     Degradation::SharedInSystemMemory,
-    // The multisampled attachment of a `MultisampleResolve` store, and a `DontCare` store, are
-    // Vulkan's `DONT_CARE` on a driver measured to leave the earlier texels there. Nothing of
-    // these cases reads a colour attachment -- the visibility result is the answer, and it is
-    // compared exactly -- so naming the kind declares what our side announced and loosens no byte.
-    Degradation::DontCareStore,
 ];
-
-/// Each read's `Boolean` results, as (the pass's index, the result's offset): the offsets whose
-/// last mode set, in that pass or one before it, is `Boolean`, which the pass's `words` site holds,
-/// at each pass the words are read after ([`groups`]).
-fn boolean_words(shape: &Shape) -> Vec<(usize, u64)> {
-    let read: Vec<usize> = groups(shape)
-        .iter()
-        .filter_map(|g| g.last().copied())
-        .collect();
-    let mut held: BTreeSet<u64> = BTreeSet::new();
-    let mut out = Vec::new();
-    for (index, acts) in shape.passes.iter().enumerate() {
-        for act in *acts {
-            match act {
-                Act::Mode(BOOL, offset) => {
-                    held.insert(*offset);
-                }
-                Act::Mode(COUNT, offset) => {
-                    held.remove(offset);
-                }
-                Act::Mode(..) | Act::Draw { .. } | Act::DrawIndirect => {}
-            }
-        }
-        if read.contains(&index) {
-            out.extend(held.iter().map(|&offset| (index, offset)));
-        }
-    }
-    out
-}
 
 /// The shape's passes by command buffer, as indices: all in one where it is `joined`, else one
 /// each.
@@ -834,10 +795,9 @@ impl Case for Visibility {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The notices site, and each `Boolean` result's word by its contract (the module docs): a
-        // visibility result is a number Metal wrote, and any other number that differs is a bug,
-        // not a near-equivalent. Nothing else here is loosened.
-        let mut all: Vec<Allowance> = PASS_NOTICES
+        // The notices site alone: a visibility result is a number Metal wrote, and any number
+        // that differs is a bug, not a near-equivalent.
+        PASS_NOTICES
             .iter()
             .map(|kind| {
                 Allowance::new(
@@ -846,21 +806,7 @@ impl Case for Visibility {
                     Justification::notice(*kind),
                 )
             })
-            .collect();
-        let booleans = boolean_words(self.shape);
-        if !booleans.is_empty() {
-            all.push(crate::replay::notice_allowance(
-                Degradation::DeviceBooleanVisibility.code(),
-            ));
-        }
-        for (index, offset) in booleans {
-            all.push(Allowance::new(
-                format!("case/pass-{index}/words/{offset}"),
-                Loosening::Nonzero,
-                Justification::notice(Degradation::DeviceBooleanVisibility),
-            ));
-        }
-        all
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1266,13 +1212,12 @@ mod tests {
     }
 
     /// Every case of the family is in the table, states its inputs, and loosens **only** its
-    /// notices site and its `Boolean` results' words, each by its contract alone.
+    /// notices site.
     ///
     /// A visibility result is a number Metal wrote; a number that differs is a bug, never a
-    /// near-equivalent, but that a `Boolean` result's nonzero value is the device's. A case that
-    /// ever loosened another word, or a `Boolean` one by more than its contract, would fail here.
+    /// near-equivalent. A case that ever loosened a word would fail here.
     #[test]
-    fn every_case_is_tabled_and_loosens_its_notices_and_boolean_words_alone() {
+    fn every_case_is_tabled_and_loosens_its_notices_alone() {
         for case in all() {
             assert!(
                 TABLE.iter().any(|(name, _)| *name == case.name()),
@@ -1287,33 +1232,16 @@ mod tests {
             );
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
-            let words: Vec<String> = boolean_words(case.shape)
-                .iter()
-                .map(|(index, offset)| format!("case/pass-{index}/words/{offset}"))
-                .collect();
             for allowance in case.allowances() {
-                if words.contains(&allowance.path) {
-                    assert_eq!(allowance.loosening, Loosening::Nonzero, "{}", case.name());
-                    assert_eq!(
-                        allowance.justified_by,
-                        Justification::notice(Degradation::DeviceBooleanVisibility),
-                        "{}",
-                        case.name()
-                    );
-                    continue;
-                }
                 assert_eq!(
                     allowance.path,
                     format!("case/{NOTICES_SITE}/*"),
-                    "{}: an allowance outside the notices site and the Boolean words",
+                    "{}: an allowance outside the notices site",
                     case.name()
                 );
                 match &allowance.justified_by {
                     Justification::Degradation(code) => assert!(
-                        PASS_NOTICES
-                            .iter()
-                            .chain([&Degradation::DeviceBooleanVisibility])
-                            .any(|kind| kind.code() == code),
+                        PASS_NOTICES.iter().any(|kind| kind.code() == code),
                         "{}: {code} is not a visibility-pass notice",
                         case.name()
                     ),

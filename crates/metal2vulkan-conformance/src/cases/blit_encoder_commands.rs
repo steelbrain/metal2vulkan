@@ -40,9 +40,7 @@
 //!   our own leg**: the runtime keeps a managed buffer's host copy apart from the device's, and
 //!   nothing but this call copies the device's writes back into it. The buffer is given a known
 //!   byte and synchronized once before the fill the case is about, so the bytes outside that fill
-//!   are bytes the case wrote. It is the one case of the family that **announces** anything, and
-//!   the only one that declares a notice, and the run that measured it is written at the
-//!   declaration's own constant.
+//!   are bytes the case wrote.
 //! - [`synchronized_managed_texture`]: `synchronizeTexture:slice:level:` of a `Managed` texture,
 //!   read by the host with `getBytes:` at a pitch six times its row — so the answer holds the
 //!   padding between the rows and after the last one, which no device write may touch.
@@ -808,7 +806,11 @@ static SYNCHRONIZED_BUFFER: Row = Row {
         words.push(value);
         words
     },
-    notices: SPLIT_FILL,
+    // The one row of the family that reads its answer back out of a **`Managed`** buffer rather
+    // than a `Shared` one, so [`NOTICES`]'s venue notice is not its: on the RTX 5080 Laptop
+    // (615.71.09) it was the only row of the family that did not announce
+    // `shared-in-system-memory`, and it compared justified there (replay-nvidia.log).
+    notices: &[],
 };
 
 /// The managed texture's extent, and the pitch the host reads it at: six times its row, so the
@@ -1022,20 +1024,6 @@ static FENCED_ENCODERS: Row = Row {
 /// form and the one that makes the next real notice visible.
 const NOTICES: &[Degradation] = &[Degradation::SharedInSystemMemory];
 
-/// The notice [`synchronized_managed_buffer`] announces, **measured** rather than argued.
-///
-/// Its second fill is `[37, 107)` of the managed buffer — neither end a multiple of four — so a
-/// device whose transfer fill writes whole words splits it. Verified on an Apple M3 Max
-/// (MoltenVK, API 1.2, Metal level 27.0.1): the first replay of this case reported
-/// `case/notices` divergent with `metal2vulkan-degrade-split-buffer-fill` announced and nothing
-/// declared, and the declaration is that run's answer. It loosens the notices site alone; every
-/// byte of the buffer still compares exactly, which is the point of the case.
-/// It is the one row of the family that reads its answer back out of a **`Managed`** buffer
-/// rather than a `Shared` one, so [`NOTICES`]'s venue notice is not its: on the RTX 5080 Laptop
-/// (615.71.09) it was the only row of the family that did not announce
-/// `shared-in-system-memory`, and it compared justified there (replay-nvidia.log).
-const SPLIT_FILL: &[Degradation] = &[Degradation::SplitBufferFill];
-
 /// The case of `copyFromTexture:toTexture:`.
 pub fn whole_texture_copy() -> BlitEncoderCommands {
     BlitEncoderCommands {
@@ -1175,12 +1163,11 @@ mod tests {
     /// Every case loosens the notices site and nothing else: no byte of these cases is ever
     /// loosened, whatever form a device's copy or fill takes.
     ///
-    /// And the declaration is held to the one case it was measured on. A code named on a case no
-    /// venue was measured announcing it for is a declaration nothing checks, and the replay would
-    /// report it as an unfired allowance rather than failing — which is the quiet direction, so it
-    /// is pinned here instead.
+    /// And the venue's memory notice is declared only where it was measured: on every row that
+    /// reads its answer back through a `Shared` buffer, and not on the one that reads it out of a
+    /// `Managed` buffer.
     #[test]
-    fn only_the_measured_case_declares_a_notice() {
+    fn only_the_shared_read_backs_declare_a_notice() {
         for case in all() {
             for allowance in case.allowances() {
                 assert_eq!(
@@ -1191,8 +1178,6 @@ mod tests {
                 );
             }
         }
-        // Every row declares the venue's memory notice except the one that reads its answer back
-        // out of a `Managed` buffer, which declares its own measured notice instead.
         assert_eq!(NOTICES, [Degradation::SharedInSystemMemory]);
         let declaring: Vec<&str> = EVERY_ROW
             .iter()
@@ -1200,20 +1185,7 @@ mod tests {
             .map(|row| row.case)
             .collect();
         assert_eq!(declaring, [SYNCHRONIZED_BUFFER.case]);
-        assert_eq!(SYNCHRONIZED_BUFFER.notices, SPLIT_FILL);
-    }
-
-    /// The fill the declaring case makes really is the shape the notice is about: neither end of
-    /// its range is a multiple of four, so a device whose fill writes whole words has to split it.
-    ///
-    /// Without this the declaration would rest on a sentence in a doc comment, and a later edit
-    /// that aligned the range would leave a code declared that nothing provokes.
-    #[test]
-    fn the_declaring_cases_fill_is_unaligned_at_both_ends() {
-        let (offset, length, _) = MANAGED_FILL;
-        assert_ne!(offset % 4, 0, "the fill starts on a word boundary");
-        assert_ne!((offset + length) % 4, 0, "the fill ends on a word boundary");
-        assert!(offset + length <= MANAGED);
+        assert!(SYNCHRONIZED_BUFFER.notices.is_empty());
     }
 
     /// Assert that `origin` plus `size` lies inside `extent` on every axis, naming the step.

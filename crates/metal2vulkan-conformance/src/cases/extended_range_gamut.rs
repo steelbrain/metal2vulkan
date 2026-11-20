@@ -149,26 +149,13 @@ fn fill(pipeline: Handle, values: Handle, extent: Handle) -> [RenderStep; 4] {
 
 /// The notices every case of the family may announce, each with the reason it cannot loosen a
 /// code: `shared-in-system-memory` (the read-back buffer is `Shared`; a device without unified
-/// memory announces it), the kept encoding of a blit through a `BGRA10_XR` texture Metal keeps
-/// compressed (a draw stores canonical codes, so the blit moves the same bytes either way),
-/// `half-output-fast-math-blend` (the fixture is a fast-math module whose `half4` fill a pipeline
-/// stores), and `extended-range-bits-kept` (a draw in a pass over such a color; every texel here is
-/// written by a Metal write first, so its bytes are canonical). Every value still compares
-/// exactly.
-fn notices(format: &Format) -> Vec<Allowance> {
-    let mut named = vec![crate::replay::shared_memory_notice()];
-    named.extend(super::compressed_blits::kept_encoding_notice(
-        format.format.as_raw(),
-    ));
-    named.extend(
-        [
-            Degradation::HalfOutputFastMathBlend,
-            Degradation::ExtendedRangeBitsKept,
-        ]
-        .into_iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code())),
-    );
-    named
+/// memory announces it) and `half-output-fast-math-blend` (the fixture is a fast-math module whose
+/// `half4` fill a pipeline stores). Every value still compares exactly.
+fn notices() -> Vec<Allowance> {
+    vec![
+        crate::replay::shared_memory_notice(),
+        crate::replay::notice_allowance(Degradation::HalfOutputFastMathBlend.code()),
+    ]
 }
 
 /// Read `target` (one sample, `format`) back into a buffer after `work`, and record its texels.
@@ -327,41 +314,9 @@ impl Case for GamutDraw {
         MetalSource::Run
     }
 
-    /// Beside the family's notices, `extended-range-blends-stored-codes` (the second draw blends
-    /// over the codes the first stored, where Metal's tile holds `half`s through the pass, on a
-    /// device whose passes hold no `half` shadow, `framebuffer_fetch::holds_extended_shadows`:
-    /// each venue of the suite holds it, in the pixel interlock or, on lavapipe, beside the input
-    /// attachment), and at four samples what the pass's shape announces: `shader-resolve` and
-    /// `extended-range-resolve` (no device's resolve averages the codes, so the runtime's own
-    /// resolve does, `BGRA10_XR`'s alpha and an sRGB twin's color from the codes where Metal
-    /// averages finer values), `dont-care-store` (the multisampled attachment of
-    /// `MultisampleResolve`, and the depth and stencil stored `DontCare`, on a driver measured to
-    /// keep one of Metal's answers), and on a device without multisampled storage images
-    /// `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes the
-    /// samples as planes, through a scratch image the target's usage needs). And
-    /// `render-pass-split` (`crate::replay::interlocked_split_notice`): the second draw blends in
-    /// the pixel interlock over what the first wrote there. None loosens a code: every texel still
-    /// compares exactly.
+    /// The family's notices, and nothing else: every texel compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
-        let mut named = notices(&self.format);
-        named.push(crate::replay::notice_allowance(
-            Degradation::ExtendedRangeBlendsStoredCodes.code(),
-        ));
-        named.push(crate::replay::interlocked_split_notice());
-        if self.samples > 1 {
-            named.extend(
-                [
-                    Degradation::ShaderResolve,
-                    Degradation::ExtendedRangeResolve,
-                    Degradation::DontCareStore,
-                    Degradation::SamplePlanes,
-                    Degradation::FetchThroughScratch,
-                ]
-                .into_iter()
-                .map(|kind| crate::replay::notice_allowance(kind.code())),
-            );
-        }
-        named
+        notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -577,17 +532,9 @@ impl Case for UnwrittenDraw {
         MetalSource::Run
     }
 
-    /// Beside the family's notices, for the pipeline that writes depth alone, `dont-care-store`:
-    /// the pass stores its depth `DontCare`, which a driver measured to keep one of Metal's
-    /// answers (lavapipe) leaves to the device. It loosens no code.
+    /// The family's notices, and nothing else: every texel compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
-        let mut named = notices(&self.format);
-        if self.shape == Unwritten::DepthOnly {
-            named.push(crate::replay::notice_allowance(
-                Degradation::DontCareStore.code(),
-            ));
-        }
-        named
+        notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -788,27 +735,9 @@ impl Case for MaskedDraw {
         MetalSource::Run
     }
 
-    /// Beside the family's notices, for the blended write, `extended-range-blends-stored-codes`:
-    /// it blends over the codes the first draw stored on a device whose passes hold no `half`
-    /// shadow (`framebuffer_fetch::holds_extended_shadows`); on lavapipe the shadow is held beside
-    /// the input attachment. And `render-pass-split` (`crate::replay::interlocked_split_notice`):
-    /// a blended write, and a masked one into `BGR10_XR`'s shared word, reads and writes in the
-    /// pixel interlock what the first draw wrote there. It loosens no code.
+    /// The family's notices, and nothing else: every texel compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
-        let mut named = notices(&self.format);
-        if self.blend.is_some() {
-            named.push(crate::replay::notice_allowance(
-                Degradation::ExtendedRangeBlendsStoredCodes.code(),
-            ));
-        }
-        let shared_word = matches!(
-            self.format.format,
-            PixelFormat::BGR10XR | PixelFormat::BGR10XRSRGB
-        );
-        if self.blend.is_some() || shared_word {
-            named.push(crate::replay::interlocked_split_notice());
-        }
-        named
+        notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

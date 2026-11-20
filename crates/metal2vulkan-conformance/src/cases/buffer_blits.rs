@@ -45,7 +45,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Negative, Node, Observed, Sites, Value};
 use crate::work::{Resource, Step, Storage, Work};
 
@@ -131,13 +130,6 @@ struct Row {
     sites: fn(&crate::work::Done) -> Vec<Node>,
     /// What the row sets that is not a buffer's bytes, as its input fingerprint.
     parameters: fn() -> Vec<u8>,
-    /// The degrade notices this row's commands announce on a device whose copy or fill cannot take
-    /// the form Metal's does. Metal announces none, so the notices site is the only field of these
-    /// rows that may differ at all — every byte compares exactly — and each kind here is what
-    /// justifies that one difference. A row that announced a kind not listed fails until the kind
-    /// is added, which is the model working: an announced difference nobody named is not an
-    /// announced difference.
-    notices: &'static [Degradation],
 }
 
 /// A case of the family: one row.
@@ -166,14 +158,7 @@ impl Case for BufferBlits {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                self.row
-                    .notices
-                    .iter()
-                    .map(|kind| crate::replay::notice_allowance(kind.code())),
-            )
-            .collect()
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -257,9 +242,6 @@ static ANY_RANGE: Row = Row {
         ]
     },
     parameters: || b"fill 1+62 5a; copy 3->21+10; fill 41+2 ee; fill 48+5 11".to_vec(),
-    // Three of the four fills cover bytes that are not whole 4-byte words at multiples of 4,
-    // which is the whole point of the row.
-    notices: &[Degradation::SplitBufferFill],
 };
 
 /// Overlapping ranges of one buffer, forwards and backwards, in shared memory and in private.
@@ -302,9 +284,6 @@ static OVERLAPPING: Row = Row {
         ]
     },
     parameters: || b"copy 1->7+4000; copy 9->2+4000; copy private 5->6+4093".to_vec(),
-    // Every copy of the row is between two overlapping ranges of one buffer, which Vulkan's copy
-    // forbids outright.
-    notices: &[Degradation::OverlappingBufferCopy],
 };
 
 /// A copy of no bytes and a fill of no bytes, inside the buffer and past its end.
@@ -345,8 +324,6 @@ static EMPTY_RANGES: Row = Row {
         ]
     },
     parameters: || b"copy 0->0+0; copy 0->64+0; fill 4+0; fill 64+0".to_vec(),
-    // Nothing is copied and nothing is filled, so nothing takes another form.
-    notices: &[],
 };
 
 /// The 600 KiB [`EVERY_FILL_SIZE`] fills.
@@ -410,8 +387,6 @@ static EVERY_FILL_SIZE: Row = Row {
             })
             .collect()
     },
-    // Four of the five fills start or end inside a word.
-    notices: &[Degradation::SplitBufferFill],
 };
 
 /// The case of one blit encoder's fills and copies of any range.
@@ -511,13 +486,6 @@ mod tests {
                 );
             }
         }
-        // The empty-range row copies and fills nothing, so it declares no notice of its own --
-        // only the venue's, which every row of the family declares.
-        assert_eq!(
-            empty_ranges().allowances().len(),
-            1,
-            "the empty-range row copies and fills nothing, so it loosens nothing of its own"
-        );
     }
 
     /// The cases name distinct rows and distinct sites.

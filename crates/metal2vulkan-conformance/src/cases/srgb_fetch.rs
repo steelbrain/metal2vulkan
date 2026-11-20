@@ -221,36 +221,17 @@ impl Case for SrgbFetch {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The notice set alone, never a texel: how a venue reaches the attachment is a route, and
-        // a route that costs more announces itself -- a scratch image through the pixel interlock
-        // (MoltenVK), a performance notice. Every byte compares exactly, which is the owner's rule
-        // for this family.
-        //
-        // A third route the same pass takes on lavapipe: an attachment it does not store back is
-        // Vulkan's `DONT_CARE` where the driver is measured to leave the earlier texels there,
-        // announced as `dont-care-store`. Measured on both rows of this module and on neither row
-        // of `super::fetch_ordered`, so it is named here and not there. It says nothing about the
-        // texels either -- every byte still compares exactly.
+        // The notice set alone, never a texel: every byte compares exactly, which is the owner's
+        // rule for this family.
         //
         // A venue with neither ordered fetch form reads the input attachment ordered between draws
         // alone, announced `unordered-fetch-within-draw`; each draw is one fullscreen triangle,
-        // which overlaps itself nowhere, so every byte still compares exactly.
-        [
-            Degradation::FetchThroughScratch,
-            Degradation::DontCareStore,
-            Degradation::UnorderedFetchWithinDraw,
-        ]
-        .iter()
-        .map(|notice| crate::replay::notice_allowance(notice.code()))
-        .chain([
-            // The buffer each pass reads its target back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
+        // which overlaps itself nowhere, so every byte still compares exactly. The buffer each
+        // pass reads its target back through is `Shared` ([`crate::replay::shared_memory_notice`]).
+        vec![
+            crate::replay::notice_allowance(Degradation::UnorderedFetchWithinDraw.code()),
             crate::replay::shared_memory_notice(),
-            // Each draw after the first fetches in the pixel interlock what the one before
-            // wrote there ([`crate::replay::interlocked_split_notice`]).
-            crate::replay::interlocked_split_notice(),
-        ])
-        .collect()
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

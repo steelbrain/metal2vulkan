@@ -292,9 +292,8 @@ pub enum VisibilityResultMode {
     /// `MTLVisibilityResultModeDisabled`: the draws write no result.
     #[default]
     Disabled,
-    /// `MTLVisibilityResultModeBoolean`: nonzero when any sample passed, else 0. The nonzero value
-    /// is the device's occlusion query's, where an Apple M3 Max writes 1
-    /// (`Degradation::DeviceBooleanVisibility`).
+    /// `MTLVisibilityResultModeBoolean`: nonzero when any sample passed, else 0. An Apple M3 Max
+    /// writes 1.
     Boolean,
     /// `MTLVisibilityResultModeCounting`: the samples that passed.
     Counting,

@@ -39,7 +39,7 @@
 use crate::allowance::Allowance;
 use crate::case::{answered, call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::hex_bytes;
-use crate::replay::{notice_allowance, NOTICES_SITE};
+use crate::replay::NOTICES_SITE;
 use crate::transcript::{Digest, DigestKind, Node, Observed, Sites, Transcript, Value};
 use crate::work::{Plane, Rect, Resource, Step, Storage, TextureSpec, Work};
 
@@ -424,28 +424,11 @@ impl Case for RowBlits {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every case declares the notice the venue's own memory model provokes: the buffer it
-        // reads the copied planes back through is `Shared`, which a device with no unified memory
-        // keeps in system memory because that is the only memory both sides can reach.
-        let shared = crate::replay::shared_memory_notice();
-        if !self.announced {
-            // Three of the blits place their texture in a placement heap, where this device keeps
-            // the two-plane texture's texels in the heap's bytes and announces it. Metal announces
-            // nothing, so the notices site differs and that notice is what justifies it. Every
-            // word still compares exactly.
-            return vec![
-                notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
-                shared,
-            ];
-        }
-        // Into the texture, where rows meet and Metal's own order varies from run to run, the
-        // device says which row's bytes it kept. Metal announces nothing, so the notices site
-        // differs; the two notices are what justify it. The words still compare exactly.
-        vec![
-            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlit.code()),
-            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlitOrder.code()),
-            shared,
-        ]
+        // Every word compares exactly. Every case declares the notice the venue's own memory model
+        // provokes: the buffer it reads the copied planes back through is `Shared`, which a device
+        // with no unified memory keeps in system memory because that is the only memory both sides
+        // can reach.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {
@@ -670,16 +653,9 @@ impl Case for PadFills {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A fill into a two-plane texture's planes goes through the device's two-plane buffer
-        // blit, which it announces. Metal announces nothing, so the notices site differs and that
-        // notice is what justifies it; every digest still compares exactly. The sibling row blits
-        // name this notice for the same reason, and the order notice besides, which a fill of
-        // whole rows never meets.
-        vec![
-            notice_allowance(crate::degradation::Degradation::TwoPlaneBufferBlit.code()),
-            // The venue's own, for the `Shared` read-back buffer, as the row blits state.
-            crate::replay::shared_memory_notice(),
-        ]
+        // Every digest compares exactly. The venue's own, for the `Shared` read-back buffer, as
+        // the row blits state.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

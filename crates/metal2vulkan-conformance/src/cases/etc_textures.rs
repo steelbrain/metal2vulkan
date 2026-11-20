@@ -54,7 +54,7 @@
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -88,15 +88,6 @@ const BLOCKS: u32 = SIDE / 4;
 /// What each round's texture is loaded with, and the name its site takes. A round is a whole
 /// texture of its own, so a diff names which blocks moved.
 const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
-
-/// The most a compact unsigned 11-bit texel may be off Metal's value: half a 16-bit step, as the
-/// `decoded-texel-precision` notice states it (docs/API.md). It is the notice's number, so a run
-/// that exceeds it fails rather than being re-fitted to whatever a device answers.
-const LEDGERS_UNSIGNED_BOUND: f64 = 1.0 / 131_070.0;
-
-/// The same for a signed 11-bit texel, whose twin holds a 16-bit **signed** normalized code, so
-/// half a step is twice as wide ([`LEDGERS_UNSIGNED_BOUND`]).
-const LEDGERS_SIGNED_BOUND: f64 = 1.0 / 65_534.0;
 
 /// One format the lane reads: the case's name and the `MTLPixelFormat`. How its blocks decode and
 /// whether its colour is sRGB follow from the format ([`EtcDecode::of`], [`srgb_raw_twin`]), so
@@ -257,18 +248,6 @@ impl EtcTextures {
         TextureRequest::read_2d(self.format().format.as_raw(), SIDE, SIDE).loaded(uploads)
     }
 
-    /// How far a compact texel of this format may be off Metal's value, where that is not zero:
-    /// an EAC 11-bit channel's half 16-bit step, by the format's own signedness. `None` for the
-    /// 8-bit formats, whose twin holds its codes exactly under either value, so they name no
-    /// tolerance.
-    fn compact_bound(&self) -> Option<f64> {
-        match self.format().format {
-            PixelFormat::EACR11Snorm | PixelFormat::EACRG11Snorm => Some(LEDGERS_SIGNED_BOUND),
-            PixelFormat::EACR11Unorm | PixelFormat::EACRG11Unorm => Some(LEDGERS_UNSIGNED_BOUND),
-            _ => None,
-        }
-    }
-
     /// The layout a round's texels read back under: one row of the layout per row of texels, four
     /// `float` channels a texel, so a diff names the texel and the channel rather than an offset.
     fn layout() -> ByteLayout {
@@ -304,16 +283,6 @@ impl Case for EtcTextures {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A device with no ETC2 format keeps the blocks in a carrier image and reads them through
-        // a decoded twin, which the runtime announces once per device. Metal announces nothing, so
-        // the notice has to be declared by its code or the comparison cannot be made at all. The
-        // declaration loosens no value: the only site it covers is the set of notices, which Metal
-        // holds empty, and it fails the case if the notice did not fire.
-        // A CPU copy that fills such a texture (`replaceRegion`) is decoded on the CPU into that
-        // twin and copied in, announced as `cpu-block-decode`: the host-copy arm of the very
-        // mechanism the line above names, measured on lavapipe for every format of this family. It
-        // is a declaration and not a tolerance -- every texel the case reads still compares
-        // exactly with Metal.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -329,34 +298,10 @@ impl Case for EtcTextures {
         // an image of it and reads the device's decode of them, the static note it announces as
         // `compressed-texel-decode` for every block-compressed texture it makes. A declaration
         // and not a tolerance: no ETC2 or EAC bound is stated, so every texel still compares exactly.
-        let mut all = vec![
+        vec![
             crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
-            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
             crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
-        ];
-        // An 8-bit format's twin holds Metal's own codes, and the `float` the function answers is
-        // the **device's** conversion of a code (`device-texel-conversion`; lavapipe multiplies by
-        // the reciprocal) or its sRGB decode (`srgb-texel-decode`): native notes the suite
-        // declares for every case, which loosen no texel.
-        //
-        // An EAC 11-bit format's compact twin holds the 16-bit normalized code nearest Metal's
-        // value, which the runtime announces as `decoded-texel-precision`, whose catalogue entry
-        // bounds it at half a 16-bit step. The bound here is the notice's number for this
-        // format's signedness, so a run that exceeds it is the notice's claim failing.
-        if let Some(bound) = self.compact_bound() {
-            all.push(crate::replay::notice_allowance(
-                Degradation::DecodedTexelPrecision.code(),
-            ));
-            for round in ROUNDS {
-                all.push(Allowance::new(
-                    format!("case/{round}/texels"),
-                    Loosening::Absolute(bound),
-                    Justification::notice(Degradation::DecodedTexelPrecision),
-                ));
-            }
-        }
-        all
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -530,70 +475,23 @@ mod tests {
         }
     }
 
-    /// Each format loosens the texel its own notice's bound names, and nothing else.
+    /// No format loosens a texel.
     ///
     /// This is the ruling that a notice declaration is not a tolerance, held as a test: the
-    /// `carried-decoded-twin` declaration is on every case and loosens no value, while an
-    /// allowance that loosens a texel is named only where the emulation's own precision stands
-    /// between Metal's value and the twin's code. Two groups, each format named in its own, so a
-    /// format moving between them fails here:
-    ///
-    /// - the six **8-bit** formats, linear and sRGB, whose twin holds Metal's codes and whose
-    ///   value is the device's conversion or decode of them, a native note that loosens no value:
-    ///   **nothing at all**;
-    /// - the four EAC **11-bit** formats, read from a compact 16-bit twin: half a 16-bit step by
-    ///   the format's signedness.
+    /// `compressed-texel-decode` declaration is on every case and loosens no value, and no ETC2 or
+    /// EAC bound is stated, so every texel of every format compares exactly.
     #[test]
-    fn each_format_loosens_the_texel_its_ledger_row_names() {
-        let mut loosened = Vec::new();
-        let mut exact = Vec::new();
+    fn no_format_loosens_a_texel() {
         for (at, format) in FORMATS.iter().enumerate() {
             let case = EtcTextures { at };
-            let bounds: Vec<Loosening> = case
+            let loosened: Vec<String> = case
                 .allowances()
                 .into_iter()
                 .filter(|allowance| allowance.path.ends_with("/texels"))
-                .map(|allowance| allowance.loosening)
+                .map(|allowance| allowance.path)
                 .collect();
-            let decode = case.decode();
-            if !decode.eleven_bit() {
-                assert!(bounds.is_empty(), "{}: {bounds:?}", format.name);
-                exact.push(format.name);
-                continue;
-            }
-            let signed = matches!(decode, EtcDecode::R11Snorm | EtcDecode::Rg11Snorm);
-            let bound = match signed {
-                true => LEDGERS_SIGNED_BOUND,
-                false => LEDGERS_UNSIGNED_BOUND,
-            };
-            assert_eq!(
-                bounds,
-                vec![Loosening::Absolute(bound); ROUNDS.len()],
-                "{}",
-                format.name
-            );
-            loosened.push(format.name);
+            assert!(loosened.is_empty(), "{}: {loosened:?}", format.name);
         }
-        assert_eq!(
-            exact,
-            [
-                "etc2-rgb8",
-                "etc2-rgb8-srgb",
-                "etc2-rgb8a1",
-                "etc2-rgb8a1-srgb",
-                "eac-rgba8",
-                "eac-rgba8-srgb"
-            ]
-        );
-        assert_eq!(
-            loosened,
-            [
-                "eac-r11-unorm",
-                "eac-r11-snorm",
-                "eac-rg11-unorm",
-                "eac-rg11-snorm"
-            ]
-        );
     }
 
     /// A round's texels as a transcript, every channel the `f32` word `word`.

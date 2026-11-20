@@ -34,14 +34,12 @@
 //! belong to a later batch, and one of their rows is a grid Metal's GPU discards — a recovery
 //! victim, which this round must not run.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side, TARGET_TEXEL,
 };
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, Loaded, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
@@ -355,53 +353,13 @@ const PAST_LIMITS: &str = "mesh-object-draws-past-limits";
 /// The fragment function every case's pipeline writes its attachments through.
 const FRAGMENT: &str = "mesh_draws_fragment";
 
-/// The degrade notices a mesh render pass may announce, each of which a mesh case loosens its
-/// notices site by, because Metal announces none and a notice our side announced is the one field
-/// that may then differ.
-///
-/// It is a list and not a device query, because a case never branches on the device: a case asks
-/// by running and reads what came back. A venue that announces a kind not here fails the case
-/// until its kind is added, which is the model working: an announced difference nobody named is
-/// not an announced difference.
-pub const MESH_PASS_NOTICES: &[Degradation] = &[
-    // The pass drew through the mesh-draw emulation, on a device without `VK_EXT_mesh_shader`.
-    Degradation::EmulatedMeshDraws,
-    // The notes the barrier and draw path makes: a fragment stage ordered before a later draw's
-    // earlier stages, a pass split at a barrier, and the bytes of draws the pass does not order.
-    Degradation::FragmentsBeforeGeometry,
-    Degradation::RenderPassSplit,
-    Degradation::UnorderedDrawBytes,
-];
-
-/// The allowances a mesh case keeps: one over its notices site per kind of
-/// [`MESH_PASS_NOTICES`], so a device that announced one may hold it in its set and a device that
-/// announced none compares the set exactly against Metal's empty one.
+/// The allowance a mesh case keeps: the notice a device's own memory model provokes. These passes
+/// read their payloads, draw arguments and attachments back through `Shared` buffers
+/// ([`crate::replay::shared_memory_notice`]). Every row of the three mesh families but
+/// `mesh-object-draws-past-limits` was measured announcing it on the RTX 5080; that row stops
+/// before it allocates one, so it declares nothing ([`MeshDraws::allowances`]).
 pub fn mesh_notice_allowances() -> Vec<Allowance> {
-    let mut allowances = vec![
-        // These passes read their payloads, draw arguments and attachments back through `Shared`
-        // buffers ([`crate::replay::shared_memory_notice`]). Every row of the three mesh families
-        // but `mesh-object-draws-past-limits` was measured announcing it on the RTX 5080; that row
-        // stops before it allocates one, so it declares nothing
-        // ([`MeshDraws::allowances`]).
-        crate::replay::shared_memory_notice(),
-    ];
-    allowances.extend(plain_mesh_notice_allowances());
-    allowances
-}
-
-/// The same list without the notice a device's own memory model provokes, for the one case that
-/// never reaches a `Shared` buffer.
-fn plain_mesh_notice_allowances() -> Vec<Allowance> {
-    MESH_PASS_NOTICES
-        .iter()
-        .map(|kind| {
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(*kind),
-            )
-        })
-        .collect()
+    vec![crate::replay::shared_memory_notice()]
 }
 
 impl MeshDraws {
@@ -629,7 +587,7 @@ impl Case for MeshDraws {
         // one: the RTX 5080 announced the notice for every other row of the three mesh families
         // and not for this one, and a declaration no run justifies is one nobody is checking.
         match self.name == PAST_LIMITS {
-            true => plain_mesh_notice_allowances(),
+            true => Vec::new(),
             false => mesh_notice_allowances(),
         }
     }

@@ -127,7 +127,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -574,29 +573,10 @@ impl Case for ResolvedSample {
 
     fn allowances(&self) -> Vec<Allowance> {
         // **No value is loosened**: every resolved byte and every resolved depth Metal leaves is
-        // one we must leave, and the whole declared set is notices. Each is a `Performance`
-        // degradation — a structurally different path to the same bits — and each is named with
-        // the shape of this case that provokes it, so a reader can tell a notice this case earns
-        // from one copied in.
-        vec![
-            // The colour attachment nothing reads is stored `DontCare`, and a device whose
-            // `DontCare` store is not Metal's announces that it took the near-equivalent.
-            // Measured not to fire on MoltenVK, where the store is the device's own.
-            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-            // The stencil of the depth-picked sample, which no Vulkan resolve mode states: the
-            // `DepthResolvedSample` cells after `Min` and `Max` reach it on **every** venue,
-            // through the draws after the pass, and this notice firing is what says the exact
-            // path ran rather than only that the run passed. Measured firing on MoltenVK.
-            //
-            // `one-aspect-resolve` is deliberately **not** named: it is what a pass whose two
-            // aspects resolve into two textures earns, and this case's one attachment resolves
-            // both into one, so a run that announced it would be a finding rather than a notice
-            // this case justifies.
-            crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
-            // The buffer the pass reads its resolved aspects back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`], measured firing on the 5080).
-            crate::replay::shared_memory_notice(),
-        ]
+        // one we must leave. The one declaration is the buffer each pass reads its resolved
+        // aspects back through, which is `Shared` ([`crate::replay::shared_memory_notice`],
+        // measured firing on the 5080).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

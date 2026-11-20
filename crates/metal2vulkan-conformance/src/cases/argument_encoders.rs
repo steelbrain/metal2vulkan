@@ -548,16 +548,7 @@ impl Case for ArgumentEncoderCase {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // A case that dispatches samples the texture and the sampler its encoder wrote through
-        // the kernel's heap set, which MoltenVK's layout query refuses
-        // ([`crate::replay::set_past_layout_notice`]): announced by both dispatching cases on the
-        // M3 Max under MoltenVK 1.4.2, by none on lavapipe.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
-        if self.dispatches {
-            allowances.push(crate::replay::set_past_layout_notice());
-        }
-        allowances
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

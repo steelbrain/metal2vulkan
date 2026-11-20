@@ -117,12 +117,6 @@ const TEXEL_BYTES: usize = 16;
 /// texture of its own, so a diff names which blocks moved.
 const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
 
-/// The most a compact linear channel may be off Metal's value, as the `decoded-texel-precision`
-/// notice states it (docs/API.md): the 8-bit code nearest Metal's 12-bit value is at most half an
-/// 8-bit step away, which is 1/510. It is the notice's number, so a run that exceeds it fails
-/// rather than being re-fitted to whatever a device answers.
-const LEDGERS_COMPACT_BOUND: f64 = 1.0 / 510.0;
-
 /// The most a linear channel of the device's own decode of an ASTC LDR block may be off Metal's
 /// value, as the `compressed-texel-decode` catalogue entry states it (docs/API.md): 1/2048, the
 /// largest difference measured over the fourteen footprints' random blocks, plus the `float`
@@ -436,13 +430,11 @@ impl AstcTextures {
         TextureRequest::read_2d(self.format().format.as_raw(), SIDE, SIDE).loaded(uploads)
     }
 
-    /// How far a compact texel of this format may be off Metal's value, where that is not zero:
-    /// a linear format's half 8-bit step. `None` for an sRGB form, whose twin holds Metal's own
-    /// codes and whose slots read the device's decode of them, which loosens no value, and
-    /// `None` for an HDR form, whose twin holds Metal's halves exactly.
-    fn compact_bound(&self) -> Option<f64> {
+    /// Whether this format's channels are linear LDR ones, the only ones the device's decode
+    /// may move (`compressed-texel-decode`); an sRGB or HDR form's texels compare exactly.
+    fn linear(&self) -> bool {
         let decode = self.decode();
-        (!decode.srgb && !decode.hdr).then_some(LEDGERS_COMPACT_BOUND)
+        !decode.srgb && !decode.hdr
     }
 
     /// The layout a round's texels read back under: one row of the layout per row of texels, four
@@ -480,19 +472,6 @@ impl Case for AstcTextures {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A device with no ASTC block keeps the blocks in a carrier image and reads them through a
-        // decoded twin, which the runtime announces once per device. Metal announces nothing, so
-        // the notice has to be declared by its code or the comparison cannot be made at all. The
-        // declaration loosens no value: the only site it covers is the set of notices, which Metal
-        // holds empty, and it fails the case if the notice did not fire.
-        // A CPU copy that fills such a texture (`replaceRegion`) is decoded on the CPU into that
-        // twin and copied in, announced as `cpu-block-decode`: the host-copy arm of the very
-        // mechanism the line above names, measured on lavapipe for every format of this family. It
-        // is a declaration and not a tolerance -- every texel the case reads still compares
-        // exactly with Metal.
-        // Measured on lavapipe for every format of this family, the HDR ones among them. A device
-        // that holds a format's ASTC block natively announces neither: nothing of ours sits between
-        // the blocks and the texels there.
         // Every row that runs reads its texels back through a `Shared` buffer, so on a device
         // without unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
@@ -510,31 +489,11 @@ impl Case for AstcTextures {
         // HDR form's compare exactly.
         let mut all = vec![
             crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
-            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
             crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
         ];
-        // An sRGB form's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
-        // table, so its texels compare exactly and it names nothing further. A linear format's
-        // compact twin holds the 8-bit code nearest Metal's 12-bit value, which the runtime
-        // announces as `decoded-texel-precision`, whose catalogue entry bounds it at 1/510. The
-        // bound here is the notice's number, so a run that exceeds it is the notice's claim
-        // failing.
-        if let Some(bound) = self.compact_bound() {
-            all.push(crate::replay::notice_allowance(
-                Degradation::DecodedTexelPrecision.code(),
-            ));
-            for round in ROUNDS {
-                all.push(Allowance::new(
-                    format!("case/{round}/texels"),
-                    Loosening::Absolute(bound),
-                    Justification::notice(Degradation::DecodedTexelPrecision),
-                ));
-            }
-            // `metal2vulkan-runtime` keeps no twin: where the device holds the format's block, a
-            // linear channel is the device's decode of it, the static note
-            // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at
-            // 1/2048.
+        // A linear channel is the device's decode of the block, the static note
+        // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at 1/2048.
+        if self.linear() {
             for round in ROUNDS {
                 all.push(Allowance::new(
                     format!("case/{round}/texels"),
@@ -773,11 +732,11 @@ mod tests {
     }
 
     /// Only the linear formats name a tolerance, and each names the bound the
-    /// `decoded-texel-precision` notice states.
+    /// `compressed-texel-decode` entry states.
     ///
     /// This is the ruling that a notice declaration is not a tolerance, held as a test: the
-    /// `carried-decoded-twin` declaration is on every case and loosens no value, while the one
-    /// allowance that loosens a texel is named only where the notice says a texel moves.
+    /// `compressed-texel-decode` declaration is on every case and loosens no value, while the one
+    /// allowance that loosens a texel is named only where the entry says a texel moves.
     #[test]
     fn only_the_linear_formats_loosen_a_texel() {
         let mut loosened = 0;
@@ -789,15 +748,13 @@ mod tests {
                 .filter(|allowance| allowance.path.ends_with("/texels"))
                 .map(|allowance| allowance.loosening)
                 .collect();
-            // An sRGB form's twin holds Metal's own codes and an HDR format's Metal's halves, so
-            // neither loosens a texel; only the fourteen linear ones do, each round by the compact
-            // twin's bound and by the device decode's.
-            if case.compact_bound().is_none() {
+            // An sRGB or HDR form loosens no texel; only the fourteen linear ones do, each round
+            // by the device decode's bound.
+            if !case.linear() {
                 assert!(bounds.is_empty(), "{}: {bounds:?}", format.name);
                 continue;
             }
-            let mut expected = vec![Loosening::Absolute(LEDGERS_COMPACT_BOUND); ROUNDS.len()];
-            expected.extend(vec![Loosening::Absolute(DEVICE_DECODE_BOUND); ROUNDS.len()]);
+            let expected = vec![Loosening::Absolute(DEVICE_DECODE_BOUND); ROUNDS.len()];
             assert_eq!(bounds, expected, "{}", format.name);
             loosened += 1;
         }

@@ -38,7 +38,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -240,21 +239,10 @@ impl Case for ShaderStencil {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Exact: every stencil byte Metal leaves is a byte we must leave. A device without
-        // `VK_EXT_shader_stencil_export` runs the shader-side stencil instead, which is a route
-        // and not a difference -- it must still answer Metal's bytes, so it gets no loosening
-        // here. The route is **declared** rather than loosened, which is what lets the case be
-        // read on a device that takes it.
-        //
-        // All three were measured firing for both rows on the RTX 5080: the shader-side stencil
-        // itself (`shader-side-stencil`), the render pass that route splits
-        // (`render-pass-split`), and the `Shared` buffer the pass reads its stencil back through
-        // ([`crate::replay::shared_memory_notice`]).
-        vec![
-            crate::replay::notice_allowance(Degradation::ShaderSideStencil.code()),
-            crate::replay::notice_allowance(Degradation::RenderPassSplit.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // Exact: every stencil byte Metal leaves is a byte we must leave. The one declaration is
+        // the `Shared` buffer the pass reads its stencil back through
+        // ([`crate::replay::shared_memory_notice`]), measured firing for both rows on the RTX 5080.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

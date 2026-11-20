@@ -116,7 +116,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -977,15 +976,7 @@ impl Case for DepthCompares {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // `dont-care-store` with it: a pass whose depth attachment is `DontCare` on store is kept
-        // by our side where Metal may drop it. Announced by this row on the 5080 **and** on
-        // llvmpipe (Mesa 26.2.4) with the case declaring it nowhere; a declaration only, so the
-        // texels stay strict.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1181,17 +1172,7 @@ impl Case for DepthCodes {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // One more, a declaration: a `DontCare` depth store our side keeps where Metal may drop
-        // it (`dont-care-store`, announced by this row on the 5080 and on llvmpipe, Mesa 26.2.4,
-        // with the case declaring it nowhere). It loosens no depth code. A normalized depth the
-        // device converts where it is not measured to store Metal's code
-        // (`unorm-depth-rounding`) is the device's own answer, which the suite declares for every
-        // case (`crate::replay::NATIVE_NOTES`).
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1719,17 +1700,8 @@ const MATRIX_ROW: u32 = 3;
 ///
 /// **This is the one case of the module whose pass attaches a depth and a stencil as two separate
 /// textures**, which is the shape Metal takes (a `Depth32Float` beside a `Stencil8`, of identical
-/// dimensions, which its validation requires) and which a Vulkan subpass has no counterpart for:
-/// the runtime renders such a pass into a scratch image of the combined format and copies each
-/// aspect in and out. Nothing else in the suite compares that path against Metal.
-///
-/// Measured on an Apple M3 Max (macOS 27.0.1, MoltenVK): **every value the case reads is Metal's
-/// own**, and the one difference is that our side announces
-/// `metal2vulkan-degrade-separate-depth-stencil`, which the case therefore names. That notice is a
-/// `Performance` degradation -- Metal's answer at a cost Metal does not pay, the two copies a
-/// single-sampled aspect takes through a staging buffer -- so the values stay exact and nothing but
-/// the notice site is loosened. The allowance fails the case if the notice stops firing, so it
-/// cannot outlive its reason.
+/// dimensions, which its validation requires). Nothing else in the suite compares that shape
+/// against Metal.
 pub struct DepthSlot;
 
 impl DepthSlot {
@@ -1949,10 +1921,9 @@ impl Case for DepthSlot {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Only the notice set is loosened. A pass whose depth and stencil attachments are two
-        // textures renders through a scratch image of the combined format, which the runtime
-        // announces; it is a `Performance` degradation, so it buys the copies and not the answer,
-        // and every texel and every stencil byte of this case still compares exactly.
+        // Only the notice set is loosened: every texel and every stencil byte of this case
+        // compares exactly.
+        //
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -1964,10 +1935,7 @@ impl Case for DepthSlot {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::SeparateDepthStencil.code()),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -2911,10 +2879,7 @@ mod tests {
                     case.name()
                 );
             }
-            // Every row declares the venue's memory notice. Three declare more: the depth-slot row
-            // the separate depth and stencil attachments it is the only case to take, and the two
-            // depth rows what a driver that is not Metal announced for their `DontCare` store (their
-            // normalized depth is the device's own answer, the suite's to declare).
+            // Every row declares the venue's memory notice, and nothing else.
             let named: std::collections::BTreeSet<&str> = allowed
                 .iter()
                 .filter_map(|allowance| match &allowance.justified_by {
@@ -2923,17 +2888,11 @@ mod tests {
                 })
                 .collect();
             assert!(
-                named.contains(Degradation::SharedInSystemMemory.code()),
+                named.contains(crate::degradation::Degradation::SharedInSystemMemory.code()),
                 "{}",
                 case.name()
             );
-            let wanted: usize = match case.name() {
-                name if name == DepthSlot.name() => 2,
-                "depthstencil-depth-compares" => 2,
-                "depthstencil-depth-codes" => 2,
-                _ => 1,
-            };
-            assert_eq!(named.len(), wanted, "{}", case.name());
+            assert_eq!(named.len(), 1, "{}", case.name());
         }
         // The six programs between them attach every combination the family needs: depth alone,
         // stencil alone, and the two together as separate textures.

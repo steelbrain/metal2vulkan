@@ -159,9 +159,9 @@ impl Case for Lockstep {
         // [`crate::replay::shared_memory_notice`] is for. And both kernels hold simdgroup-scoped
         // accesses inside divergent loops, so on a device whose answer lacks maximal reconvergence
         // (`shaderMaximalReconvergence`, the SIMD groups' query form) the stage carries its static
-        // note, `DeviceReconvergence`, which the sides announce as
-        // `implementation-defined-reconvergence`. The device's answer decides it: a device with
-        // maximal reconvergence announces nothing, and this declaration then holds nowhere.
+        // note, `DeviceReconvergence`, which the sides announce as `device-reconvergence`. The
+        // device's answer decides it: a device with maximal reconvergence announces nothing, and
+        // this declaration then holds nowhere.
         vec![
             Allowance::new(
                 "case/output",
@@ -172,7 +172,7 @@ impl Case for Lockstep {
             ),
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
-                crate::degradation::Degradation::ImplementationDefinedReconvergence.code(),
+                crate::degradation::Degradation::DeviceReconvergence.code(),
             ),
         ]
     }

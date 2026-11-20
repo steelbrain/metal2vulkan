@@ -104,12 +104,6 @@ const EVEN_SHAPES: &[&[[u32; 2]]] = &[
 /// answers, such as the NaN encoding it copies the blur's `RGBA16Float` attachment with
 /// (`device-nan-encoding`), are the suite's to declare ([`crate::replay::NATIVE_NOTES`]).
 pub const TILE_PASS_NOTICES: &[Degradation] = &[
-    // The attachments a tile dispatch stages are copied into its scratch before the dispatch and
-    // back after it (`render/tile_dispatch.rs`), which is what a tile dispatch costs on a device
-    // whose imageblock is not Metal's.
-    Degradation::TileDispatchScratch,
-    // The pass is split at the barrier the tile dispatch's scratch needs.
-    Degradation::RenderPassSplit,
     // A device that splits a fragment quad at a clipped edge where Metal keeps it whole. Announced
     // on lavapipe. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
     // and it compares exactly -- so the kind is declared and no value is loosened.

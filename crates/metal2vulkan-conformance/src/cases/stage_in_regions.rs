@@ -25,7 +25,6 @@ use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side, StageInAttribute,
     StageInLayout, StageInRegion, StageInput,
 };
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
@@ -501,19 +500,11 @@ impl Case for StageInRegions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The one row that sets its region indirectly reads that region on the host, because it is
-        // GPU memory the work before the dispatch may write, and the runtime announces that. The
-        // notice is a performance one: the words the row writes still compare exactly, and the
-        // only site loosened is the set of notices, which Metal holds empty. The allowance fails
-        // the case if the notice did not fire, so a row that stops reading the region on the host
-        // has to drop this line rather than carry a stale excuse.
-        // The second is the venue's own: the buffers this dispatch reads its arguments and writes
-        // its answer through are `Shared`, which a device with no unified memory keeps in system
-        // memory because that is the only memory both sides can reach.
-        vec![
-            crate::replay::notice_allowance(Degradation::HostReadDispatchArguments.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // The words the rows write compare exactly. The one declaration is the venue's own: the
+        // buffers this dispatch reads its arguments and writes its answer through are `Shared`,
+        // which a device with no unified memory keeps in system memory because that is the only
+        // memory both sides can reach.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

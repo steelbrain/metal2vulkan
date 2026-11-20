@@ -523,17 +523,9 @@ impl Case for ByteFills {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The fills whose last copy of the pattern is cut at the texel read the bytes past it and
-        // write them as zeros, as Metal's do, and the device announces it once. Metal announces
-        // nothing, so the notices site differs, and the notice is what justifies it.
-        vec![
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::TextureBufferFillLeftover.code(),
-            ),
-            // The texture buffer these fills write into is backed by a `Shared` buffer
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ]
+        // The texture buffer these fills write into is backed by a `Shared` buffer
+        // ([`crate::replay::shared_memory_notice`]).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -662,17 +654,9 @@ impl Case for LongFills {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The fills whose last copy of the pattern is cut at the texel read the bytes past it and
-        // write them as zeros, as Metal's do, and the device announces it once. Metal announces
-        // nothing, so the notices site differs, and the notice is what justifies it.
-        vec![
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::TextureBufferFillLeftover.code(),
-            ),
-            // The texture buffer these fills write into is backed by a `Shared` buffer
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ]
+        // The texture buffer these fills write into is backed by a `Shared` buffer
+        // ([`crate::replay::shared_memory_notice`]).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

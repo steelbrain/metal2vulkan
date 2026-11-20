@@ -43,7 +43,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -182,23 +181,16 @@ fn read_target(texture: Handle, into: Handle) -> RenderWork {
     }
 }
 
-/// The shader reference both texts of `fixture` give, under `entries`.
-/// The notices every row of the family declares, both measured firing for all three rows.
+/// The notice every row of the family declares, measured firing for all three rows on the 5080:
+/// the buffer each pass reads its colour target back through is `Shared`
+/// ([`crate::replay::shared_memory_notice`]).
 ///
-/// Neither loosens a value: both sit at the notices site, so a texel that differs still fails the
-/// case. The depth-bias row declares a third of its own ([`DepthBias::allowances`]).
+/// It loosens no value: it sits at the notices site, so a texel that differs still fails the case.
 fn pass_notices() -> Vec<Allowance> {
-    vec![
-        // The depth attachment nothing reads is stored `DontCare`, and a device whose `DontCare`
-        // store is not Metal's announces that it took the near-equivalent. Measured on llvmpipe
-        // and on the RTX 5080.
-        crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-        // The buffer each pass reads its colour target back through is `Shared`
-        // ([`crate::replay::shared_memory_notice`], measured on the 5080).
-        crate::replay::shared_memory_notice(),
-    ]
+    vec![crate::replay::shared_memory_notice()]
 }
 
+/// The shader reference both texts of `fixture` give, under `entries`.
 fn shader_refs(fixture: &'static str, entries: &str) -> Result<Vec<ShaderRef>, String> {
     let held = Fixture::new(fixture);
     [RUNTIME_TEXT, METAL_TEXT]
@@ -532,17 +524,9 @@ impl Case for DepthBias {
     fn allowances(&self) -> Vec<Allowance> {
         // **Nothing is loosened.** A texel is four ones or the pass's clear, both of which a
         // `RGBA32Float` attachment stores exactly, and the fragment function does no arithmetic a
-        // device's float bounds could reach.
-        //
-        // The family's two declarations ([`pass_notices`]), and one more this case alone earns:
-        // a device that clamps a depth bias outside the unit range where Metal does not says so,
-        // and only this case states a bias. Measured firing for this row on llvmpipe and for
-        // neither of the other two.
-        let mut named = pass_notices();
-        named.push(crate::replay::notice_allowance(
-            Degradation::BiasedDepthPastUnitRange.code(),
-        ));
-        named
+        // device's float bounds could reach. The family's declaration ([`pass_notices`]) sits at
+        // the notices site.
+        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1515,17 +1499,10 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // Every case declares the family's two notices, the depth-bias case one more, and
-            // none of them loosens a value, so each allowance sits at the notices site: a value
-            // tolerance added later fails here.
+            // Every case declares the family's notice, and it loosens no value, so each allowance
+            // sits at the notices site: a value tolerance added later fails here.
             let allowances = case.allowances();
-            let states_a_bias = case.name() == "render-state-depth-bias";
-            assert_eq!(
-                allowances.len(),
-                pass_notices().len() + usize::from(states_a_bias),
-                "{}",
-                case.name()
-            );
+            assert_eq!(allowances.len(), pass_notices().len(), "{}", case.name());
             for allowance in &allowances {
                 assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
                 assert_eq!(allowance.loosening, Loosening::Unchecked);

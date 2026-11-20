@@ -78,7 +78,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -895,20 +894,7 @@ impl Case for LayeredTargets {
         // (`crate::replay::shared_memory_notice`). Measured on the RTX 5080 Laptop (615.71.09),
         // where all five rows announced it with the case declaring it nowhere and each was
         // divergent on that field and nothing else (replay-nvidia.log).
-        //
-        // `shader-resolve` is the resolve row's alone, and it is the one declaration this family
-        // **removed** once for firing on no venue. It has a venue now, and two: the RTX 5080 and
-        // llvmpipe (Mesa 26.2.4) both announced it for `layered-resolve-places` and for no other
-        // row, and on both every texel of that row compared exactly -- the whole difference was
-        // the announcement (replay-nvidia.log, replay-llvmpipe.log). A device whose resolve is the
-        // store's rather than a draw's announces nothing and the declaration simply does not fire.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if matches!(self.cross, Cross::Resolves) {
-            named.push(crate::replay::notice_allowance(
-                Degradation::ShaderResolve.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

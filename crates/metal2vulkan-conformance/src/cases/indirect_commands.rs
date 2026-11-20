@@ -24,21 +24,10 @@
 //! | [`RENDER_DRAWN`] | two render commands that **rasterize**, each with a vertex and a fragment buffer of its own, into one 8 by 8 target, one of them behind a barrier |
 //! | [`LEFT_RENDER_STATES`] | nine descriptors, one property each, whose buffers are made and never executed |
 //!
-//! # What the rows announce, and on which venue
+//! # What Metal's own API validation says
 //!
-//! Measured on this Apple M3 Max through MoltenVK 1.4.2 and on lavapipe, replaying each row
-//! against its recording: **one** row announces notices, and five announce nothing at all.
-//!
-//! - [`RENDER_DRAWN`] announces `render-pass-split` on both venues, for the barrier its command 1
-//!   keeps: the runtime draws an indirect render command with a barrier in a render pass instance
-//!   of its own. Every texel of the row compared exactly on both venues, so the notice is the whole
-//!   difference the row has and its declaration loosens no value.
-//! - The five other rows announced nothing on either venue, and **declare nothing**. A declaration
-//!   no run was measured provoking is a declaration nobody checked, so none of them carries one,
-//!   however plausible the note would be for its shape.
-//!
-//! Metal's own API validation is the other axis, and it disagrees with plain Metal twice here —
-//! which is the whole reason the recording keeps it:
+//! Metal's own API validation disagrees with plain Metal twice here, which is the whole reason
+//! the recording keeps it:
 //!
 //! - [`RENDER_DRAWN`]: `setBarrier` and `clearBarrier` on a buffer without mesh draws are
 //!   reported ("requires DrawMeshThreadgroups or DrawMeshThreads") while plain Metal takes them
@@ -89,7 +78,7 @@
 //! - **`gpuResourceID`** and the rows a kernel encodes are [`super::mesh_commands`]' gap, named
 //!   there.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::STAGE_OBJECT;
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MeshFunctions, MetalSource, Side,
@@ -1847,22 +1836,6 @@ fn drawn_layout() -> ByteLayout {
 /// The row whose two render commands rasterize into a target.
 pub struct DrawnCommands;
 
-/// The notices this family was measured announcing, and the row each was measured on.
-///
-/// One, [`RENDER_DRAWN`]'s, and **every texel of the row still compared exactly** — the notice is
-/// the whole difference the row has, so the declaration names a code and loosens no value.
-///
-/// - **`render-pass-split`**, announced on **both** venues: the runtime draws the barrier
-///   command 1 of the row keeps in a render pass instance of its own.
-///
-/// The row's `RGBA8Unorm` store is the device's own conversion, a native note the suite declares
-/// for every case ([`crate::replay::NATIVE_NOTES`]).
-///
-/// The other five rows were measured announcing **nothing** on either venue, and **declare
-/// nothing**: a declaration no run was measured provoking is a declaration nobody checked.
-const DRAWN_NOTICES: [crate::degradation::Degradation; 1] =
-    [crate::degradation::Degradation::RenderPassSplit];
-
 impl Case for DrawnCommands {
     fn name(&self) -> &'static str {
         RENDER_DRAWN
@@ -1884,15 +1857,7 @@ impl Case for DrawnCommands {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(DRAWN_NOTICES.iter().map(|kind| {
-                Allowance::new(
-                    format!("case/{}/*", crate::replay::NOTICES_SITE),
-                    Loosening::Unchecked,
-                    Justification::notice(*kind),
-                )
-            }))
-            .collect()
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

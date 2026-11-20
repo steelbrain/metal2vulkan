@@ -158,37 +158,6 @@ impl Row {
         matches!(self.blit, Blit::IntoBuffer | Blit::OutOfBuffer)
     }
 
-    /// Whether the row's copy reads and writes **the same bytes of the buffer**, which is what
-    /// `overlapping-texel-copy` names: Vulkan's copy forbids it, so our side takes the rows through
-    /// a scratch buffer.
-    ///
-    /// This is the shape that decides the row's `overlapping-texel-copy` declaration, and nothing
-    /// else. It is read off the row's own numbers rather than its key, so a row added to a table,
-    /// or an offset moved, changes what the case declares by itself.
-    ///
-    /// A copy with an ordinary texture on one side shares nothing: that texture is not over the
-    /// buffer. Between two textures over the one buffer, the bytes are shared where the textures'
-    /// own byte ranges meet. Within one texture, a row of it holds its texels and nothing else, so
-    /// the bytes are shared only where the source and destination rectangles share a row **and** a
-    /// column: `onto-itself-disjoint` reads rows 0..2 and writes rows 2..4 and shares none.
-    fn copies_shared_bytes(&self) -> bool {
-        // The half-open byte range a texture at `at` covers: its last row's texels end it, not its
-        // pitch, so the bytes past the last row belong to neither texture.
-        let span = |at: u64| at..at + (SIDE - 1) * PITCH + ROW_BYTES;
-        match self.blit {
-            Blit::IntoBuffer | Blit::OutOfBuffer => false,
-            Blit::WithinBuffer { other, .. } => {
-                let (one, two) = (span(OFFSET), span(other));
-                one.start < two.end && two.start < one.end
-            }
-            Blit::OntoItself => {
-                let meet = |from: u64, to: u64, size: u64| from < to + size && to < from + size;
-                meet(self.from[1], self.to[1], self.size[1])
-                    && meet(self.from[0], self.to[0], self.size[0])
-            }
-        }
-    }
-
     /// The buffer's bytes before the row's program runs.
     fn buffer_bytes(&self) -> Vec<u8> {
         let bytes = pattern(LEN as usize);
@@ -500,30 +469,8 @@ impl Case for Blits {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // Every byte of every one of these programs compares exactly, Metal's against ours. What
-        // differs is the announcing: a texture whose rows lie further apart than a row is wide is
-        // kept as a shadow image, and a copy whose source and destination texels are the same
-        // bytes is done in a way the device announces. Metal announces neither, because neither
-        // is a thing Metal has to do, so the notices site differs and the notice itself is what
-        // justifies it.
+        // Every byte of every one of these programs compares exactly, Metal's against ours.
         //
-        // One declaration per code, and a code is declared only where a row of this case can
-        // announce it. A declaration fires on its own code, so a code a case announces and declares
-        // nowhere is a divergence for an undeclared notice, and a code it declares but no row can
-        // announce is an allowance that fires on no venue — the noise a real difference hides in.
-        // Both halves matter, which is why the second code is read off the rows rather than named
-        // for the whole family.
-        //
-        // `shadowed-texture` is every row's: each row's pitch is wider than its row, so the texture
-        // over the buffer is kept as a shadow image.
-        //
-        // `overlapping-texel-copy` is only the rows whose copy reads and writes the same bytes of
-        // the buffer ([`Row::copies_shared_bytes`]), which Vulkan's copy forbids and our side takes
-        // through a scratch buffer. The `to-and-from` table has no such row — both its sides are an
-        // ordinary texture and a texture over the buffer, which share nothing — so that case
-        // declares only the first code. Measured on Apple M3 Max: `buffer-texture-blits-overlapping`
-        // announced `overlapping-texel-copy` and declared it nowhere, while `to-and-from` compared
-        // justified in the same run.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -535,18 +482,7 @@ impl Case for Blits {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::ShadowedTexture.code(),
-            ),
-        ];
-        if self.rows.iter().any(Row::copies_shared_bytes) {
-            named.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::OverlappingTexelCopy.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -635,137 +571,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The rows of the overlapping case that say they overlap do, and the ones that say they do not
-    /// do not — as [`Row::copies_shared_bytes`] reads them, which is what decides the case's
-    /// `overlapping-texel-copy` declaration.
-    ///
-    /// The point of those rows is that the source and destination bytes are the same bytes, so a
-    /// row whose offsets had drifted apart would look like a passing overlap case while asking
-    /// nothing. Its failure mode was exercised while writing it: pointing the second texture at
-    /// `ELSEWHERE` instead of one pitch on fails here.
-    ///
-    /// The expectation is computed **independently of the method**, which is the whole value of the
-    /// test: the method intersects ranges, while this enumerates the actual buffer byte each texel
-    /// of the source and destination rectangles occupies and intersects the two sets. A test that
-    /// called the method to work out what to expect would pass whatever the method did. Every
-    /// variant of [`Blit`] is covered, not only the two textures over one buffer, because a copy
-    /// with an ordinary texture on one side must read as sharing nothing for the `to-and-from` case
-    /// to declare only the one code.
-    #[test]
-    fn the_overlapping_rows_bytes_overlap_and_the_disjoint_ones_do_not() {
-        // The buffer bytes a texel of the texture at `at` occupies, as the row pitch lays them.
-        let texel_bytes = |at: u64, x: u64, y: u64| {
-            let start = at + y * PITCH + x * (ROW_BYTES / SIDE);
-            start..start + ROW_BYTES / SIDE
-        };
-        let rect = |at: u64, origin: [u64; 2], size: [u64; 2]| {
-            let mut bytes = std::collections::BTreeSet::new();
-            for y in origin[1]..origin[1] + size[1] {
-                for x in origin[0]..origin[0] + size[0] {
-                    bytes.extend(texel_bytes(at, x, y));
-                }
-            }
-            bytes
-        };
-        for row in OVERLAPPING_ROWS.iter().chain(&TO_AND_FROM_ROWS) {
-            // What the row's two sides really occupy. Only a side that is a texture **over the
-            // buffer** occupies any of it, so a side that is an ordinary texture contributes none.
-            let (read, written) = match row.blit {
-                Blit::IntoBuffer => (
-                    std::collections::BTreeSet::new(),
-                    rect(OFFSET, row.to, row.size),
-                ),
-                Blit::OutOfBuffer => (
-                    rect(OFFSET, row.from, row.size),
-                    std::collections::BTreeSet::new(),
-                ),
-                Blit::WithinBuffer { other, reverse } => {
-                    let (from_at, to_at) = match reverse {
-                        false => (OFFSET, other),
-                        true => (other, OFFSET),
-                    };
-                    (
-                        rect(from_at, row.from, row.size),
-                        rect(to_at, row.to, row.size),
-                    )
-                }
-                Blit::OntoItself => (
-                    rect(OFFSET, row.from, row.size),
-                    rect(OFFSET, row.to, row.size),
-                ),
-            };
-            let shares = read.intersection(&written).next().is_some();
-            assert_eq!(
-                row.copies_shared_bytes(),
-                shares,
-                "{}: the copy's bytes {} really shared, which is not what the row reads as, so the \
-                 case would declare the wrong set of notices",
-                row.key,
-                if shares { "are" } else { "are not" }
-            );
-        }
-        // And the family is not all of one kind, or the comparison above would hold vacuously.
-        let sharing = OVERLAPPING_ROWS
-            .iter()
-            .chain(&TO_AND_FROM_ROWS)
-            .filter(|row| row.copies_shared_bytes())
-            .count();
-        assert!(
-            sharing > 0 && sharing < OVERLAPPING_ROWS.len() + TO_AND_FROM_ROWS.len(),
-            "{sharing} rows share bytes: the tables must hold both kinds for this to check anything"
-        );
-    }
-
-    /// Each case declares exactly the notice codes a row of it can announce: both, where a row's
-    /// copy reads and writes the same bytes of the buffer, and the shadow alone where none does.
-    ///
-    /// The second direction is the one that costs a run its meaning. A declaration fires on its own
-    /// code, so a code declared where no row can announce it fires on no venue and names nothing
-    /// the run justifies — an allowance that sits in every report as noise a real difference can
-    /// hide in. So this asserts the whole set, equal, rather than that the codes are present.
-    #[test]
-    fn each_case_declares_exactly_the_notices_a_row_of_it_can_announce() {
-        use crate::allowance::Justification;
-        use crate::degradation::Degradation;
-        for case in table() {
-            let codes: Vec<String> = case
-                .allowances()
-                .iter()
-                .map(|allowance| {
-                    assert_eq!(
-                        allowance.path,
-                        format!("case/{}/*", crate::replay::NOTICES_SITE),
-                        "{}: an allowance outside the notices site",
-                        case.name()
-                    );
-                    match &allowance.justified_by {
-                        Justification::Degradation(code) => code.clone(),
-                        other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),
-                    }
-                })
-                .collect();
-            // The venue's own notice leads the set: both cases declare it, because both read
-            // their answer back through a `Shared` buffer and a card without unified memory holds
-            // that buffer in system memory.
-            let mut wanted = vec![
-                Degradation::SharedInSystemMemory.code().to_owned(),
-                Degradation::ShadowedTexture.code().to_owned(),
-            ];
-            if case.rows.iter().any(Row::copies_shared_bytes) {
-                wanted.push(Degradation::OverlappingTexelCopy.code().to_owned());
-            }
-            assert_eq!(codes, wanted, "{}", case.name());
-        }
-        // The two cases must not declare the same set, or the row-shaped test above is decoration.
-        let sets: Vec<usize> = table().iter().map(|case| case.allowances().len()).collect();
-        assert_eq!(
-            sets,
-            vec![2, 3],
-            "one case declares the venue's notice and the shadow image, the other those two and \
-             the overlapping copy"
-        );
     }
 
     /// Every texel of every set names itself, so no two texels of a program share a value.

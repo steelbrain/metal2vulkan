@@ -11,156 +11,24 @@ use metal2vulkan::pipeline::PrecisionNote;
 /// A kind of degrade notice, by its code ([`Degradation::code`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Degradation {
-    /// `metal2vulkan-degrade-shadowed-texture`.
-    ShadowedTexture,
-    /// `metal2vulkan-degrade-unordered-draw-bytes`.
-    UnorderedDrawBytes,
-    /// `metal2vulkan-degrade-unorm-depth-rounding`.
-    UnormDepthRounding,
-    /// `metal2vulkan-degrade-biased-depth-past-unit-range`.
-    BiasedDepthPastUnitRange,
-    /// `metal2vulkan-degrade-fragments-before-geometry`.
-    FragmentsBeforeGeometry,
-    /// `metal2vulkan-degrade-indirect-index-bounds-pass`.
-    IndirectIndexBoundsPass,
-    /// `metal2vulkan-degrade-emulated-mesh-draws`.
-    EmulatedMeshDraws,
-    /// `metal2vulkan-degrade-emulated-tessellation-draws`.
-    EmulatedTessellationDraws,
-    /// `metal2vulkan-degrade-overlapping-buffer-copy`.
-    OverlappingBufferCopy,
-    /// `metal2vulkan-degrade-split-buffer-fill`.
-    SplitBufferFill,
-    /// `metal2vulkan-degrade-staged-texture-copy`.
-    StagedTextureCopy,
-    /// `metal2vulkan-degrade-overlapping-texel-copy`.
-    OverlappingTexelCopy,
-    /// `metal2vulkan-degrade-split-dispatch`.
-    SplitDispatch,
-    /// `metal2vulkan-degrade-separate-depth-stencil`.
-    SeparateDepthStencil,
-    /// `metal2vulkan-degrade-one-aspect-resolve`.
-    OneAspectResolve,
-    /// `metal2vulkan-degrade-shader-resolve`.
-    ShaderResolve,
-    /// `metal2vulkan-degrade-shader-color-conversion`.
-    ShaderColorConversion,
-    /// `metal2vulkan-degrade-render-pass-split`.
-    RenderPassSplit,
-    /// `metal2vulkan-degrade-memoryless-texture-buffer`.
-    MemorylessTextureBuffer,
-    /// `metal2vulkan-degrade-fetch-through-scratch`.
-    FetchThroughScratch,
-    /// `metal2vulkan-degrade-sample-planes`.
-    SamplePlanes,
-    /// `metal2vulkan-degrade-shader-side-stencil`.
-    ShaderSideStencil,
-    /// `metal2vulkan-degrade-tile-dispatch-scratch`.
-    TileDispatchScratch,
-    /// `metal2vulkan-degrade-host-replayed-indirect-commands`.
-    HostReplayedIndirectCommands,
-    /// `metal2vulkan-degrade-staged-indirect-records`.
-    StagedIndirectRecords,
-    /// `metal2vulkan-degrade-uncalibrated-gpu-times`.
-    UncalibratedGpuTimes,
-    /// `metal2vulkan-degrade-loosely-calibrated-gpu-times`.
-    LooselyCalibratedGpuTimes,
-    /// `metal2vulkan-degrade-gpu-times-from-host`.
-    GpuTimesFromHost,
     /// `metal2vulkan-degrade-device-rounded-resolve`.
     DeviceRoundedResolve,
-    /// `metal2vulkan-degrade-extended-range-resolve`.
-    ExtendedRangeResolve,
-    /// `metal2vulkan-degrade-dont-care-store`.
-    DontCareStore,
-    /// `metal2vulkan-degrade-dont-care-load-tiles`.
-    DontCareLoadTiles,
-    /// `metal2vulkan-degrade-fresh-pattern-zeroed`.
-    FreshPatternZeroed,
-    /// `metal2vulkan-degrade-implementation-defined-reconvergence`.
-    ImplementationDefinedReconvergence,
-    /// `metal2vulkan-degrade-restricted-depth-upload`.
-    RestrictedDepthUpload,
-    /// `metal2vulkan-degrade-host-read-dispatch-arguments`.
-    HostReadDispatchArguments,
-    /// `metal2vulkan-degrade-non-strict-residency`.
-    NonStrictResidency,
-    /// `metal2vulkan-degrade-host-read-mapping-arguments`.
-    HostReadMappingArguments,
-    /// `metal2vulkan-degrade-emulated-sparse-texture`.
-    EmulatedSparseTexture,
+    /// `metal2vulkan-degrade-device-reconvergence`.
+    DeviceReconvergence,
     /// `metal2vulkan-degrade-shared-in-system-memory`.
     SharedInSystemMemory,
     /// `metal2vulkan-degrade-device-filtered-mipmaps`.
     DeviceFilteredMipmaps,
-    /// `metal2vulkan-degrade-shadowed-texture-view`.
-    ShadowedTextureView,
     /// `metal2vulkan-degrade-capped-lod-bias`.
     CappedLodBias,
-    /// `metal2vulkan-degrade-unnamed-texture-unviewable`.
-    UnnamedTextureUnviewable,
-    /// `metal2vulkan-degrade-unnamed-shadowed-texture`.
-    UnnamedShadowedTexture,
-    /// `metal2vulkan-degrade-drawn-depth-copy`.
-    DrawnDepthCopy,
-    /// `metal2vulkan-degrade-heap-two-plane-layout`.
-    HeapTwoPlaneLayout,
-    /// `metal2vulkan-degrade-two-plane-texture-copy`.
-    TwoPlaneTextureCopy,
-    /// `metal2vulkan-degrade-extended-range-bits-kept`.
-    ExtendedRangeBitsKept,
     /// `metal2vulkan-degrade-snorm-minimum-kept`.
     SnormMinimumKept,
     /// `metal2vulkan-degrade-shared-exponent-kept`.
     SharedExponentKept,
-    /// `metal2vulkan-degrade-two-plane-buffer-blit`.
-    TwoPlaneBufferBlit,
-    /// `metal2vulkan-degrade-two-plane-buffer-blit-order`.
-    TwoPlaneBufferBlitOrder,
-    /// `metal2vulkan-degrade-set-past-layout-support`.
-    SetPastLayoutSupport,
-    /// `metal2vulkan-degrade-ycbcr-filter-not-exact`.
-    YCbCrFilterNotExact,
-    /// `metal2vulkan-degrade-rotated-load-tiles`.
-    RotatedLoadTiles,
-    /// `metal2vulkan-degrade-heap-texture-lossless-layout`.
-    HeapTextureLosslessLayout,
-    /// `metal2vulkan-degrade-heap-texture-untiled-layout`.
-    HeapTextureUntiledLayout,
-    /// `metal2vulkan-degrade-extended-range-blends-stored-codes`.
-    ExtendedRangeBlendsStoredCodes,
     /// `metal2vulkan-degrade-compressed-texel-decode`.
     CompressedTexelDecode,
-    /// `metal2vulkan-degrade-cpu-block-decode`.
-    CpuBlockDecode,
-    /// `metal2vulkan-degrade-carried-decoded-twin`.
-    CarriedDecodedTwin,
-    /// `metal2vulkan-degrade-decoded-texel-precision`.
-    DecodedTexelPrecision,
-    /// `metal2vulkan-degrade-heap-texture-larger-than-metal`.
-    HeapTextureLargerThanMetal,
-    /// `metal2vulkan-degrade-dont-care-stand-in`.
-    DontCareStandIn,
-    /// `metal2vulkan-degrade-copied-host-pages`.
-    CopiedHostPages,
     /// `metal2vulkan-degrade-depth-denormals`.
     DepthDenormals,
-    /// `metal2vulkan-degrade-signed-depth-test`.
-    SignedDepthTest,
-    /// `metal2vulkan-degrade-first-sparse-resource-wait`.
-    FirstSparseResourceWait,
-    /// `metal2vulkan-degrade-unpacked-fill-color`.
-    UnpackedFillColor,
-    /// `metal2vulkan-degrade-texture-buffer-fill-leftover`.
-    TextureBufferFillLeftover,
-    /// `metal2vulkan-degrade-device-line-ties`.
-    DeviceLineTies,
-    /// `metal2vulkan-degrade-device-subpixel-snap`.
-    DeviceSubpixelSnap,
-    /// `metal2vulkan-degrade-device-boolean-visibility`.
-    DeviceBooleanVisibility,
-    /// `metal2vulkan-degrade-float-tininess-after-rounding`.
-    FloatTininessAfterRounding,
     /// `metal2vulkan-degrade-f16-fma-double-rounding`.
     F16FmaDoubleRounding,
     /// `metal2vulkan-degrade-f16-int-conv-double-rounding`.
@@ -326,81 +194,15 @@ pub enum Degradation {
 impl Degradation {
     /// Every kind, in declaration order.
     pub const ALL: &'static [Degradation] = &[
-        Degradation::ShadowedTexture,
-        Degradation::UnorderedDrawBytes,
-        Degradation::UnormDepthRounding,
-        Degradation::BiasedDepthPastUnitRange,
-        Degradation::FragmentsBeforeGeometry,
-        Degradation::IndirectIndexBoundsPass,
-        Degradation::EmulatedMeshDraws,
-        Degradation::EmulatedTessellationDraws,
-        Degradation::OverlappingBufferCopy,
-        Degradation::SplitBufferFill,
-        Degradation::StagedTextureCopy,
-        Degradation::OverlappingTexelCopy,
-        Degradation::SplitDispatch,
-        Degradation::SeparateDepthStencil,
-        Degradation::OneAspectResolve,
-        Degradation::ShaderResolve,
-        Degradation::ShaderColorConversion,
-        Degradation::RenderPassSplit,
-        Degradation::MemorylessTextureBuffer,
-        Degradation::FetchThroughScratch,
-        Degradation::SamplePlanes,
-        Degradation::ShaderSideStencil,
-        Degradation::TileDispatchScratch,
-        Degradation::HostReplayedIndirectCommands,
-        Degradation::StagedIndirectRecords,
-        Degradation::UncalibratedGpuTimes,
-        Degradation::LooselyCalibratedGpuTimes,
-        Degradation::GpuTimesFromHost,
         Degradation::DeviceRoundedResolve,
-        Degradation::ExtendedRangeResolve,
-        Degradation::DontCareStore,
-        Degradation::DontCareLoadTiles,
-        Degradation::FreshPatternZeroed,
-        Degradation::ImplementationDefinedReconvergence,
-        Degradation::RestrictedDepthUpload,
-        Degradation::HostReadDispatchArguments,
-        Degradation::NonStrictResidency,
-        Degradation::HostReadMappingArguments,
-        Degradation::EmulatedSparseTexture,
+        Degradation::DeviceReconvergence,
         Degradation::SharedInSystemMemory,
         Degradation::DeviceFilteredMipmaps,
-        Degradation::ShadowedTextureView,
         Degradation::CappedLodBias,
-        Degradation::UnnamedTextureUnviewable,
-        Degradation::UnnamedShadowedTexture,
-        Degradation::DrawnDepthCopy,
-        Degradation::HeapTwoPlaneLayout,
-        Degradation::TwoPlaneTextureCopy,
-        Degradation::ExtendedRangeBitsKept,
         Degradation::SnormMinimumKept,
         Degradation::SharedExponentKept,
-        Degradation::TwoPlaneBufferBlit,
-        Degradation::TwoPlaneBufferBlitOrder,
-        Degradation::SetPastLayoutSupport,
-        Degradation::YCbCrFilterNotExact,
-        Degradation::RotatedLoadTiles,
-        Degradation::HeapTextureLosslessLayout,
-        Degradation::HeapTextureUntiledLayout,
-        Degradation::ExtendedRangeBlendsStoredCodes,
         Degradation::CompressedTexelDecode,
-        Degradation::CpuBlockDecode,
-        Degradation::CarriedDecodedTwin,
-        Degradation::DecodedTexelPrecision,
-        Degradation::HeapTextureLargerThanMetal,
-        Degradation::DontCareStandIn,
-        Degradation::CopiedHostPages,
         Degradation::DepthDenormals,
-        Degradation::SignedDepthTest,
-        Degradation::FirstSparseResourceWait,
-        Degradation::UnpackedFillColor,
-        Degradation::TextureBufferFillLeftover,
-        Degradation::DeviceLineTies,
-        Degradation::DeviceSubpixelSnap,
-        Degradation::DeviceBooleanVisibility,
-        Degradation::FloatTininessAfterRounding,
         Degradation::F16FmaDoubleRounding,
         Degradation::F16IntConvDoubleRounding,
         Degradation::GradFromBias,
@@ -486,121 +288,15 @@ impl Degradation {
     /// The kind's code, `metal2vulkan-degrade-<kind>`.
     pub const fn code(self) -> &'static str {
         match self {
-            Degradation::ShadowedTexture => "metal2vulkan-degrade-shadowed-texture",
-            Degradation::UnorderedDrawBytes => "metal2vulkan-degrade-unordered-draw-bytes",
-            Degradation::UnormDepthRounding => "metal2vulkan-degrade-unorm-depth-rounding",
-            Degradation::BiasedDepthPastUnitRange => {
-                "metal2vulkan-degrade-biased-depth-past-unit-range"
-            }
-            Degradation::FragmentsBeforeGeometry => {
-                "metal2vulkan-degrade-fragments-before-geometry"
-            }
-            Degradation::IndirectIndexBoundsPass => {
-                "metal2vulkan-degrade-indirect-index-bounds-pass"
-            }
-            Degradation::EmulatedMeshDraws => "metal2vulkan-degrade-emulated-mesh-draws",
-            Degradation::EmulatedTessellationDraws => {
-                "metal2vulkan-degrade-emulated-tessellation-draws"
-            }
-            Degradation::OverlappingBufferCopy => "metal2vulkan-degrade-overlapping-buffer-copy",
-            Degradation::SplitBufferFill => "metal2vulkan-degrade-split-buffer-fill",
-            Degradation::StagedTextureCopy => "metal2vulkan-degrade-staged-texture-copy",
-            Degradation::OverlappingTexelCopy => "metal2vulkan-degrade-overlapping-texel-copy",
-            Degradation::SplitDispatch => "metal2vulkan-degrade-split-dispatch",
-            Degradation::SeparateDepthStencil => "metal2vulkan-degrade-separate-depth-stencil",
-            Degradation::OneAspectResolve => "metal2vulkan-degrade-one-aspect-resolve",
-            Degradation::ShaderResolve => "metal2vulkan-degrade-shader-resolve",
-            Degradation::ShaderColorConversion => "metal2vulkan-degrade-shader-color-conversion",
-            Degradation::RenderPassSplit => "metal2vulkan-degrade-render-pass-split",
-            Degradation::MemorylessTextureBuffer => {
-                "metal2vulkan-degrade-memoryless-texture-buffer"
-            }
-            Degradation::FetchThroughScratch => "metal2vulkan-degrade-fetch-through-scratch",
-            Degradation::SamplePlanes => "metal2vulkan-degrade-sample-planes",
-            Degradation::ShaderSideStencil => "metal2vulkan-degrade-shader-side-stencil",
-            Degradation::TileDispatchScratch => "metal2vulkan-degrade-tile-dispatch-scratch",
-            Degradation::HostReplayedIndirectCommands => {
-                "metal2vulkan-degrade-host-replayed-indirect-commands"
-            }
-            Degradation::StagedIndirectRecords => "metal2vulkan-degrade-staged-indirect-records",
-            Degradation::UncalibratedGpuTimes => "metal2vulkan-degrade-uncalibrated-gpu-times",
-            Degradation::LooselyCalibratedGpuTimes => {
-                "metal2vulkan-degrade-loosely-calibrated-gpu-times"
-            }
-            Degradation::GpuTimesFromHost => "metal2vulkan-degrade-gpu-times-from-host",
             Degradation::DeviceRoundedResolve => "metal2vulkan-degrade-device-rounded-resolve",
-            Degradation::ExtendedRangeResolve => "metal2vulkan-degrade-extended-range-resolve",
-            Degradation::DontCareStore => "metal2vulkan-degrade-dont-care-store",
-            Degradation::DontCareLoadTiles => "metal2vulkan-degrade-dont-care-load-tiles",
-            Degradation::FreshPatternZeroed => "metal2vulkan-degrade-fresh-pattern-zeroed",
-            Degradation::ImplementationDefinedReconvergence => {
-                "metal2vulkan-degrade-implementation-defined-reconvergence"
-            }
-            Degradation::RestrictedDepthUpload => "metal2vulkan-degrade-restricted-depth-upload",
-            Degradation::HostReadDispatchArguments => {
-                "metal2vulkan-degrade-host-read-dispatch-arguments"
-            }
-            Degradation::NonStrictResidency => "metal2vulkan-degrade-non-strict-residency",
-            Degradation::HostReadMappingArguments => {
-                "metal2vulkan-degrade-host-read-mapping-arguments"
-            }
-            Degradation::EmulatedSparseTexture => "metal2vulkan-degrade-emulated-sparse-texture",
+            Degradation::DeviceReconvergence => "metal2vulkan-degrade-device-reconvergence",
             Degradation::SharedInSystemMemory => "metal2vulkan-degrade-shared-in-system-memory",
             Degradation::DeviceFilteredMipmaps => "metal2vulkan-degrade-device-filtered-mipmaps",
-            Degradation::ShadowedTextureView => "metal2vulkan-degrade-shadowed-texture-view",
             Degradation::CappedLodBias => "metal2vulkan-degrade-capped-lod-bias",
-            Degradation::UnnamedTextureUnviewable => {
-                "metal2vulkan-degrade-unnamed-texture-unviewable"
-            }
-            Degradation::UnnamedShadowedTexture => "metal2vulkan-degrade-unnamed-shadowed-texture",
-            Degradation::DrawnDepthCopy => "metal2vulkan-degrade-drawn-depth-copy",
-            Degradation::HeapTwoPlaneLayout => "metal2vulkan-degrade-heap-two-plane-layout",
-            Degradation::TwoPlaneTextureCopy => "metal2vulkan-degrade-two-plane-texture-copy",
-            Degradation::ExtendedRangeBitsKept => "metal2vulkan-degrade-extended-range-bits-kept",
             Degradation::SnormMinimumKept => "metal2vulkan-degrade-snorm-minimum-kept",
             Degradation::SharedExponentKept => "metal2vulkan-degrade-shared-exponent-kept",
-            Degradation::TwoPlaneBufferBlit => "metal2vulkan-degrade-two-plane-buffer-blit",
-            Degradation::TwoPlaneBufferBlitOrder => {
-                "metal2vulkan-degrade-two-plane-buffer-blit-order"
-            }
-            Degradation::SetPastLayoutSupport => "metal2vulkan-degrade-set-past-layout-support",
-            Degradation::YCbCrFilterNotExact => "metal2vulkan-degrade-ycbcr-filter-not-exact",
-            Degradation::RotatedLoadTiles => "metal2vulkan-degrade-rotated-load-tiles",
-            Degradation::HeapTextureLosslessLayout => {
-                "metal2vulkan-degrade-heap-texture-lossless-layout"
-            }
-            Degradation::HeapTextureUntiledLayout => {
-                "metal2vulkan-degrade-heap-texture-untiled-layout"
-            }
-            Degradation::ExtendedRangeBlendsStoredCodes => {
-                "metal2vulkan-degrade-extended-range-blends-stored-codes"
-            }
             Degradation::CompressedTexelDecode => "metal2vulkan-degrade-compressed-texel-decode",
-            Degradation::CpuBlockDecode => "metal2vulkan-degrade-cpu-block-decode",
-            Degradation::CarriedDecodedTwin => "metal2vulkan-degrade-carried-decoded-twin",
-            Degradation::DecodedTexelPrecision => "metal2vulkan-degrade-decoded-texel-precision",
-            Degradation::HeapTextureLargerThanMetal => {
-                "metal2vulkan-degrade-heap-texture-larger-than-metal"
-            }
-            Degradation::DontCareStandIn => "metal2vulkan-degrade-dont-care-stand-in",
-            Degradation::CopiedHostPages => "metal2vulkan-degrade-copied-host-pages",
             Degradation::DepthDenormals => "metal2vulkan-degrade-depth-denormals",
-            Degradation::SignedDepthTest => "metal2vulkan-degrade-signed-depth-test",
-            Degradation::FirstSparseResourceWait => {
-                "metal2vulkan-degrade-first-sparse-resource-wait"
-            }
-            Degradation::UnpackedFillColor => "metal2vulkan-degrade-unpacked-fill-color",
-            Degradation::TextureBufferFillLeftover => {
-                "metal2vulkan-degrade-texture-buffer-fill-leftover"
-            }
-            Degradation::DeviceLineTies => "metal2vulkan-degrade-device-line-ties",
-            Degradation::DeviceSubpixelSnap => "metal2vulkan-degrade-device-subpixel-snap",
-            Degradation::DeviceBooleanVisibility => {
-                "metal2vulkan-degrade-device-boolean-visibility"
-            }
-            Degradation::FloatTininessAfterRounding => {
-                "metal2vulkan-degrade-float-tininess-after-rounding"
-            }
             Degradation::F16FmaDoubleRounding => "metal2vulkan-degrade-f16-fma-double-rounding",
             Degradation::F16IntConvDoubleRounding => {
                 "metal2vulkan-degrade-f16-int-conv-double-rounding"
@@ -832,7 +528,7 @@ impl Degradation {
             PrecisionNote::DeviceRoundedResolve => Degradation::DeviceRoundedResolve,
             PrecisionNote::CompressedTexelDecode => Degradation::CompressedTexelDecode,
             PrecisionNote::SharedExponentKept => Degradation::SharedExponentKept,
-            PrecisionNote::DeviceReconvergence => Degradation::ImplementationDefinedReconvergence,
+            PrecisionNote::DeviceReconvergence => Degradation::DeviceReconvergence,
         }
     }
 }

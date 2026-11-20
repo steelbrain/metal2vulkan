@@ -26,9 +26,8 @@
 //! four bytes (a texture-buffer fill pattern over 32752 bytes, which ends Metal's process, is a
 //! case this round must not run).
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Fill, Input, MetalSource, PlaneTexture, Side};
-use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{
@@ -453,31 +452,10 @@ impl Case for SurfaceFills {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Metal announces nothing, so the notices site is the one field that may differ. A texture
-        // over a buffer's padded rows is kept as an exact shadow copy, which the device announces;
-        // a color packed in a format Metal packs no color in fills the command buffer's last
-        // packed texel, which it announces too. Each names its own kind, and only the one that
-        // fired on a run justifies that run's difference.
-        [
-            Degradation::ShadowedTexture,
-            Degradation::ShadowedTextureView,
-            Degradation::UnnamedShadowedTexture,
-            Degradation::UnpackedFillColor,
-        ]
-        .into_iter()
-        .map(|kind| {
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(kind),
-            )
-        })
-        .chain([
-            // The buffer the case reads the filled surfaces back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ])
-        .collect()
+        // Metal announces nothing, so the notices site is the one field that may differ: the
+        // buffer the case reads the filled surfaces back through is `Shared`
+        // ([`crate::replay::shared_memory_notice`]).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -90,8 +90,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Input, MetalSource, Side};
-use crate::degradation::Degradation;
-use crate::replay::notice_allowance;
 use crate::sparse_mapping::{MappingMode, MappingStep, SparseMappingProgram, TileGrid, TileRect};
 use crate::sparse_query::{SparseHeapSpec, SparseTextureSpec};
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites};
@@ -151,28 +149,6 @@ const FILL: u8 = 0xc3;
 /// so "this tile lost its mapping" and "this tile is as it was" are two readings and not one.
 const SLICE_FILLS: [u8; 4] = [0xc3, 0x3c, 0xa5, 0x5a];
 
-/// The notices **every** row of the family takes.
-///
-/// A sparse texture is emulated wherever the device offers no sparse residency of its own — which
-/// on this oracle's MoltenVK is every sparse texture — and the runtime announces that once per
-/// texture. It is a device gap, announced honestly, so each row declares it and then compares
-/// every number exactly; a venue with native sparse residency announces nothing and the
-/// declaration simply does not fire there.
-///
-/// A device that *has* sparse residency announces the other of the pair instead:
-/// `non-strict-residency` says the device does not guarantee that a read of an unmapped tile
-/// answers zero, where Metal's sparse texture does. Both are the device's own and neither loosens
-/// a number: every row still compares each texel and each count with Metal's exactly, so a texel
-/// a non-strict read moved would be this family's finding and not its tolerance.
-///
-/// Measured on llvmpipe (LLVM 23.1.1, 256 bits, Mesa 26.2.4) in a whole-suite replay: all nine
-/// rows announce `non-strict-residency`, and eight of them announce no
-/// `emulated-sparse-texture` at all, which is the declaration that leaves the other unfired.
-const EVERY_ROWS_NOTICES: [Degradation; 2] = [
-    Degradation::EmulatedSparseTexture,
-    Degradation::NonStrictResidency,
-];
-
 /// A single-sampled 2D sparse texture of [`WIDTH`] by [`WIDTH`].
 fn plain() -> SparseTextureSpec {
     SparseTextureSpec::texture_2d(FORMAT, [WIDTH, WIDTH], LEVELS)
@@ -221,10 +197,6 @@ struct Row {
     case: &'static str,
     /// The program the row runs, built with no device at all so a guard can read it.
     program: fn() -> SparseMappingProgram,
-    /// The notices the row takes **beyond** [`EVERY_ROWS_NOTICES`], each a degradation the
-    /// runtime announces on the path this row alone drives. Empty for every row but the indirect
-    /// one.
-    notices: &'static [Degradation],
 }
 
 /// The program a row states, over `textures`, with `buffers`, `fences` and `steps`.
@@ -267,7 +239,6 @@ fn update(mode: MappingMode, region: TileRect, level: u64, slice: u64) -> Vec<Ma
 /// sweep a measurement rather than five encodings of one answer.
 static MODES_AND_SIZES: Row = Row {
     case: "sparse-mapping-modes-and-region-sizes",
-    notices: &[],
     program: || {
         let mut steps = Vec::new();
         for mode in MappingMode::ALL {
@@ -298,7 +269,6 @@ static MODES_AND_SIZES: Row = Row {
 /// our side refuses it and an abort there would leave every number below uncompared.
 static LEVELS_AND_THE_TAIL: Row = Row {
     case: "sparse-mapping-levels-and-the-tail",
-    notices: &[],
     program: || {
         let mut steps = Vec::new();
         for level in [0, 1, 2] {
@@ -347,7 +317,6 @@ static LEVELS_AND_THE_TAIL: Row = Row {
 /// of [`LEVELS_AND_THE_TAIL`].
 static A_LEVEL_PAST_THE_TEXTURES: Row = Row {
     case: "sparse-mapping-a-level-past-the-textures",
-    notices: &[],
     program: || {
         program(
             vec![plain()],
@@ -392,7 +361,6 @@ static A_LEVEL_PAST_THE_TEXTURES: Row = Row {
 /// still of a tile the program itself mapped.
 static A_SLICE_PAST_THE_TEXTURES: Row = Row {
     case: "sparse-mapping-a-slice-past-the-textures",
-    notices: &[],
     program: || {
         // The two tiles of level 0 each real slice holds mapped: the second is the one the
         // out-of-bounds `Unmap` names.
@@ -463,7 +431,6 @@ static A_SLICE_PAST_THE_TEXTURES: Row = Row {
 /// slice 0 for both reads the first rise twice and the case moves.
 static SLICES_OF_AN_ARRAY: Row = Row {
     case: "sparse-mapping-slices-of-an-array",
-    notices: &[],
     program: || {
         let mut steps = Vec::new();
         for slice in 0..SLICES as u64 {
@@ -484,7 +451,6 @@ static SLICES_OF_AN_ARRAY: Row = Row {
 /// over one element is the shape a side is most likely to read as a range of none.
 static PLURAL_UPDATES: Row = Row {
     case: "sparse-mapping-plural-updates",
-    notices: &[],
     program: || {
         let regions = vec![
             (whole_level(0), 0, 0),
@@ -528,10 +494,6 @@ static PLURAL_UPDATES: Row = Row {
 /// offset are both swept, and a count of 0 is the negative fact beside them.
 static INDIRECT_UPDATES: Row = Row {
     case: "sparse-mapping-indirect-updates",
-    // The runtime reads the indirect regions on the **host**, once the work before the update
-    // completed, and announces that it did. The case takes the notice and compares every number
-    // exactly; what it may not do is take a different number because of one, and it does not.
-    notices: &[Degradation::HostReadMappingArguments],
     program: || {
         let steps = vec![
             // A count of 0 at offset 0: nothing maps.
@@ -622,7 +584,6 @@ fn indirect_arguments() -> Vec<u8> {
 /// a mapped tile is the one that would raise it if an implementation took a page for it.
 static MOVES: Row = Row {
     case: "sparse-mapping-moves",
-    notices: &[],
     program: || {
         let one = [1, 1, 1];
         let steps = vec![
@@ -839,7 +800,6 @@ fn move_of(from: [u64; 2], size: [u64; 2], to: [u64; 2]) -> MappingStep {
 /// exactly that region, so the two agree here and the rows past an edge are where the run shows.
 static MOVE_INSIDE_THE_LEVEL: Row = Row {
     case: "sparse-mapping-move-inside-the-level",
-    notices: &[],
     program: || {
         moved(
             &[(SOURCE, TileRect::new([0, 0], [2, 2]))],
@@ -874,7 +834,6 @@ static MOVE_INSIDE_THE_LEVEL: Row = Row {
 /// another implementation doing it.
 static MOVE_PAST_THE_DESTINATIONS_ROW: Row = Row {
     case: "sparse-mapping-move-past-the-destinations-row",
-    notices: &[],
     program: || {
         moved(
             &[(SOURCE, TileRect::new([0, 0], [4, 1]))],
@@ -909,7 +868,6 @@ static MOVE_PAST_THE_DESTINATIONS_ROW: Row = Row {
 /// maps a destination tile ahead of a move.
 static MOVE_OF_A_SOURCE_PAST_THE_LEVEL: Row = Row {
     case: "sparse-mapping-move-of-a-source-past-the-level",
-    notices: &[],
     program: || {
         moved(
             &[
@@ -947,7 +905,6 @@ static MOVE_OF_A_SOURCE_PAST_THE_LEVEL: Row = Row {
 /// the runtime and nothing held it; this row is what holds it.
 static MOVE_OF_A_CLIPPED_SOURCE: Row = Row {
     case: "sparse-mapping-move-of-a-clipped-source",
-    notices: &[],
     program: || {
         moved(
             &[(SOURCE, TileRect::new([2, 2], [2, 2]))],
@@ -972,7 +929,6 @@ static MOVE_OF_A_CLIPPED_SOURCE: Row = Row {
 /// after it, [`mapped_tiles_hold_their_texels`], is where a mapping's effect is actually read.
 static FENCES: Row = Row {
     case: "sparse-mapping-fences",
-    notices: &[],
     program: || {
         let steps = vec![
             MappingStep::One {
@@ -1008,7 +964,6 @@ static FENCES: Row = Row {
 /// nobody here has measured.
 static MAPPED_TEXELS: Row = Row {
     case: "sparse-mapping-mapped-tiles-hold-their-texels",
-    notices: &[],
     program: || {
         let region = TileRect::one([0, 0]);
         let steps = vec![
@@ -1075,27 +1030,15 @@ impl Case for SparseMappings {
 
     fn allowances(&self) -> Vec<Allowance> {
         // **No value is loosened**: every number and every byte of every row compares exactly. The
-        // only declarations are the notices a row's own path announces, which the runtime must be
-        // allowed to say; a notice a row does not declare reads as `UndeclaredNotice`, naming the
-        // code and the case, which is the loud form.
-        //
-        // Two kinds are declared beyond a row's own. A device that keeps a sparse texture's
-        // residency less strictly than Metal says so (`non-strict-residency`), which llvmpipe
-        // announced for every row of the family. And the `Shared` buffer a row that reads texels
-        // back carries ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for
-        // the two rows that read any -- `sparse-mapping-mapped-tiles-hold-their-texels` and
+        // one declaration is the `Shared` buffer a row that reads texels back carries
+        // ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for the two rows
+        // that read any -- `sparse-mapping-mapped-tiles-hold-their-texels` and
         // `sparse-mapping-indirect-updates`. The rest answer mappings and numbers alone, so they
         // allocate no such buffer and declare nothing for one.
-        let mut named: Vec<Allowance> = EVERY_ROWS_NOTICES
-            .iter()
-            .chain(self.row.notices)
-            .chain(std::iter::once(&Degradation::NonStrictResidency))
-            .map(|code| notice_allowance(code.code()))
-            .collect();
-        if reaches_a_shared_buffer(&(self.row.program)()) {
-            named.push(crate::replay::shared_memory_notice());
+        match reaches_a_shared_buffer(&(self.row.program)()) {
+            true => vec![crate::replay::shared_memory_notice()],
+            false => Vec::new(),
         }
-        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -1281,22 +1224,15 @@ mod tests {
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            // Every row declares the notices every row takes and the one a device's own sparse
-            // residency provokes; the indirect row adds its own, and the two rows that reach a
-            // `Shared` buffer add the one a device's own memory model provokes. No value
-            // tolerance appears anywhere in this family.
+            // The two rows that reach a `Shared` buffer declare the one a device's own memory
+            // model provokes, and no other row declares anything. No value tolerance appears
+            // anywhere in this family.
             let allowed = case.allowances();
-            let expects = EVERY_ROWS_NOTICES.len()
-                + 1
-                + match case.name() == INDIRECT_UPDATES.case {
-                    true => INDIRECT_UPDATES.notices.len(),
-                    false => 0,
-                }
-                + usize::from(reaches_a_shared_buffer(&(EVERY_ROW
-                    .iter()
-                    .find(|row| row.case == case.name())
-                    .expect("a row of the family")
-                    .program)()));
+            let expects = usize::from(reaches_a_shared_buffer(&(EVERY_ROW
+                .iter()
+                .find(|row| row.case == case.name())
+                .expect("a row of the family")
+                .program)()));
             assert_eq!(allowed.len(), expects, "{}", case.name());
             for allowance in &allowed {
                 assert!(

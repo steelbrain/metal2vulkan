@@ -27,11 +27,9 @@
 //! # The GPU pair is a `Result`, because one side may have no answer
 //!
 //! `GPUStartTime` and `GPUEndTime` need the device to write timestamps. The runtime refuses them
-//! typed where its queue family writes none, and answers them from the host — announcing
-//! `Degradation::GpuTimesFromHost` — where the driver's own timestamps wait for every queue's.
-//! So [`CommandBufferFacts::gpu`] holds either the flags or the refusal, and a venue with no
-//! timestamps records the refusal rather than four booleans derived from zeros. The kernel pair
-//! needs no device at all and is always flags.
+//! typed where its queue family writes none. So [`CommandBufferFacts::gpu`] holds either the flags
+//! or the refusal, and a venue with no timestamps records the refusal rather than four booleans
+//! derived from zeros. The kernel pair needs no device at all and is always flags.
 //!
 //! # Why the two owners are booleans too
 //!

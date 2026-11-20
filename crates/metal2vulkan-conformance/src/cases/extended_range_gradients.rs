@@ -243,50 +243,13 @@ impl Case for GradientDraw {
 
     /// The notices a draw into such a target may announce, none of which loosens a code (every
     /// texel still compares exactly): `shared-in-system-memory` (the read-back buffer is `Shared`;
-    /// a device without unified memory announces it), the kept encoding of a blit through a
-    /// `BGRA10_XR` texture Metal keeps compressed (a draw stores canonical codes, so the blit
-    /// moves the same bytes either way), `half-output-fast-math-blend` (the fixture is a
-    /// fast-math module whose `half4` gradient a pipeline blends), `extended-range-bits-kept` (a
-    /// draw in a pass over such a color; every texel is written by a clear or a draw first), and
-    /// `extended-range-blends-stored-codes` (the second draw blends over the first's color where
-    /// the pass cannot hold its `half` shadow). At four samples, what the pass's shape announces:
-    /// `shader-resolve` and `extended-range-resolve` (the runtime's own resolve averages the
-    /// codes), `dont-care-store` (the multisampled attachment of `MultisampleResolve`, on a driver
-    /// measured to keep one of Metal's answers), and on a device without multisampled storage
-    /// images `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes
-    /// the samples as planes, through a scratch image the target's usage needs). A blended row also
-    /// declares `render-pass-split` (`crate::replay::interlocked_split_notice`): its second draw
-    /// blends in the pixel interlock over what the first wrote there.
+    /// a device without unified memory announces it) and `half-output-fast-math-blend` (the
+    /// fixture is a fast-math module whose `half4` gradient a pipeline blends).
     fn allowances(&self) -> Vec<Allowance> {
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        named.extend(super::compressed_blits::kept_encoding_notice(
-            self.format.format.as_raw(),
-        ));
-        let mut kinds = vec![
-            Degradation::HalfOutputFastMathBlend,
-            Degradation::ExtendedRangeBitsKept,
-        ];
-        if self.blended {
-            kinds.push(Degradation::ExtendedRangeBlendsStoredCodes);
-        }
-        if self.samples > 1 {
-            kinds.extend([
-                Degradation::ShaderResolve,
-                Degradation::ExtendedRangeResolve,
-                Degradation::DontCareStore,
-                Degradation::SamplePlanes,
-                Degradation::FetchThroughScratch,
-            ]);
-        }
-        named.extend(
-            kinds
-                .into_iter()
-                .map(|kind| crate::replay::notice_allowance(kind.code())),
-        );
-        if self.blended {
-            named.push(crate::replay::interlocked_split_notice());
-        }
-        named
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::HalfOutputFastMathBlend.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

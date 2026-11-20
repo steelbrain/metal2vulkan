@@ -50,7 +50,6 @@ use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side, TextureRole, TextureSpec,
 };
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -451,25 +450,10 @@ impl Case for RenderBarriers {
         // texel read at integer coordinates takes no device's float bounds, so every texel here is
         // an exact answer or a bug.
         //
-        // One notice is declared, and it is what the barrier calls themselves cost. **A Metal
-        // memory barrier between draws of one pass orders the draws after it behind the draws
-        // before it, which Vulkan gives across render pass instances**, so the runtime ends the
-        // instance at the barrier and begins another. Metal does not split its pass, so the
-        // runtime announces the difference in work.
-        //
-        // Measured on an Apple M3 Max (macOS 27.0.1, build 26A434), under the exact policy and
-        // under the runtime's own defaults alike: our leg announces
-        // `metal2vulkan-degrade-render-pass-split` once, its notice reading "memory barriers
-        // between its draws end 1 of its Vulkan render pass instances", while every texel of both
-        // halves of the target and every other field of the transcript compared exactly.
-        //
-        // One more is declared, and it is the venue's rather than this case's: the buffer the
+        // One notice is declared, and it is the venue's rather than this case's: the buffer the
         // pass reads its target back through is `Shared`, which a device with no unified memory
         // keeps in system memory because that is the only memory both sides can reach.
-        vec![
-            crate::replay::notice_allowance(Degradation::RenderPassSplit.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -591,9 +575,8 @@ impl Case for HeapResidency {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened, for the reason the barrier case states, and no pass-split notice:
-        // this case encodes no barrier. What is declared is the one notice the venue's own memory
-        // model provokes for the `Shared` read-back buffer.
+        // Nothing loosened, for the reason the barrier case states. What is declared is the one
+        // notice the venue's own memory model provokes for the `Shared` read-back buffer.
         vec![crate::replay::shared_memory_notice()]
     }
 
@@ -823,21 +806,20 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
             // Both cases declare the notice the venue's own memory model provokes for the
-            // `Shared` read-back buffer, and the barrier case declares the pass split besides. No
-            // value of either is loosened, so every declaration sits at the notices site.
+            // `Shared` read-back buffer, and nothing else. No value of either is loosened, so
+            // every declaration sits at the notices site.
             let declared = case.allowances();
             for allowance in &declared {
                 assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
             }
             let codes: Vec<&Justification> =
                 declared.iter().map(|held| &held.justified_by).collect();
-            let shared =
-                Justification::Degradation(Degradation::SharedInSystemMemory.code().to_owned());
-            let split = Justification::Degradation(Degradation::RenderPassSplit.code().to_owned());
-            match case.name() {
-                "render-state-render-barriers" => assert_eq!(codes, vec![&split, &shared]),
-                _ => assert_eq!(codes, vec![&shared], "{}", case.name()),
-            }
+            let shared = Justification::Degradation(
+                crate::degradation::Degradation::SharedInSystemMemory
+                    .code()
+                    .to_owned(),
+            );
+            assert_eq!(codes, vec![&shared], "{}", case.name());
         }
         // The barriers name the stage whose writes the next draw reads, on both sides of each.
         assert_eq!(FRAGMENT, RenderStages::FRAGMENT);

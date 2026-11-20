@@ -26,7 +26,7 @@
 //! private API. The digests were measured on **an Apple M4**, not on this M3 Max, which the
 //! recording's provenance says in words.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{answered, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::replay::{notice_allowance, NOTICES_SITE};
 use crate::transcript::{
@@ -713,49 +713,17 @@ impl Case for TextureFills {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut allowances = Vec::new();
-        if matches!(self.raw, 252 | 260) {
-            // A 32-bit float depth's patterns may be depth outside [0, 1]
-            // (`Depth32Float_Stencil8`'s are). Where the device's uploads announce that it may
-            // store such a value clamped, the format's bytes are not Metal's to match: the lane
-            // skips the format there, and here the digest goes unchecked, named, counted and
-            // reported, with that notice as the justification.
-            allowances.push(Allowance::new(
-                format!("case/{}", site(self.raw)),
-                Loosening::Unchecked,
-                Justification::Degradation(
-                    crate::degradation::Degradation::RestrictedDepthUpload
-                        .code()
-                        .to_owned(),
-                ),
-            ));
-        }
-        // What this work announces on a device that needs it, which is the lane's own list: a
-        // fill of a color packed where fills ignore the color, a carried texture's twin, a
-        // two-plane texture shadowed in a heap's bytes and a mipmapped one whose later levels lie
-        // apart from the shadow, the combined format's clamp, and shared storage in system memory.
-        // Metal announces none of them, so the notices site differs on such a device, and the
-        // difference is justified where one of these fired. A fill and its read-back by copies
-        // move a carried texture's blocks and read no twin, so its precision
-        // (`decoded-texel-precision`, announced at a command's first read of the twin) is not
-        // among them. A block-compressed texture's device decode, announced where the runtime
-        // makes it (`compressed-texel-decode`), is among them too: the fill reads bytes. A float
-        // depth's denormals are the device's own answer, which the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`). The format's own digest still compares, and only the
-        // 32-bit float depth formats' go unchecked, above.
+        // What this work announces on a device that needs it: a block-compressed texture's device
+        // decode, announced where the runtime makes it (`compressed-texel-decode`), and shared
+        // storage in system memory. Metal announces neither, so the notices site differs on such a
+        // device, and the difference is justified where one of these fired. A float depth's
+        // denormals are the device's own answer, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`). The format's own digest still compares.
         use crate::degradation::Degradation as D;
-        for kind in [
-            D::UnpackedFillColor,
-            D::ShadowedTexture,
-            D::HeapTwoPlaneLayout,
-            D::RestrictedDepthUpload,
-            D::CarriedDecodedTwin,
-            D::CompressedTexelDecode,
-            D::SharedInSystemMemory,
-        ] {
-            allowances.push(notice_allowance(kind.code()));
-        }
-        allowances
+        [D::CompressedTexelDecode, D::SharedInSystemMemory]
+            .into_iter()
+            .map(|kind| notice_allowance(kind.code()))
+            .collect()
     }
 
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {
@@ -884,17 +852,11 @@ impl Case for TwoPlaneHeapFill {
         MetalSource::Run
     }
 
-    /// What the work announced on MoltenVK, measured: the two-plane texture is shadowed in the
-    /// heap's bytes, which is the whole point of the case. Metal announces nothing, so the notices
-    /// site differs and this is what names it; every byte of the heap still compares exactly.
+    /// What the work declares: every byte of the heap compares exactly, and the buffer this case
+    /// reads the filled planes back through is `Shared`, which a device with no unified memory
+    /// keeps in system memory because that is the only memory both sides can reach.
     fn allowances(&self) -> Vec<Allowance> {
-        // The second is the venue's own: the buffer this case reads the filled planes back
-        // through is `Shared`, which a device with no unified memory keeps in system memory
-        // because that is the only memory both sides can reach.
-        vec![
-            notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

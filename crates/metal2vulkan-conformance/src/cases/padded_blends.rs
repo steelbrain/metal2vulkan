@@ -286,22 +286,15 @@ impl Case for PaddedBlend {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
+        // Every row reads its answer back through a `Shared` buffer, so on a device without unified
+        // memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason); it loosens the notices
-        // site alone. The pass loads and stores a padded colour attachment, so its draw announces
-        // `extended-range-bits-kept`: the device's store keeps the bits the codes leave unused in
-        // the texels the draw does not write, where Metal's pass makes them canonical. The draw is
-        // one full-screen triangle over the whole target, so a texel it does not write is one its
-        // mask leaves channels of, and every stored word still compares exactly. `rt6_samples` is
-        // a fast-math module, so a pipeline that blends its `half4` fill announces
-        // `half-output-fast-math-blend`. The blend in the device's arithmetic announces
-        // `extended-range-blend-source`, a native note the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`); a word the device's arithmetic moves is a known gap.
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::ExtendedRangeBitsKept.code()),
-        ];
+        // site alone. Every stored word compares exactly. `rt6_samples` is a fast-math module, so a
+        // pipeline that blends its `half4` fill announces `half-output-fast-math-blend`. The blend
+        // in the device's arithmetic announces `extended-range-blend-source`, a native note the
+        // suite declares for every case (`crate::replay::NATIVE_NOTES`); a word the device's
+        // arithmetic moves is a known gap.
+        let mut named = vec![crate::replay::shared_memory_notice()];
         if self.draw == Draw::PremulHalf {
             named.push(crate::replay::notice_allowance(
                 Degradation::HalfOutputFastMathBlend.code(),

@@ -9,9 +9,9 @@
 //! # The timings are the subject, and they are read as orderings
 //!
 //! Nothing in this tree held an implementation to the shape of `GPUStartTime`, `GPUEndTime`,
-//! `kernelStartTime` and `kernelEndTime`. The runtime builds all four from its own clocks and
-//! announces three different degradations over them, and the only thing watching was a lane
-//! assertion that one of them eventually stops being zero. This case states the contract instead:
+//! `kernelStartTime` and `kernelEndTime`. The runtime builds all four from its own clocks, and the
+//! only thing watching was a lane assertion that one of them eventually stops being zero. This
+//! case states the contract instead:
 //! zero before the work, positive after, and each interval ordered, with the GPU's interval not
 //! beginning or ending before the kernel's.
 //!
@@ -37,32 +37,10 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Input, MetalSource, Side};
-use crate::degradation::Degradation;
-use crate::replay::notice_allowance;
 use crate::transcript::Sites;
 
 /// The case's name.
 pub const COMMAND_BUFFER_FACTS: &str = "command-buffer-facts";
-
-/// The notices the runtime can announce over the GPU times, and the whole of what this case takes.
-///
-/// `UncalibratedGpuTimes` is here because a venue announces it. The RX 7900 XTX (RADV NAVI31)
-/// announced it for this case on 2026-11-07: its calibrated timestamps placed each of the case's
-/// two timed command buffers outside the command buffer's life
-/// (`WorkCounts::calibration_disagreements` 2 in each of three `cost` runs). So the runtime
-/// placed their times as it does on an uncalibrated device (`gpu_time.rs`), and every value of
-/// the case still compared exactly. The Radeon 780M (RADV PHOENIX) in the same machine agreed
-/// with its calibration in the same runs (0) and announced nothing.
-///
-/// `LooselyCalibratedGpuTimes` is here because a loaded host makes it: a calibration pair whose
-/// readings each state the time the reading thread spent off the CPU stays beyond 20 us after
-/// the runtime's four readings (the RX 7900 XTX stated 93 and 125 us in full parallel suites),
-/// and its times, still inside the command buffer's life, are announced as such (`gpu_time.rs`).
-const GPU_TIME_NOTICES: [Degradation; 3] = [
-    Degradation::GpuTimesFromHost,
-    Degradation::UncalibratedGpuTimes,
-    Degradation::LooselyCalibratedGpuTimes,
-];
 
 /// A case over one command buffer's own answers.
 pub struct CommandBufferFactsCase {
@@ -109,17 +87,6 @@ impl Case for CommandBufferFactsCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The runtime builds `GPUStartTime` and `GPUEndTime` from its own clocks and announces how
-        // on the venues that need it. The case takes the notice and compares every value exactly;
-        // what it may not do is take a different *number* because of one, and it does not.
-        // `GpuTimesFromHost`: the runtime answers the GPU times from the host clock where the
-        // driver's own timestamps wait for every queue's (MoltenVK on Apple's GPUs).
-        // `UncalibratedGpuTimes`: it places them without calibrated timestamps where the device
-        // offers none, or where the device's calibration disagrees with the command buffer's life
-        // (the RX 7900 XTX, `GPU_TIME_NOTICES`). `LooselyCalibratedGpuTimes`: it places them by a
-        // calibration a loaded host left beyond 20 us. The orderings this case compares do not
-        // depend on any of them, which is why the case can take the notice and still compare every
-        // value exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -131,13 +98,7 @@ impl Case for CommandBufferFactsCase {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                GPU_TIME_NOTICES
-                    .iter()
-                    .map(|code| notice_allowance(code.code())),
-            )
-            .collect()
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -156,22 +117,22 @@ impl Case for CommandBufferFactsCase {
 mod tests {
     use super::*;
 
-    /// The case states its inputs, names itself once, and declares the three notices the runtime
-    /// can announce over the GPU times, the venue's own memory notice, and nothing else.
+    /// The case states its inputs, names itself once, declares the venue's own memory notice and
+    /// nothing else.
     ///
-    /// A fifth notice slipping in would be a value the case took for a reason nobody wrote down,
+    /// A second notice slipping in would be a value the case took for a reason nobody wrote down,
     /// which is what this count is for.
     #[test]
-    fn the_case_states_its_inputs_and_only_the_gpu_time_notices() {
+    fn the_case_states_its_inputs_and_only_the_venue_notice() {
         let cases = all();
         assert_eq!(cases.len(), 1);
         let case = &cases[0];
         assert_eq!(case.name(), COMMAND_BUFFER_FACTS);
         assert!(!case.inputs().expect("the inputs").is_empty());
         let allowed = case.allowances();
-        // The three GPU-time notices, and the one a card without unified memory announces for the
-        // `Shared` buffer the case reads its answer back through.
-        assert_eq!(allowed.len(), GPU_TIME_NOTICES.len() + 1);
+        // The one a card without unified memory announces for the `Shared` buffer the case reads
+        // its answer back through.
+        assert_eq!(allowed.len(), 1);
         // And the case records more than one run, because two of its booleans read a clock.
         assert!(case.record_runs() > 1);
     }

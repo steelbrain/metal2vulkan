@@ -552,11 +552,6 @@ impl Case for PixelSamplers {
                 // The buffer each pass writes its sampled texels into is `Shared`
                 // ([`crate::replay::shared_memory_notice`]).
                 crate::replay::shared_memory_notice(),
-                // The `arg` source samples a texture and a sampler held in an argument buffer, whose
-                // heap set MoltenVK's layout query refuses
-                // ([`crate::replay::set_past_layout_notice`]): announced by all 16 cases of the family
-                // on the M3 Max under MoltenVK 1.4.2, by none on lavapipe.
-                crate::replay::set_past_layout_notice(),
             ])
             .collect()
     }

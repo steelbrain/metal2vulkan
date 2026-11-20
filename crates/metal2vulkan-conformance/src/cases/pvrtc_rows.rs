@@ -29,17 +29,13 @@
 //! [`crate::cases::pvrtc_cpu_order`].
 //!
 //! **One case per format**, so a venue that holds no texture of one answers its typed refusal there
-//! and counts as lacking that format rather than taking the other seven down. A device without the
-//! Vulkan format keeps the blocks in a carrier image — half as wide for a 2-bit format, whose block
-//! is 8 x 4 texels — which is the mechanism these rows exist to check, and it announces
-//! `carried-decoded-twin` once.
+//! and counts as lacking that format rather than taking the other seven down.
 //!
 //! Nothing here can fault a GPU: blit copies between textures and buffers the program makes, no
 //! dispatch, no draw, no loop, every region block-aligned and inside its level.
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
@@ -553,18 +549,11 @@ impl Case for PvrtcRows {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A device with no Vulkan format for this PVRTC format keeps the blocks in a carrier image
-        // and its reads through a decoded twin, which the runtime announces once per device. Metal
-        // announces nothing. Every block still compares exactly: the only site loosened is the set
-        // of notices, which Metal holds empty, and the allowance fails the case if the notice did
-        // not fire.
-        // The buffer each pass reads its blocks back through is `Shared`, which a device with no
-        // unified memory keeps in system memory because that is the only memory both sides can
-        // reach: the venue's memory model, not this family's subject.
-        vec![
-            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // Every block compares exactly. The buffer each pass reads its blocks back through is
+        // `Shared`, which a device with no unified memory keeps in system memory because that is
+        // the only memory both sides can reach: the venue's memory model, not this family's
+        // subject.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

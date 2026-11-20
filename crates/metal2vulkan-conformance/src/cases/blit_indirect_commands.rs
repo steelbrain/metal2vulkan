@@ -71,7 +71,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::indirect_commands::{ComputeCommandStep, EncodedCommand, IcbDescriptor};
 use crate::recording::ShaderRef;
@@ -179,23 +178,6 @@ impl Call {
 
     /// Whether the call needs a second buffer of its own to land in.
     const fn has_destination(self) -> bool {
-        matches!(self, Call::Copy)
-    }
-
-    /// Whether the call writes a buffer's records on the GPU, which makes the runtime replay a
-    /// later execution of them through its host step and announce it once.
-    ///
-    /// The optimize call records nothing, so it alone does not.
-    const fn replays_on_the_host(self) -> bool {
-        matches!(self, Call::Reset | Call::Copy)
-    }
-
-    /// Whether the call's GPU write is the first use of the buffer it writes: the copy's
-    /// destination, which the case makes and touches nowhere before the copy. On a device that
-    /// places records by their first use, that write places them in device-local memory, where the
-    /// host step of the execution after it reads them through copies. The reset's buffer is the
-    /// CPU's first, so its records lie in host memory; the optimize writes nothing.
-    const fn places_its_records_on_the_gpu(self) -> bool {
         matches!(self, Call::Copy)
     }
 
@@ -343,15 +325,6 @@ impl Case for BlitIndirectCommands {
         // Every byte of every leg's output compares exactly, on this venue and under this
         // declaration: the only site loosened is the set of notices, which Metal holds empty.
         //
-        // Measured on this Apple M3 Max through MoltenVK 1.4.2: the reset and the copy cases
-        // announce `host-replayed-indirect-commands`, because the runtime replays an execution of
-        // commands the **GPU** wrote through its host step, and these two calls write a buffer's
-        // records on the GPU as the command buffer runs. The optimize case records nothing on the
-        // GPU, so it announces nothing and declares nothing — a declaration no run was measured
-        // provoking is a declaration nobody checked.
-        //
-        // The allowance fails the case if the notice did not fire, so a call that stops replaying
-        // on the host has to drop this line rather than carry a stale excuse.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -363,26 +336,7 @@ impl Case for BlitIndirectCommands {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // On a device that places records by their first use, the copy case announces
-        // `staged-indirect-records` (`crate::replay::staged_records_notice` holds the whole
-        // reason). Measured on the RX 7900 XTX (RADV NAVI31), the case alone at 45e6784e91's
-        // runtime (`conformance cost --show --runs 1`): host_steps_recorded 3 and
-        // icb_records_staged_accesses 3 for the copy, the three executions after a copy of at
-        // least one command, each reading the records the copy wrote into device-local memory;
-        // the leg that copies none reads its never-written records in place. The reset read
-        // host_steps_recorded 3 and no staged access, its buffer the CPU's first, so it declares
-        // nothing. On unified memory, the M3 Max's included, it cannot fire.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.call.replays_on_the_host() {
-            named.push(crate::replay::notice_allowance(
-                Degradation::HostReplayedIndirectCommands.code(),
-            ));
-        }
-        if self.call.places_its_records_on_the_gpu() {
-            named.push(crate::replay::staged_records_notice());
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

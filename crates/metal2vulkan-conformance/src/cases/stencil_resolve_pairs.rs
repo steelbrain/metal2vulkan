@@ -84,13 +84,8 @@
 //! sweep of either store action cannot make that claim.
 //!
 //! `resolve-stencil-under-depth-filters` states `MultisampleResolve` on both aspects and **not**
-//! `StoreAndMultisampleResolve`, deliberately: a separate depth texture stored beside a separate
-//! stencil one renders through a combined scratch image whose multisampled aspects are copied back
-//! after the pass, and on a device whose fragment depth does not store a value unchanged that copy
-//! is an announced near-equivalent (`Degradation::DrawnDepthCopy`). A resolving store that keeps
-//! no samples needs no copy back, so
-//! the cell asks about the resolve and nothing else. The store-action pair is already answered by
-//! the case above it and by `resolve-depth-filters-4`.
+//! `StoreAndMultisampleResolve`, deliberately: the cell asks about the resolve and nothing else.
+//! The store-action pair is already answered by the case above it and by `resolve-depth-filters-4`.
 //!
 //! # What is not asked, and why
 //!
@@ -122,7 +117,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -659,36 +653,10 @@ impl Case for StencilResolves {
 
     fn allowances(&self) -> Vec<Allowance> {
         // **No value is loosened**: every resolved byte and every resolved depth Metal leaves is
-        // one we must leave, and the whole declared set is notices. Each is a `Performance`
-        // degradation — a structurally different path to the same bits — and each is named with
-        // the shape of this case that provokes it, so a reader can tell a notice this family
-        // earns from one copied in.
-        let mut named = vec![
-            // The colour attachment nothing reads is stored `DontCare`, and a device whose
-            // `DontCare` store is not Metal's announces that it took the near-equivalent.
-            // Measured not to fire on MoltenVK, where the store is the device's own.
-            crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-            // The buffer each pass reads its resolved aspects back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`], measured firing on the 5080).
-            crate::replay::shared_memory_notice(),
-        ];
-        if self.has_depth() {
-            named.extend([
-                // The pair case's depth and stencil are **two textures**, which renders through a
-                // scratch image of the combined format: announced on every venue, and measured
-                // firing on MoltenVK.
-                crate::replay::notice_allowance(Degradation::SeparateDepthStencil.code()),
-                // And their two aspects resolve into two textures, which resolves one aspect at a
-                // time: announced on every venue, and measured firing on MoltenVK.
-                crate::replay::notice_allowance(Degradation::OneAspectResolve.code()),
-                // A device with no `MIN` or `MAX` depth resolve mode reaches Metal's depth
-                // through a draw after the pass rather than through the store. On MoltenVK the
-                // modes are the device's and this does not fire; on a device that lacks them the
-                // notice is what says the exact path ran.
-                crate::replay::notice_allowance(Degradation::ShaderResolve.code()),
-            ]);
-        }
-        named
+        // one we must leave. The one declaration is the buffer each pass reads its resolved
+        // aspects back through, which is `Shared` ([`crate::replay::shared_memory_notice`],
+        // measured firing on the 5080).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

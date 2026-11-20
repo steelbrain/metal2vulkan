@@ -34,8 +34,7 @@
 //! two textures of the format off the pairs, and four copies into a texture of `GBGR422`,
 //! `BGRG422`, `RG8Unorm` and `R16Uint`. Each read-back's bytes are recorded whole under a layout
 //! that names the row and the texel, so a diff says which texel of which sub-case moved. Every
-//! byte compares exactly; the case's allowances are on the notices site alone, for the kinds the
-//! runtime announces while it keeps a 4:2:2 texture's decoded twin beside the bytes it moves.
+//! byte compares exactly; the case's allowances are on the notices site alone.
 //!
 //! [`ChromaTexels`] is the lane's texel table, over a 16 x 16 texture of the format holding the
 //! lane's pattern, reached two ways through the owned fixture `fpv_swizzled_reads`:
@@ -45,11 +44,7 @@
 //! sampling is the operation its feature tables grant it and a nearest sample at a centre is
 //! defined to be that texel, while whether Metal defines `read()` for these formats is what the
 //! recording answers rather than assumes. Comparison is exact and each case's allowances are on the
-//! notices site alone: the runtime reaches these texels through the texture's decoded twin and
-//! announces `carried-decoded-twin`, and where the device converts the format itself the twin holds
-//! the device's own conversion and it announces `decoded-texel-precision` too. Metal announces
-//! neither, and those notices are what justify the notices site differing. Every texel still
-//! compares bit for bit.
+//! notices site alone. Every texel compares bit for bit.
 //!
 //! # Why nothing here can fault a GPU
 //!
@@ -65,10 +60,8 @@ use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, SamplerSpec, Side, TextureRole,
     TextureSpec,
 };
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
-use crate::replay::notice_allowance;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec as WorkTexture, Work};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
@@ -580,12 +573,8 @@ impl Case for ChromaCopies {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Every byte of every read-back compares exactly; what differs is the notices site, which
-        // Metal records empty. A device whose own driver does not decode 4:2:2 texels as Metal
-        // does reaches them through the texture's decoded twin, decodes a host copy's rows on the
-        // CPU where it does not run a pass for them, and stages a copy between two such textures
-        // -- three kinds, each announced once per device. Each is named here, so the difference is
-        // justified only while that notice really fires; on a device that needs none of them, none
-        // of the three fires and the report counts them as unused.
+        // Metal records empty.
+        //
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -597,21 +586,7 @@ impl Case for ChromaCopies {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // A copy moves the carrier's bytes and reads no twin, so the twin's precision
-        // (`decoded-texel-precision`, announced at a command's first read of the twin) is not
-        // declared here.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                [
-                    Degradation::CarriedDecodedTwin,
-                    Degradation::CpuBlockDecode,
-                    Degradation::StagedTextureCopy,
-                ]
-                .into_iter()
-                .map(|kind| notice_allowance(kind.code())),
-            )
-            .collect()
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -752,16 +727,9 @@ impl Case for ChromaTexels {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // On a device whose own driver does not decode these texels as Metal does, the runtime
-        // reads them through the texture's decoded twin and announces it once. Metal announces
-        // nothing, so the notices site differs and that notice is what justifies it; every texel
-        // still compares exactly. On a device that needs no twin the allowance simply does not
-        // fire, which the report counts.
+        // Every texel compares exactly; what differs is the notices site, which Metal records
+        // empty.
         //
-        // The host copy that fills the texture (`replaceRegion`) is decoded on the CPU into that
-        // twin, which announces `cpu-block-decode` -- the same kind, for the same reason, that
-        // this file's blit case names. It is a declaration and not a tolerance: every texel the
-        // case reads still compares exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -773,30 +741,7 @@ impl Case for ChromaTexels {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        //
-        // Where the device converts the format itself with Metal's reconstruction, the twin holds
-        // the device's own Y′CbCr conversion of the pairs, its native answer (AGENTS.md rule 1):
-        // each chroma channel the nearest 8-bit code to the device's 3:1 sum of the pair's code
-        // and the code beside it, ties to even, where Metal's `(3 c + n + 2) >> 2` rounds them up.
-        // The runtime announces `decoded-texel-precision` at the case's read or sample, the
-        // twin's first. It is declared at the notices site alone and loosens no texel. Measured on the M3 Max
-        // (MoltenVK 1.4.2, which samples through Metal's own `GBGR422` and `BGRG422` texture
-        // unit): it fired for all 4 texel rows, and each was divergent on that field and nothing
-        // else, every texel Metal's bit for bit. The lane's pattern holds no tie to round: a
-        // pair's chroma code and the one beside it are 4 apart (mod 256), or equal at a row's
-        // clamped edge, so every `3 c + n` is a multiple of 4. Where the twin holds Metal's decode
-        // it does not fire, which the report counts.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                [
-                    Degradation::CarriedDecodedTwin,
-                    Degradation::CpuBlockDecode,
-                    Degradation::DecodedTexelPrecision,
-                ]
-                .into_iter()
-                .map(|kind| notice_allowance(kind.code())),
-            )
-            .collect()
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

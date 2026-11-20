@@ -36,8 +36,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 518 |
 | of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 290 |
-| of those exercised, a case reaching it loosens some site | 228 |
+| of those exercised, no case reaching it loosens anything | 295 |
+| of those exercised, a case reaching it loosens some site | 223 |
 | case modules | 179 |
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
@@ -506,10 +506,10 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1235 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 23 |
-| tolerances in all | 28 |
-| modules declaring a notice (loosening no value) | 145 |
-| loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
+| modules that loosen a measured value | 17 |
+| tolerances in all | 19 |
+| modules declaring a notice (loosening no value) | 142 |
+| loosenings used | `Unchecked`, `AnyOf`, `Absolute` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 133 |
@@ -530,7 +530,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `alpha_coverage_pairs` | 17 | 17 | every field | 113 |
 | `argument_encoder_crossings` | 4 | 4 | every field | 41 |
 | `argument_encoders` | 5 | 5 | every field | 57 |
-| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation` | 41 |
+| `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 41 |
 | `attribute_formats` | 2 | 2 | every field | 48 |
 | `attribute_strides` | 4 | 4 | every field | 46 |
 | `bicubic_texel_classes` | 1 | 1 | every field | 31 |
@@ -570,8 +570,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `draw_state_changes` | 1 | 1 | every field | 137 |
 | `dynamic_libraries` | 3 | 3 | every field | 6 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
-| `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 41 |
-| `event_orders` | 5 | 5 | 4 tolerance(s): `AcceptedDifference` | 27 |
+| `etc_textures` | 10 | 10 | every field | 41 |
+| `event_orders` | 5 | 5 | 2 tolerance(s): `AcceptedDifference` | 27 |
 | `extended_range_blends` | 18 | 18 | every field | 124 |
 | `extended_range_gamut` | 39 | 39 | every field | 115 |
 | `extended_range_gradients` | 8 | 8 | every field | 116 |
@@ -585,7 +585,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `format_footprints` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 19 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
 | `frame_chains` | 1 | 1 | every field | 138 |
-| `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 41 |
+| `fresh_contents` | 87 | 87 | every field | 41 |
 | `function_bindings` | 15 | 15 | every field | 64 |
 | `function_constants_half3` | 1 | 1 | every field | 27 |
 | `function_facts` | 15 | 15 | every field | 32 |
@@ -649,9 +649,9 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `resolve_then_load` | 1 | 1 | every field | 123 |
 | `resource_facts` | 4 | 4 | every field | 23 |
 | `rgb10a2_srgb` | 8 | 8 | every field | 76 |
-| `rotated_planes` | 20 | 20 | 1 tolerance(s): `Degradation` | 114 |
+| `rotated_planes` | 20 | 20 | every field | 114 |
 | `rotated_targets` | 14 | 14 | every field | 117 |
-| `sample_fills` | 17 | 0 | 1 tolerance(s): `Degradation` | 0 |
+| `sample_fills` | 17 | 0 | every field | 0 |
 | `sample_positions` | 19 | 16 | every field | 115 |
 | `sampler_crossings` | 8 | 8 | every field | 59 |
 | `sampler_filtering` | 15 | 15 | every field | 59 |
@@ -681,7 +681,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `texture_buffer_fills` | 3 | 0 | every field | 0 |
 | `texture_buffer_tails` | 1 | 1 | every field | 49 |
 | `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `AcceptedDifference` | 27 |
-| `texture_fills` | 54 | 2 | 1 tolerance(s): `Degradation` | 42 |
+| `texture_fills` | 54 | 2 | every field | 42 |
 | `texture_view_casts` | 5 | 5 | every field | 77 |
 | `texture_views` | 4 | 4 | every field | 37 |
 | `textures` | 76 | 76 | every field | 10 |
@@ -699,7 +699,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `vertex_fetch_reach` | 1 | 1 | every field | 103 |
 | `vertex_formats` | 4 | 4 | every field | 102 |
 | `vertex_step_rate` | 1 | 1 | every field | 102 |
-| `visibility` | 16 | 16 | 1 tolerance(s): `Degradation` | 127 |
+| `visibility` | 16 | 16 | every field | 127 |
 | `visible_tables` | 18 | 18 | every field | 38 |
 | `wide_int_attributes` | 2 | 2 | every field | 102 |
 | `wide_points` | 1 | 1 | every field | 116 |

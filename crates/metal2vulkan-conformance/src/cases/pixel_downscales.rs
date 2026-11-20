@@ -429,11 +429,6 @@ impl Case for PixelDownscales {
             // The buffer each pass writes its sampled texels into is `Shared`
             // ([`crate::replay::shared_memory_notice`]).
             crate::replay::shared_memory_notice(),
-            // A downscale through an argument buffer's texture and sampler takes the heap set,
-            // which MoltenVK's layout query refuses ([`crate::replay::set_past_layout_notice`]):
-            // announced by all 7 cases of the family on the M3 Max under MoltenVK 1.4.2, by none
-            // on lavapipe.
-            crate::replay::set_past_layout_notice(),
         ]
     }
 

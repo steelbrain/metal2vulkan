@@ -46,8 +46,6 @@
 //! `EXCLUDED` constant's own documentation.
 
 use crate::case::{Abort, Case, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
-use crate::replay::notice_allowance;
 use crate::sparse_query::{SparseHeapSpec, SparseTextureSpec as T};
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, TextureType};
@@ -333,22 +331,6 @@ mod site {
     pub const TEXTURE: &str = "texture";
 }
 
-/// The degrade notices a device may announce as it makes a sparse heap or a sparse texture.
-///
-/// Each gets an allowance over the notices site, so a venue that announced one may hold it in its
-/// set while a venue that announced none compares the set exactly against Metal's empty one. The
-/// set is genuinely per-venue and measured, not guessed: MoltenVK binds no sparse memory, so it
-/// makes ordinary images and announces `emulated-sparse-texture`; lavapipe makes **real** sparse
-/// images but is not `residencyNonResidentStrict`, so it announces `non-strict-residency`. Several
-/// allowances on one path is the shape the suite already uses for this, and a difference is
-/// justified where **any** of them holds.
-const SPARSE_NOTICES: [Degradation; 4] = [
-    Degradation::EmulatedSparseTexture,
-    Degradation::NonStrictResidency,
-    Degradation::FirstSparseResourceWait,
-    Degradation::HostReadMappingArguments,
-];
-
 impl Case for SparseHeapCase {
     fn name(&self) -> &'static str {
         self.name
@@ -374,13 +356,6 @@ impl Case for SparseHeapCase {
                 },
             ),
         ])
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        SPARSE_NOTICES
-            .iter()
-            .map(|kind| notice_allowance(kind.code()))
-            .collect()
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

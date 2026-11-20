@@ -444,20 +444,13 @@ impl Case for ReadWriteDescriptors {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The tables name block-compressed formats, which a device with no Vulkan format for one
-        // makes through a decoded twin carried beside the blocks, and the runtime says so: a
-        // performance notice at the notices site alone, every answer of the tables still
-        // compared. Measured firing on llvmpipe (LLVM 21.1.8). A texture of such a format the
-        // device holds itself announces the device's decode of its blocks
-        // (`compressed-texel-decode`), at the notices site alone too: the tables read no texel.
-        vec![
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::CarriedDecodedTwin.code(),
-            ),
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::CompressedTexelDecode.code(),
-            ),
-        ]
+        // The tables name block-compressed formats: a texture of such a format the device holds
+        // itself announces the device's decode of its blocks (`compressed-texel-decode`), at the
+        // notices site alone: the tables read no texel, and every answer of the tables is still
+        // compared.
+        vec![crate::replay::notice_allowance(
+            crate::degradation::Degradation::CompressedTexelDecode.code(),
+        )]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -890,22 +883,8 @@ impl Case for HeldReadWrite {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The venue's memory model for the `Shared` read-back ([`crate::replay::shared_memory_notice`]),
-        // and the notice a device announces for a held texture whose format its heap array cannot
-        // view (`unnamed-texture-unviewable`): the array holds the class's neutral at the
-        // texture's ID. It fired on lavapipe and the RTX 5080 for the two sRGB formats and
-        // `BGR10A2Unorm` until the heap viewed them through their storage aliases
-        // (`bind::heap::storage_conversions`); it stays declared for a device whose alias for a
-        // swept format the heap's formatless declaration cannot serve. Both sit at the notices
-        // site alone: every texel is still compared. And the held textures' heap set,
-        // which MoltenVK's layout query refuses ([`crate::replay::set_past_layout_notice`]):
-        // announced on the M3 Max under MoltenVK 1.4.2, not on lavapipe.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(
-                crate::degradation::Degradation::UnnamedTextureUnviewable.code(),
-            ),
-            crate::replay::set_past_layout_notice(),
-        ]
+        // at the notices site alone: every texel is still compared.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

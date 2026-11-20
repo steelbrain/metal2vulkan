@@ -40,7 +40,6 @@ use crate::case::{
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
-use crate::replay::notice_allowance;
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
 
@@ -364,13 +363,8 @@ impl Case for NanIntegerConversions {
     fn allowances(&self) -> Vec<Allowance> {
         // Every word compares exactly. Both answers come back through `Shared` buffers, so a
         // device without unified memory announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). The fragment fill's pass
-        // loads nothing into the tile, which MoltenVK announced on the M3 Max (job
-        // m3-max-55436), as `rgb10a2_srgb`'s fills do.
-        let mut allowances = vec![
-            crate::replay::shared_memory_notice(),
-            notice_allowance(crate::degradation::Degradation::DontCareLoadTiles.code()),
-        ];
+        // (`crate::replay::shared_memory_notice` holds the whole reason).
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
         // A `long` of either infinity, the one answer past a range where Metal on the M3 Max
         // (job m3-max-55436) does not saturate: it answers 0, and the translator the bound. MSL
         // states no answer past the range, so the two elements of each `long` column hold either,

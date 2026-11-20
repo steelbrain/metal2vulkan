@@ -43,7 +43,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, BlendColorChannels, ColorState, PassColor, Plane, ReadAt, RenderPass,
@@ -180,21 +179,6 @@ struct State {
     label: &'static str,
     mask: ColorWriteMask,
     blend: Option<[(BlendFactor, BlendFactor, BlendOperation); 2]>,
-}
-
-impl State {
-    /// Whether a colour factor of the state's blend reads the destination alpha, which no Vulkan
-    /// factor reads from the rotated image ([`destination_alpha`]).
-    fn reads_destination_alpha_in_color(&self) -> bool {
-        self.blend.is_some_and(|[(source, destination, _), _]| {
-            [source, destination].iter().any(|f| {
-                matches!(
-                    f,
-                    BlendFactor::DestinationAlpha | BlendFactor::OneMinusDestinationAlpha
-                )
-            })
-        })
-    }
 }
 
 /// The thirteen states the lane sweeps: every write mask and blend it measured, in its order.
@@ -516,19 +500,7 @@ impl Case for RotatedTarget {
         // from it: a difference stays a mismatch for review". Loosening a texel here would be this
         // suite overruling that, so the blended states stay divergent on lavapipe and are a
         // per-venue divergence to carry, not a tolerance to write.
-        //
-        // The state whose colour factor reads the destination alpha ([`destination_alpha`]) has
-        // the fragment function read its texel. A venue that orders that read through the pixel
-        // interlock may render the pass into a scratch image (`fetch-through-scratch`, MoltenVK
-        // here), a performance notice that loosens the notices site alone, as `fetch_ordered`'s
-        // does.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
-        if self.state.reads_destination_alpha_in_color() {
-            allowances.push(crate::replay::notice_allowance(
-                Degradation::FetchThroughScratch.code(),
-            ));
-        }
-        allowances
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

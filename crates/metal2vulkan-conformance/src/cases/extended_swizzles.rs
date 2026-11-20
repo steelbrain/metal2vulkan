@@ -363,15 +363,7 @@ impl Case for ExtendedSwizzles {
     /// arithmetic of that filter (`bicubic-filter-arithmetic`).
     ///
     /// Each op reads every lane of its sweep in one dispatch, in groups of at most 64 threads, and
-    /// no lane count here is a whole number of such groups. That shape used to make our side run
-    /// the interior and the partial edge as dispatches of their own, announcing
-    /// `metal2vulkan-degrade-split-dispatch`, and the family declared the code for it. It does not
-    /// any more: a ragged `dispatchThreads:` on a kernel that cannot observe its threadgroup
-    /// partition runs as Metal's single dispatch, and `Degradation::SplitDispatch` fires on more
-    /// than one region. Measured on this M3 Max, 8 runs of the whole 1,103-case set: every row of
-    /// this family announced no notice at all, where the recordings taken before that landing hold
-    /// `metal2vulkan-degrade-split-dispatch` in their cost record's `degraded` set. So the
-    /// declaration is gone, and a split here reads as an undeclared notice at once.
+    /// no lane count here is a whole number of such groups.
     ///
     /// The loosening that is left reaches `case/notices/*` alone. Every texel this family records
     /// is still compared bit for bit, which is the point of the family: a swizzle moves channels

@@ -222,25 +222,19 @@ impl Row {
 }
 
 /// What a **four-sample** row with an alpha output announced: the coverage of a clipped edge split
-/// per sample (`clipped-coverage-split`), the sample outputs written in a loop
-/// (`looped-sample-outputs`) and the resolve done by a draw rather than the store
-/// (`shader-resolve`), with `alphaToCoverage` on or off. With it on, the device's own conversion
-/// of the alpha into the attachment (`device-color-conversion`) and its own coverage of the alpha
-/// (`device-alpha-coverage`) fire too, which the suite declares for every case
-/// ([`crate::replay::NATIVE_NOTES`]).
+/// per sample (`clipped-coverage-split`) and the sample outputs written in a loop
+/// (`looped-sample-outputs`), with `alphaToCoverage` on or off. With it on, the device's own
+/// conversion of the alpha into the attachment (`device-color-conversion`) and its own coverage of
+/// the alpha (`device-alpha-coverage`) fire too, which the suite declares for every case
+/// ([`crate::replay::NATIVE_NOTES`]). A four-sample row whose fragment writes **no alpha** names
+/// none: nothing narrows the coverage, so neither the split nor the looped outputs fire.
 ///
 /// Measured on the RTX 5080 Laptop (615.71.09) for all ten such rows, each divergent on the
 /// notices site and nothing else (replay-nvidia.log).
 const ALPHA_MULTISAMPLE: &[Degradation] = &[
     Degradation::ClippedCoverageSplit,
     Degradation::LoopedSampleOutputs,
-    Degradation::ShaderResolve,
 ];
-
-/// A four-sample row whose fragment writes **no alpha**: nothing narrows the coverage, so neither
-/// the split nor the looped outputs fire, and what is left is the resolve. Measured on the 5080 and
-/// on llvmpipe for both such rows.
-const NO_ALPHA_MULTISAMPLE: &[Degradation] = &[Degradation::ShaderResolve];
 
 /// A single-sample row, whose store announces nothing but the device's own answers, which the suite
 /// declares for every case ([`crate::replay::NATIVE_NOTES`]): the device's conversion of an alpha
@@ -323,13 +317,11 @@ const ROWS: &[Row] = &[
     Row {
         name: "a2c-on-4-no-alpha-output",
         report: Report::NoAlpha,
-        notices: NO_ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-no-alpha-output", true, 0.5)
     },
     Row {
         name: "a2c-off-4-no-alpha-output",
         report: Report::NoAlpha,
-        notices: NO_ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-off-4-no-alpha-output", false, 0.5)
     },
     // Alpha-to-one, and the blend that says what it fed.

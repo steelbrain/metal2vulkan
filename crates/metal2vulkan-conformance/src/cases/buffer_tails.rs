@@ -24,12 +24,9 @@
 //!   (wholly past it), copies rows 240 to 255 into a texture of its own, and reads every one of
 //!   those back, with the buffer's bytes.
 //!
-//! Every byte compares exactly. What differs is the announcing: where the device makes no image
-//! over the buffer's memory on Metal's layout, the runtime keeps the texture as a shadow image and
-//! announces `shadowed-texture`, which Metal never does, and a device without unified memory
+//! Every byte compares exactly. What differs is the announcing: a device without unified memory
 //! announces `shared-in-system-memory` for the `Shared` buffers the answers are read back
-//! through. Nothing here can fault a GPU: one small texture, one thread a
-//! texel, no loop.
+//! through. Nothing here can fault a GPU: one small texture, one thread a texel, no loop.
 
 use crate::allowance::Allowance;
 use crate::case::{
@@ -86,15 +83,9 @@ fn written(n: u64, set: u64) -> Vec<u8> {
 
 /// What both cases loosen: the notices, and nothing else.
 fn allowances() -> Vec<Allowance> {
-    // Where the device makes no image over the buffer's memory on Metal's layout, the runtime
-    // keeps the texture as a shadow image of the buffer's bytes, and announces
-    // `shadowed-texture`, which Metal never does.
     // Every case reads its answers back through `Shared` buffers, so a device without unified
     // memory announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`).
-    vec![
-        crate::replay::shared_memory_notice(),
-        crate::replay::notice_allowance(crate::degradation::Degradation::ShadowedTexture.code()),
-    ]
+    vec![crate::replay::shared_memory_notice()]
 }
 
 /// The numbers that place the texture in the buffer, for both cases' inputs.

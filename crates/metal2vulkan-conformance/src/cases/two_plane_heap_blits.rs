@@ -42,7 +42,7 @@
 use crate::allowance::Allowance;
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::public_fixture;
-use crate::replay::{notice_allowance, NOTICES_SITE};
+use crate::replay::NOTICES_SITE;
 use crate::transcript::{Digest, DigestKind, Node, Observed, Sites, Transcript, Value};
 use crate::work::{Resource, Step, Storage, TextureSpec, Work};
 
@@ -574,27 +574,9 @@ impl Case for HeapBlits {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A copy whose alpha bytes land past the destination's alpha plane, on the heap's other
-        // bytes, and in `end255` past the heap's end, is what Metal's blit writes and what the
-        // device announces. Metal announces nothing, so the notices site differs and that notice
-        // is what justifies it.
-        //
-        // These textures are also shadowed, and the notice's own definition names this exact
-        // shape: a heap's 2D texture of one level of `RGB10A8_2P_XR10` or its sRGB twin has an
-        // image that is a shadow of its two planes in the heap's bytes, where Metal lays them out.
-        // Declaring it loosens no byte -- every heap byte the case reads compares exactly.
-        [
-            crate::degradation::Degradation::TwoPlaneTextureCopy,
-            crate::degradation::Degradation::ShadowedTexture,
-        ]
-        .into_iter()
-        .map(|kind| notice_allowance(kind.code()))
-        .chain([
-            // The buffer the case reads the blitted planes back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ])
-        .collect()
+        // Every heap byte the case reads compares exactly. The buffer the case reads the blitted
+        // planes back through is `Shared` ([`crate::replay::shared_memory_notice`]).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

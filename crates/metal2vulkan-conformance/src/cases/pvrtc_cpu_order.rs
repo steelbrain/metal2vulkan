@@ -33,8 +33,7 @@
 //! of them: a placement that is wrong in both directions by the same permutation would round-trip
 //! and tell us nothing.
 //!
-//! **One case per format**, as the rest of the compressed families. A device with no Vulkan format
-//! for this one keeps the blocks in a carrier image and announces `carried-decoded-twin` once.
+//! **One case per format**, as the rest of the compressed families.
 //!
 //! **Not ported, and why.** The lane's `replaceRegion:`/`getBytes:` of a region **other than** a
 //! whole level, and of a whole level at a *padded* pitch, which our runtime refuses typed
@@ -49,7 +48,6 @@
 use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::cases::pvrtc_rows::{blocks, Linear, BEFORE, BLOCK};
-use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
@@ -287,21 +285,9 @@ impl Case for PvrtcCpuOrder {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A device with no Vulkan format for this one keeps the blocks in a carrier image and its
-        // reads through a decoded twin, announced once per device; Metal announces nothing. Every
-        // block still compares exactly: the only site loosened is the set of notices, and the
-        // allowance fails the case if the notice did not fire.
-        //
-        // Two more. A device with no Vulkan format for a PVRTC one decodes its blocks on the CPU
-        // to answer a host read of them (`cpu-block-decode`), which is a route to the same texels
-        // and not a texel of its own; the RTX 5080 announced it for all six rows. And the buffer
-        // each row reads its blocks back through is `Shared`
-        // ([`crate::replay::shared_memory_notice`]).
-        vec![
-            crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
-            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // Every block compares exactly. The buffer each row reads its blocks back through is
+        // `Shared` ([`crate::replay::shared_memory_notice`]).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

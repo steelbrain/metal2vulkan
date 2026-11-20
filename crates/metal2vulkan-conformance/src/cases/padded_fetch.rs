@@ -34,7 +34,6 @@
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     ColorState, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
@@ -233,26 +232,9 @@ impl Case for PaddedFetch {
     fn allowances(&self) -> Vec<Allowance> {
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). A pass that loads and
-        // stores a padded colour attachment announces `extended-range-bits-kept` (color 0's words
-        // are not compared). A read after a clear or an earlier draw of the pass announces
-        // `extended-range-blends-stored-codes`, and a draw that reads in the interlock what the
-        // fill wrote may split the pass (`render-pass-split`, the venue's). Each loosens the
-        // notices site alone: every value read still compares exactly, and a read the stored codes
-        // move is a known gap.
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::ExtendedRangeBitsKept.code()),
-        ];
-        if self.leg != Leg::Load {
-            named.push(crate::replay::notice_allowance(
-                Degradation::ExtendedRangeBlendsStoredCodes.code(),
-            ));
-        }
-        if self.leg == Leg::Draw {
-            named.push(crate::replay::interlocked_split_notice());
-        }
-        named
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It loosens the notices
+        // site alone: every value read still compares exactly.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

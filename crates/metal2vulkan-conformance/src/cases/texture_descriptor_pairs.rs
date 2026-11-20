@@ -576,26 +576,12 @@ impl Case for DescriptorPairs {
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
         // **No value is loosened**: every footprint and every getter of every row compares
-        // exactly with Metal's, and each allowance below sits at the notices site alone.
-        //
-        // `heap-texture-larger-than-metal`, for every row of the four: a heap texture the device
-        // lays out its own way needs more of the heap's bytes than Metal's does, and the runtime
-        // says so rather than reporting Metal's number for its own image. Measured firing for all
-        // four rows on llvmpipe and on the RTX 5080.
-        let mut named = vec![crate::replay::notice_allowance(
-            crate::degradation::Degradation::HeapTextureLargerThanMetal.code(),
-        )];
+        // exactly with Metal's, and each notice below sits at the notices site alone.
+        let mut named = Vec::new();
         if self.name == USAGE {
-            // The usage table names compressed formats, which a device with no Vulkan format for
-            // one reads through a decoded twin carried beside the blocks. Measured firing for this
-            // row alone, on both venues. It sits at the notices site alone. The row reads no twin,
-            // so a twin's precision (`decoded-texel-precision`, announced at a command's first
-            // read of it) is not declared.
-            named.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::CarriedDecodedTwin.code(),
-            ));
-            // A compressed texture the device holds itself announces the device's decode of its
-            // blocks (`compressed-texel-decode`), which the row never reads either.
+            // The usage table names compressed formats: a compressed texture the device holds
+            // itself announces the device's decode of its blocks (`compressed-texel-decode`),
+            // which the row never reads.
             named.push(crate::replay::notice_allowance(
                 crate::degradation::Degradation::CompressedTexelDecode.code(),
             ));
@@ -605,30 +591,6 @@ impl Case for DescriptorPairs {
             // makes a `Shared` allocation ([`crate::replay::shared_memory_notice`]). Measured
             // firing for this row alone, on the 5080.
             named.push(crate::replay::shared_memory_notice());
-        }
-
-        // A table that asks for a texture of a memoryless TEXTURE BUFFER descriptor, which plain
-        // Metal makes: its texels are a buffer's bytes, and no Vulkan buffer takes memory lazily,
-        // so the runtime lies over a `Private` buffer of the row's bytes and says so. Metal
-        // announces nothing, because the memory is its own business, so the notice is a difference
-        // and this declaration is what accounts for it.
-        //
-        // It loosens no value. Every getter of the row compares exactly with Metal's -- the
-        // texture answers the descriptor's memoryless mode as Metal's does -- and the whole of
-        // what the declaration covers is the announcement. The cost is bytes nothing reaches: a
-        // command that uses a memoryless texture fails its command buffer, as plain Metal's does.
-        //
-        // Selected by the table's own descriptors and not by the case's name, so a table that
-        // gains such a row declares it and one that loses it stops declaring it.
-        let memoryless_texture_buffer = self.asks == Asks::FootprintAndGetters
-            && (self.queries.iter()).any(|query| {
-                query.texture_type == TextureType::TextureBuffer
-                    && query.storage == Storage::Memoryless
-            });
-        if memoryless_texture_buffer {
-            named.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::MemorylessTextureBuffer.code(),
-            ));
         }
         // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
@@ -783,46 +745,6 @@ impl Case for HeapTextureGetters {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // `heap-texture-lossless-layout` is announced as each of these textures is made: Metal
-        // lays a heap texture it keeps losslessly compressed out in the heap's bytes in a way the
-        // device's image does not reproduce, so the runtime places the texture's own tiles
-        // otherwise and says so. Metal announces nothing, because the layout is Metal's own, so
-        // the notice is a difference and the declaration is what accounts for it.
-        //
-        // It loosens no value. Every `MTLResource` getter of every row compares exactly with
-        // Metal's, and the whole of what the declaration covers is the announcement: this case
-        // reads where a texture lives and what may be done to it, never a byte of its contents,
-        // so a layout of the heap's bytes is not something any site of it can observe. A case that
-        // reads a heap texture's texels is a case of its own and would have to compare them.
-        //
-        // The notice is announced once per device per kind, so which case of a whole-set run
-        // provokes it depends on what ran before; measured announced by this case on an Apple M3
-        // Max under macOS 27.0.1, in the run this declaration was taken from.
-        //
-        // Two more, both measured firing for this row on llvmpipe and on the RTX 5080 and both
-        // about the same layout rather than about a value: a heap texture the device lays out its
-        // own way needs more of the heap's bytes than Metal's does
-        // (`heap-texture-larger-than-metal`), and it is laid out untiled where Metal tiles it
-        // (`heap-texture-untiled-layout`).
-        //
-        // A fourth, `shadowed-texture`, is the end of the same layout: where the device's image
-        // cannot lie over the heap's bytes at all, the texture's texels are copied into an image
-        // before each use and back after each write. It is a cost rather than a value -- this
-        // case still reads only where a texture lives and what may be done to it -- and it was
-        // measured firing for this row on llvmpipe (LLVM 23.1.1, 256 bits, Mesa 26.2.4) in a
-        // whole-suite replay.
-        [
-            crate::degradation::Degradation::HeapTextureLosslessLayout,
-            crate::degradation::Degradation::HeapTextureLargerThanMetal,
-            crate::degradation::Degradation::HeapTextureUntiledLayout,
-            crate::degradation::Degradation::ShadowedTexture,
-        ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

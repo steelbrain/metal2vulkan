@@ -1036,13 +1036,13 @@ fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
 }
 
 /// **The lockstep cases declare the SIMD groups' static note.** A device whose answer lacks maximal
-/// reconvergence announces `implementation-defined-reconvergence` for both kernels, as Intel's
+/// reconvergence announces `device-reconvergence` for both kernels, as Intel's
 /// Windows driver on the UHD 630 does through the rt side; with Metal's own words that is each case
 /// announced, by that notice, where it read divergent at its notices site before the cases declared
 /// it. A device with maximal reconvergence announces nothing, and the words still compare exactly.
 #[test]
 fn the_lockstep_cases_declare_the_reconvergence_note() {
-    let code = Degradation::ImplementationDefinedReconvergence.code();
+    let code = Degradation::DeviceReconvergence.code();
     for case in crate::cases::simdgroup_lockstep::all() {
         let recording = crate::recording::read(case.name())
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
@@ -1054,8 +1054,7 @@ fn the_lockstep_cases_declare_the_reconvergence_note() {
         let Value::Bytes(words) = &output.observed.value else {
             panic!("{}: the recording holds no bytes", case.name());
         };
-        let mut side = StubSide::new(words.clone())
-            .announcing(&[Degradation::ImplementationDefinedReconvergence]);
+        let mut side = StubSide::new(words.clone()).announcing(&[Degradation::DeviceReconvergence]);
         let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
         let Verdict::Announced { fields } = &replayed.verdict else {
             panic!("{}: not announced: {}", case.name(), replayed.verdict);
@@ -1081,10 +1080,13 @@ fn the_lockstep_cases_declare_the_reconvergence_note() {
 /// names nowhere, one of them unrelated to the one it declares.
 #[test]
 fn a_declared_notice_does_not_excuse_an_undeclared_one() {
-    let declared = Degradation::CarriedDecodedTwin;
+    let declared = Degradation::GradFromBias;
     // Neither is one of the device's native answers, which the suite declares for every case
     // ([`crate::replay::NATIVE_NOTES`]).
-    let undeclared = [Degradation::CpuBlockDecode, Degradation::ShaderResolve];
+    let undeclared = [
+        Degradation::PixelSamplerScaling,
+        Degradation::BicubicFilterArithmetic,
+    ];
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![crate::replay::notice_allowance(declared.code())],
@@ -1163,7 +1165,7 @@ fn a_native_note_is_declared_for_every_case() {
 #[test]
 fn a_native_note_declares_no_value_and_excuses_no_other_notice() {
     let native = Degradation::NativeNanEncoding;
-    let other = Degradation::CarriedDecodedTwin;
+    let other = Degradation::GradFromBias;
     let case = WordsCase::new("words", 2);
     let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
     let mut side = StubSide::new(words(&[1, 7])).announcing(&[native, other]);
@@ -1200,7 +1202,7 @@ fn a_native_note_declares_no_value_and_excuses_no_other_notice() {
 /// differing, and is not told that it loosens the site with a declaration nothing justified.
 #[test]
 fn an_unannounced_native_note_is_no_unjustified_loosening() {
-    let other = Degradation::CarriedDecodedTwin;
+    let other = Degradation::GradFromBias;
     let case = WordsCase::new("words", 2);
     let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
     let mut side = StubSide::new(words(&[1, 2])).announcing(&[other]);
@@ -1706,7 +1708,7 @@ fn an_accepted_difference_in_the_document_justifies_a_loosened_field() {
 /// beside it, still diverges.
 #[test]
 fn a_nonzero_allowance_at_an_element_loosens_that_element_alone() {
-    let kind = Degradation::DeviceBooleanVisibility;
+    let kind = Degradation::GradFromBias;
     let case = WordsCase {
         allowances: vec![
             crate::replay::notice_allowance(kind.code()),
@@ -4259,19 +4261,19 @@ fn an_allowance_no_site_needed_is_counted_and_named_rather_than_silently_kept() 
         Allowance::new(
             "case/output",
             Loosening::Absolute(8.0),
-            Justification::notice(Degradation::ShadowedTexture),
+            Justification::notice(Degradation::GradFromBias),
         ),
     ];
     let bytes = words(&[1, 2]);
     // The notice the second allowance names is announced, so it is justified; the run is
     // byte-identical, so neither allowance fires.
-    let announced = [Degradation::ShadowedTexture.code()];
+    let announced = [Degradation::GradFromBias.code()];
     let recording = recording_of(
         &case,
         case.transcript(bytes.clone(), "Completed", &announced),
         3,
     );
-    let mut side = StubSide::new(bytes).announcing(&[Degradation::ShadowedTexture]);
+    let mut side = StubSide::new(bytes).announcing(&[Degradation::GradFromBias]);
     let replayed = replay_against(&case, &mut side, &recording).unwrap();
 
     // Report-only: the run is still exact, and still compliant.
@@ -5031,11 +5033,11 @@ fn a_divergence_that_is_a_notice_names_the_notice_each_side_announced() {
     let case = WordsCase::new("ledger-notice-only", 2);
     // Metal announces nothing; the case names no tolerance.
     let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
-    let code = Degradation::ShaderColorConversion.code();
+    let code = Degradation::PixelSamplerScaling.code();
 
     let mut side = StubSide::new(words(&[1, 2]))
         .on("llvmpipe (LLVM 21.1.8, 128 bits)")
-        .announcing(&[Degradation::ShaderColorConversion]);
+        .announcing(&[Degradation::PixelSamplerScaling]);
     let replayed = replay_against(&case, &mut side, &recording).unwrap();
     assert_eq!(replayed.verdict.word(), "divergent");
     let Verdict::Divergent { found, .. } = &replayed.verdict else {

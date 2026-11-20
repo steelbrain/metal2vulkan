@@ -2447,6 +2447,13 @@ bound.
   for a NaN bias is not measured. The translator states the same difference as the sampler state's
   static note, `PrecisionNote::CappedLodBias` (`DeviceLodBias::note`), which no pipeline stage
   records.
+- `metal2vulkan-degrade-device-reconvergence` (precision). `DeviceReconvergence`: A stage holds a
+  tangled instruction (a simdgroup or quad operation, or a barrier whose lanes depend on
+  reconvergence) on a device without maximal reconvergence (`shaderMaximalReconvergence`): after
+  divergent control flow the device decides which lanes run it together, where Metal's lanes
+  reconverge maximally, so such an operation may see other lanes active than Metal's. Under
+  subgroup-uniform control flow (`shaderSubgroupUniformControlFlow`) the lanes reconverge where
+  control flow is uniform. Static per stage: recorded for any tangled instruction in the entry.
 - `metal2vulkan-degrade-snorm-minimum-kept` (precision). `SnormMinimumKept`: A draw in a render pass
   that loads a single-sampled color attachment of a signed normalized format (`R8Snorm`, `RG8Snorm`,
   `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) and does not discard it at the store. Cost:

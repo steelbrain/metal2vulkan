@@ -43,34 +43,20 @@
 //! scissor's edges is a few rows of a few runs each, where its runs of texels alone would be two a
 //! row (1,042 for each of the chain's targets, 1.46 MB of recording for the three).
 //!
-//! **What the runtime announces, and the case declares.** The rows whose read follows a solid draw
-//! behind the barrier announce `render-pass-split`: the draw that reads the target records into a
-//! Vulkan render pass instance after the one the solid draw ran in, behind a copy of what it wrote
-//! (`texture/attached_reads.rs`). Every other row with a barrier reads the clear before any draw
-//! of its pass, through a copy cleared to it before the pass, in the pass's one instance, and
-//! announces nothing for it (`WorkCounts::attachment_read_clears`). The display row announces two
-//! more, from the parts of its shape the compositor gave it: `dont-care-load-tiles` for the earlier
-//! pass's `DontCare` load, whose draws cover the whole target before the read's pass clears it, and
-//! `shadowed-texture` for the mask over a buffer's bytes. Measured on the Apple M3 Max (MoltenVK),
-//! on lavapipe (LLVM 23.1.1) and on the RTX 5080 Laptop, under the exact policy and the runtime's
-//! defaults alike, with every texel and every other field of the transcripts compared. The RTX 5080
-//! Laptop announces `shared-in-system-memory` on every row. RADV (the RX 7900 XTX and the Radeon 780M, 2026-11-07) announces `shadowed-texture` on
-//! the small rows over a buffer instead: no linear image of its aliases the 32x32 target over
-//! the buffer's 128-byte rows, so the runtime renders and reads the target through a shadow image
-//! (`texture.rs`), and every texel of those rows still compares exactly there.
+//! **What the runtime announces, and the case declares.** Every row reads its answer back through a
+//! `Shared` buffer, which a device without unified memory announces as `shared-in-system-memory`
+//! (the RTX 5080 Laptop announces it on every row). The declaration loosens the notices site alone.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, PlaneTexture, Side,
 };
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, ColorState, OverBuffer, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec,
     RenderStep, RenderWork, ScissorBox, TargetSpec,
 };
-use crate::replay::notice_allowance;
 use crate::transcript::{Digest, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages};
 
@@ -499,8 +485,8 @@ impl Row {
     }
 
     /// The fragment functions of [`FUNCTIONS`] the row draws with, in that order: the pipelines it
-    /// makes. A pipeline made and never drawn with would cost its creation's prediction for nothing
-    /// (`cost::the_creation_prediction`), and no row asks a question of one.
+    /// makes. A pipeline made and never drawn with would cost its creation for nothing, and no row
+    /// asks a question of one.
     fn functions(&self) -> Vec<&'static str> {
         let drawn: &[&str] = match self.shape {
             Shape::Small {
@@ -859,30 +845,6 @@ impl Case for PassStartRead {
                 Loosening::AnyOf(vec![texel_rows(&bytes, SMALL)]),
                 Justification::accepted(DRAWN_WITHOUT_BARRIER),
             ));
-        }
-        // The notices the runtime announces for the row's shape (the module docs). Each loosens
-        // the notices site alone, so every texel still compares.
-        if matches!(
-            self.row.shape,
-            Shape::Small {
-                read: Small::DrawBarrierRead,
-                ..
-            }
-        ) {
-            allowances.push(notice_allowance(Degradation::RenderPassSplit.code()));
-        }
-        if matches!(self.row.shape, Shape::Display) {
-            allowances.push(notice_allowance(Degradation::DontCareLoadTiles.code()));
-            allowances.push(notice_allowance(Degradation::ShadowedTexture.code()));
-        }
-        if matches!(
-            self.row.shape,
-            Shape::Small {
-                over_buffer: true,
-                ..
-            }
-        ) {
-            allowances.push(notice_allowance(Degradation::ShadowedTexture.code()));
         }
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`

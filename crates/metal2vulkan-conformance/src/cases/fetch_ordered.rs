@@ -253,14 +253,10 @@ impl Case for FetchOrdered {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Both loosen the **notice set** alone: how a venue reaches the attachment is a route,
-        // and a route that costs more announces itself. Reading it through the pixel interlock may
-        // mean rendering the pass into a scratch image (`fetch-through-scratch`, MoltenVK here), a
-        // performance notice, so it says nothing about the texels -- every byte still compares
-        // exactly, which is the owner's rule for this family: if Metal allows it we must allow it,
-        // so a byte that differs is a bug and a refusal is a bug, and neither gets a tolerance
-        // here. A venue that reads through an input attachment announces no route at all, so the
-        // declaration is reported as having fired on no venue of that run, which is honest.
+        // Every declaration loosens the **notice set** alone: every byte still compares exactly,
+        // which is the owner's rule for this family: if Metal allows it we must allow it, so a
+        // byte that differs is a bug and a refusal is a bug, and neither gets a tolerance here.
+        //
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -273,22 +269,15 @@ impl Case for FetchOrdered {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         //
-        // Every row fetches in the pixel interlock draw after draw, so on a driver whose such draws
-        // race under load each draw after the first begins a render pass instance of its own
-        // (`crate::replay::interlocked_split_notice` holds the reason and the run it rests on).
-        //
         // A venue with neither ordered fetch form (no rasterization-order attachment access, no
         // pixel interlock) reads the input attachment ordered between draws alone and announces
         // `unordered-fetch-within-draw`, a precision note of what it leaves unordered: overlapping
         // fragments of one draw. Each draw here is one fullscreen triangle, which overlaps itself
         // nowhere, so every byte still compares exactly.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain([
-                crate::replay::notice_allowance(Degradation::FetchThroughScratch.code()),
-                crate::replay::interlocked_split_notice(),
-                crate::replay::notice_allowance(Degradation::UnorderedFetchWithinDraw.code()),
-            ])
-            .collect()
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::UnorderedFetchWithinDraw.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

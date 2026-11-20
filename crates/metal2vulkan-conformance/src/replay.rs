@@ -369,9 +369,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// static note of a sample whose sampler may state pixel coordinates, which the translator then
 /// divides by the texture's size for the device's normalized sampler. The function does not know
 /// the bound state, and under the identity domains of `metal2vulkan-runtime` no binder specializes the
-/// slot by it, so the note is recorded for every such sample, nearest ones included; the old
-/// runtime specializes a slot bound with a nearest pixel sampler and records it for none of
-/// them.
+/// slot by it, so the note is recorded for every such sample, nearest ones included.
 ///
 /// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
 /// value still compares exactly. Measured on lavapipe (Mesa 26.2.4) through the rt side: it fired
@@ -381,49 +379,6 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// each divergent at the notices site.
 pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
     notice_allowance(crate::degradation::Degradation::PixelSamplerScaling.code())
-}
-
-/// The declaration a case needs for the second notice a **venue's memory model** provokes:
-/// `staged-indirect-records`, which the runtime announces on a device without unified memory that
-/// places an indirect command buffer's records by their first use, where a GPU write was the first
-/// use, so the records lie in device-local memory, and a host step then reads them while the
-/// command buffer that wrote them holds them, through the device's staging queue
-/// ([`crate::degradation::Degradation::StagedIndirectRecords`]).
-///
-/// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: every recording here
-/// was taken on an Apple chip, whose GPU and CPU hold one memory, so there is no device-local
-/// memory to place the records in and the notice cannot fire; MoltenVK on the same chip announces
-/// nothing either. A discrete card keeps the records a GPU write placed in its own memory, which
-/// the host reaches only through copies, and a host step must read what the GPU wrote. The
-/// notice is the runtime reporting that cost honestly.
-///
-/// **It is a declaration and never an excuse.** Like every [`notice_allowance`] it loosens the
-/// notices site alone: every value still compares against Metal's exactly. A case names it only
-/// where a run on such a device announced it for the case's own work, and says in a comment which
-/// run, and which counts showed the staged accesses were its host steps' reads of GPU-written
-/// records; a staged access of records the GPU never wrote is a runtime defect, not this.
-pub fn staged_records_notice() -> crate::allowance::Allowance {
-    notice_allowance(crate::degradation::Degradation::StagedIndirectRecords.code())
-}
-
-/// The declaration a case needs for the split a **venue's driver** makes the runtime take between
-/// two draws that read and write a color in the pixel interlock: `render-pass-split`, which the
-/// runtime announces where a draw that reaches interlocked storage an earlier draw of its
-/// instance wrote begins a render pass instance of its own, on a driver whose such draws race
-/// under load (`DriverFact::InterlockedDrawsRaceUnderLoad`: MoltenVK on Apple's GPUs, which
-/// encodes no Metal barrier inside a render pass there).
-///
-/// **Why it is the venue's and not ours.** Metal runs the case's draws in one pass, ordered by its
-/// tile, and records no split; a driver that orders such draws by the interlock or by a barrier
-/// inside the instance runs them in one instance too. The split is the runtime ordering them on a
-/// driver that does neither, and the notice is it reporting the cost. Like every
-/// [`notice_allowance`] it loosens the notices site alone: every value still compares exactly.
-///
-/// **Its evidence.** Measured on the M3 Max (MoltenVK 1.4.2, macOS 27.0.1): it fired for every row
-/// of `fetch-ordered-*` (its sRGB rows among them), `xr-gamut-*`, `xr-masked-*` whose second draw blends or writes a
-/// `BGR10_XR` word under a mask, and `xr-gradient-*-blended-*`, the families that name it.
-pub fn interlocked_split_notice() -> crate::allowance::Allowance {
-    notice_allowance(crate::degradation::Degradation::RenderPassSplit.code())
 }
 
 /// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
@@ -460,34 +415,12 @@ pub fn without_compression(site: &str) -> crate::allowance::Allowance {
     )
 }
 
-/// The declaration a case needs where its kernel reaches a texture or a sampler through an
-/// **argument buffer**: `set-past-layout-support`, which the runtime announces where it makes a
-/// descriptor set layout its driver's `vkGetDescriptorSetLayoutSupport` refuses though the driver
-/// runs it ([`crate::degradation::Degradation::SetPastLayoutSupport`]).
-///
-/// **Why it is the venue's and the case's shape.** Such a kernel takes the handle heap, set 1,
-/// whose arrays hold the device's update-after-bind capacity (65536 descriptors each on the M3
-/// Max). MoltenVK answers the layout query by the sum of the bindings' counts against
-/// `maxPerSetDescriptors` (1212 there), ignoring the update-after-bind limits it reports, so it
-/// refuses every such set though it makes and runs it; Vulkan's validation layer reports each one
-/// (`VUID-vkCreateDescriptorSetLayout-support-09582`), and the notice says so. lavapipe supports
-/// the same layouts and announces nothing; Metal recorded nothing. The query is not ours to answer
-/// otherwise: it is asked of the create info the layout is made from.
-///
-/// **It is a declaration and never an excuse**, like [`shared_memory_notice`]: it loosens the
-/// notices site alone, so every value of a case that names it still compares exactly. A case names
-/// it from its own shape (a texture or sampler in an argument buffer that a dispatch reads), never
-/// from the venue, and says in a comment which run it rests on.
-pub fn set_past_layout_notice() -> crate::allowance::Allowance {
-    notice_allowance(crate::degradation::Degradation::SetPastLayoutSupport.code())
-}
-
 /// The declaration a case needs where it samples through a sampler that reads an opaque-black
 /// border ([`reads_opaque_black_border`]): `swizzled-opaque-black-border`
-/// ([`crate::degradation::Degradation::SwizzledOpaqueBlackBorder`]), the static note the new
-/// runtime records for such a sampler state, and for a pipeline whose function samples through
-/// such a constexpr sampler, on every device. Through a view whose component mapping is not the
-/// identity, the border texel is the device's answer where the device does not report
+/// ([`crate::degradation::Degradation::SwizzledOpaqueBlackBorder`]), the static note the runtime
+/// records for such a sampler state, and for a pipeline whose function samples through such a
+/// constexpr sampler, on every device. Through a view whose component mapping is not the identity,
+/// the border texel is the device's answer where the device does not report
 /// `borderColorSwizzleFromImage`.
 ///
 /// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
@@ -526,24 +459,20 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// in the translator, or the runtime's own `Degradation`'s) says the answer is the device's own
 /// native form of an operation rule 1 names, and that no other form is built:
 ///
-/// - **maths**: the native-maths class (`native-transcendentals`, `native-division`,
-///   `native-fma`, `native-dot`, `native-mix`, `native-min-max`, `native-nan-encoding`), the
-///   device's functions and precision bounds (`device-transcendentals`, `device-arithmetic`), the
-///   device's denormals and NaN bits (`device-denormals`, `device-nan-encoding`), the device's
-///   rounding of a tiny product (`float-tininess-after-rounding`), and the device's compiler's
-///   grouping and fusion of the fast-math arithmetic the AIR's flags let it rewrite
-///   (`fast-math-rewrites`: the module states each operation in the AIR's order and reproduces no
-///   grouping of Metal's);
+/// - **maths**: the native-maths class (`native-transcendentals`, `native-division`, `native-fma`,
+///   `native-dot`, `native-mix`, `native-min-max`, `native-nan-encoding`), the device's functions
+///   and precision bounds (`device-transcendentals`, `device-arithmetic`), the device's denormals
+///   and NaN bits (`device-denormals`, `device-nan-encoding`), and the device's compiler's grouping
+///   and fusion of the fast-math arithmetic the AIR's flags let it rewrite (`fast-math-rewrites`:
+///   the module states each operation in the AIR's order and reproduces no grouping of Metal's);
 /// - **rounding**: the native-half class (`native-half-conversion`, `native-half-quantize`), and
-///   the device's own depth conversion and depth test (`unorm-depth-rounding`, `depth-denormals`,
-///   `signed-depth-test`);
+///   the device's own depth denormals (`depth-denormals`);
 /// - **texel, vertex and colour conversions**: `device-texel-conversion`,
 ///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
 /// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
 ///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
-///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
-///   `ycbcr-filter-not-exact`);
+///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`);
 /// - **blending**: the device's arithmetic of the blend a function computes into an extended-range
 ///   attachment, whose raw codes no blend unit reads (`extended-range-blend-source`,
 ///   `extended-range-float-blend-source`: `S·Fs op D·Fd` in `float`, where Metal's compiler rounds
@@ -556,19 +485,16 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 ///   reads and stores a signed lowest code as the code above it);
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
-///   alpha-to-coverage (`device-alpha-coverage`), its choice of the pixel a width-1 line covers
-///   at a vertex two pixels' diamonds share (`device-line-ties`), and its rasterizer's snap of a
-///   line band's corner half a step off its subpixel grid (`device-subpixel-snap`).
+///   alpha-to-coverage (`device-alpha-coverage`).
 ///
 /// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
-/// `restricted-depth-range`), of an emulation's own precision (`decoded-texel-precision`,
-/// `grad-from-bias`, `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not
-/// measured or not built (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`,
-/// `reduction-order`), a native answer whose catalogue entry states the bound the cases that
-/// read it hold it to (the device's decode of a block-compressed texture's blocks,
-/// `compressed-texel-decode`, which only a case that makes such a texture can announce), and every
-/// performance or validity notice.
+/// `restricted-depth-range`), of an emulation's own precision (`grad-from-bias`,
+/// `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not measured or not built
+/// (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`, `reduction-order`), a
+/// native answer whose catalogue entry states the bound the cases that read it hold it to (the
+/// device's decode of a block-compressed texture's blocks, `compressed-texel-decode`, which only a
+/// case that makes such a texture can announce), and every performance or validity notice.
 ///
 /// **It declares the notice, and nothing about a value.** Each entry loosens the notices site
 /// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still
@@ -591,13 +517,10 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::DeviceArithmetic,
         D::DeviceDenormals,
         D::DeviceNanEncoding,
-        D::FloatTininessAfterRounding,
         D::FastMathRewrites,
         D::NativeHalfConversion,
         D::NativeHalfQuantize,
-        D::UnormDepthRounding,
         D::DepthDenormals,
-        D::SignedDepthTest,
         D::DeviceTexelConversion,
         D::HalfTexelConversion,
         D::SrgbTexelDecode,
@@ -608,15 +531,12 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::DeviceFilteredMipmaps,
         D::HalfSampleFilter,
         D::FloatSampleFilter,
-        D::YCbCrFilterNotExact,
         D::ExtendedRangeBlendSource,
         D::ExtendedRangeFloatBlendSource,
         D::NativeFloat8,
         D::NativeLogicOperation,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,
-        D::DeviceLineTies,
-        D::DeviceSubpixelSnap,
     ]
 };
 
