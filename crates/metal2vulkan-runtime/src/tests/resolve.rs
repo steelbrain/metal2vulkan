@@ -667,7 +667,9 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut td = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
             td.usage = TextureUsage::SHADER_READ;
-            let index = Some(IndexClass::Texture.range().start);
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let index = Some(first);
             let over = (buffer.new_texture(&td, index, 0, pitch))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             if over.copied_over().is_some() {
