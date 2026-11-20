@@ -458,23 +458,32 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let reads = device.core().attachment_reads;
             let feedback = device.core().feedback.is_some();
+            // The feedback usage is the loop's extension's, so only a device with the loop is
+            // asked it (`VUID-VkPhysicalDeviceImageFormatInfo2-usage-parameter`); the answer is
+            // read only there.
+            let mut usage = vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT;
+            if feedback {
+                usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+            }
             let info = vk::PhysicalDeviceImageFormatInfo2::default()
                 .format(vk::Format::R32G32B32A32_UINT)
                 .ty(vk::ImageType::TYPE_2D)
                 .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(
-                    vk::ImageUsageFlags::TRANSFER_SRC
-                        | vk::ImageUsageFlags::TRANSFER_DST
-                        | vk::ImageUsageFlags::SAMPLED
-                        | vk::ImageUsageFlags::STORAGE
-                        | vk::ImageUsageFlags::COLOR_ATTACHMENT
-                        | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT,
-                );
+                .usage(usage);
             let offered = device.core().image_format_properties(&info).is_some();
             println!(
                 "fetch-storage: {name}: attachment reads {reads}, feedback loop {feedback}; \
-                 R32G32B32A32_UINT optimal 2D with transfer, sampled, storage, colour and \
-                 feedback usage: {}",
+                 R32G32B32A32_UINT optimal 2D with transfer, sampled, storage and colour usage{}: \
+                 {}",
+                if feedback {
+                    " and the feedback usage"
+                } else {
+                    ""
+                },
                 if offered { "offered" } else { "refused" },
             );
             let state = state(name, &device, &d);
