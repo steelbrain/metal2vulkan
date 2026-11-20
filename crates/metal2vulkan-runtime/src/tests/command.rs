@@ -3950,15 +3950,15 @@ pub(crate) mod on_device {
         });
     }
 
-    /// The command buffers of a group share submit infos where no event wait or signal separates
-    /// them, and record what they record alone. A mix of a fill whose segment's end barrier
-    /// reaches commands, a Shared fill whose end barrier reaches the host, an event's signal and
-    /// wait (which end and lead infos), and between them a command buffer with nothing for the GPU
+    /// The command buffers of a group share submit infos where no event signal separates them,
+    /// and record what they record alone. A mix of a fill whose segment's end barrier reaches
+    /// commands, a Shared fill whose end barrier reaches the host, an event's signal (which ends
+    /// its group) and a wait for it, and between them a command buffer with nothing for the GPU
     /// (no timestamps, no info) records the same barriers, passes and bytes copied and leaves the
     /// same words committed behind three busy submissions, held in groups, as committed one at a
     /// time. The groups pass two submit infos for the mix's four command buffers with commands:
-    /// one for the fills up to the signal, which ends the group, and one the wait leads. One at a
-    /// time passes one each. The busy work is held by the host until the submit thread has staged
+    /// one for the fills up to the signal, which ends the group, and one for the waiter, in the
+    /// next. One at a time passes one each. The busy work is held by the host until the submit thread has staged
     /// the whole mix: a completion seen sooner would send the held group with what it had staged
     /// by then, which splits it where the completion happened to arrive.
     #[test]

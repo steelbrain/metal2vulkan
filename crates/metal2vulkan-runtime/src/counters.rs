@@ -1465,7 +1465,7 @@ pub struct Metrics {
     /// `vkQueueSubmit2` calls.
     pub submissions: u64,
     /// The `VkSubmitInfo2`s those calls passed: the command buffers of a submission that no event
-    /// wait or signal separates share one, and the upload shares the first.
+    /// signal separates share one, and the upload shares the first.
     pub submit_infos: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those calls took, from each call to
     /// its return, in total: the time inside the driver, which a driver may spend holding the call

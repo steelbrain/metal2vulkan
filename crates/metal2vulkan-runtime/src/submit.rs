@@ -443,7 +443,8 @@ struct Batch {
     wrote: Vec<Arc<TextureInner>>,
 }
 
-/// One segment's part of a submit info: its event waits, its commands and its signals.
+/// One part of a submit info: a segment's or an upload's commands and its signals, and for a
+/// submission's first, the wait for a sparse bind (`submit`).
 #[derive(Default)]
 pub(crate) struct Staged {
     pub(crate) waits: Vec<vk::SemaphoreSubmitInfo<'static>>,
@@ -2125,9 +2126,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     parts.push(segments);
     parts.reverse();
     for part in &mut parts {
-        part.retain(|staged| {
-            staged.command.is_some() || !staged.waits.is_empty() || !staged.signals.is_empty()
-        });
+        part.retain(|staged| staged.command.is_some() || !staged.signals.is_empty());
     }
     parts.retain(|part| !part.is_empty());
     let progress = vk::SemaphoreSubmitInfo::default()
