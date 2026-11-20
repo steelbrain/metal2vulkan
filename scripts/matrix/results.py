@@ -92,6 +92,9 @@ GOLDEN_CHANGED = re.compile(r"output changed under an unchanged key: (\d+) cell"
 GOLDEN_PROFILE = re.compile(r"(\d+) under a changed profile fingerprint")
 
 RECORD = re.compile(r"^\s*M2V-MATRIX (\S+) (\S+) (\S+)\s*$")
+#: A test's record it did not count on this node (the lock budget's, where the node names no
+#: event): `M2V-MATRIX uncounted <test>/<name>`. Its leg's line says `not counted`.
+UNCOUNTED = re.compile(r"^\s*M2V-MATRIX uncounted (\S+)\s*$")
 LEG = re.compile(r"^M2V-LEG (\S+) begin\s*$")
 DEVICE = re.compile(r"^M2V-DEVICE (\S+) (\S+) (.*?)\s*$")
 SUITE = re.compile(r"^M2V-SUITE (\S+) (\S+) exit (-?\d+)\s*$")
@@ -120,6 +123,7 @@ def parse_suite(lines):
     failed, problems = [], []
     records = empty_records()
     duplicated = set()
+    uncounted = []
     golden = dict(changed=0, profile=0)
     summary = False
     for line in lines:
@@ -143,6 +147,11 @@ def parse_suite(lines):
             if name not in failed:
                 failed.append(name)
             continue
+        m = UNCOUNTED.match(line)
+        if m:
+            if m.group(1) not in uncounted:
+                uncounted.append(m.group(1))
+            continue
         m = RECORD.match(line)
         if m:
             kind, key, value = m.groups()
@@ -159,7 +168,7 @@ def parse_suite(lines):
             else:
                 records[kind][key] = float(value) if kind == "time" else int(value)
     return dict(run=run, passed=passed, failed=failed, records=records, problems=problems,
-                golden=golden, duplicated=duplicated)
+                golden=golden, duplicated=duplicated, uncounted=uncounted)
 
 
 def parse_job(text):
@@ -199,6 +208,11 @@ def leg_records(leg):
                     problems.append(f"record {kind} {key}: recorded by two suites")
                 records[kind][key] = value
     return records, problems
+
+
+def leg_uncounted(leg):
+    """The records a leg's suites said they did not count (UNCOUNTED), sorted, each once."""
+    return sorted({key for suite in leg["suites"].values() for key in suite.get("uncounted", [])})
 
 
 #: Record keys, by prefix, that the harness measures: its counts sum over its own workloads, so,
@@ -1465,6 +1479,8 @@ def verdict_line(leg_id, leg):
         tail += "".join(f", {state}" for state in leg["timed"]["states"])
     if leg["problems"]:
         tail += " | " + " | ".join(leg["problems"][:4]) + (" ..." if len(leg["problems"]) > 4 else "")
+    if leg.get("uncounted"):
+        tail += " | not counted: " + ", ".join(leg["uncounted"])
     if leg.get("parked"):
         tail += f" | parked: {len(leg['parked'])} ({leg['parked'][0]}" + (" ..." if len(leg["parked"]) > 1 else "") + ")"
     return f"{head}: {tail}"

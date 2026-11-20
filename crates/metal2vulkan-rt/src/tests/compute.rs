@@ -546,7 +546,7 @@ pub(crate) mod on_device {
     #[cfg(m2v_gpu)]
     fn every_gpu_adds_no_locked_instruction_per_dispatch() {
         use crate::tests::locks::Locks;
-        let Some(locks) = Locks::open("compute_locks") else {
+        let Some(locks) = Locks::open("compute_locks", "dispatch") else {
             return;
         };
         locks.each_device("compute_locks", |name, _, device| {

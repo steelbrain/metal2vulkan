@@ -976,7 +976,7 @@ def leg_entry(run, leg):
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
         records=records, base=base_sha, base_records=base and base["records"], shape=results.HARNESS_SHAPE,
-        problems=problems,
+        problems=problems, uncounted=results.leg_uncounted(parsed),
         parked=results.leg_parked(parsed, records) + budget_parked,
         **({"timed": timed} if timed is not None else {}))
 

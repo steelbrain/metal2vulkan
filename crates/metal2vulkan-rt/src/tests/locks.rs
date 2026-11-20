@@ -8,7 +8,9 @@
 //! A node names the event that counts locked instructions on its CPU in `M2V_LOCK_EVENT`, as
 //! `perf` names a raw event (`metal2vulkan_devtools::instructions::ProcessEvent`):
 //! `cpu_core/r21d0` (an Intel performance core's `MEM_INST_RETIRED.LOCK_LOADS`) or `r1e25` (a
-//! Zen 4 core's locked instructions). A node that names none prints that it measured nothing.
+//! Zen 4 core's locked instructions). A test on a node that names none counts nothing and passes,
+//! and says so in two lines: `LOCKS <test>: not counted, ...` for a reader, and the matrix's
+//! `M2V-MATRIX uncounted lock_budget/<key>`, which shows its leg as not counted.
 //!
 //! The devices are opened on an instance without the validation layer ([`Locks::each_device`]):
 //! the layer takes a lock of its own on every command it checks, 74 locked instructions a draw on
@@ -35,12 +37,13 @@ pub(crate) struct Locks {
 
 impl Locks {
     /// The counter of the event the node names, with this thread, and so every thread it starts
-    /// after, pinned to the CPUs its unit counts on; `None`, printed, where the node names none.
-    /// Opened before the test makes its instance, so the runtime's and the driver's threads
-    /// count.
-    pub(crate) fn open(test: &str) -> Option<Locks> {
+    /// after, pinned to the CPUs its unit counts on; `None` where the node names none, which the
+    /// test `test`, of the matrix's record `lock_budget/<key>`, prints as not counted. Opened
+    /// before the test makes its instance, so the runtime's and the driver's threads count.
+    pub(crate) fn open(test: &str, key: &str) -> Option<Locks> {
         let Ok(name) = std::env::var(EVENT) else {
-            println!("LOCKS-UNMEASURED {test}: the node names no {EVENT}");
+            println!("LOCKS {test}: not counted, the node names no {EVENT}");
+            println!("M2V-MATRIX uncounted lock_budget/{key}");
             return None;
         };
         let event =

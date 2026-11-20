@@ -466,7 +466,7 @@ pub(crate) mod on_device {
         let Some(library) = examples() else {
             return;
         };
-        let Some(locks) = Locks::open("draw_locks") else {
+        let Some(locks) = Locks::open("draw_locks", "draw") else {
             return;
         };
         let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
@@ -508,7 +508,7 @@ pub(crate) mod on_device {
         let Some(library) = examples() else {
             return;
         };
-        let Some(locks) = Locks::open("bind_locks") else {
+        let Some(locks) = Locks::open("bind_locks", "bound_draw") else {
             return;
         };
         let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);

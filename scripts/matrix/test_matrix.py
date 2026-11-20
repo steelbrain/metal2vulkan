@@ -337,6 +337,40 @@ class DeviceTestTests(unittest.TestCase):
         self.assertNotIn(matrix.DEVICE_TEST_FILTER, script)
 
 
+class UncountedTests(unittest.TestCase):
+    """A lock budget test on a node that names no event passes counting nothing: its leg says so."""
+
+    def test_a_lock_budget_test_that_counted_nothing_shows_its_leg_as_not_counted(self):
+        # nextest's output of a GPU leg, as `--success-output final` prints it: the passing lock
+        # budget test's captured lines come after the summary.
+        out = "\n".join([
+            "    Starting 2 tests across 1 binary",
+            "        PASS [   0.027s] (1/2) metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
+            "        PASS [   0.010s] (2/2) metal2vulkan-rt tests::pass::on_device::every_device_clears",
+            "     Summary [   0.030s] 2 tests run: 2 passed, 0 skipped",
+            "        PASS [   0.027s] (1/2) metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
+            "--- STDOUT:              metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind ---",
+            "LOCKS bind_locks: not counted, the node names no M2V_LOCK_EVENT",
+            "M2V-MATRIX uncounted lock_budget/bound_draw",
+            "",
+        ])
+        kept = subprocess.run(["awk", matrix.KEEP], input=out, capture_output=True, text=True, check=True).stdout
+        self.assertIn("M2V-MATRIX uncounted lock_budget/bound_draw", kept)
+        legs = matrix.results.parse_job("M2V-LEG a begin\n" + kept + "M2V-SUITE a rt exit 0\n")
+        suite = legs["a"]["suites"]["rt"]
+        self.assertEqual((suite["run"], suite["passed"], suite["problems"]), (2, 2, []))
+        uncounted = matrix.results.leg_uncounted(legs["a"])
+        self.assertEqual(uncounted, ["lock_budget/bound_draw"])
+        leg = dict(suites={"rt": suite}, records=suite["records"], verdict="pass", problems=[],
+                   uncounted=uncounted)
+        line = matrix.results.verdict_line("a", leg)
+        self.assertTrue(line.startswith("PASS"), line)
+        self.assertIn("not counted: lock_budget/bound_draw", line)
+        # A leg whose budget counted shows no such words.
+        leg["uncounted"] = []
+        self.assertNotIn("not counted", matrix.results.verdict_line("a", leg))
+
+
 class ArgumentTests(unittest.TestCase):
     def test_an_argument_the_usage_does_not_name_prints_it_and_starts_no_run(self):
         for argv in (["run", "--help"], ["run", "-h"], ["run", "--leg", "lavapipe"], ["run", "--legs"],
