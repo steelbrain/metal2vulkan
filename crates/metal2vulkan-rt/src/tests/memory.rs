@@ -1681,6 +1681,106 @@ mod on_device {
         }
     }
 
+    /// A copy's staging buffer of its own goes to the block-maker thread, which frees it in its
+    /// form of every free: with that thread's frees held open, a copy larger than the staging
+    /// region goes through a buffer of its own into a texture, carried by a command buffer's
+    /// submission. Once it completed, the buffer is given back and its free is held open on that
+    /// thread, its memory still a block: a submission made then is counted as one during a free,
+    /// with its time, and once the frees go on, the buffer's memory is freed.
+    #[test]
+    fn every_device_frees_a_copy_s_staging_buffer_on_the_block_maker_thread() {
+        use crate::staging::REGION_LEN;
+        use crate::{IndexClass, Region};
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            device
+                .grant_indices(IndexClass::Texture, 4096, 8)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            core.pool.await_internals();
+            let queue = device.new_command_queue(1).expect("a queue");
+            let target = (device.take_block(MemoryClass::Private, 4096))
+                .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
+            let buffer = (device.new_buffer(target.id, 0, 256, None)).expect("a buffer");
+            let fill = || {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let (to, at) = vk_buffer(&device, target.id);
+                command_buffer
+                    .record_for_test(&[&buffer], |device, command| {
+                        // SAFETY: the command buffer is recording; the block is held.
+                        unsafe { device.cmd_fill_buffer(command, to, at, 256, 7) };
+                    })
+                    .expect("a fill");
+                command_buffer.commit().expect("a commit");
+                command_buffer
+                    .wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
+            };
+            // 2304 texels square of RGBA8Unorm, 21,233,664 bytes: larger than the region.
+            let side = 2304;
+            let d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, side, side);
+            let texture = (device.new_texture(&d, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let bytes = vec![0x5A_u8; (side * side * 4) as usize];
+            let len = bytes.len() as u64;
+            core.submit_calls.hold_frees(true);
+            let whole = Region {
+                origin: [0; 3],
+                size: [side, side, 1],
+            };
+            texture
+                .replace_region(
+                    whole,
+                    0,
+                    0,
+                    crate::HostBytes::from(&bytes[..]),
+                    u64::from(side * 4),
+                    len,
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                counters.gauges().staging_bytes,
+                REGION_LEN + len,
+                "{name}: a staging buffer of its own"
+            );
+            // The command buffer whose submission carries the copy.
+            fill();
+            wait_until("the staging buffer's free held open", || {
+                counters.gauges().staging_bytes == REGION_LEN && core.submit_calls.freeing()
+            });
+            let held = counters.gauges();
+            let before = counters.metrics();
+            fill();
+            assert_eq!(
+                counters.metrics().submissions_during_frees,
+                before.submissions_during_frees + 1,
+                "{name}: the submission during the staging buffer's free"
+            );
+            wait_until("the submission's time during the free", || {
+                counters.metrics().submit_call_nanos_during_frees
+                    > before.submit_call_nanos_during_frees
+            });
+            assert_eq!(
+                counters.gauges().blocks,
+                held.blocks,
+                "{name}: the staging buffer's memory, its free held open"
+            );
+            core.submit_calls.hold_frees(false);
+            wait_until("the staging buffer's memory freed", || {
+                counters.gauges().blocks == held.blocks - 1 && !core.submit_calls.freeing()
+            });
+            drop((texture, buffer, target, queue));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
+
     /// Seeded takes and releases of mixed lengths across both classes, with the block-maker
     /// thread running: every take and release returns within a minute, every block's allocation
     /// was mapped before the take returned it, every allocation mapped is unmapped once by the
