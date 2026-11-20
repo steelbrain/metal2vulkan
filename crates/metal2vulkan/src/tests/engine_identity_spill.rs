@@ -223,18 +223,20 @@ fn a_vertex_function_past_its_share_spills_the_checks_fields_into_its_block() {
         assert_eq!(
             block_loads(&text),
             (spilled, spilled),
-            "{stem}: each spilled field loaded once, in the function's first block"
+            "{stem}: each spilled field loaded once, in the function's first block:\n{}",
+            pointer_lines(&text)
         );
     }
 }
 
-/// The loads through a parameter block's address in disassembly `text`: of a pointer made from a
-/// `ulong` loaded from the push block plus a constant. Their number, and how many of them lie in
-/// a function's first block.
+/// The loads through a parameter block's address in disassembly `text`: a `ulong` loaded from the
+/// push block, plus a constant (none for the block's first field, where the sum may fold), made a
+/// pointer to a one-member block (`OpConvertUToPtr`), whose member is loaded. Their number, and how
+/// many of them lie in a function's first block.
 fn block_loads(text: &str) -> (usize, usize) {
     use std::collections::BTreeSet;
     let (mut push, mut chains, mut bases) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    let (mut constants, mut adds, mut pointers) =
+    let (mut constants, mut blocks, mut members) =
         (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     let (mut loads, mut first) = (0, 0);
     let (mut opened, mut entry) = (false, false);
@@ -252,21 +254,29 @@ fn block_loads(text: &str) -> (usize, usize) {
             [id, "=", "OpConstant", "%ulong", _] => {
                 constants.insert(id);
             }
-            [id, "=", "OpAccessChain", _, var, ..] if push.contains(var) => {
+            [id, "=", "OpAccessChain" | "OpInBoundsAccessChain", _, var, ..]
+                if push.contains(var) =>
+            {
                 chains.insert(id);
             }
             [id, "=", "OpLoad", "%ulong", chain, ..] if chains.contains(chain) => {
                 bases.insert(id);
             }
-            [id, "=", "OpIAdd", "%ulong", a, b, ..]
-                if bases.contains(a) && constants.contains(b) =>
+            [id, "=", "OpIAdd", "%ulong", a, b]
+                if (bases.contains(a) && constants.contains(b))
+                    || (constants.contains(a) && bases.contains(b)) =>
             {
-                adds.insert(id);
+                blocks.insert(id);
             }
-            [id, "=", "OpConvertUToPtr", _, sum] if adds.contains(sum) => {
-                pointers.insert(id);
+            [id, "=", "OpConvertUToPtr", _, at] if bases.contains(at) || blocks.contains(at) => {
+                members.insert(id);
             }
-            [_, "=", "OpLoad", _, pointer, ..] if pointers.contains(pointer) => {
+            [id, "=", "OpAccessChain" | "OpInBoundsAccessChain", _, block, _]
+                if members.contains(block) =>
+            {
+                members.insert(id);
+            }
+            [_, "=", "OpLoad", _, pointer, ..] if members.contains(pointer) => {
                 loads += 1;
                 first += usize::from(entry);
             }
@@ -274,6 +284,20 @@ fn block_loads(text: &str) -> (usize, usize) {
         }
     }
     (loads, first)
+}
+
+/// The lines of disassembly `text` that read the push block or make a device pointer, for a
+/// failure's message.
+fn pointer_lines(text: &str) -> String {
+    (text.lines())
+        .filter(|l| {
+            ["PushConstant", "OpConvertUToPtr", "OpIAdd %ulong"]
+                .iter()
+                .any(|k| l.contains(k))
+        })
+        .take(60)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
