@@ -36,7 +36,6 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 | `crates/metal2vulkan-runtime/README.md` | The runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
 | `docs/HOWTO.md` | Integration: tools, caching, failures, isolation |
 | `docs/ARCHITECTURE.md` | The translator's stages and module map |
-| `docs/FAST-PATHS.md` | The translator's speed-for-accuracy switches, until the cutover deletes them |
 | `docs/VALIDATION.md` | The validation ladder |
 | `docs/REPLAY-STREAM.md` | The replay stream format and its player |
 | `docs/RESOURCE-ID.md` | The resource ID: its index classes, the texture and sampler words, and their test vectors |
@@ -110,10 +109,7 @@ investigation gets a time box, then rung 4.
 question: it is allowed only as the last form on a device that has no other, and it is reported
 as a known gap.
 
-**The old runtime and old switches.** The old runtime is deleted, and its crate name is now the
-runtime's. The translator's `DevicePolicy` switches, the driver-fact tables, the device checks and
-`docs/FAST-PATHS.md` with `tests::fast_paths` stay correct until the cutover deletes them. Never
-add a switch, a fact-table row, a device check or a ledger row.
+**No switches.** Never add a policy switch, a fact-table row, a device check or a ledger row.
 
 ## Translation honesty
 
@@ -322,9 +318,8 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
   entries (`D<n>`), work-package codes or TODO section numbers, and the tree keeps no plan, status
   or journal. The why of a change goes in its commit message; a durable contract goes in the doc
   that owns it.
-- **The honest trade-offs stay current.** `docs/FAST-PATHS.md` (speed-for-accuracy choices, device
-  gaps and known gaps), `docs/REFUSALS.md` (generated), `docs/METAL-COVERAGE.md` (generated),
-  `docs/CONFORMANCE-COVERAGE.md` (generated) and
+- **The honest trade-offs stay current.** `docs/REFUSALS.md` (generated),
+  `docs/METAL-COVERAGE.md` (generated), `docs/CONFORMANCE-COVERAGE.md` (generated) and
   `docs/API.md`'s precision-note catalogue and accepted differences change in the same commit as
   the behavior they describe. An open gap is recorded where a user reads it: a typed refusal, a
   static precision note, or the known gaps in the runtime's README.
