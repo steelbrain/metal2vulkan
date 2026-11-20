@@ -179,6 +179,10 @@ pub(crate) struct Work {
     /// For the device tests: a commit began its count of the wait for the work lock.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) counting: AtomicBool,
+    /// For the device tests: a submission began its count of the wait for the runtime's queue
+    /// lock.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) asking: AtomicBool,
 }
 
 pub(crate) struct WorkState {
@@ -530,6 +534,8 @@ impl Work {
             released: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             counting: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            asking: AtomicBool::new(false),
         }
     }
 
@@ -2138,7 +2144,11 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         }]),
     }
     if ok {
+        let asked = times::host_time();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        (core.work.asking).store(true, Ordering::SeqCst);
         let queue = lock(&core.queues.runtime);
+        (core.counters).queue_lock_wait(times::host_time().saturating_sub(asked));
         if core.submit_calls.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
@@ -2174,10 +2184,12 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             // Inside the driver from here until the call returns, for the block-maker thread's
             // wait after its memory calls (`crate::submit_calls`).
             let call = core.submit_calls.enter();
+            let began = times::host_time();
             // SAFETY: every command buffer is executable and in no other pending submission;
             // every wait is on a signal submitted earlier, and every signal raises its semaphore;
             // the queue is held.
             ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
+            (core.counters).submit_call(times::host_time().saturating_sub(began));
             drop(call);
             if !ok {
                 break;

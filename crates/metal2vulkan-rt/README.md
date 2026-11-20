@@ -163,7 +163,11 @@ and a call that needs a runtime thread after `Device::quiesce` (`Error::Quiesced
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
 cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
 first-use waits, kernels lowered, kernels read from the cache directory, upload waits, pushes,
-and the draws and dispatches whose push bytes the command buffer already held);
+and the draws and dispatches whose push bytes the command buffer already held), and times in
+nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time inside the
+driver (`submit_call_nanos`, with the calls over 100 ms counted) and the submit thread's wait
+for the queue's lock before a submission's calls (`queue_lock_wait_nanos`), which on a family of
+one queue is also the wait behind the consumer's presents (`Device::with_present_queue`);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.

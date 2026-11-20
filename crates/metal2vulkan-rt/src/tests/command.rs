@@ -1619,6 +1619,61 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A submission's wait for the runtime's queue lock and its `vkQueueSubmit2` calls are timed:
+    /// one made while the test holds the lock counts at least the time from the start of its
+    /// count to the lock's release, here 20 ms or more, and the calls count a time of their own,
+    /// whose longest is at least their mean.
+    #[test]
+    fn every_device_times_its_submit_calls_and_their_wait_for_the_queue_lock() {
+        each_device("command_queue_lock_wait", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let counters = device.counters();
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &buffer, 3);
+            let asking = || (device.core().work.asking).load(std::sync::atomic::Ordering::SeqCst);
+            (device.core().work.asking).store(false, std::sync::atomic::Ordering::SeqCst);
+            let (waiting, released) = device.with_runtime_queue(|_| {
+                command_buffer.commit().expect("a commit");
+                within("the submission's count", asking);
+                let waiting = host_time();
+                thread::sleep(Duration::from_millis(20));
+                (waiting, host_time())
+            });
+            finished(name, &command_buffer);
+            within("the call's time", || {
+                counters.metrics().submit_call_nanos > before.submit_call_nanos
+            });
+            let after = counters.metrics();
+            assert!(
+                after.queue_lock_wait_max_nanos >= released - waiting,
+                "{name}: {} counted, the lock held {} past the start of the submission's count",
+                after.queue_lock_wait_max_nanos,
+                released - waiting
+            );
+            assert!(
+                after.queue_lock_wait_nanos - before.queue_lock_wait_nanos >= released - waiting,
+                "{name}: the waits' total"
+            );
+            assert!(after.queue_lock_wait_nanos >= after.queue_lock_wait_max_nanos);
+            let calls = after.submissions;
+            assert!(calls > before.submissions, "{name}: a submission");
+            assert!(
+                after.submit_call_max_nanos > 0
+                    && after.submit_call_max_nanos >= after.submit_call_nanos / calls
+                    && after.submit_call_nanos >= after.submit_call_max_nanos,
+                "{name}: the longest call {} against {} over {calls} calls",
+                after.submit_call_max_nanos,
+                after.submit_call_nanos
+            );
+            assert!(after.submit_calls_over_100_ms <= calls, "{name}");
+            assert_eq!(command_buffer.error(), None, "{name}");
+            drop((command_buffer, buffer, arena, queue, device));
+        });
+    }
+
     /// Commits a command buffer of one fill of `buffer` with `word` on `queue`.
     fn queue_fill(queue: &CommandQueue, buffer: &Buffer, word: u32) -> CommandBuffer {
         let command_buffer = queue.command_buffer().expect("a command buffer");

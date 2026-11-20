@@ -26,6 +26,10 @@ fn bucket(bounds: &[u64], nanos: u64) -> usize {
 /// The bounds of each [`Timed`]'s buckets, in nanoseconds: 1, 5 and 20 ms.
 const OVER_NANOS: [u64; 3] = [1_000_000, 5_000_000, 20_000_000];
 
+/// A `vkQueueSubmit2` call longer than this, in nanoseconds (100 ms), is counted in
+/// [`Metrics::submit_calls_over_100_ms`].
+const LONG_SUBMIT_CALL: u64 = 100_000_000;
+
 /// A part of the consumer's takes, buffer makes and exported block makes the runtime times,
 /// counted on its own in [`Metrics`].
 #[derive(Clone, Copy)]
@@ -357,6 +361,11 @@ struct Atomics {
     threads: [AtomicU64; THREADS],
     submissions: AtomicU64,
     submit_infos: AtomicU64,
+    submit_call_nanos: AtomicU64,
+    submit_call_max_nanos: AtomicU64,
+    submit_calls_over_100_ms: AtomicU64,
+    queue_lock_wait_nanos: AtomicU64,
+    queue_lock_wait_max_nanos: AtomicU64,
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
@@ -640,6 +649,24 @@ impl Counters {
     /// A submission of `infos` submit infos ([`Metrics::submit_infos`]).
     pub(crate) fn submitted_infos(&self, infos: u64) {
         self.atomics.submit_infos.fetch_add(infos, Relaxed);
+    }
+
+    /// A `vkQueueSubmit2` call that took `nanos` nanoseconds ([`Metrics::submit_call_nanos`]).
+    pub(crate) fn submit_call(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.submit_call_nanos.fetch_add(nanos, Relaxed);
+        a.submit_call_max_nanos.fetch_max(nanos, Relaxed);
+        if nanos > LONG_SUBMIT_CALL {
+            a.submit_calls_over_100_ms.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// A submission that waited `nanos` nanoseconds for the runtime's queue lock before its
+    /// calls ([`Metrics::queue_lock_wait_nanos`]).
+    pub(crate) fn queue_lock_wait(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.queue_lock_wait_nanos.fetch_add(nanos, Relaxed);
+        a.queue_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
     /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
@@ -1079,6 +1106,11 @@ impl Counters {
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
+            submit_call_nanos: a.submit_call_nanos.load(Relaxed),
+            submit_call_max_nanos: a.submit_call_max_nanos.load(Relaxed),
+            submit_calls_over_100_ms: a.submit_calls_over_100_ms.load(Relaxed),
+            queue_lock_wait_nanos: a.queue_lock_wait_nanos.load(Relaxed),
+            queue_lock_wait_max_nanos: a.queue_lock_wait_max_nanos.load(Relaxed),
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
@@ -1275,6 +1307,27 @@ pub struct Metrics {
     /// The `VkSubmitInfo2`s those calls passed: the command buffers of a submission that no event
     /// wait or signal separates share one, and the upload shares the first.
     pub submit_infos: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) those calls took, from each call to
+    /// its return, in total: the time inside the driver, which a driver may spend holding the call
+    /// while another thread is inside a memory call
+    /// ([`submissions_during_frees`](Self::submissions_during_frees)). The wait for the queue's
+    /// lock before them is [`queue_lock_wait_nanos`](Self::queue_lock_wait_nanos).
+    pub submit_call_nanos: u64,
+    /// The longest such call, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub submit_call_max_nanos: u64,
+    /// Those calls longer than 100 ms.
+    pub submit_calls_over_100_ms: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the submit thread waited for the
+    /// runtime's queue lock before a submission's `vkQueueSubmit2` calls, in total: one wait a
+    /// submission, whose calls then hold the lock. A sparse bind of an import takes the lock too.
+    /// Where the queue family has one queue, the lock is also
+    /// [`Device::with_present_queue`](crate::Device::with_present_queue)'s, so a wait here is
+    /// also the submit thread's wait behind the consumer's presents.
+    pub queue_lock_wait_nanos: u64,
+    /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub queue_lock_wait_max_nanos: u64,
     /// Encoders recorded: compute, blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
