@@ -2086,11 +2086,12 @@ fn the_emulated_tiers_limits_stay_refused_for_partial_simdgroups() {
 }
 
 /// A `dispatchThreads` grid whose edge is a partial simdgroup runs whole on the variant, so its
-/// interior is checked against the variant's limits, not the flattened tier's. On
-/// nvidia-rtx50-linux (`Direct`, z at most 64), an interior of `[1, 1, 96]`, which the flattened
-/// pipeline runs alone, asks for no variant; a grid of `[1, 1, 100]` in threadgroups of
-/// `[1, 1, 96]` is a `LocalSize` refusal up front, and one in threadgroups of `[1, 1, 64]` asks for
-/// the variant, whose plan runs both regions.
+/// interior is checked against the variant's limits, not the flattened tier's: those of a kernel
+/// that runs a threadgroup deeper than `DEEP_THREADGROUP` as one row. On nvidia-rtx50-linux
+/// (`Direct`, z at most 64), an interior of `[1, 1, 96]`, which the flattened pipeline runs alone,
+/// asks for no variant, and a grid of `[1, 1, 100]` in threadgroups of `[1, 1, 96]` or `[1, 1, 64]`
+/// asks for the variant, whose plan runs both regions: the flattened plan's check and the
+/// variant's plan agree.
 #[test]
 fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
     let Some(bc) = assemble("simd_ops") else {
@@ -2134,20 +2135,11 @@ fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
     };
     assert_eq!(plan.dispatch_variant(&interior), Ok(VariantKey::new()));
     assert!(plan.instantiate_dispatch(&state, &interior).is_ok());
-    match plan.dispatch_variant(&mixed(96)) {
-        Err(BindError::Unsupported(u)) => assert_eq!(
-            u.feature,
-            Feature::LocalSize {
-                axis: Some(Axis::Z)
-            }
-        ),
-        other => panic!("{other:?}"),
+    for z in [96, 64] {
+        let variant = plan.dispatch_variant(&mixed(z));
+        let regions = (vplan.instantiate_dispatch(&state, &mixed(z))).map(|c| c.regions.len());
+        assert_eq!((variant, regions), (Ok(emulated_key()), Ok(2)), "z {z}");
     }
-    assert_eq!(plan.dispatch_variant(&mixed(64)), Ok(emulated_key()));
-    let c = vplan
-        .instantiate_dispatch(&state, &mixed(64))
-        .expect("the variant runs both regions");
-    assert_eq!(c.regions.len(), 2);
 }
 
 /// The committed moltenvk-m3 profile (32-lane subgroups that require whole subgroups).

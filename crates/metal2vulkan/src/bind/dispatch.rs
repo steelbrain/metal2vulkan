@@ -326,12 +326,16 @@ fn region_flags(rules: &LocalRules, r: [u32; 3]) -> vk::PipelineShaderStageCreat
 }
 
 /// The local-size rules of the kernel's emulated-simdgroups variant as the plan of its flattened
-/// variant knows them: the same device limits, a local size that is not flattened, and no whole
-/// subgroups (the flattened plan's multiples are all its tier's, [`partial`]). The variant's
+/// variant knows them: the same device limits, a local size that is not flattened, a threadgroup
+/// deeper than [`DEEP_THREADGROUP`] run as one row, and no whole subgroups (the flattened plan's
+/// multiples are all its tier's, [`partial`]). The variant is of the `Spec` form, and a kernel of
+/// a flattened tier has no compute derivatives (`lower::dispatch::plan_kernel` refuses them
+/// there), so it declares `SpecKey::DeepThreadgroup`, as its own plan reads it. The variant's
 /// scratch only its own plan knows.
 fn emulated_rules(rules: &LocalRules) -> LocalRules {
     LocalRules {
         flat: false,
+        deep: true,
         multiples: Vec::new(),
         required_subgroup_size: None,
         stage_flags: vk::PipelineShaderStageCreateFlags::empty(),

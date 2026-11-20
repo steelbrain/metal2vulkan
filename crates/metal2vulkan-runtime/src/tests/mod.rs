@@ -14,6 +14,7 @@ mod copy_out;
 mod copy_over;
 mod cube_views;
 mod d3d11;
+mod deep_threadgroups;
 mod device;
 mod dispatch_tiles;
 mod dma_bufs;
