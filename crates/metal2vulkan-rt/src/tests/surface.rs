@@ -1169,6 +1169,168 @@ mod on_device {
         drop((view, out));
     }
 
+    /// The gauges a surface's memory and planes count in, which its free brings back: exports,
+    /// surface imports and their bytes, surface buffers, textures.
+    fn surface_gauges(device: &Device) -> [u64; 5] {
+        let gauges = device.counters().gauges();
+        [
+            gauges.exports,
+            gauges.surface_imports,
+            gauges.surface_import_bytes,
+            gauges.surface_buffers,
+            gauges.textures,
+        ]
+    }
+
+    /// The submissions, and the held releases that started a send ([`crate::Metrics`]).
+    fn sends(device: &Device) -> [u64; 2] {
+        let metrics = device.counters().metrics();
+        [metrics.submissions, metrics.held_release_starts]
+    }
+
+    /// A surface let go of while its acquire is not yet submitted is freed with no later call.
+    /// For each row the device exports, on the 1080p picture: 32 surfaces, each acquired
+    /// (`external_writes_done`) and never used, dropped together, their gauges back with no
+    /// other call, through one submission for the whole burst; a surface whose acquire the
+    /// submission of a command buffer that read it carried, dropped once that command buffer
+    /// completed, freed with no submission added; one acquired again after such a read and
+    /// dropped, freed through one submission; then 200 rounds of make, acquire, a read on every
+    /// other round and drop, each freed before the next, the gauges the same at rounds 100 and
+    /// 200. Without the drop's send the acquires' upload holds the planes until a later call, and
+    /// the waits for the frees time out.
+    #[test]
+    fn every_device_frees_a_surface_at_its_drop_with_its_acquire_unsent() {
+        each_device("surface_drop", |name, _, device| {
+            let counters = device.counters();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let (picture, planes) = &PICTURES[0];
+            let (_out_block, out) = shared(&device, packed(planes).2);
+            for row in &ROWS {
+                let handle = row.handle;
+                let foreign = device
+                    .extensions()
+                    .iter()
+                    .any(|n| n.as_c_str() == ash::ext::queue_family_foreign::NAME);
+                let label = format!("{name}: {} {handle:?} {picture}", row.name);
+                if !device.core().exports.offers(handle) || (handle.foreign() && !foreign) {
+                    println!("surface-drop: {label}: not exported");
+                    continue;
+                }
+                let specs = [0, 1].map(|i| {
+                    let p = planes[i];
+                    let mut descriptor =
+                        TextureDescriptor::new(TextureType::Type2D, p.format, p.width, p.height);
+                    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                    PlaneSpec {
+                        descriptor,
+                        index: None,
+                        rows_below: row.rows_below(planes)[i],
+                    }
+                });
+                let spec = SurfaceSpec {
+                    handle,
+                    pitch_multiple: row.pitch_multiple,
+                    start_multiple: row.start_multiple,
+                    planes: &specs,
+                };
+                let mut form = None;
+                let mut acquired = || {
+                    let (surface, export) = (device.new_exported_surface(&spec))
+                        .unwrap_or_else(|error| panic!("{label}: {error}"));
+                    form = Some(export.form);
+                    (surface.external_writes_done())
+                        .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
+                    surface
+                };
+                let base = surface_gauges(&device);
+                let freed = |what: &str| {
+                    within(&format!("{label}: the free of {what}"), || {
+                        surface_gauges(&device) == base
+                    })
+                };
+                let since = |before: [u64; 2]| {
+                    let now = sends(&device);
+                    [now[0] - before[0], now[1] - before[1]]
+                };
+
+                // 32 surfaces acquired and never used, dropped together.
+                let surfaces: Vec<Surface> = (0..32).map(|_| acquired()).collect();
+                assert_eq!(
+                    surface_gauges(&device)[4],
+                    base[4] + 64,
+                    "{label}: the planes' textures counted"
+                );
+                let before = sends(&device);
+                drop(surfaces);
+                freed("32 surfaces never used");
+                let burst = since(before);
+                assert_eq!(
+                    burst,
+                    [1, 1],
+                    "{label}: one submission, one held release starting it, for the 32 drops"
+                );
+
+                // The acquire carried by a read's submission: the drop sends nothing.
+                let surface = acquired();
+                rt_read(&label, &queue, &surface, planes, &out);
+                let before = sends(&device);
+                drop(surface);
+                freed("a surface read");
+                let used = since(before);
+                assert_eq!(
+                    used,
+                    [0, 0],
+                    "{label}: the drop of a surface read sends nothing"
+                );
+
+                // Acquired again after a read: the drop sends that acquire.
+                let surface = acquired();
+                rt_read(&label, &queue, &surface, planes, &out);
+                (surface.external_writes_done())
+                    .unwrap_or_else(|error| panic!("{label}: the second acquire: {error}"));
+                let before = sends(&device);
+                drop(surface);
+                freed("a surface acquired again after its read");
+                let again = since(before);
+                assert_eq!(again, [1, 1], "{label}: the drop sends the second acquire");
+
+                // 200 rounds, each freed before the next.
+                let mut at = Vec::new();
+                for round in 1..=200 {
+                    let surface = acquired();
+                    if round % 2 == 1 {
+                        rt_read(&label, &queue, &surface, planes, &out);
+                    }
+                    drop(surface);
+                    freed(&format!("round {round}"));
+                    if round == 100 || round == 200 {
+                        at.push((surface_gauges(&device), counters.gauges().blocks));
+                    }
+                }
+                assert_eq!(
+                    at[0].0, at[1].0,
+                    "{label}: the gauges at rounds 100 and 200"
+                );
+                let metrics = counters.metrics();
+                println!(
+                    "surface-drop: {label}: form {form:?}; submissions and held releases that \
+                     started one: 32 drops of surfaces never used {burst:?}, a read surface's \
+                     drop {used:?}, a drop after a second acquire {again:?}; 200 rounds: exports, \
+                     surface imports, their bytes, surface buffers, textures {:?} at round 100 \
+                     and {:?} at 200, blocks {} and {}; the device's held releases {} of {} bytes, \
+                     {} starts",
+                    at[0].0,
+                    at[1].0,
+                    at[0].1,
+                    at[1].1,
+                    metrics.held_releases,
+                    metrics.held_release_bytes,
+                    metrics.held_release_starts,
+                );
+            }
+        });
+    }
+
     /// The handles and multiples the busy-queue timing makes a surface of, where the device
     /// exports the handle: the product's VA-API row and its NVIDIA row.
     #[cfg(unix)]

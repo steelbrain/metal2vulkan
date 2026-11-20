@@ -105,6 +105,6 @@ impl Drop for Claim {
             return;
         };
         lock(&core.claims).remove(&self.info.id);
-        core.work.release_block(&block);
+        core.work.release_block(&core, &block);
     }
 }

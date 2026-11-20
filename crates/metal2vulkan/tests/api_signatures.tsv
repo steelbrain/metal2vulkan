@@ -2422,6 +2422,9 @@ field	metal2vulkan-rt::Metrics.first_use_variant_waits	pub first_use_variant_wai
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
+field	metal2vulkan-rt::Metrics.held_release_bytes	pub held_release_bytes: u64
+field	metal2vulkan-rt::Metrics.held_release_starts	pub held_release_starts: u64
+field	metal2vulkan-rt::Metrics.held_releases	pub held_releases: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-rt::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed

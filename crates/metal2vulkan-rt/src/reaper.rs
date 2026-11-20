@@ -1,15 +1,18 @@
 //! The reaper thread: it makes the device's `VkPipelineCache` from its blob first, then frees
-//! what the runtime's other threads give up, one object at a time, runs a teardown that starts in
-//! a handler or a listener, writes the lowerings the pipeline states hand it to the store, lowers
-//! the pipeline states' variants an encoding call waits for (`pipeline::Later`), and looks at the
-//! pipeline cache once creation is quiet, writing its blob or replacing it past its bound
-//! (`crate::cache`). No driver free runs on the completion thread, so no completion waits behind
-//! one, and a submission on another thread waits behind at most one free.
+//! what the runtime's other threads give up, one object at a time, looks at the release of a
+//! texture whose image an upload held past it (`crate::submit::Work::release`), runs a teardown
+//! that starts in a handler or a listener, writes the lowerings the pipeline states hand it to
+//! the store, lowers the pipeline states' variants an encoding call waits for
+//! (`pipeline::Later`), and looks at the pipeline cache once creation is quiet, writing its blob
+//! or replacing it past its bound (`crate::cache`). No driver free runs on the completion thread,
+//! so no completion waits behind one, and a submission on another thread waits behind at most one
+//! free.
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
 use crate::pipeline::{Compiled, Which};
-use crate::texture::Backing;
+use crate::submit::Held;
+use crate::texture::{Backing, Image};
 use crate::times::host_time;
 use ash::vk;
 use std::collections::VecDeque;
@@ -32,6 +35,10 @@ struct State {
 
 pub(crate) enum Job {
     Free(Free),
+    /// A released texture's image, of its bytes, which an upload held past the texture: the
+    /// release is looked at under the work lock, which the texture's drop may run under
+    /// ([`Work::release`](crate::submit::Work::release)). Nothing where the image is gone.
+    Released(Weak<Image>, u64),
     /// The device's teardown, after its last handle dropped on the completion thread or the
     /// submit thread, in a handler or a listener.
     Teardown(Teardown),
@@ -139,7 +146,7 @@ impl Reaper {
         for job in jobs {
             match job {
                 Job::Free(object) => free(core, object),
-                Job::Teardown(_) => {}
+                Job::Released(..) | Job::Teardown(_) => {}
             }
         }
     }
@@ -316,6 +323,13 @@ pub(crate) fn run(core: Arc<Core>) {
         };
         match next {
             Next::Job(Job::Free(object)) => free(&core, object),
+            Next::Job(Job::Released(image, bytes)) => {
+                if let Some(image) = image.upgrade() {
+                    // Where this is the image's last holder, it goes here, after the work lock.
+                    let held = Held::Texture(image);
+                    core.work.release(&core, &held, bytes);
+                }
+            }
             Next::Job(Job::Teardown(teardown)) => teardown(&core),
             // SAFETY: the caches are the core's device's.
             Next::Look => unsafe { core.caches.look(&core.device, &core.counters) },

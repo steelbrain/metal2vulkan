@@ -92,7 +92,7 @@ mod on_device {
     #[cfg(m2v_gpu)]
     mod picture {
         use super::d3d::{self, D3d, SharedTexture};
-        use crate::tests::command::on_device::{each_device, finished};
+        use crate::tests::command::on_device::{each_device, finished, within};
         use crate::{
             BufferLayout, D3d11Plane, Device, Error, Gap, MemoryClass, PixelFormat, Surface,
             TextureDescriptor, TexturePlace, TextureType,
@@ -355,6 +355,150 @@ mod on_device {
                     metrics.external_releases - before.external_releases,
                 );
                 drop(surface);
+            });
+        }
+
+        /// The gauges a Direct3D 11 surface counts in, which its free brings back: surface
+        /// imports, their bytes, textures.
+        fn import_gauges(device: &Device) -> [u64; 3] {
+            let gauges = device.counters().gauges();
+            [
+                gauges.surface_imports,
+                gauges.surface_import_bytes,
+                gauges.textures,
+            ]
+        }
+
+        /// A surface of Direct3D 11 planes let go of while its acquire is not yet submitted is
+        /// freed with no later call, as a picture imported and acquired but never used is: 32
+        /// pictures' planes, each pair imported and acquired (`external_writes_done`), dropped
+        /// together, their gauges back with no other call, through one submission for the whole
+        /// burst; a picture whose acquire the submission of a command buffer that read it
+        /// carried, dropped once that command buffer completed, freed with no submission added;
+        /// one acquired again after such a read and dropped, freed through one submission; then
+        /// 200 rounds of import, acquire, a read on every other round and drop, each freed before
+        /// the next, the gauges the same at rounds 100 and 200. Without the drop's send the
+        /// acquires' upload holds the planes' imports, and with them the Direct3D 11 textures'
+        /// memory, until a later call, and the waits for the frees time out.
+        #[test]
+        fn every_device_frees_direct3d_11_planes_at_the_surface_drop() {
+            each_device("import_d3d11_surface_drop", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let pair = || {
+                    PLANES
+                        .each_ref()
+                        .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi))
+                };
+                let acquired = |textures: &[SharedTexture; 2]| -> Surface {
+                    let planes: Vec<D3d11Plane<'_>> = (textures.iter().zip(&PLANES))
+                        .map(|(texture, plane)| D3d11Plane {
+                            handle: texture.handle.as_handle(),
+                            image_format: plane.image,
+                            descriptor: TextureDescriptor::new(
+                                TextureType::Type2D,
+                                plane.view,
+                                plane.width,
+                                plane.height,
+                            ),
+                            index: None,
+                        })
+                        .collect();
+                    let surface = (device.import_d3d11_surface(&planes))
+                        .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
+                    (surface.external_writes_done())
+                        .unwrap_or_else(|error| panic!("{name}: the acquire: {error}"));
+                    surface
+                };
+                let counters = device.counters();
+                let base = import_gauges(&device);
+                let freed = |what: &str| {
+                    within(&format!("{name}: the free of {what}"), || {
+                        import_gauges(&device) == base
+                    })
+                };
+                let sends = || {
+                    let metrics = counters.metrics();
+                    [metrics.submissions, metrics.held_release_starts]
+                };
+                let since = |before: [u64; 2]| {
+                    let now = sends();
+                    [now[0] - before[0], now[1] - before[1]]
+                };
+
+                // 32 pictures acquired and never used, dropped together.
+                let pictures: Vec<[SharedTexture; 2]> = (0..32).map(|_| pair()).collect();
+                let surfaces: Vec<Surface> = pictures.iter().map(acquired).collect();
+                assert_eq!(
+                    import_gauges(&device)[0],
+                    base[0] + 64,
+                    "{name}: each plane's import counted"
+                );
+                let before = sends();
+                drop(surfaces);
+                freed("32 pictures never used");
+                let burst = since(before);
+                assert_eq!(
+                    burst,
+                    [1, 1],
+                    "{name}: one submission, one held release starting it, for the 32 drops"
+                );
+                drop(pictures);
+
+                // The acquire carried by a read's submission: the drop sends nothing.
+                let textures = pair();
+                let surface = acquired(&textures);
+                rt_read(name, &device, &surface);
+                let before = sends();
+                drop(surface);
+                freed("a picture read");
+                let used = since(before);
+                assert_eq!(
+                    used,
+                    [0, 0],
+                    "{name}: the drop of a picture read sends nothing"
+                );
+
+                // Acquired again after a read: the drop sends that acquire.
+                let surface = acquired(&textures);
+                rt_read(name, &device, &surface);
+                surface.external_writes_done().expect("the second acquire");
+                let before = sends();
+                drop(surface);
+                freed("a picture acquired again after its read");
+                let again = since(before);
+                assert_eq!(again, [1, 1], "{name}: the drop sends the second acquire");
+
+                // 200 rounds, each freed before the next.
+                let mut at = Vec::new();
+                for round in 1..=200 {
+                    let surface = acquired(&textures);
+                    if round % 2 == 1 {
+                        rt_read(name, &device, &surface);
+                    }
+                    drop(surface);
+                    freed(&format!("round {round}"));
+                    if round == 100 || round == 200 {
+                        at.push((import_gauges(&device), counters.gauges().blocks));
+                    }
+                }
+                assert_eq!(at[0].0, at[1].0, "{name}: the gauges at rounds 100 and 200");
+                let metrics = counters.metrics();
+                println!(
+                    "d3d11-drop: {name}: submissions and held releases that started one: 32 drops \
+                     of pictures never used {burst:?}, a read picture's drop {used:?}, a drop \
+                     after a second acquire {again:?}; 200 rounds: surface imports, their bytes, \
+                     textures {:?} at round 100 and {:?} at 200, blocks {} and {}; the device's \
+                     held releases {} of {} bytes, {} starts",
+                    at[0].0,
+                    at[1].0,
+                    at[0].1,
+                    at[1].1,
+                    metrics.held_releases,
+                    metrics.held_release_bytes,
+                    metrics.held_release_starts,
+                );
             });
         }
     }

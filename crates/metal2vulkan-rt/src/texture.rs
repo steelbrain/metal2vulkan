@@ -831,9 +831,13 @@ impl Drop for TextureInner {
                 }
             }
             core.ids.give_back(self.id);
-            // An upload holds the image past the texture: the pending one's bound counts it.
+            // An upload holds the image past the texture: the pending one's bound counts it, and
+            // the reaper, off the work lock this drop may run under, has the release looked at
+            // where one not yet submitted holds it (`Work::release`).
             if Arc::strong_count(&self.image) > 1 {
                 core.work.released(self.image.bytes);
+                let image = Arc::downgrade(&self.image);
+                core.reaper.give(Job::Released(image, self.image.bytes));
             }
         }
         if let Some((index, owner)) = self.index {

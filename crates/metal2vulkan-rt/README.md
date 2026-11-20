@@ -707,7 +707,10 @@ command that uses the planes: in place, each plane's image's release, one barrie
 the block's release, the planes' images copied back first. Both count in
 `Metrics::external_acquires` and `Metrics::external_releases`. From a release until the consumer's
 next write into the surface through the runtime or the next `external_writes_done`, the consumer
-encodes no read of its planes.
+encodes no read of its planes. The surface's memory is freed once the surface, its planes'
+handles and every command buffer that used it are gone. An acquire that no command buffer's
+submission has carried yet goes as the last of them lets go of a plane or of the exported block,
+in a submission of its own, with no wait, so the memory waits for no later call.
 
 **The surface's buffer.** `Surface::buffer()` answers a buffer over the surface's own memory, the
 counterpart of an IOSurface-backed buffer: from the memory's first byte, its bytes at the layout
@@ -762,7 +765,9 @@ exported surface. No keyed mutex is used; the consumer orders the two APIs' work
 plane rt uses before any Direct3D 11 access has undefined contents, as a Metal texture nothing
 wrote does. The surface has no buffer: `Surface::buffer()` is `Gap::D3d11SurfaceBuffer`, as its
 planes lie in memories of their own, and `Surface::handle()` is `None`. No move goes ahead of the
-planes' first use, so `Surface::wait_until_ready()` returns at once.
+planes' first use, so `Surface::wait_until_ready()` returns at once. The planes' imports are freed
+as an exported surface's memory is (above); rt keeps no handle of its own, and each import holds
+the Direct3D 11 texture's payload until it is freed.
 
 ### Known gaps of memory blocks
 
@@ -1434,7 +1439,11 @@ made, with no lock, and never rewritten for layouts.
   record at most 4,096 calls and keep at most 64 MiB on their own account: the staging buffers of
   copies larger than the staging region, and the textures and blocks released while they held
   them. A call that finds them past either submits them and waits for them to complete before
-  recording, so nothing grows without a commit. While
+  recording, so nothing grows without a commit. The release of memory another API shares that
+  they hold (a surface plane's image, an exported block) submits them at once, with no wait, so it
+  is freed with no later call; any other release they hold waits for the next submission or the
+  bound. `Metrics::held_releases` and `held_release_bytes` count every release they held, and
+  `held_release_starts` those that were the first since they came to hold the object. While
   fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
   goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
   scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer

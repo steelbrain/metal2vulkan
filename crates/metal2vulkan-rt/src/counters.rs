@@ -429,6 +429,9 @@ struct Atomics {
     idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
     idle_reuses_by_age: [AtomicU64; REUSE_AGES_MS.len() + 1],
     managed_bytes_captured: AtomicU64,
+    held_releases: AtomicU64,
+    held_release_bytes: AtomicU64,
+    held_release_starts: AtomicU64,
     untimed_command_buffers: AtomicU64,
     sampler_element_writes: AtomicU64,
     stamps_not_available: AtomicU64,
@@ -897,6 +900,18 @@ impl Counters {
             .fetch_add(bytes, Relaxed);
     }
 
+    /// One more release of `bytes` while an upload not yet submitted held it
+    /// ([`Metrics::held_releases`], [`Metrics::held_release_bytes`]), and one that would start a
+    /// send where `starts` ([`Metrics::held_release_starts`]).
+    pub(crate) fn held_release(&self, bytes: u64, starts: bool) {
+        let a = &self.atomics;
+        a.held_releases.fetch_add(1, Relaxed);
+        a.held_release_bytes.fetch_add(bytes, Relaxed);
+        if starts {
+            a.held_release_starts.fetch_add(1, Relaxed);
+        }
+    }
+
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
     pub(crate) fn cache_written(&self, bytes: u64) {
         self.atomics.cache_bytes_written.fetch_add(bytes, Relaxed);
@@ -1147,6 +1162,9 @@ impl Counters {
             idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
             idle_reuses_by_age: std::array::from_fn(|at| a.idle_reuses_by_age[at].load(Relaxed)),
             managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
+            held_releases: a.held_releases.load(Relaxed),
+            held_release_bytes: a.held_release_bytes.load(Relaxed),
+            held_release_starts: a.held_release_starts.load(Relaxed),
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             stamps_not_available: a.stamps_not_available.load(Relaxed),
@@ -1602,6 +1620,20 @@ pub struct Metrics {
     /// Managed buffers have device copies
     /// ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
     pub managed_bytes_captured: u64,
+    /// Releases of a texture or a block while an upload not yet submitted held it: a texture
+    /// whose last handle and last command buffer were gone, or a block given back, while a call's
+    /// upload (a copy, a zero fill, a move home, an acquire of another API's writes) still held
+    /// its image or its memory. The release of memory another API shares (a surface plane's
+    /// image, an exported block) has the uploads go at once, with no wait; any other release
+    /// leaves them for the next submission or for their bound
+    /// ([`upload_waits`](Self::upload_waits)).
+    pub held_releases: u64,
+    /// The bytes of the images and blocks [`held_releases`](Self::held_releases) counts.
+    pub held_release_bytes: u64,
+    /// Of [`held_releases`](Self::held_releases), each the first since the uploads not yet
+    /// submitted came to hold the object: the sends that releases of every texture and block
+    /// would start, where those of memory another API shares alone start one.
+    pub held_release_starts: u64,
     /// Command buffers that ran untimed, their GPU start and end times 0
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)): at their first
     /// record, every pair of the device's timestamp pools was taken and the device made no new

@@ -37,7 +37,9 @@
 //!
 //! The uploads not yet submitted are bounded: a call that finds them holding [`UPLOAD_ENTRIES`]
 //! calls, or [`UPLOAD_BYTES`] of memory they alone keep, has them submitted and waits for them to
-//! complete before it records. A new texture's move to its home layout holds nothing until the
+//! complete before it records. The release of memory another API shares that one of them holds
+//! (a surface plane's image, an exported block) has them go at once, with no wait
+//! ([`Work::release`]). A new texture's move to its home layout holds nothing until the
 //! submission that takes the upload of its commit, which records the moves of every upload it
 //! takes in one barrier where the textures still live. Copies stage their bytes in the device's
 //! staging region ([`crate::staging`]), which the work lock guards with the uploads; they go
@@ -57,7 +59,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
-use crate::memory::{Block, Internal};
+use crate::memory::{Block, Internal, Own};
 use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
@@ -252,6 +254,9 @@ pub(crate) struct Upload {
     /// The commit number its calls come before ([`WorkState::current`]).
     number: u64,
     held: Vec<Held>,
+    /// How many of `held` it held at the last release of an object it held
+    /// ([`Work::release`]): a release of one held from there on is the first since.
+    met: usize,
     /// The calls recorded, and one for the home layouts recorded as it is submitted.
     entries: usize,
     /// The bytes of the staging buffers of its own it holds.
@@ -291,6 +296,18 @@ pub(crate) enum Held {
 }
 
 impl Held {
+    /// Whether it is memory another API shares, whose release has the uploads not yet submitted
+    /// go at once ([`Work::release`]): a surface plane's image (an exported surface's in place, a
+    /// Direct3D 11 texture's) or an exported block (an exported surface's in the copy form among
+    /// them).
+    fn shared(&self) -> bool {
+        match self {
+            Held::Texture(image) => image.surface(),
+            Held::Block(block) => matches!(block.memory.own, Some(Own::Export(_))),
+            Held::Staging(_) | Held::Copy(_) => false,
+        }
+    }
+
     /// Whether `self` and `other` are the same object.
     fn is(&self, other: &Held) -> bool {
         match (self, other) {
@@ -317,6 +334,7 @@ impl Upload {
                 command,
                 number,
                 held: Vec::new(),
+                met: 0,
                 entries: 0,
                 staging: 0,
                 spans: Vec::new(),
@@ -921,16 +939,47 @@ impl Work {
         self.released.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// The consumer released `block`: where an upload not yet submitted holds it, its length
-    /// counts against their [`UPLOAD_BYTES`].
-    pub(crate) fn release_block(&self, block: &Arc<Block>) {
-        let holds = self.lock().unsent().any(|upload| {
-            (upload.held.iter())
-                .any(|kept| matches!(kept, Held::Block(kept) if Arc::ptr_eq(kept, block)))
-        });
-        if holds {
-            self.released(block.memory.len);
+    /// The consumer released `block`: where an upload not yet submitted holds it, the release is
+    /// a held one ([`release`](Self::release)), and its length counts against their
+    /// [`UPLOAD_BYTES`].
+    pub(crate) fn release_block(&self, core: &Core, block: &Arc<Block>) {
+        let len = block.memory.len;
+        if self.release(core, &Held::Block(Arc::clone(block)), len) {
+            self.released(len);
         }
+    }
+
+    /// The last holder of `held` outside the uploads let go of it, `bytes` of a texture's image
+    /// or of a block: whether an upload not yet submitted holds it. Such a release is counted
+    /// ([`Metrics::held_releases`](crate::Metrics::held_releases), with its bytes), as one that
+    /// would start a send where no such release came since those uploads came to hold it
+    /// ([`Metrics::held_release_starts`](crate::Metrics::held_release_starts)). Where `held` is
+    /// memory another API shares ([`Held::shared`]), every upload not yet submitted goes at
+    /// once, alone where no group goes, with no wait ([`flush`](Self::flush)), so what they hold
+    /// is freed once they complete, with no later call.
+    pub(crate) fn release(&self, core: &Core, held: &Held, bytes: u64) -> bool {
+        let mut state = self.lock();
+        let mut holds = false;
+        let mut starts = false;
+        for upload in state.unsent() {
+            if let Some(at) = (upload.held.iter()).position(|kept| kept.is(held)) {
+                holds = true;
+                starts |= at >= upload.met;
+            }
+        }
+        if !holds {
+            return false;
+        }
+        core.counters.held_release(bytes, starts);
+        for upload in state.unsent_mut() {
+            upload.met = upload.held.len();
+        }
+        if held.shared() {
+            state.flush();
+            drop(state);
+            self.wake();
+        }
+        true
     }
 
     /// For the device tests: the calls of the uploads not yet submitted, the bytes they alone
@@ -1150,6 +1199,11 @@ impl WorkState {
     /// The uploads not yet submitted, oldest first.
     fn unsent(&self) -> impl Iterator<Item = &Upload> {
         self.sealed.iter().chain(&self.upload)
+    }
+
+    /// [`unsent`](Self::unsent), to change.
+    fn unsent_mut(&mut self) -> impl Iterator<Item = &mut Upload> {
+        self.sealed.iter_mut().chain(&mut self.upload)
     }
 
     /// The calls the uploads not yet submitted hold, and the bytes of the staging buffers of their
