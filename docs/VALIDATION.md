@@ -127,9 +127,13 @@ with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 7
   (`runtime_lane/device_room.rs`), each pause a `LANE-DEVICE-ROOM` line on stderr. The runtime
   crate's own device tests make theirs the same way (`src/tests/plan_room.rs`, `PLAN-DEVICE-ROOM`
   lines), and one still of its least plan past the bound fails its test; the tests of the least
-  plan itself stand the driver's refusal in (`refuse_next_devices`). `cargo nextest run --profile
-  few-channels` runs three device tests at a time (`.config/nextest.toml` has the measurement),
-  leaving room for other programs' devices on the same GPU.
+  plan itself stand the driver's refusal in (`refuse_next_devices`). The new runtime's device tests
+  wait for no room: a refused device fails its test. So in every profile the stream device tests
+  that open a device of the plan, which the GPU legs run beside the new runtime's
+  (`runtime_lane::replay_streams` and three of `runtime_lane::rt_replay`), run at most four at a
+  time (nextest's `queue-plan` test group). `cargo nextest run --profile few-channels` runs three
+  device tests at a time (`.config/nextest.toml` has the measurement), leaving room for other
+  programs' devices on the same GPU: a whole lane run on such a GPU takes it.
 - **A busy window the host outlasted is asked again.** The `did_modify_range` oracle's steps
   (`runtime_lane/device_copies.rs`) and the host copies of new `Shared` and `Managed` textures
   (`runtime_lane/first_use.rs`) need the GPU busy past their calls, about 2 s of busy work

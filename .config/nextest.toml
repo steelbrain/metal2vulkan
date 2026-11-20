@@ -157,10 +157,33 @@ threads-required = 'num-test-threads'
 filter = 'package(metal2vulkan-rt) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
 threads-required = 'num-test-threads'
 
+# The stream device tests that open a lane device of the old runtime's queue plan run at most four
+# at a time, in every profile: the `runtime_lane::replay_streams` tests and the three
+# `runtime_lane::rt_replay` tests that play on the old runtime too. The GPU legs run both modules
+# beside the new runtime's device tests (`DEVICE_TEST_FILTER` in `scripts/matrix/matrix`). A device
+# of the plan takes 18 `VkQueue`s, each a channel on NVIDIA's driver, and an RTX 2080 holds 10 such
+# devices at once (the measurement is below). In the 2080's leg at the default parallelism (16
+# processes, NVIDIA 620.70.06) 15 of these tests were alive at once; the kernel logged
+# `kchannelAllocMem_GM107: Could not create Channel` 31 times in 2 s, and a new runtime device
+# test's `vkCreateDevice` failed (`VK_ERROR_INITIALIZATION_FAILED`) while the card had 242 to
+# 257 MiB of its 8,192 in use (3 runs of 3: m3-max-58129, m3-max-58168, m3-max-58241). The lane's
+# devices wait for room (`runtime_lane/device_room.rs`); the new runtime's tests take the driver's
+# refusal as it is. Four devices of the plan, 72 `VkQueue`s, leave room for six more: the leg's
+# other 12 processes, whose new runtime devices take at most 2 `VkQueue`s each, and other
+# programs' devices on the same GPU.
+[test-groups]
+queue-plan = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-validation) & (test(/^runtime_lane::replay_streams::/) | test(/^runtime_lane::rt_replay::(a_private_shown_texture_is_checked_through_a_copy|a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use|the_address_census_is_the_same_on_both_runtimes)$/))'
+test-group = 'queue-plan'
+
 # A GPU whose driver has few channels runs its device tests three at a time
-# (`cargo nextest run --profile few-channels`). On NVIDIA's driver each `VkQueue` is a channel,
-# and a device of the runtime's queue plan takes 18 (14 for the round robin, 2 presenting, the
-# staging and fill queues). With no other process's devices, an RTX 2080 (NVIDIA 620.70.06) held
+# (`cargo nextest run --profile few-channels`): the lane's other tests open devices of the plan
+# too (`at_plan`), outside the group above, so a whole lane run on such a GPU takes this profile.
+# On NVIDIA's driver each `VkQueue` is a channel, and a device of the runtime's queue plan takes 18
+# (14 for the round robin, 2 presenting, the staging and fill queues). With no other process's
+# devices, an RTX 2080 (NVIDIA 620.70.06) held
 # 10 such devices at once and refused the 11th, and held 68 of the least plan's 3 `VkQueue`s;
 # an RTX 3090 (620.70.06) and an RTX 5080 Laptop GPU (615.71.09) held 61 of the plan's
 # (`crates/metal2vulkan-runtime/examples/queue_plan_cost.rs`). At the default parallelism a
