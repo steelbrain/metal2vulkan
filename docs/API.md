@@ -6587,14 +6587,19 @@ each item named states the rule in full.
   | Form | M3 Max | Radeon Pro 5300M | UHD Graphics 630 | Runtime |
   |---|---|---|---|---|
   | `vstore_half_rtz`, `_rtp`, `_rtn` (`70000.0` by `_rtz`) | as named (`0x7bff`) | nearest even (`0x7c00`) | nearest even (`0x7c00`) | nearest even (`0x7c00`) |
-- **A plain LLVM `fptosi` or `fptoui` of a NaN, or of a value its integer cannot hold, answers what
-  the device's conversion answers.** It is Vulkan's `OpConvertFToS` or `OpConvertFToU`, whose
-  result for such a value SPIR-V leaves undefined. Metal's compiler emits none: it spells every
-  float-to-integer conversion of MSL as an `air.convert` call (measured over `int`, `uint`,
+- **A float past an integer's range converts to the integer's nearest bound, a `long` of an
+  infinity too, where Metal's is 0.** MSL states two answers of a conversion from a floating-point
+  type to an integer (MSL 8.6): it rounds toward zero, and a NaN converts to 0. Metal's compiler
+  spells every such conversion of MSL as an `air.convert` call (measured over `int`, `uint`,
   `static_cast` and two-lane vector forms of `float` and `half`, in a kernel and in fragment
   functions, with fast math on and off: probe job m3-max-55309, Metal compiler 32023.922), which
-  the runtime converts as Metal does, a NaN to 0 and a value past the destination's range to its
-  nearest bound.
+  the runtime converts so, and which takes a value past the destination's range to its nearest
+  bound. Metal on the M3 Max (macOS 27.0.1) answers the same at every width from `char` to
+  `ulong`, from `float` and from `half`, but converts either infinity to a `long` as 0, where
+  `ulong` of +inf is its maximum (conformance case `nan-to-integer-conversions`). A plain LLVM
+  `fptosi` or `fptoui`, which Metal's compiler does not emit, is Vulkan's `OpConvertFToS` or
+  `OpConvertFToU`, whose result for a NaN or a value its integer cannot hold SPIR-V leaves
+  undefined: the device's own.
 
 **Inline assembly**
 

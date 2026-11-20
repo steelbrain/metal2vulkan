@@ -26,12 +26,14 @@
 //! and a value past `int`'s range and inside `long`'s for a float (`2^40` and its negative) or
 //! past `short`'s for a half (`65504` and its negative). So a device that answered 0 everywhere
 //! fails, and a value past a destination's range asks what Metal saturates it to, which MSL does
-//! not state. Every word compares exactly.
+//! not state. Every word compares exactly but a `long` of either infinity, where Metal on the M3
+//! Max answers 0 and the translator the bound: it holds either, under the accepted difference of
+//! `docs/API.md` that says so.
 //!
 //! Nothing here can fault a GPU: per fixture one dispatch of 90 threads and one draw of a 90-texel
 //! target, each invocation reading its input's two words and writing its own four.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, FragmentFill, Input, MetalSource, Side,
     TARGET_TEXEL,
@@ -122,6 +124,15 @@ const HALVES: [u16; INPUTS] = [
     0x7bff, // 65504, the largest half
     0xfbff, // -65504
 ];
+
+/// The inputs that are infinities, each with the bound a `long` saturates it to.
+const INFINITIES: [(usize, u64); 2] = [(14, i64::MAX as u64), (15, i64::MIN as u64)];
+
+/// The accepted difference a `long` of an infinity is held under.
+const LONG_OF_AN_INFINITY: &str = concat!(
+    "a-float-past-an-integer-s-range-converts-to-the-integer-s-nearest-bound-",
+    "a-long-of-an-infinity-too-where-metal-s-is-0"
+);
 
 /// The invocations that answer one input's words.
 const PARTS: usize = 5;
@@ -356,10 +367,29 @@ impl Case for NanIntegerConversions {
         // (`crate::replay::shared_memory_notice` holds the whole reason). The fragment fill's pass
         // loads nothing into the tile, which MoltenVK announced on the M3 Max (job
         // m3-max-55436), as `rgb10a2_srgb`'s fills do.
-        vec![
+        let mut allowances = vec![
             crate::replay::shared_memory_notice(),
             notice_allowance(metal2vulkan_runtime::Degradation::DontCareLoadTiles.code()),
-        ]
+        ];
+        // A `long` of either infinity, the one answer past a range where Metal on the M3 Max
+        // (job m3-max-55436) does not saturate: it answers 0, and the translator the bound. MSL
+        // states no answer past the range, so the two elements of each `long` column hold either,
+        // under docs/API.md's accepted difference; every other element compares exactly.
+        for program in &PROGRAMS {
+            for stage in ["kernel", "fragment"] {
+                for column in COLUMNS.iter().filter(|c| c.bits == 64 && c.signed) {
+                    for (input, bound) in INFINITIES {
+                        let at = input as u32 * ROW + column.offset;
+                        allowances.push(Allowance::new(
+                            format!("case/{}/{stage}/output/{}/{at}", program.site, column.name),
+                            Loosening::AnyOf(vec![Value::Uint(0), Value::Uint(bound)]),
+                            Justification::accepted(LONG_OF_AN_INFINITY),
+                        ));
+                    }
+                }
+            }
+        }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -491,6 +521,25 @@ mod tests {
                 .count();
             assert!(nonzero > 0, "{}: every stated answer is 0", column.name);
         }
+    }
+
+    /// The inputs `INFINITIES` names are both widths' infinities, of the sign its bound has.
+    #[test]
+    fn the_infinities_are_the_inputs_named() {
+        for (input, bound) in INFINITIES {
+            let float = f32::from_bits(FLOATS[input]);
+            let half = half(HALVES[input]);
+            assert!(float.is_infinite() && half.is_infinite(), "input {input}");
+            let negative = (bound as i64) < 0;
+            assert_eq!(
+                (float < 0.0, half < 0.0),
+                (negative, negative),
+                "input {input}"
+            );
+        }
+        assert!(crate::allowance::accepted_differences()
+            .iter()
+            .any(|slug| slug == LONG_OF_AN_INFINITY));
     }
 
     /// The columns tile an input's row, each word once, in the fixtures' order.
