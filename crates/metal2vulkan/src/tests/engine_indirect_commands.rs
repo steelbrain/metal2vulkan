@@ -26,7 +26,7 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::status::{ExecutionStatus, StatusBits, StatusWord};
-use crate::device::profile::{BufferAccess, DeviceProfile, GuestIsolation};
+use crate::device::profile::{BufferAccess, DeviceProfile};
 use crate::error::{Error, Feature, Needs, Unsupported};
 use crate::indirect_commands::written_flag_offset;
 use crate::indirect_commands::{
@@ -1251,33 +1251,31 @@ fn a_write_outside_the_descriptor_policy_faults_and_writes_nothing() {
 }
 
 /// A record buffer no resident allocation holds is root 0: nothing of it is read or written (the
-/// header loads read 0, so every write faults into the sink), and under isolation each operation's
-/// access is counted as a resident-set miss, which the executor reads as no evidence.
+/// header loads read 0, so every write faults into the sink), and each operation's access is
+/// counted as a resident-set miss, which the executor reads as no evidence.
 #[test]
 fn a_record_buffer_outside_the_resident_set_is_contained_and_counted() {
     let Some(runs) = compiled("miss", &compute_kernel()) else {
         return;
     };
-    for (stem, p, plan, m) in &runs {
+    for (stem, _, plan, m) in &runs {
         let descriptor = compute_descriptor(false);
         let initial = storage(&descriptor, OWNED);
         let params: Vec<Params> = (0..THREADS).map(Params::valid).collect();
         let run = run_encoder(plan, m, initial.clone(), &params, false)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(run.records, initial, "{stem}");
-        if p.fields().isolation == GuestIsolation::On {
-            // One per operation: six for an even thread (with the barrier), five for an odd one.
-            assert_eq!(
-                run.status[StatusWord::ResidentMisses.index() as usize],
-                (0..THREADS).map(|t| 6 - t % 2).sum::<u32>(),
-                "{stem}"
-            );
-            assert!(
-                StatusBits(run.status[StatusWord::Status.index() as usize])
-                    .contains(StatusBits::RESIDENT_MISS),
-                "{stem}"
-            );
-        }
+        // One per operation: six for an even thread (with the barrier), five for an odd one.
+        assert_eq!(
+            run.status[StatusWord::ResidentMisses.index() as usize],
+            (0..THREADS).map(|t| 6 - t % 2).sum::<u32>(),
+            "{stem}"
+        );
+        assert!(
+            StatusBits(run.status[StatusWord::Status.index() as usize])
+                .contains(StatusBits::RESIDENT_MISS),
+            "{stem}"
+        );
     }
 }
 

@@ -7,7 +7,6 @@ use super::*;
 use crate::device::enables::{
     self, Exposure, BUFFER_UPDATE_AFTER_BIND, BUFFER_UPDATE_AFTER_BIND_VUID, FEATURE_NEEDS,
 };
-use crate::device::profile::GuestIsolation;
 use crate::device::requirements::{Requirements, StageCreateFlag};
 use crate::error::Capability;
 
@@ -159,17 +158,6 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
         let whole = Device::from_queries(d.clone(), DevicePolicy::default()).unwrap();
         assert_eq!(whole.required_enables(), rec, "{reported}");
     }
-    // Under `UnsafeOff` robust buffer access is not recommended, so neither rule side is lost.
-    d.robust_buffer_access_update_after_bind = false;
-    let policy = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..DevicePolicy::default()
-    };
-    let rec = d.recommended_enables();
-    assert!(!rec.features.contains(&VkFeature::RobustBufferAccess));
-    assert!(rec.features.is_superset(&set(BUFFER_UPDATE_AFTER_BIND)));
-    d.with_enabled(&rec).unwrap();
 }
 
 /// SwiftShader's committed profile states `robustBufferAccessUpdateAfterBind` false and lists
@@ -211,12 +199,7 @@ fn the_swiftshader_recommendation_keeps_vuid_10247() {
         fields.enabled.features.remove(f);
     }
     assert_eq!(&fields, stated.profile().fields());
-    assert!(matches!(
-        fields.containment,
-        crate::device::profile::Containment::On {
-            robust: crate::device::profile::Robustness::Rba
-        }
-    ));
+    assert_eq!(fields.robustness, crate::device::profile::Robustness::Rba);
     // The whole set is the one a conformant SwiftShader refuses.
     let mut both = rec.clone();
     both.features
@@ -367,23 +350,6 @@ fn recommendations_close_extension_requirements() {
     assert!(rec.features.contains(&VkFeature::BorderColorSwizzle));
     // Not consumed on its own, enabled as the swizzle extension's requirement.
     assert!(rec.extensions.contains(&VkExtension::ExtCustomBorderColor));
-}
-
-/// `UnsafeOff` containment reads no robust buffer access, so it is not recommended.
-#[test]
-fn unsafe_containment_recommends_no_robust_buffer_access() {
-    let desc = profile("nvidia-rtx50-linux");
-    assert!(desc.has(VkFeature::RobustBufferAccess2));
-    let policy = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..DevicePolicy::default()
-    };
-    let rec = desc.recommended_enables();
-    assert!(!rec.features.contains(&VkFeature::RobustBufferAccess));
-    assert!(!rec.features.contains(&VkFeature::RobustBufferAccess2));
-    let restricted = desc.with_enabled(&rec).unwrap();
-    Device::from_queries(restricted, policy).unwrap();
 }
 
 #[test]

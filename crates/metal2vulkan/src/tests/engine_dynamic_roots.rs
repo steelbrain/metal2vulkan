@@ -5,8 +5,8 @@
 //!   offsets computed after the load; out-of-bounds accesses (past the end, below the start,
 //!   wrapped offsets near 2³² and 2⁶⁴) never trap, load 0, and store only into the sink.
 //! - A null pointer or a guest address outside the resident set is root 0: every access through
-//!   it is contained and, under `GuestIsolation::On`, counted in the `ExecutionStatus` miss word
-//!   and bit; with isolation off nothing is counted and no status address is read.
+//!   it is bounded and counted in the `ExecutionStatus` miss word
+//!   and bit.
 //! - `inttoptr` resolves every address of resident sets of 0 to 33 entries exactly (the binary
 //!   search's loop), including a pointer one past an allocation's end, and the probed addresses
 //!   of sets of 2^16 to about 3 * 2^16 entries.
@@ -28,9 +28,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::status::{ExecutionStatus, StatusBits, StatusWord};
-use crate::device::profile::{DeviceProfile, GuestIsolation};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
-use crate::device::{ContainmentPolicy, Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Needs};
 use crate::lower::select::Plan;
 use crate::pipeline::facts::RuntimeFact;
@@ -424,80 +424,6 @@ fn a_loaded_pointer_is_exact_in_bounds_and_contained_elsewhere() {
                     );
                 }
             }
-        }
-    }
-}
-
-/// With `GuestIsolation::Off` a miss is contained but not counted: the function reads no
-/// status address. With containment off too (`UnsafeOff`) an in-bounds access is still exact.
-#[test]
-fn without_isolation_misses_are_not_counted() {
-    let leaf = &LEAVES[0];
-    let Some(bc) = assemble_text("off", &kernel(leaf.name, &format!("{CHASE}{}", leaf.body)))
-    else {
-        return;
-    };
-    for unsafe_off in [false, true] {
-        let mut policy = DevicePolicy {
-            isolation: GuestIsolation::Off,
-            ..Default::default()
-        };
-        if unsafe_off {
-            policy.containment = ContainmentPolicy::UnsafeOff;
-        }
-        let p = profile("moltenvk-m3", true, policy);
-        let what = format!("unsafe_off={unsafe_off}");
-        let a = compile(&bc, leaf.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let (plan, m) = typed_module(&bc, leaf.name, &p).expect("module");
-        assert!(
-            !plan
-                .push
-                .fields
-                .iter()
-                .any(|f| f.field == PushField::ExecutionStatusAddress),
-            "{what}"
-        );
-        assert!(
-            !plan.facts.contains(&RuntimeFact::ExecutionStatus),
-            "{what}"
-        );
-        let ptrs: Vec<u8> = [guest(0), guest(7)]
-            .iter()
-            .flat_map(|g| g.to_le_bytes())
-            .collect();
-        // In bounds (both policies), and a miss (contained only with containment on).
-        let cases: &[(u32, u64)] = if unsafe_off {
-            &[(0, 8)]
-        } else {
-            &[(0, 8), (1, 0)]
-        };
-        for &(k, off) in cases {
-            let mut params = vec![0u8; 16];
-            params[..4].copy_from_slice(&k.to_le_bytes());
-            params[8..].copy_from_slice(&off.to_le_bytes());
-            let res = Resources {
-                buffers: vec![
-                    slot_buffer(0, ptrs.clone()),
-                    slot_buffer(1, vec![0; 16]),
-                    slot_buffer(2, params),
-                    addressed(
-                        TABLE,
-                        root_table(&[(0, 0, 0, 0); 3], &[(host(0), guest(0), ALLOC)]),
-                    ),
-                    addressed(SINK, vec![0; 64]),
-                    addressed(host(0), pattern(0)),
-                ],
-                push: push_bytes(&plan),
-                spec: Default::default(),
-            };
-            let out = run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let want: Vec<u8> = if k == 0 {
-                pattern(0)[8..12].to_vec()
-            } else {
-                vec![0; 4]
-            };
-            assert_eq!(out.buffers[1][..4], want[..], "{what} k={k}");
         }
     }
 }

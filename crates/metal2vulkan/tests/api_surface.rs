@@ -226,7 +226,6 @@ surface! {
         struct MetalDeviceProperties N;
         struct SimdSupport N;
         struct StageSimd N;
-        enum ContainmentPolicy N;
         struct DevicePolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
@@ -236,13 +235,11 @@ surface! {
         struct FloatControls N;
         struct FloatWidthControls N;
         enum DriverWorkaround N;
-        enum GuestIsolation N;
         enum HandleDomain N;
         enum Independence N;
         struct Limits N;
         struct MeshLimits N;
         enum PointerDomain N;
-        enum Containment N;
         struct DescriptorCaps N;
         enum FunctionStorage N;
         enum Robustness N;

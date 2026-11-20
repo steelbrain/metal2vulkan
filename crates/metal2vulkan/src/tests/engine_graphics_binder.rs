@@ -33,7 +33,7 @@ use crate::bind::{
     TextureFacts, UseTarget, WriteSource,
 };
 use crate::budget::Budget;
-use crate::device::profile::{Containment, Robustness};
+use crate::device::profile::Robustness;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, DescriptorError, Error, Feature};
 use crate::library::Library;
@@ -2227,12 +2227,7 @@ fn out_of_bounds_alpha_follows_the_bound_format() {
             .constants
             .iter()
             .find(|c| c.key == SpecKey::OutOfBoundsAlpha(src));
-        let checked = !matches!(
-            f.containment,
-            Containment::On {
-                robust: Robustness::Rba2
-            }
-        );
+        let checked = f.robustness != Robustness::Rba2;
         assert_eq!(c.is_some(), checked, "{stem}");
         if let Some(c) = c {
             // Vulkan 1.2 requires `R32_SFLOAT` and `R32G32B32A32_SFLOAT` uniform texel buffers.

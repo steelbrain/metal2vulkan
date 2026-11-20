@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::air;
 use crate::budget::SPIRV_WORDS;
-use crate::device::profile::{DeviceProfile, GuestIsolation};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
-use crate::device::{ContainmentPolicy, Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
@@ -827,8 +827,7 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 /// the profile's encoding, so the census names each access by the form it takes: the `u64` add
 /// `access.atomic.buffer.rmw.psb.checked` with robust descriptors and without them, the `u32` add
 /// through the view `access.atomic.buffer.rmw` or `.checked` as the profile's encoding says, and a
-/// load whose pointer may be either `access.load.switch.psb_and_view.checked`. With containment off
-/// nothing is checked, the device address included.
+/// load whose pointer may be either `access.load.switch.psb_and_view.checked`.
 #[test]
 fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
     let Some(bc) = assemble("addressed_and_viewed", ADDRESSED_AND_VIEWED) else {
@@ -896,24 +895,6 @@ fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
             .filter(|name| name.starts_with("access.atomic.buffer"))
             .collect::<Vec<_>>(),
         ["access.atomic.buffer.rmw.psb.checked"]
-    );
-    let unsafe_off = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..Default::default()
-    };
-    let off = profile("lavapipe", unsafe_off).expect("profile");
-    let (plan, off_names) = names(&off);
-    assert!(!plan.families.access.psb_contained);
-    expect(
-        &off_names,
-        &[
-            "access.atomic.buffer.rmw.psb",
-            "access.atomic.buffer.rmw",
-            "access.load.switch.psb_and_view",
-            "access.store",
-        ],
-        "lavapipe with containment off",
     );
 }
 

@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::{BindState, Dispatch, ResourceClass, TextureFacts, UsedResource, WriteSource};
 use crate::budget::Budget;
-use crate::device::profile::{Containment, DeviceProfile, GuestIsolation, Robustness};
+use crate::device::profile::{DeviceProfile, Robustness};
 use crate::device::requirements::VkFeature;
-use crate::device::{ContainmentPolicy, Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::library::Library;
 use crate::lower::select::{LowerInputs, Plan};
@@ -1167,10 +1167,7 @@ enum Class {
 
 fn class(p: &DeviceProfile, buffer: bool) -> Class {
     let f = p.fields();
-    let Containment::On { robust } = f.containment else {
-        panic!("containment off")
-    };
-    match (buffer, robust) {
+    match (buffer, f.robustness) {
         (true, Robustness::Rba2) => Class::Device,
         (true, _) => Class::Shader,
         (false, _) if f.images.robust_image_access2 => Class::Device,
@@ -1977,8 +1974,7 @@ fn a_read_where_its_thread_wrote_out_of_bounds_is_zero() {
 }
 
 /// Only a slot the device is left both an out-of-bounds store and an out-of-bounds load of is
-/// `Volatile`: never a slot the function only writes or only reads, and never without containment,
-/// where nothing out of bounds is defined. A texture atomic alone is both where image robustness
+/// `Volatile`: never a slot the function only writes or only reads. A texture atomic alone is both where image robustness
 /// discards it unguarded : the atomic-only `fwd_atomic`, declared `R32Uint` as atomics need, is
 /// `Volatile` on every profile with `robustImageAccess` (`roadmap-2022`, `swiftshader`) and on none
 /// without (`vk12-floor`), where the shader guards it.
@@ -1987,18 +1983,7 @@ fn only_a_slot_left_both_a_store_and_a_load_is_volatile() {
     let Some(bc) = assemble_text("texture_forward", FORWARD) else {
         return;
     };
-    let unsafe_off = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..Default::default()
-    };
-    let mut all = profiles();
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        all.push((
-            format!("{stem} unsafe-off"),
-            profile(stem, unsafe_off).expect("profile"),
-        ));
-    }
+    let all = profiles();
     let mut atomic_inputs = LowerInputs::new();
     atomic_inputs.storage_images.insert(
         TEXTURE,
@@ -2007,7 +1992,6 @@ fn only_a_slot_left_both_a_store_and_a_load_is_volatile() {
     let mut volatile = 0;
     let mut atomic: BTreeMap<String, bool> = BTreeMap::new();
     for (stem, p) in all {
-        let off = !matches!(p.fields().containment, Containment::On { .. });
         for (entry, buffer) in [
             ("fwd_rw", false),
             ("fwd_buffer", true),
@@ -2028,12 +2012,11 @@ fn only_a_slot_left_both_a_store_and_a_load_is_volatile() {
                 };
                 plan
             };
-            let want = !off
-                && match entry {
-                    "fwd_rw" | "fwd_buffer" => class(&p, buffer) == Class::Device,
-                    "fwd_atomic" => p.fields().images.robust_image_access,
-                    _ => false,
-                };
+            let want = match entry {
+                "fwd_rw" | "fwd_buffer" => class(&p, buffer) == Class::Device,
+                "fwd_atomic" => p.fields().images.robust_image_access,
+                _ => false,
+            };
             let got = plan.families.texture.slots[&0].volatile;
             assert_eq!(got, want, "{stem}: {entry}");
             volatile += usize::from(want);

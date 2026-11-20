@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts, WriteSource};
 use crate::budget::Budget;
-use crate::device::profile::{Containment, DeviceProfile};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature};
@@ -332,9 +332,6 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 /// shader contains every access.
 fn robust(p: &DeviceProfile, alpha: u32) -> Option<[u32; 4]> {
     let f = p.fields();
-    let Containment::On { .. } = f.containment else {
-        panic!("containment off")
-    };
     if f.images.robust_image_access2 {
         Some([0, 0, 0, alpha])
     } else if f.images.robust_image_access {

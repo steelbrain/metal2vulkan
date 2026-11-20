@@ -896,12 +896,8 @@ fn a_draws_targets_are_contained_by_their_fetch() {
                 strategies,
             )
         };
-        let shader = !matches!(
-            profile.containment(),
-            Containment::On {
-                robust: Robustness::Rba2
-            }
-        ) && profile.checks_buffers_in_shader();
+        let shader =
+            !matches!(profile.robustness(), Robustness::Rba2) && profile.checks_buffers_in_shader();
         match vertex(attribute, ContainmentForm::VertexInput, &fixed, &strategies) {
             Ok(contained) => {
                 assert!(!shader, "{label}");

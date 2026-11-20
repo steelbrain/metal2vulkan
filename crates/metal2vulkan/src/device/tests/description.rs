@@ -800,12 +800,11 @@ fn required_features_are_cumulative() {
 #[cfg(feature = "serde")]
 #[test]
 fn descriptions_and_policies_round_trip_through_serde() {
-    let unsafe_off = DevicePolicy {
-        containment: crate::device::ContainmentPolicy::UnsafeOff,
-        isolation: crate::device::profile::GuestIsolation::Off,
-        ..DevicePolicy::default()
+    let identity = DevicePolicy {
+        pointer_domain: crate::device::PointerDomain::Identity,
+        handle_domain: crate::device::HandleDomain::Identity,
     };
-    let policies = [DevicePolicy::default(), unsafe_off];
+    let policies = [DevicePolicy::default(), identity];
     for (stem, text) in committed_profiles() {
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let json = serde_json::to_string(&description).unwrap();

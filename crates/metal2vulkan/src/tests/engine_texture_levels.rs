@@ -27,10 +27,10 @@ use crate::air::intrinsics::ImageDim;
 use crate::bind::{BindState, BoundBuffer, BoundTexture, Dispatch, StageTable, TextureFacts};
 use crate::bind::{BindingPlan, FieldLocation, PlanDiagnostic, WriteSource};
 use crate::budget::Budget;
-use crate::device::profile::{Containment, DeviceProfile, GuestIsolation};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkLimit;
-use crate::device::{ContainmentPolicy, Device, DeviceDescription, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::library::{FunctionArtifact, Library};
 use crate::lower::select::Plan;
@@ -692,20 +692,19 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
         .clone()
 }
 
-/// How a profile contains an image read out of bounds: the device reads Metal's texel
-/// (`robustImageAccess2`), the shader checks reads under `robustImageAccess` alone, the shader
-/// checks reads with no robustness, or nothing is contained (`ContainmentPolicy::UnsafeOff`).
+/// How a profile bounds an image read out of bounds: the device reads Metal's texel
+/// (`robustImageAccess2`), the shader checks reads under `robustImageAccess` alone, or the shader
+/// checks reads with no robustness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Class {
     Device,
     ShaderReads,
     Shader,
-    Off,
 }
 
 /// Every committed profile, `moltenvk-m3` without `robustImageAccess2`, `moltenvk-m3` and
-/// `lavapipe` without any robustness (as `src/tests/engine_texture_oob.rs` runs them), and
-/// `moltenvk-m3` and `lavapipe` without containment, with each one's class.
+/// `lavapipe` without any robustness (as `src/tests/engine_texture_oob.rs` runs them), with each
+/// one's class.
 fn classed_profiles() -> Vec<(String, DeviceProfile, Class)> {
     let mut out = committed_profiles().expect("profiles");
     out.push((
@@ -721,22 +720,10 @@ fn classed_profiles() -> Vec<(String, DeviceProfile, Class)> {
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), without(stem, &all)));
     }
-    let unsafe_off = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..Default::default()
-    };
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        out.push((
-            format!("{stem} unsafe-off"),
-            profile(stem, unsafe_off).expect("profile"),
-        ));
-    }
     out.into_iter()
         .map(|(stem, p)| {
             let f = p.fields();
-            let class = match f.containment {
-                Containment::UnsafeOff => Class::Off,
+            let class = match () {
                 _ if f.images.robust_image_access2 => Class::Device,
                 _ if f.images.robust_image_access => Class::ShaderReads,
                 _ => Class::Shader,
@@ -1080,15 +1067,12 @@ fn a_read_at_a_missing_level_is_metals_out_of_bounds_texel() {
             assert_eq!(plan.facts.contains(&fact), k.observed, "{stem}: {entry}");
             let n = max_levels(&p, k.tex.dim);
             for (levels, rows) in (k.cases)(n) {
-                let rows: Vec<Row> = rows
-                    .into_iter()
-                    .filter(|r| class != Class::Off || r.inside)
-                    .collect();
+                let rows: Vec<Row> = rows.into_iter().collect();
                 for alpha in [0, k.lanes.one()] {
                     let robust = match class {
                         Class::Device => Some([0, 0, 0, alpha]),
                         Class::ShaderReads => Some([0xDEAD_BEEF; 4]),
-                        Class::Shader | Class::Off => None,
+                        Class::Shader => None,
                     };
                     let imgs = seeded_views(k.lanes, k.tex, levels, n, robust);
                     let p_rows: Vec<u8> = rows
@@ -1132,7 +1116,7 @@ fn a_read_at_a_missing_level_is_metals_out_of_bounds_texel() {
         classes.dedup();
         assert_eq!(
             classes,
-            [Class::Device, Class::ShaderReads, Class::Shader, Class::Off],
+            [Class::Device, Class::ShaderReads, Class::Shader],
             "{} ran on every class",
             k.entry
         );

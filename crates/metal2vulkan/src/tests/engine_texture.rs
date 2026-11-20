@@ -763,11 +763,7 @@ fn containment_follows_image_robustness() {
             (false, false) => not += 1,
         }
         let a = ok(compile(&bc, "depth_ms", &p), &p, &stem);
-        let clamped = !f.images.robust_image_access2
-            && matches!(
-                f.containment,
-                crate::device::profile::Containment::On { .. }
-            );
+        let clamped = !f.images.robust_image_access2;
         assert_eq!(uses(&a, "texture.read_clamped") == 2, clamped, "{stem}");
         assert_eq!(uses(&a, "texture.read") == 2, !clamped, "{stem}");
         if p.fields().images.storage_write_without_format {

@@ -11,7 +11,7 @@
 //! - An alloca whose accesses are punned lives in the private arena, word-composed and
 //!   byte-exact.
 //! - Typed allocas and closed constant globals are `Private` arrays indexed by access chains; their
-//!   dynamic indices are contained under `GuestIsolation::On` (a typed alloca's out-of-range load
+//!   dynamic indices are bounded (a typed alloca's out-of-range load
 //!   is 0 and its out-of-range store is dropped; a constant global's out-of-range load reads the
 //!   level's last element) and unclamped without it.
 //!
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::budget::{Budget, Meter, LEDGER_BYTES, SPIRV_WORDS, WORK_UNITS};
-use crate::device::profile::{DeviceProfile, GuestIsolation};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkLimit;
 use crate::device::DevicePolicy;
 use crate::error::{Capability, Error, Feature, Limit, LowerFamily, Needs, Unsupported};
@@ -599,24 +599,6 @@ fn typed_alloca_indices_are_clamped_under_isolation() {
             })
             .collect();
         assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");
-
-        let off = DevicePolicy {
-            isolation: GuestIsolation::Off,
-            ..Default::default()
-        };
-        let prof = profile(stem, off).expect("profile");
-        l3(&bc, "typed", &prof, stem);
-        let (plan, _) = typed_module(&bc, "typed", &prof).expect("module");
-        let census = plan.census();
-        assert!(census.contains_key("access.typed.load"), "{census:?}");
-        assert!(
-            !census.contains_key("access.typed.load.clamped"),
-            "{census:?}"
-        );
-        assert!(
-            !census.contains_key("access.typed.store.clamped"),
-            "{census:?}"
-        );
     }
 }
 
@@ -727,21 +709,6 @@ fn typed_allocas_index_nested_levels_dynamically() {
             })
             .collect();
         assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");
-
-        let off = DevicePolicy {
-            isolation: GuestIsolation::Off,
-            ..Default::default()
-        };
-        let prof = profile(stem, off).expect("profile");
-        l3(&bc, "nested", &prof, stem);
-        let (plan, _) = typed_module(&bc, "nested", &prof).expect("module");
-        assert_eq!(plan.families.access.local.private, None, "{stem}");
-        let census = plan.census();
-        assert!(census.contains_key("access.typed.load"), "{census:?}");
-        assert!(
-            !census.contains_key("access.typed.load.clamped"),
-            "{census:?}"
-        );
     }
 }
 

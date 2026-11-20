@@ -273,19 +273,6 @@ fn below_1_2_is_refused() {
         }
         other => panic!("{other:?}"),
     }
-    let mut unsafe_on = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        ..DevicePolicy::default()
-    };
-    assert!(matches!(
-        Device::from_queries(profile("vk12-floor"), unsafe_on),
-        Err(Error::InvalidDescriptor(
-            DescriptorError::DeviceDescription { .. }
-        ))
-    ));
-    unsafe_on.isolation = GuestIsolation::Off;
-    let dev = Device::from_queries(profile("vk12-floor"), unsafe_on).unwrap();
-    assert_eq!(dev.profile().fields().robustness, Containment::UnsafeOff);
 }
 
 /// The identity domains come as a pair (`InvalidDescriptor` for one alone) and need
@@ -342,11 +329,6 @@ fn fingerprint_covers_every_policy_field() {
     };
     let reference = fp(base);
     let mut variants = Vec::new();
-    let mut p = base;
-    p.isolation = GuestIsolation::Off;
-    variants.push(("isolation", p));
-    p.containment = ContainmentPolicy::UnsafeOff;
-    variants.push(("containment", p));
     let identity = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,

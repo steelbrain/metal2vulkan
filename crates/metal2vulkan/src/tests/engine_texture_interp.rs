@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::device::profile::{Containment, DeviceProfile, Robustness};
+use crate::device::profile::{DeviceProfile, Robustness};
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription};
 use crate::error::Error;
@@ -92,18 +92,13 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 /// Reads are checked and writes guarded for images on `p`.
 fn contains_images(p: &DeviceProfile) -> bool {
     let f = p.fields();
-    !f.images.robust_image_access && matches!(f.containment, Containment::On { .. })
+    !f.images.robust_image_access
 }
 
 /// Reads are checked and writes guarded for texel buffers on `p`: `robustBufferAccess` may write
 /// past a texel buffer anywhere in its buffer.
 fn contains_texel_buffers(p: &DeviceProfile) -> bool {
-    matches!(
-        p.fields().containment,
-        Containment::On {
-            robust: Robustness::None | Robustness::Rba
-        }
-    )
+    matches!(p.fields().robustness, Robustness::None | Robustness::Rba)
 }
 
 /// The module of `entry` on `p`, or `None` when `p` needs a runtime input for it (a storage

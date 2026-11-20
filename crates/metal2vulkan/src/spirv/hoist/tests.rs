@@ -16,9 +16,7 @@ use crate::spirv::ir::{
 };
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
-const ROBUST: Containment = Containment::On {
-    robust: Robustness::Rba2,
-};
+const ROBUST: Robustness = Robustness::Rba2;
 
 fn meter() -> Meter {
     Meter::new(&Budget::default())
@@ -261,11 +259,11 @@ fn out_word(m: &TypedModule, input: &[u32], p: &[u32]) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// Hoist `shape`'s kernel under `containment`; returns the moves, the kernel before and after.
-fn hoisted(shape: Shape, containment: Containment) -> (u32, TypedModule, TypedModule) {
+/// Hoist `shape`'s kernel under `robustness`; returns the moves, the kernel before and after.
+fn hoisted(shape: Shape, robustness: Robustness) -> (u32, TypedModule, TypedModule) {
     let before = kernel(shape);
     let mut after = before.clone();
-    let moved = hoist_uniform_loads(&mut after, containment, &mut meter()).expect("hoist");
+    let moved = hoist_uniform_loads(&mut after, robustness, &mut meter()).expect("hoist");
     assert_valid(after.clone(), &lavapipe());
     (moved, before, after)
 }
@@ -294,12 +292,12 @@ fn a_guarded_uniform_load_at_a_fixed_word_leaves_its_loop() {
 /// leaves.
 #[test]
 fn without_robust_access_only_a_load_every_entry_runs_leaves() {
-    let (moved, _, after) = hoisted(Shape::Guarded, Containment::UnsafeOff);
+    let (moved, _, after) = hoisted(Shape::Guarded, Robustness::None);
     assert_eq!(moved, 0);
     assert!(!uniform_loads(&after)
         .iter()
         .any(|&(b, _)| b == after.loops()[0].preheader));
-    let (moved, before, after) = hoisted(Shape::AtTop, Containment::UnsafeOff);
+    let (moved, before, after) = hoisted(Shape::AtTop, Robustness::None);
     assert_eq!(moved, 1);
     let p = [0, 7, 0, 0, 0, 0, 0, 0];
     for n in [0, 1, 3] {

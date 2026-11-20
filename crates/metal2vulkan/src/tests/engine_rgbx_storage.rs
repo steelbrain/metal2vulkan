@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::device::profile::{Containment, DeviceProfile};
+use crate::device::profile::DeviceProfile;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
@@ -214,9 +214,6 @@ declare void @air.write_texture_2d.{suffix}(ptr addrspace(1), <2 x i32>, {vec4},
 /// under `robustImageAccess`; a trap where the shader contains every access.
 fn robust(p: &DeviceProfile) -> Option<[u32; 4]> {
     let f = p.fields();
-    let Containment::On { .. } = f.containment else {
-        panic!("containment off")
-    };
     if f.images.robust_image_access2 {
         Some([0; 4])
     } else if f.images.robust_image_access {

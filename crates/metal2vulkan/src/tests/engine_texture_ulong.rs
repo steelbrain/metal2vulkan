@@ -36,7 +36,7 @@ use crate::bind::{
     BindState, BoundBuffer, BoundTexture, NeutralResource, StageTable, TextureFacts, WriteSource,
 };
 use crate::budget::Budget;
-use crate::device::profile::{Containment, DeviceProfile, Robustness};
+use crate::device::profile::{DeviceProfile, Robustness};
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Needs};
@@ -129,10 +129,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 /// shader contains both.
 fn robust(p: &DeviceProfile, buffer: bool) -> Option<[u32; 4]> {
     let f = p.fields();
-    let Containment::On { robust } = f.containment else {
-        panic!("containment off")
-    };
-    match (buffer, robust) {
+    match (buffer, f.robustness) {
         (true, Robustness::Rba2) => Some([0, 0, 0, 1]),
         (true, _) => None,
         (false, _) if f.images.robust_image_access2 => Some([0, 0, 0, 1]),
