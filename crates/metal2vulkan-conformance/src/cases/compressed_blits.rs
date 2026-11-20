@@ -6,7 +6,7 @@
 //! that compression, so for three families the bytes the blit writes are not the bytes it read:
 //! the same value in its canonical encoding. The runtime's answer is the device's copy, which keeps
 //! the bytes, announced by the note of the encoding it keeps where the format has one
-//! ([`kept_encoding_notice`]).
+//! (`kept_encoding_notice`).
 //!
 //! Record mode runs the whole program on this M3 Max, because every call it makes is public Metal:
 //! a texture of any descriptor, a texture over a buffer, the blit copies, `replaceRegion:` and
