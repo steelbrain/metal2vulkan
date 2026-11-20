@@ -2327,15 +2327,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
   -51726, -51757, -51772, -51839 and -51840. No tool translates every pipeline state of the
   recorded streams under the identity domains without a GPU, so the count is of these streams
   to these frames.
-- On RADV (Mesa 26.2.6) a stage reads the pushed values it does not keep in registers from the
-  driver's own upload of them, and the driver may widen such a read to a power of two of words,
-  past the upload's end: 12 words read as 16, 16 bytes past it. Where the upload ends the
-  driver's upload buffer, the read faults. A Radeon 780M and an RX 7900 XTX then lose the device,
-  and every guest's later work ends `DeviceLost`; an RX 550 logs the fault and goes on, and what
-  the read answers there is not known. rt places each stage's pushed values with no regard to that
-  widening. Met on the 780M by a compute kernel of a recorded session, whose fault lies at the end
-  of the driver's upload buffer (job m3-max-57449), and in guest sessions on the 780M and the
-  RX 7900 XTX.
 - Every `VkPipeline` is made through the device's `VkPipelineCache` (The cache directory, above),
   which is empty on a host's first run. Cold, the driver's time for a recorded session's render
   pipelines made through it, against the same pipelines made past any cache (states-only plays):
@@ -2343,8 +2334,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   3090 with a second session (m3-max-58098); 9.8% faster on an Iris Xe (ANV, m3-max-58178), whose
   driver shares compiled stages between the pipelines made through one cache; level on a Radeon
   780M (RADV, m3-max-58159), 0.4% slower, within the plays' spread. Warm, in a second process on
-  the directory a first one filled, with the driver's own disk cache on: 21.4 against 21.0 ms
-  through the cache against past it on the second RTX 3090 (m3-max-58285), 5.5 against 21.5 ms on
+  the directory a first one filled, with the driver's own disk cache on: the second session's 274
+  render pipelines took 21.4 against 21.0 ms through the cache against past it on the second RTX
+  3090 (m3-max-58285), 5.5 against 21.5 ms on
   the Iris Xe and 3.6 against 8.1 ms on the Radeon 780M; with the driver's disk cache off, 5.6
   against 4,280.6 ms on the Iris Xe and 3.7 against 845.8 ms on the Radeon 780M.
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it
@@ -2638,10 +2630,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   (NVIDIA 620.70.06, job m3-max-58251), and 1,335 ms on a second RTX 3090 (m3-max-58134). Made
   without either dynamic state rt adds (the feedback loop's enable, depth bias's enable), its time
   changes by under 1% (m3-max-58251). It is paid once per cold cache: warm, with the driver's disk
-  cache on, the whole session's render pipelines take 34.5 ms of driver time on the second RTX
-  3090 (m3-max-58285). A warm make in a new process reads each render content's record (The cache
-  directory), so it decodes and specializes no function: on lavapipe, a recorded session's warm
-  render state creation is 31 to 44% faster with the records than without them (m3-max-58317).
+  cache on, that session's 383 render pipelines take 34.5 ms of driver time through rt's cache on
+  the second RTX 3090 (m3-max-58285). A warm make in a new process reads each render content's
+  record (The cache directory), so it decodes and specializes no function: on lavapipe, a recorded
+  session's warm render state creation is 31 to 44% faster with the records than without them
+  (m3-max-58317).
 - Mesh render pipelines are not built. No call makes a state of a `MTLMeshRenderPipelineDescriptor`
   (`newRenderPipelineStateWithMeshDescriptor:`), and the render encoder has no object or mesh
   binding and no mesh draw (`drawMeshThreadgroups:`, `drawMeshThreads:` and the indirect form), so
