@@ -2699,6 +2699,7 @@ impl Backend for NewRuntime {
             ("upload_waits", metrics.upload_waits),
             ("staging_sleeps", metrics.staging_sleeps),
             ("synchronizations", metrics.synchronizations),
+            ("commit_lock_wait_nanos", metrics.commit_lock_wait_nanos),
             ("managed_bytes_captured", metrics.managed_bytes_captured),
             ("stamps_not_available", metrics.stamps_not_available),
             ("waits_behind_counter", metrics.waits_behind_counter),
@@ -2790,6 +2791,9 @@ impl Backend for NewRuntime {
             format!("pipeline {at} wall_nanos={} kernel={kernel}", made.nanos)
         });
         let mut lines: Vec<String> = lines.collect();
+        // A maximum since the device was made: it does not sum, so it is not a frame's counter.
+        let longest = self.device.counters().metrics().commit_lock_wait_max_nanos;
+        lines.push(format!("commit lock wait longest {longest} ns"));
         if let Some(copies) = self.managed {
             let from = match self.identity {
                 true => "the stream's device identity",
