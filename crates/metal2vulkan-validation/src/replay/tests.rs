@@ -1640,8 +1640,8 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
     assert_eq!(
         report.lines()[0],
         "completed #3 stream address_arguments=0 address_looking_words=0 calls=10 commits=1 \
-         dispatches=1 draws=2 encoders=2 misaligned_address_words=0 relocated_words=0 \
-         written_bytes=0 executed submissions=1"
+         dispatches=1 draws=2 encoders=2 misaligned_address_words=0 noted_words=0 \
+         relocated_words=0 written_bytes=0 executed submissions=1"
     );
 }
 
