@@ -333,6 +333,10 @@ pub(crate) enum Gauge {
     PrivateTakeSparseBytes,
     /// [`Gauges::private_take_sparse_allocations`].
     PrivateTakeSparseAllocations,
+    /// [`Gauges::private_units`].
+    PrivateUnits,
+    /// [`Gauges::private_unit_used_bytes`].
+    PrivateUnitUsedBytes,
     /// [`Gauges::texture_own_bytes`].
     TextureOwnBytes,
     /// [`Gauges::shared_buffer_bytes`].
@@ -603,6 +607,8 @@ struct Atomics {
     private_take_bytes: AtomicU64,
     private_take_sparse_bytes: AtomicU64,
     private_take_sparse_allocations: AtomicU64,
+    private_units: AtomicU64,
+    private_unit_used_bytes: AtomicU64,
     texture_own_bytes: AtomicU64,
     shared_buffer_bytes: AtomicU64,
     private_buffer_bytes: AtomicU64,
@@ -1229,6 +1235,8 @@ impl Counters {
             Gauge::PrivateTakeBytes => &a.private_take_bytes,
             Gauge::PrivateTakeSparseBytes => &a.private_take_sparse_bytes,
             Gauge::PrivateTakeSparseAllocations => &a.private_take_sparse_allocations,
+            Gauge::PrivateUnits => &a.private_units,
+            Gauge::PrivateUnitUsedBytes => &a.private_unit_used_bytes,
             Gauge::TextureOwnBytes => &a.texture_own_bytes,
             Gauge::SharedBufferBytes => &a.shared_buffer_bytes,
             Gauge::PrivateBufferBytes => &a.private_buffer_bytes,
@@ -1506,6 +1514,8 @@ impl Counters {
             private_take_bytes: a.private_take_bytes.load(Relaxed),
             private_take_sparse_bytes: a.private_take_sparse_bytes.load(Relaxed),
             private_take_sparse_allocations: a.private_take_sparse_allocations.load(Relaxed),
+            private_units: a.private_units.load(Relaxed),
+            private_unit_used_bytes: a.private_unit_used_bytes.load(Relaxed),
             texture_own_bytes: a.texture_own_bytes.load(Relaxed),
             shared_buffer_bytes: a.shared_buffer_bytes.load(Relaxed),
             private_buffer_bytes: a.private_buffer_bytes.load(Relaxed),
@@ -2482,6 +2492,18 @@ pub struct Gauges {
     /// The sparse allocations [`private_take_sparse_bytes`](Self::private_take_sparse_bytes)
     /// counts.
     pub private_take_sparse_allocations: u64,
+    /// The pool's Private units, its allocations of 16 MiB
+    /// ([`MemoryClass::block_len`](crate::MemoryClass::block_len)), that hold a block: blocks the
+    /// consumer took, or a texture block, which fills its unit (the one kept empty for the next
+    /// place among them). An idle unit is not one, nor a long allocation. A unit goes back only
+    /// once it holds nothing, and nothing moves out of one, so against
+    /// [`private_unit_used_bytes`](Self::private_unit_used_bytes) the rest of their 16 MiB each
+    /// is free bytes that only takes and places that fit them use.
+    pub private_units: u64,
+    /// Bytes in use inside the [`private_units`](Self::private_units): the lengths of the blocks
+    /// the consumer took there, and the image sizes of the textures placed in their texture
+    /// blocks.
+    pub private_unit_used_bytes: u64,
     /// Bytes of textures' allocations of their own (shadows and counted copies' images among
     /// them), not in the pool.
     pub texture_own_bytes: u64,

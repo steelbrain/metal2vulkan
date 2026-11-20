@@ -291,11 +291,17 @@ mod on_device {
         ]
     }
 
+    /// The Private units that hold a block, of either kind, and the bytes in use inside them.
+    fn units(gauges: &Gauges) -> [u64; 2] {
+        [gauges.private_units, gauges.private_unit_used_bytes]
+    }
+
     /// The gauges count the texture blocks and the consumer's Private allocations apart, on every
     /// device: a small block alone in its unit makes the unit sparse until a sixteenth of it is
     /// placed; a small texture alone in its texture block likewise; neither kind is counted in
     /// the other's gauges; and once all is released only the texture block kept for the next
-    /// place is held.
+    /// place is held. The units gauges count both kinds' units together, with the blocks' and
+    /// the textures' bytes in them, and no long allocation.
     #[test]
     fn every_device_gauges_texture_blocks_and_private_takes_apart() {
         let unit = MemoryClass::Private.block_len();
@@ -310,25 +316,28 @@ mod on_device {
             core.pool.await_internals();
             let gauges = counters.gauges();
             assert_eq!(
-                (takes(&gauges), texture_blocks(&gauges)),
-                ([0; 4], [0; 4]),
+                (takes(&gauges), texture_blocks(&gauges), units(&gauges)),
+                ([0; 4], [0; 4], [0; 2]),
                 "{name}: at the start"
             );
 
             // A small block alone in its unit, then a sixteenth of the unit beside it.
             let small = (device.take_block(MemoryClass::Private, 1))
                 .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
+            let gauges = counters.gauges();
             assert_eq!(
-                takes(&counters.gauges()),
-                [unit, small.len, unit, 1],
+                (takes(&gauges), units(&gauges)),
+                ([unit, small.len, unit, 1], [1, small.len]),
                 "{name}: a small block alone"
             );
             let more = (device.take_block(MemoryClass::Private, unit / 16))
                 .unwrap_or_else(|error| panic!("{name}: a sixteenth: {error}"));
             assert_eq!(more.allocation, small.allocation, "{name}: one unit");
+            let blocks = small.len + more.len;
+            let gauges = counters.gauges();
             assert_eq!(
-                takes(&counters.gauges()),
-                [unit, small.len + more.len, 0, 0],
+                (takes(&gauges), units(&gauges)),
+                ([unit, blocks, 0, 0], [1, blocks]),
                 "{name}: a sixteenth placed"
             );
 
@@ -340,9 +349,10 @@ mod on_device {
             let first = (device.new_texture(&tiny, Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: a small texture: {error}"));
             let size = first.image_size();
+            let gauges = counters.gauges();
             assert_eq!(
-                texture_blocks(&counters.gauges()),
-                [unit, size, unit, 1],
+                (texture_blocks(&gauges), units(&gauges)),
+                ([unit, size, unit, 1], [2, blocks + size]),
                 "{name}: a small texture alone"
             );
             let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 512, 512);
@@ -351,8 +361,12 @@ mod on_device {
             let placed = size + second.image_size();
             let gauges = counters.gauges();
             assert_eq!(
-                (texture_blocks(&gauges), takes(&gauges)),
-                ([unit, placed, 0, 0], [unit, small.len + more.len, 0, 0]),
+                (texture_blocks(&gauges), takes(&gauges), units(&gauges)),
+                (
+                    [unit, placed, 0, 0],
+                    [unit, blocks, 0, 0],
+                    [2, blocks + placed]
+                ),
                 "{name}: a sixteenth placed in the texture block, the takes unchanged"
             );
             assert_eq!(
@@ -361,11 +375,23 @@ mod on_device {
                 "{name}: the Private blocks out are the takes and the texture blocks"
             );
 
+            // A take longer than a unit: an allocation of its own length, no unit.
+            let long = (device.take_block(MemoryClass::Private, unit + 1))
+                .unwrap_or_else(|error| panic!("{name}: a long block: {error}"));
+            assert_eq!(
+                units(&counters.gauges()),
+                [2, blocks + placed],
+                "{name}: a long allocation is no unit"
+            );
+            (device.release_block(long))
+                .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
+
             drop((first, second));
             wait_until("the textures freed", || counters.gauges().textures == 0);
+            let gauges = counters.gauges();
             assert_eq!(
-                texture_blocks(&counters.gauges()),
-                [unit, 0, 0, 0],
+                (texture_blocks(&gauges), units(&gauges)),
+                ([unit, 0, 0, 0], [2, blocks]),
                 "{name}: the texture block kept for the next place"
             );
             for block in [small, more] {
@@ -375,6 +401,11 @@ mod on_device {
             wait_until("the takes given back", || {
                 takes(&counters.gauges()) == [0; 4]
             });
+            assert_eq!(
+                units(&counters.gauges()),
+                [1, 0],
+                "{name}: the kept texture block alone holds its unit"
+            );
             device
                 .release_indices(grant)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

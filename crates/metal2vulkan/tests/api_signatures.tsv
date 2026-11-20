@@ -2112,6 +2112,8 @@ field	metal2vulkan-runtime::Gauges.private_take_bytes	pub private_take_bytes: u6
 field	metal2vulkan-runtime::Gauges.private_take_held_bytes	pub private_take_held_bytes: u64
 field	metal2vulkan-runtime::Gauges.private_take_sparse_allocations	pub private_take_sparse_allocations: u64
 field	metal2vulkan-runtime::Gauges.private_take_sparse_bytes	pub private_take_sparse_bytes: u64
+field	metal2vulkan-runtime::Gauges.private_unit_used_bytes	pub private_unit_used_bytes: u64
+field	metal2vulkan-runtime::Gauges.private_units	pub private_units: u64
 field	metal2vulkan-runtime::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-runtime::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-runtime::Gauges.shadow_bytes	pub shadow_bytes: u64

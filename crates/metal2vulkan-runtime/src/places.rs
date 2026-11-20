@@ -65,6 +65,7 @@ impl PlaceBlock {
                 core.counters.fall_by(Gauge::TextureBlockBytes, len);
             }
         }
+        count_unit(core, len, taken);
         let counters = &core.counters;
         match (was, self.sparse()) {
             (false, true) => {
@@ -77,6 +78,17 @@ impl PlaceBlock {
             }
             _ => {}
         }
+    }
+}
+
+/// Moves [`Gauges::private_unit_used_bytes`](crate::Gauges::private_unit_used_bytes) with a place
+/// of `len` bytes taken or freed (`taken`), where it lies in a block of the block length, which
+/// fills a unit of the pool: a place no longer than that length.
+fn count_unit(core: &Core, len: u64, taken: bool) {
+    match (len <= BLOCK_LEN, taken) {
+        (true, true) => core.counters.rise_by(Gauge::PrivateUnitUsedBytes, len),
+        (true, false) => core.counters.fall_by(Gauge::PrivateUnitUsedBytes, len),
+        (false, _) => {}
     }
 }
 
@@ -162,6 +174,7 @@ impl Places {
         let mut blocks = lock(&self.blocks);
         let Some(index) = (blocks.iter()).position(|block| block.memory.id == place.block) else {
             core.counters.fall_by(Gauge::TextureBlockBytes, place.len);
+            count_unit(core, place.len, false);
             return;
         };
         let block = &mut blocks[index];

@@ -349,7 +349,12 @@ in its memory.
   allocations holding a block the consumer took, whole, and `private_take_bytes` those blocks.
   `texture_block_sparse_bytes` with `texture_block_sparse_blocks`, and
   `private_take_sparse_bytes` with `private_take_sparse_allocations`, count the sparse ones among
-  each, those holding something that is less than a sixteenth of their length. Once the last handle
+  each, those holding something that is less than a sixteenth of their length. Both kinds
+  together, `private_units` counts the 16 MiB Private units that hold a block (a texture block or
+  the consumer's blocks; idle units and long allocations are not counted) and
+  `private_unit_used_bytes` the bytes in use inside them, the consumer's blocks' lengths and the
+  placed textures' image sizes: against 16 MiB per unit, the rest is free bytes held by what
+  lives beside them. Once the last handle
   is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's

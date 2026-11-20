@@ -687,6 +687,9 @@ struct State {
     unmapped: bool,
     /// Per class, the idle allocations' bytes the class's gauge shows.
     idle_bytes: [u64; 2],
+    /// The bytes of the consumer's blocks in the Private units, the pool's share of
+    /// [`Gauges::private_unit_used_bytes`](crate::Gauges::private_unit_used_bytes).
+    unit_take_bytes: u64,
     /// For the device tests: the blocks given back.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     returned: HashSet<BlockId>,
@@ -801,6 +804,7 @@ impl Pool {
                 mapped: HashSet::new(),
                 unmapped: false,
                 idle_bytes: [0, 0],
+                unit_take_bytes: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 returned: HashSet::new(),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1071,6 +1075,17 @@ impl Pool {
         // block shares.
         if class == MemoryClass::Private {
             let (mut held, mut placed, mut sparse_bytes, mut sparse) = (0, 0, 0, 0);
+            // The units that hold a block, and the consumer's bytes in them: a texture block's
+            // places count in `crate::places`, as its block fills its unit.
+            let (mut units, mut unit_bytes) = (0, 0);
+            for allocation in (state.allocations[index].iter())
+                .filter(|allocation| allocation.live > 0 && allocation.unit())
+            {
+                units += 1;
+                if !allocation.texture {
+                    unit_bytes += allocation.placed;
+                }
+            }
             for allocation in (state.allocations[index].iter())
                 .filter(|allocation| allocation.live > 0 && !allocation.texture)
             {
@@ -1086,6 +1101,14 @@ impl Pool {
             counters.set(Gauge::PrivateTakeBytes, placed);
             counters.set(Gauge::PrivateTakeSparseBytes, sparse_bytes);
             counters.set(Gauge::PrivateTakeSparseAllocations, sparse);
+            counters.set(Gauge::PrivateUnits, units);
+            let was = state.unit_take_bytes;
+            if unit_bytes > was {
+                counters.rise_by(Gauge::PrivateUnitUsedBytes, unit_bytes - was);
+            } else {
+                counters.fall_by(Gauge::PrivateUnitUsedBytes, was - unit_bytes);
+            }
+            state.unit_take_bytes = unit_bytes;
         }
     }
 
@@ -2440,6 +2463,7 @@ pub(crate) fn free_all(core: &mut Core) {
             idle[index] = state.idle_bytes[index];
             state.idle_bytes[index] = 0;
         }
+        state.unit_take_bytes = 0;
     }
     for class in MemoryClass::ALL {
         let shared = class == MemoryClass::Shared;
@@ -2460,6 +2484,8 @@ pub(crate) fn free_all(core: &mut Core) {
         Gauge::PrivateTakeBytes,
         Gauge::PrivateTakeSparseBytes,
         Gauge::PrivateTakeSparseAllocations,
+        Gauge::PrivateUnits,
+        Gauge::PrivateUnitUsedBytes,
     ] {
         core.counters.set(gauge, 0);
     }
