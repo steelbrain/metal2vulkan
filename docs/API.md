@@ -69,10 +69,11 @@ driver's identity. Three ways to get one:
 
 ```rust
 let description = DeviceDescription::from_khronos_json(&json, None)?;
-let device = Device::new(description, DevicePolicy::default())?;
+let device = Device::from_queries(description, DevicePolicy::default())?;
 ```
 
-`Device::new` refuses a device below Vulkan 1.2 and an inconsistent description or policy. A
+`Device::from_queries` needs no Vulkan device: it derives the profile from the description's
+queries alone, reading no vendor, device or driver identity. It refuses a device below Vulkan 1.2 and an inconsistent description or policy. A
 `Device` is cheap to clone; every compile and plan takes it.
 
 ### The policy

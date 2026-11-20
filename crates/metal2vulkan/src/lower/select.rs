@@ -1868,7 +1868,7 @@ fn finish(
     };
     plan.estimate.add(walk);
     if access::identity(p) {
-        identity_admits(&plan, p)?;
+        identity_admits(&plan)?;
     }
     Ok(plan)
 }
@@ -1933,8 +1933,8 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// fetch on a device with neither ordered form). Its fields past the push window are a parameter block, whose
 /// address the window holds. Its refusal names the first form the plan holds that they do not
 /// lower ([`identity_refusal`]).
-fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
-    match identity_refusal(plan, p) {
+fn identity_admits(plan: &Plan) -> Result<(), Error> {
+    match identity_refusal(plan) {
         None => Ok(()),
         Some(form) => Err(Unsupported::not_implemented(Feature::IdentityDomains)
             .naming(DiagName::new(form))
@@ -1948,20 +1948,13 @@ pub(crate) const BICUBIC_PIXEL_FORM: &str = "a bicubic filter at pixel coordinat
 /// [`identity_refusal`]'s form for a 1D texture's bicubic sample.
 pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
 
-/// The first form plan `plan` on profile `p` holds that the identity domains do not lower yet, as
-/// a Metal program reaches it, which [`identity_admits`]'s refusal names (diagnostics only);
-/// `None` where it holds none.
-fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
-    let stage = match plan.stage {
-        Stage::Kernel => true,
-        Stage::Vertex | Stage::Fragment => true,
-        _ => false,
-    };
-    if !stage {
+/// The first form plan `plan` holds that the identity domains do not lower yet, as a Metal
+/// program reaches it, which [`identity_admits`]'s refusal names (diagnostics only); `None` where
+/// it holds none.
+fn identity_refusal(plan: &Plan) -> Option<String> {
+    if !matches!(plan.stage, Stage::Kernel | Stage::Vertex | Stage::Fragment) {
         return Some(
-            "a function of a stage other than a kernel's, or a vertex or fragment function off \
-             the floor's push window"
-                .to_owned(),
+            "a function of a stage other than a kernel, vertex or fragment function".to_owned(),
         );
     }
     let field = plan.push.fields.iter().find(|f| match (f.field, f.loc) {

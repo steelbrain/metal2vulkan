@@ -36,9 +36,9 @@
 use crate::air::intrinsics::{AirIntrinsic, FunctionConstant};
 use crate::air::ir::{Callee, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::bind::status::{StatusBits, StatusWord};
-use crate::device::profile::{AbsentReads, BufferAccess};
+use crate::device::profile::BufferAccess;
 use crate::device::requirements::VkFeature;
-use crate::error::{Capability, Error, Feature, Unsupported};
+use crate::error::Error;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::leaf::k32;

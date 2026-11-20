@@ -29,9 +29,7 @@ What the translator promises:
 - **Recorded differences.** Where a pipeline gives a near-equivalent of Metal's answer, its
   artifact records a precision note, and the runtime announces it once with a stable code.
 - **The GPU's native arithmetic.** Where the device has a native form (its maths, rounding,
-  conversions and sampler), that form gives the answer, its difference from Metal's recorded; the
-  runtime's speed-for-accuracy choices default to the fast form, each with an opt-in exact switch
-  ([docs/FAST-PATHS.md](docs/FAST-PATHS.md)).
+  conversions and sampler), that form gives the answer, its difference from Metal's recorded.
 - **Bounded work.** Every compile runs under a deadline, a cancellation token and deterministic
   work and memory caps.
 
@@ -113,7 +111,7 @@ use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, Stag
 use metal2vulkan::Budget;
 
 let description = DeviceDescription::from_khronos_json(&profile_json, None)?;
-let device = Device::new(description, DevicePolicy::default())?;
+let device = Device::from_queries(description, DevicePolicy::default())?;
 let library = Library::parse(&metallib_bytes)?;
 let kernel = FunctionDescriptor::new(library.function("my_kernel")?);
 let descriptor = ComputePipelineDescriptor::new(StageSource::Function(kernel));
@@ -140,7 +138,6 @@ For the runtime, start at [its README](crates/metal2vulkan-rt/README.md).
 | [docs/HOWTO.md](docs/HOWTO.md) | You integrate: tools, caching, failures, isolation, the runtime's shader cache |
 | [docs/RUNTIME-PORTING.md](docs/RUNTIME-PORTING.md) | You port Metal calls (Objective-C or metal-rs) to the runtime |
 | [docs/RESOURCE-ID.md](docs/RESOURCE-ID.md) | You compute a texture's or sampler's `gpuResourceID` on the guest's side |
-| [docs/FAST-PATHS.md](docs/FAST-PATHS.md) | You need every speed-for-accuracy default and its exact switch |
 | [docs/METAL-COVERAGE.md](docs/METAL-COVERAGE.md) | You ask whether a Metal API item is covered |
 | [docs/REFUSALS.md](docs/REFUSALS.md) | You ask what Metal accepts that the code refuses |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | You change the translator |

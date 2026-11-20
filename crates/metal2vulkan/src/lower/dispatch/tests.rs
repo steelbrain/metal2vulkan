@@ -39,7 +39,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         object_grid: false,
         partial_groups: false,
         grid_edge: false,
-        identity_region: None,
+        identity: false,
         pinned_subgroup_size: None,
         deep: false,
     }

@@ -36,7 +36,8 @@ This reference shows exactly the API's frozen surface. A walkthrough with a runn
 # The flow
 
 1. **A device.** Describe the Vulkan device as created ([`device::DeviceDescription`]) and pick a
-   [`device::DevicePolicy`]; [`device::Device::new`] derives the profile every compile decides by.
+   [`device::DevicePolicy`]; [`device::Device::from_queries`] derives the profile every compile
+   decides by.
 2. **A library.** [`library::Library::parse`] reads a metallib or AIR bitcode;
    [`library::Library::function`] finds a function, and [`library::Function::reflection`]
    answers what its arguments bind, in Metal's shape ([`reflection`]).

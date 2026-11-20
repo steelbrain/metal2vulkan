@@ -1716,9 +1716,11 @@ fn a_device_without_quad_control_refuses_full_quads() {
         "fragment_quad_scans",
     ] {
         match compile(&quads, entry, &without) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!((u.feature, u.needs), (want.feature, want.needs), "{entry}")
-            }
+            Err(Error::Unsupported(u)) => assert_eq!(
+                (&u.feature, &u.needs),
+                (&want.feature, &want.needs),
+                "{entry}"
+            ),
             other => panic!("{entry} without the feature: {:?}", other.map(|_| ())),
         }
     }

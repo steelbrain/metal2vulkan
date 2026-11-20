@@ -480,15 +480,14 @@ fn half_triples() -> Vec<[u64; 3]> {
     out
 }
 
-/// A `half` fused multiply-add on 16-bit floats, by the device's `Fma` ([`Route::F16`],
-/// [`Route::F16Native`]) or by `OpFmaKHR` ([`Route::F16Khr`]), rounds once on the interpreter,
-/// whose `Fma` rounds once (a device's on [`Route::F16Native`] may not, noted): the operands
+/// A `half` fused multiply-add on 16-bit floats, by the device's `Fma` ([`Route::F16Native`]),
+/// rounds once on the interpreter, whose `Fma` rounds once (a device's may not, noted): the operands
 /// convert to 16 bits exactly and the result widens exactly. The device's `float` `Fma` rounded to `half`
 /// ([`Route::Native`]) rounds the sum twice, so it is within one `half` unit in the last place.
 #[test]
 fn half_fused_multiply_add_rounds_on_its_route() {
     let triples = half_triples();
-    for route in [Route::F16, Route::F16Khr, Route::F16Native] {
+    for route in [Route::F16Native] {
         for lanes in [1u8, 2] {
             let fma = Fma {
                 form: vec(float(16), lanes),
@@ -551,18 +550,12 @@ fn the_half_reference_rounds_the_exact_sum() {
 }
 
 /// The route follows the profile: `float` by `OpFmaKHR` where `shaderFmaFloat32` is enabled, else
-/// the device's `Fma`; `half` by the device's 16-bit `Fma` where the driver is measured to compute
-/// it as Metal's `half` `fma` and `shaderFloat16` is enabled (the MoltenVK captures alone), else
-/// `OpFmaKHR` on 16 bits where `shaderFmaFloat16` is enabled and the profile rounds under the
+/// the device's `Fma`; `half` by the device's 16-bit `Fma` where the profile rounds under the
 /// 16-bit float controls, else the device's `float` `Fma` rounded to `half`; `bfloat` and `double`
 /// keep their own lowering.
 #[test]
 fn the_fused_multiply_add_route_follows_the_profile() {
-    use crate::error::DriverDeviation;
-    use crate::spirv::testing::is_moltenvk_capture;
     let mut seen = BTreeSet::new();
-    let mut f16 = 0;
-    let mut khr16 = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
         let l = &p.fields().leaf;
         let want = if l.fma32 { Route::Khr } else { Route::Native };
@@ -571,10 +564,8 @@ fn the_fused_multiply_add_route_follows_the_profile() {
             want,
             "{stem}"
         );
-        let half = if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && l.float16 {
-            Route::F16
-        } else if l.fma16 && crate::lower::arith::narrow::half_controls(&p) {
-            Route::F16Khr
+        let half = if crate::lower::arith::narrow::half_controls(&p) {
+            Route::F16Native
         } else {
             Route::Native
         };
@@ -583,9 +574,6 @@ fn the_fused_multiply_add_route_follows_the_profile() {
             half,
             "{stem}"
         );
-        assert_eq!(half == Route::F16, is_moltenvk_capture(&stem), "{stem}");
-        f16 += usize::from(half == Route::F16);
-        khr16 += usize::from(half == Route::F16Khr);
         assert_eq!(Fma::by(fma::routes(&p), bfloat()), None, "{stem}");
         assert_eq!(Fma::by(fma::routes(&p), float(64)), None, "{stem}");
         seen.insert(want);
@@ -595,6 +583,4 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         BTreeSet::from([Route::Khr, Route::Native]),
         "every float route is some committed profile's"
     );
-    assert!(f16 >= 1, "{f16} profiles take Metal's 16-bit Fma");
-    assert!(khr16 >= 2, "{khr16} profiles take OpFmaKHR on 16 bits");
 }

@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError, Scratch,
+    compile, link_and_validate, llvm_assemble, typed_module, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::committed_profiles;

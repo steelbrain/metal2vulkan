@@ -634,21 +634,15 @@ pub(crate) fn note_vulkan_codes(
     }
 }
 
-/// Note Metal's tile store among `modules` of the render pipeline `d` where the profile `p`
-/// records it ([`SnormMinimumNote::Noted`]) and `d` draws single-sampled: Metal's pass stores each
+/// Note Metal's tile store among `modules` of the render pipeline `d` where `d` draws
+/// single-sampled: Metal's pass stores each
 /// tile a draw reaches back through the texels' values, where the device's pass keeps the bytes its
 /// draws do not write. Into a color attachment of a signed normalized format, a minimum code (-128,
 /// or -32768) it loaded is stored as the code above it (`PrecisionNote::SnormMinimumKept`); into an
 /// `RGB9E5Float` one, a word whose largest mantissa is below 256 under an exponent above 0 is
 /// stored normalized (`PrecisionNote::SharedExponentKept`). A note is the fragment stage's, the
 /// vertex stage's where the pipeline has none.
-///
-/// [`SnormMinimumNote::Noted`]: crate::device::profile::SnormMinimumNote::Noted
-pub(crate) fn note_tile_store(
-    d: &RenderPipelineDescriptor,
-    p: &DeviceProfile,
-    modules: &mut [StageModule],
-) {
+pub(crate) fn note_tile_store(d: &RenderPipelineDescriptor, modules: &mut [StageModule]) {
     use PixelFormat as P;
     if d.raster_sample_count > 1 {
         return;

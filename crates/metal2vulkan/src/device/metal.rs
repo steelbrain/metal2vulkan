@@ -2,7 +2,7 @@
 //! drives translation.
 
 use crate::device::description::AllocationLimits;
-use crate::device::profile::{BufferAccess, DeepThreadgroups, DeviceProfile};
+use crate::device::profile::{BufferAccess, DeviceProfile};
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::subgroup::{tier, OpBits, SimdClass};
 use crate::error::{Capability, Feature, Unsupported};

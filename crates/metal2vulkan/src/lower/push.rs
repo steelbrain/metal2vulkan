@@ -588,7 +588,7 @@ mod tests {
 
     /// The floor's tail: a kernel's highest field of a tail kind moves 24 bytes above its other
     /// fields, the rest packed as before; the tail word ends a push of no tail kind, and a single
-    /// field of one or two words has none. The same kernel on the guaranteed window is packed.
+    /// field of one or two words has none.
     #[test]
     fn the_floor_places_each_stage_s_tail_above_a_hole() {
         let at = |p: &PushPlacement, field: PushField| {
@@ -615,13 +615,6 @@ mod tests {
             PushLoc::Push { offset: 80 }
         );
         assert_eq!(p.push_range, Some((0, 88)));
-        let words = |p: &PushPlacement| -> u32 {
-            (p.fields.iter())
-                .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
-                .map(|f| f.size / 4)
-                .sum()
-        };
-        assert_eq!(words(&p), words(&packed), "no word added");
         assert_eq!(p.tail_word, None);
         // A second slot's bounds: the higher one is the tail, the first stays packed.
         fields.insert(PushField::SlotBounds(b));
@@ -637,12 +630,12 @@ mod tests {
         );
         assert_eq!(p.push_range, Some((0, 96)));
         // A region alone: the tail word, 24 bytes above it.
-        let region = check_in(Stage::Kernel, &[PushField::DispatchRegion].into());
+        let region = check(Stage::Kernel, &[PushField::DispatchRegion].into());
         assert_eq!(tail(&region), Some(PushField::TailWord));
         assert_eq!(region.tail_word, Some(56));
         assert_eq!(region.push_range, Some((0, 60)));
         // One address alone: no tail.
-        let one = check_in(Stage::Kernel, &[PushField::SlotGuestBase(a)].into());
+        let one = check(Stage::Kernel, &[PushField::SlotGuestBase(a)].into());
         assert_eq!((tail(&one), one.push_range), (None, Some((0, 8))));
         assert!(check(Stage::Kernel, &BTreeSet::new()).fields.is_empty());
     }

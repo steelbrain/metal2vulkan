@@ -179,19 +179,18 @@ derivation's own tests), from those crates' sources alone.
 blessing it asserts; a removed or changed line is a breaking change of a published crate, or of the
 API `metal2vulkan-rt` is published with at the cutover.
 
-Four docs are checked by tests. `docs/REFUSALS.md` must be the surface the sources state, and
+Three docs are checked by tests. `docs/REFUSALS.md` must be the surface the sources state, and
 every variant of the runtime's refusal enums must end its doc comment with a `Basis:` line that says
 where the belief that Metal refuses that input comes from and cites its evidence
 (`crates/metal2vulkan/tests/refusal_surface.rs`, which says what it cannot see; a basis that is
-not settled is `Basis: unknown (why)`, never nothing). `docs/FAST-PATHS.md` must name every
-`DevicePolicy` accuracy choice and the notes it records (`tests::fast_paths`); `docs/API.md` must list every degrade code
+not settled is `Basis: unknown (why)`, never nothing); `docs/API.md` must list every degrade code
 with its category and quote `examples/api_preview.rs` verbatim in its `rust` blocks; and
 `docs/METAL-COVERAGE.md` must carry the coverage table's totals.
 
 ## Changes
 
-- Follow [AGENTS.md](AGENTS.md): structure over names, honest refusals, fast defaults with exact
-  switches (and their row in `docs/FAST-PATHS.md`), tests for every fixed bug class.
+- Follow [AGENTS.md](AGENTS.md): structure over names, honest refusals, one form per Vulkan
+  capability, tests for every fixed bug class.
 - One concern per commit when practical; run `cargo fmt --all` first.
 - Update the docs a consumer reads when what they describe changes: `docs/API.md` and
   `examples/api_preview.rs` for the translator's API, the runtime's README and rustdoc for the

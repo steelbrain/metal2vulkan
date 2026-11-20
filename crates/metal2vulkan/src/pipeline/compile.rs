@@ -3371,15 +3371,8 @@ fn lower_bounded<K>(
     // folds the round trip (`DriverWorkaround::HalfConversionPairFolded`, so `Converted`) the
     // pair's rounding is the device's whatever the entry declares, recorded below, and the rest
     // is Metal's under them as elsewhere.
-    let declares_controls = controls
-        && (widens
-            || crate::lower::arith::narrow::computes_in_16_bits(&module)
-            || match controlled_pair {
-                Some(pair) => pair,
-                None => {
-                    controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?
-                }
-            });
+    let declares_controls =
+        controls && (widens || crate::lower::arith::narrow::computes_in_16_bits(&module) || fused);
     if declares_controls {
         let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
         module.declare_modes(&modes)?;

@@ -35,7 +35,7 @@ use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
 use crate::pipeline::PrecisionNote;
-use crate::spirv::testing::{committed_descriptions, committed_profiles};
+use crate::spirv::testing::committed_profiles;
 
 const OP_EXT_INST: u16 = 12;
 const OP_CONSTANT: u16 = 43;

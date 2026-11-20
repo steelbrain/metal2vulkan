@@ -97,16 +97,15 @@ that needs an internal item is one of the crate's own tests (`src/tests/`).
 
 ## Decisions come from structure and the device
 
-- **The device profile.** `Device::new` derives one `DeviceProfile` from the description and the
-  policy. Every device-dependent choice (subgroup tier, buffer views, storage widths, robustness,
-  push-constant room, limits, measured driver deviations and the measured cost facts that choose
-  between exact encodings, such as a uniform view's texel form) reads it, and its fingerprint is
-  part of every cache key.
+- **The device profile.** `Device::from_queries` derives one `DeviceProfile` from the description's
+  Vulkan queries and the policy, reading no vendor, device or driver identity. Every
+  device-dependent choice (subgroup tier, buffer views, storage widths, robustness, push-constant
+  room, limits) reads it, and its fingerprint is part of every cache key.
 - **The device's native forms.** The maths, the grouping and fusion of fast-math arithmetic, NaN
   bits, minimum and maximum, `half` rounding and blends, the sampler and the texel and color
   conversions are the device's own on every device,
   each difference from Metal recorded as a precision note; on MoltenVK on Apple's GPUs most are
-  Metal's own. The policy's accuracy switches are the runtime's ([FAST-PATHS.md](FAST-PATHS.md)).
+  Metal's own.
 - **Structure, not names.** Families decide from IR types, address spaces, the metadata ABI and the
   `air.*` and `llvm.*` intrinsic contract. No branch keys on a function, type or variable name.
 - **Typed refusals.** An input the device cannot run exactly is `Error::Unsupported`, naming the
