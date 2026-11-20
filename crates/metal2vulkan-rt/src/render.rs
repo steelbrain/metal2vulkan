@@ -519,12 +519,16 @@ fn draws(
             };
             fields.push((offset, at, value));
         }
-        // The block, where there is one, is in one ring chunk, and its address in the range.
-        blocks[at] = match (placement.argument_table_size, address) {
-            (0, None) => None,
-            (len @ 1.., Some(address)) if u64::from(len) <= CHUNK => Some((len, address)),
+        // The block, where there is one, is in one ring chunk, and its address in the range. A
+        // placement with none leaves its table's: the address form's control stage states its
+        // fields as a second placement of the vertex stage's, after the vertex function's.
+        match (placement.argument_table_size, address) {
+            (0, None) => {}
+            (len @ 1.., Some(address)) if u64::from(len) <= CHUNK && blocks[at].is_none() => {
+                blocks[at] = Some((len, address))
+            }
             _ => return Err(draw_input()),
-        };
+        }
     }
     if push_len > PUSH_BYTES {
         return Err(draw_input());

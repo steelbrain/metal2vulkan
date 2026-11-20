@@ -9,6 +9,9 @@
 //!   buffer past bytes of zero: the first covers the top half of clip space in its tint, and the
 //!   second, whose first edge factor is 0, is culled. The pass is one submission, its barrier and
 //!   its pass, and makes no pipeline and copies no byte of the runtime's own.
+//! - the same patches of a post-tessellation function whose fields pass its push window (16 more
+//!   buffer arguments, written here): its parameter block survives the control stage's placement
+//!   of the vertex stage, and every buffer's address and bounds reach the function from it.
 //! - what Metal refuses is refused: a patch draw with a plain state, a plain draw with a patch
 //!   state, a patch draw with no factor buffer and factors at an odd byte. What the runtime does
 //!   not build is a gap: a patch index buffer, a per-instance factor step and an enabled factor
@@ -26,7 +29,7 @@ mod on_device {
     use crate::tests::command::on_device::each_device;
     use crate::tests::draw::on_device::{
         descriptor, examples, floats, library, pass, read, run, state, target, texels, vertices,
-        Buffers, BLACK, BLUE, GREEN,
+        Buffers, BLACK, BLUE, GREEN, SIDE,
     };
     use crate::{
         Buffer, ColorAttachmentDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap,
@@ -79,6 +82,128 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) }
 !16 = !{i32 2, i32 8, i32 0}
 !17 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
+
+    /// The buffer arguments of [`wide_vertex`]'s function.
+    const WIDE: u32 = 16;
+
+    /// [`wide_vertex`]'s text but its buffer arguments, their reads and their metadata.
+    const WIDE_TEMPLATE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define <{ <4 x float>, <4 x float> }> @tess_wide_points(ptr %0, <4 x float> %1, <3 x float> noundef %2, i32 noundef %3ARGS) local_unnamed_addr #0 {
+  %5 = tail call { <4 x float>, <2 x half>, <4 x i8> } @_Z12ControlPoint.MTL_CONTROL_POINT_FN(i32 0, ptr %0) #4
+  %6 = extractvalue { <4 x float>, <2 x half>, <4 x i8> } %5, 0
+  %7 = shufflevector <3 x float> %2, <3 x float> undef, <4 x i32> zeroinitializer
+  %8 = fmul fast <4 x float> %6, %7
+  %9 = tail call { <4 x float>, <2 x half>, <4 x i8> } @_Z12ControlPoint.MTL_CONTROL_POINT_FN(i32 1, ptr %0) #4
+  %10 = extractvalue { <4 x float>, <2 x half>, <4 x i8> } %9, 0
+  %11 = shufflevector <3 x float> %2, <3 x float> undef, <4 x i32> <i32 1, i32 1, i32 1, i32 1>
+  %12 = fmul fast <4 x float> %10, %11
+  %13 = fadd fast <4 x float> %12, %8
+  %14 = tail call { <4 x float>, <2 x half>, <4 x i8> } @_Z12ControlPoint.MTL_CONTROL_POINT_FN(i32 2, ptr %0) #4
+  %15 = extractvalue { <4 x float>, <2 x half>, <4 x i8> } %14, 0
+  %16 = shufflevector <3 x float> %2, <3 x float> undef, <4 x i32> <i32 2, i32 2, i32 2, i32 2>
+  %17 = fmul fast <4 x float> %15, %16
+  %18 = fadd fast <4 x float> %13, %17
+  %19 = tail call fast float @air.convert.f.f32.u.i32(i32 %3) #3
+  %20 = insertelement <4 x float> poison, float %19, i64 0
+  %21 = shufflevector <4 x float> %20, <4 x float> poison, <4 x i32> zeroinitializer
+  %22 = fadd fast <4 x float> %21, %1
+  %i = zext i32 %3 to i64
+READS  %23 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %18, 0
+  %24 = insertvalue <{ <4 x float>, <4 x float> }> %23, <4 x float> SUM, 1
+  ret <{ <4 x float>, <4 x float> }> %24
+}
+
+declare { <4 x float>, <2 x half>, <4 x i8> } @_Z12ControlPoint.MTL_CONTROL_POINT_FN(i32, ptr) local_unnamed_addr #2 section "air.externally_defined"
+
+declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #1
+
+attributes #0 = { convergent mustprogress nofree nounwind willreturn memory(read) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #1 = { mustprogress nofree nosync nounwind willreturn memory(none) }
+attributes #2 = { convergent mustprogress nofree nounwind willreturn memory(read) }
+attributes #3 = { nounwind willreturn memory(none) }
+attributes #4 = { convergent nounwind willreturn memory(read) }
+
+!llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
+!air.vertex = !{!9}
+!air.compile_options = !{!23, !24}
+!air.version = !{!25}
+!air.language_version = !{!26}
+
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}
+!1 = !{i32 1, !"wchar_size", i32 4}
+!2 = !{i32 7, !"frame-pointer", i32 2}
+!3 = !{i32 7, !"air.max_device_buffers", i32 31}
+!4 = !{i32 7, !"air.max_constant_buffers", i32 31}
+!5 = !{i32 7, !"air.max_threadgroup_buffers", i32 31}
+!6 = !{i32 7, !"air.max_textures", i32 128}
+!7 = !{i32 7, !"air.max_read_write_textures", i32 8}
+!8 = !{i32 7, !"air.max_samplers", i32 16}
+!9 = !{ptr @tess_wide_points, !10, !13, !22}
+!10 = !{!11, !12}
+!11 = !{!"air.position", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
+!12 = !{!"air.vertex_output", !"user(locn0)", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
+!13 = !{!14, !19, !20, !21BUFFERS}
+!14 = !{i32 0, !"air.patch_control_point_input", !15, !16, !17, !18}
+!15 = !{!"air.patch_control_point_function", ptr @_Z12ControlPoint.MTL_CONTROL_POINT_FN}
+!16 = !{!"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
+!17 = !{!"air.location_index", i32 1, i32 1, !"air.arg_type_name", !"half2", !"air.arg_name", !"uv", !"air.arg_unused"}
+!18 = !{!"air.location_index", i32 2, i32 1, !"air.arg_type_name", !"uchar4", !"air.arg_name", !"color", !"air.arg_unused"}
+!19 = !{i32 1, !"air.patch_input", !"air.location_index", i32 5, i32 1, !"air.arg_type_name", !"float4", !"air.arg_name", !"tint"}
+!20 = !{i32 2, !"air.position_in_patch", !"air.arg_type_name", !"float3", !"air.arg_name", !"bc"}
+!21 = !{i32 3, !"air.instance_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"instance"}
+!22 = !{!"air.patch", !"triangle", !"air.patch_control_point", i32 3}
+!23 = !{!"air.compile.denorms_disable"}
+!24 = !{!"air.compile.fast_math_enable"}
+!25 = !{i32 2, i32 8, i32 0}
+!26 = !{!"Metal", i32 4, i32 0, i32 0}
+BUFFER_META"#;
+
+    /// A post-tessellation function whose fields pass the vertex function's push window:
+    /// `tess_triangle_points` without the control points' `half2` (its control points and its
+    /// patch's tint), plus [`WIDE`] `float4` buffer arguments at indices 2 and on, each read at
+    /// the instance's element, a read checked against the buffer's bounds, and added into the
+    /// colour.
+    fn wide_vertex() -> String {
+        let args: String = (0..WIDE)
+            .map(|k| {
+                format!(
+                    r#", ptr addrspace(1) noundef readonly align 16 captures(none) "air-buffer-no-alias" %b{k}"#
+                )
+            })
+            .collect();
+        let mut reads = String::new();
+        let mut sum = "%22".to_owned();
+        for k in 0..WIDE {
+            reads += &format!(
+                "  %p{k} = getelementptr inbounds <4 x float>, ptr addrspace(1) %b{k}, i64 %i\n  \
+                 %v{k} = load <4 x float>, ptr addrspace(1) %p{k}, align 16\n  \
+                 %s{k} = fadd fast <4 x float> {sum}, %v{k}\n"
+            );
+            sum = format!("%s{k}");
+        }
+        let buffers: String = (0..WIDE).map(|k| format!(", !{}", 30 + k)).collect();
+        let meta: String = (0..WIDE)
+            .map(|k| {
+                format!(
+                    "!{} = !{{i32 {}, !\"air.buffer\", !\"air.location_index\", i32 {}, i32 1, \
+                     !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, \
+                     !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", \
+                     !\"air.arg_name\", !\"b{k}\"}}\n",
+                    30 + k,
+                    4 + k,
+                    2 + k
+                )
+            })
+            .collect();
+        WIDE_TEMPLATE
+            .replace("ARGS", &args)
+            .replace("READS", &reads)
+            .replace("SUM", &sum)
+            .replace("BUFFERS", &buffers)
+            .replace("BUFFER_META", &meta)
+    }
 
     /// The half-precision factors of one triangle patch: three edges, then the inside.
     fn factors(edges: [u16; 3], inside: u16) -> Vec<u8> {
@@ -237,6 +362,93 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) }
             let want = texels(|_, y| if y < 4 { GREEN } else { BLACK });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: two patches drawn, the second culled; 1 barrier, no pipeline made");
+        });
+    }
+
+    /// A post-tessellation function whose fields pass its push window ([`wide_vertex`]) spills
+    /// the rest into its parameter block, which each draw writes into the ring and the function
+    /// reads: the pipeline's control stage, whose fields the translator states as a second
+    /// placement of the vertex stage, leaves the vertex function's block, and the block holds
+    /// fields of the summed buffers. Buffer `k` holds `2^(k % 4) / 255` in channel `k / 4`, so the
+    /// patch's colour is 15 in every channel only where every buffer's address and bounds reach
+    /// the function where it reads them; one read through a wrong or empty field drops or repeats
+    /// a bit. The second patch, whose first edge factor is 0, is culled.
+    #[test]
+    fn every_device_draws_patches_whose_fields_spill_into_their_block() {
+        use crate::pipeline::FieldValue;
+        use crate::render::{DrawPlace, VERTEX};
+        let Some((_, fragment)) = libraries() else {
+            return;
+        };
+        let wide = match llvm_assemble_text(&wide_vertex()) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the wide library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("the wide function: {error:?}"),
+        };
+        let function = wide.function("tess_wide_points").expect("the function");
+        let mut d = patches(&(wide, fragment));
+        d.vertex = StageSource::Function(FunctionDescriptor::new(function));
+        each_device("draw_patches_spilled", |name, _, device| {
+            let state = state(name, &device, &d);
+            let draws = &state.inner.compiled.draws;
+            let spilled: Vec<FieldValue> = (draws.fields.iter())
+                .filter(|(place, ..)| matches!(place, DrawPlace::Block(VERTEX, _)))
+                .map(|&(_, _, value)| value)
+                .collect();
+            assert!(
+                spilled.iter().any(|value| matches!(
+                    value,
+                    FieldValue::BufferAddress { slot, .. } | FieldValue::BufferBounds(slot)
+                        if (2..2 + WIDE).contains(slot)
+                )),
+                "{name}: the vertex function's block holds a summed buffer's field"
+            );
+            assert!(
+                draws.blocks[VERTEX].is_some(),
+                "{name}: the vertex function's block, past the control stage's placement"
+            );
+            let mut buffers = Buffers::new(&device);
+            let (points, _, factors) = patch_buffers(&device, &mut buffers);
+            let tints = buffers.of(&device, &[0; 32]);
+            let summed: Vec<Buffer> = (0..WIDE)
+                .map(|k| {
+                    let mut value = [0.0; 4];
+                    value[(k / 4) as usize] = f32::from(1u8 << (k % 4)) / 255.0;
+                    buffers.of(&device, &floats(&value))
+                })
+                .collect();
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
+            for (k, buffer) in summed.iter().enumerate() {
+                draw(encoder.set_vertex_buffer(Some(buffer), 0, 2 + k as u32));
+            }
+            draw(encoder.set_tessellation_factor_buffer(Some(&factors), 8, 0));
+            draw(encoder.draw_patches(3, 0, 2, None, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let black = [0, 0, 0, 255];
+            let want: Vec<u8> = (0..SIDE * SIDE)
+                .flat_map(|at| if at / SIDE < 4 { [15; 4] } else { black })
+                .collect();
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!(
+                "{name}: a patch of {} fields in its block drawn from every buffer",
+                spilled.len()
+            );
         });
     }
 
