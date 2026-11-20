@@ -10,7 +10,7 @@
 //! answers `Unavailable` there and the case's Metal answer is carried from a measurement this tree
 //! already holds ([`MetalSource::Carried`]). The case body stays one body.
 //!
-//! The vocabulary grows one family at a time as cases are ported. Nothing here reads an
+//! The vocabulary grows one family at a time as cases are added. Nothing here reads an
 //! environment variable, a device name or a vendor: a case that needs a feature finds out by making
 //! the call and reading the typed refusal.
 

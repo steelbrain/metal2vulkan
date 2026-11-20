@@ -271,10 +271,9 @@ public API, `metal2vulkan-devtools` for fixture paths and `llvm_assemble`, and, 
 The suite's own cases are its **case set** (`src/cases/`). Its recordings are its own, in
 `recordings/`, in its own format; they are not observations and they enter no census.
 
-A case ported from a runtime lane restates that lane's measured Metal values and reads the lane's
-committed measurement files under `fixtures/public/`. Those are our own measurements over our own
-fixtures, which is what the boundary allows; the lanes stay where they are and a ported case never
-edits one.
+A case may read committed Metal measurement files under `fixtures/public/` (`measured`). Those are
+our own measurements over our own fixtures, which is what the boundary allows; a case never edits
+one.
 
 ## Layout
 
@@ -292,7 +291,7 @@ edits one.
 | `record`, `replay` | Taking Metal's answer, and comparing a run against it |
 | `report` | Verdict counts and the matrix of case against venue |
 | `work`, `rt_side::work`, `metal_work` | The copy-and-fill vocabulary a case states as data, and the two sides that run it |
-| `measured` | The committed Metal measurements a ported case reads, under the public fixtures |
+| `measured` | The committed Metal measurements a case reads, under the public fixtures |
 | `argument_encoders` | The argument-encoder vocabulary: what a case asks an `MTLArgumentEncoder` to do, and the layout facts it can observe without a host's own addresses in them |
 | `function_bindings` | What a function's reflection says its arguments are: `MTLBinding` and the type tree under it |
 | `indirect_commands` | The indirect-command-buffer vocabulary: the descriptor a case states whole, and each command as the list of setter calls the host makes on it |
@@ -360,8 +359,5 @@ how `two_plane_copies` lost its Metal leg in the first place:
 
 Where a carried answer came from a call record mode cannot make — Apple SPI, a private getter —
 the Objective-C probe that measured it is committed here, with the command that builds it in its
-header comment. A probe deleted after one run is how a measurement evaporates: the
-`RG10Unorm_X12_sRGB` row of `surface_fills` was missing for exactly that reason, because the
-original probe was thrown away and the lane that kept its number printed only the first 24 bytes
-of each 32-byte run. A probe that re-measures rows already carried, as a control, says whether its
-new rows can be trusted.
+header comment, so a carried measurement can be taken again. A probe that re-measures rows already
+carried, as a control, says whether its new rows can be trusted.

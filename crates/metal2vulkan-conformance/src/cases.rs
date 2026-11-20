@@ -1,26 +1,19 @@
 //! The suite's case set.
 //!
-//! Two seed families proved the loop end to end, chosen to be as unlike each other as the first
-//! increment allowed: one compares the bytes a compute pass wrote, the other a typed answer a
-//! getter gives.
-//!
-//! Most of the rest are ports of the runtime lanes whose expectation is already a transcript of a
-//! Metal probe's printed lines, which is what made them the first batch. Where Metal's whole path
-//! is public, record mode **runs** the probe rather than copying it: the mesh draws, the mesh draws
-//! behind a barrier, and the mesh draws of an indirect command buffer's own-state commands. Where
-//! it is not, the case carries our own measurement and forbids re-recording: the texture fills,
-//! whose `fillTexture:` is Apple SPI, and an indirect command's read-back through private getters.
-//! The reason is always the *call*, never the pixel format a case names.
+//! Where Metal's whole path is public, record mode **runs** the case on Metal: the mesh draws, the
+//! mesh draws behind a barrier, and the mesh draws of an indirect command buffer's own-state
+//! commands among them. Where it is not, the case carries our own measurement and forbids
+//! re-recording: the texture fills, whose `fillTexture:` is Apple SPI, and an indirect command's
+//! read-back through private getters. The reason is always the *call*, never the pixel format a
+//! case names.
 //!
 //! [`rate_maps`] is the family where Metal's own API validation layer and plain Metal disagree,
 //! and it is what exercises the recording's second oracle ([`crate::validated`]).
 //!
-//! Two families are ports of lanes that held **no Metal value at all** — a rule, or a list in a
-//! module's prose — and whose values this round measured on the oracle for the first time:
-//! [`texture_accesses`], where Metal's render-pipeline reflection states each texture slot's
-//! access, and [`textures`], where every uncompressed colour format's texture answers what a fresh
-//! level 0 reads, what a host round trip gives back, and whether the bytes between the rows stayed
-//! as they were.
+//! [`texture_accesses`] records each texture slot's access as Metal's render-pipeline reflection
+//! states it, and [`textures`] what every uncompressed colour format's texture answers: what a
+//! fresh level 0 reads, what a host round trip gives back, and whether the bytes between the rows
+//! stayed as they were.
 //!
 //! No case here can fault a GPU, hang it, trip its watchdog or end Metal's process.
 //!
