@@ -1,14 +1,14 @@
 //! A product by a constant `-0.0` beside a product of the same value by `+0.0`: the owned fixture
 //! `sfold_precise` (its authored case `float-operations-decided-by-a-bound-constant-precise`)
-//! multiplies one loaded `float4` by the function constants `+0.0` and `-0.0`. On every profile
-//! whose products are `OpFMul`, the fixture's products keep their `-0.0` factor as given.
+//! multiplies one loaded `float4` by the function constants `+0.0` and `-0.0`. On every profile the
+//! product by `-0.0` is the product by `+0.0` negated, so no product has a `-0.0` factor beside a
+//! `+0.0` one, which a driver may compile as one multiply (ANV's `brw` backend, Mesa 26.2.6).
 //! `llvm-as` assembles the fixture; without it the test skips visibly.
 
 use crate::library::{FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
 use crate::pipeline::testing::{llvm_assemble, typed_module_specialized, AssembleError};
-use crate::spirv::builder::ProductForm;
-use crate::spirv::ir::{BinOp, ConstKind, Constant, Inst, TypedModule, ValueOrigin};
+use crate::spirv::ir::{BinOp, ConstKind, Constant, Inst, TypedModule, UnOp, ValueOrigin};
 use crate::spirv::testing::committed_profiles;
 
 /// The `f32` `-0.0`.
@@ -76,25 +76,24 @@ fn negative_zero_factors(m: &TypedModule) -> usize {
 }
 
 #[test]
-fn a_negative_zero_factor_is_kept_on_every_profile() {
+fn a_negative_zero_factor_is_a_negated_positive_one_on_every_profile() {
     let Some(bc) = assemble() else { return };
     let values = constants();
-    let mut multiplied = 0;
     for (stem, p) in committed_profiles().expect("committed profiles") {
-        let (plan, m) = typed_module_specialized(&bc, "sfold", &p, &values)
+        let (_, m) = typed_module_specialized(&bc, "sfold", &p, &values)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let form = plan.families.arith.product;
-        assert_ne!(form, ProductForm::PositiveZeroFactors, "{stem}");
-        if form == ProductForm::Multiply {
-            assert!(
-                negative_zero_factors(&m) > 0,
-                "{stem}: the -0.0 factor as given"
-            );
-            multiplied += 1;
-        }
+        assert_eq!(negative_zero_factors(&m), 0, "{stem}: a -0.0 factor");
+        let negations = (m.blocks().iter().flat_map(|b| b.insts.iter()))
+            .filter(|n| {
+                matches!(
+                    n.inst,
+                    Inst::Unary {
+                        op: UnOp::FNegate,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(negations > 0, "{stem}: no negated product");
     }
-    assert!(
-        multiplied > 0,
-        "no committed profile multiplies by the factor as given"
-    );
 }

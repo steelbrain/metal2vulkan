@@ -215,10 +215,8 @@ impl FunctionBuilder<'_> {
         {
             return self.mul_extended_from_halves(op, a, b, ty);
         }
-        if matches!(op, BinOp::FMul | BinOp::VectorTimesScalar)
-            && self.mb().product_form == ProductForm::PositiveZeroFactors
-        {
-            if let Some(r) = self.product_by_positive_zeros(op, a, b, contract, ty)? {
+        if matches!(op, BinOp::FMul | BinOp::VectorTimesScalar) {
+            if let Some(r) = self.product_by_positive_zeros(op, a, b, contract)? {
                 return Ok(r);
             }
         }
@@ -330,18 +328,21 @@ impl FunctionBuilder<'_> {
         self.composite_construct(ty, &[low, high])
     }
 
-    /// Under [`ProductForm::PositiveZeroFactors`], the product `op` of `a` and `b` where one of them
-    /// is an `f32` constant with a `-0.0` component: the product by that constant with each such
-    /// component `+0.0`, negated in those components of the result (`OpFNegate`, and an
-    /// `OpVectorShuffle` of the product and its negation where only some components are). `-(x ·
-    /// +0)` is `x · (−0)` for every `x`. `None` where neither factor is such a constant.
+    /// The product `op` of `a` and `b` where one of them is an `f32` constant with a `-0.0`
+    /// component, on every device: the product by that constant with each such component `+0.0`
+    /// (in the module's [`ProductForm`]), negated in those components of the result
+    /// (`OpFNegate`, and an `OpVectorShuffle` of the product and its negation where only some
+    /// components are). `-(x · +0)` is `x · (−0)` for every `x`; a NaN's sign is the device's
+    /// either way. So no product the module emits has a `-0.0` factor beside a `+0.0` one, which a
+    /// driver may compile as one multiply (ANV's `brw` backend, Mesa 26.2.6, kept the first of two
+    /// products of one value by `+0.0` and `-0.0` and stored its result for both). `None` where
+    /// neither factor is such a constant.
     fn product_by_positive_zeros(
         &mut self,
         op: BinOp,
         a: Value,
         b: Value,
         contract: Contraction,
-        ty: TypeId,
     ) -> BResult<Option<Value>> {
         for (index, factor) in [(1, b), (0, a)] {
             let Some(negative) = self.negative_zero_components(factor)? else {
@@ -353,15 +354,8 @@ impl FunctionBuilder<'_> {
             } else {
                 (positive, b)
             };
-            let product = self.emit(
-                Inst::Binary {
-                    op,
-                    a: x,
-                    b: y,
-                    contract,
-                },
-                ty,
-            )?;
+            // The positive factor has no `-0.0` component, so this takes the module's form.
+            let product = self.binary_with(op, x, y, contract)?;
             let negated = self.unary(UnOp::FNegate, product)?;
             // A scalar factor of `OpVectorTimesScalar` scales every component.
             if negative.iter().all(|n| *n) {

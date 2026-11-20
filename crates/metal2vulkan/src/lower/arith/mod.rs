@@ -722,9 +722,8 @@ pub struct ArithPlan {
     /// the same fact as [`ArithPlan::metal_functions`]: a device whose `float` functions are
     /// Metal's reaches Metal through SPIRV-Cross, which loses a `-0` product of a `NoContraction`
     /// `OpFMul`, so it takes `Fma(a, b, -0.0)`; any other device takes the `OpFMul`, which has no
-    /// `-0.0` addend for it to answer, with a constant factor's `-0.0` components multiplied as
-    /// `+0.0` and negated on a driver that keeps one multiply for products of one value by zeros of
-    /// opposite sign (`DriverWorkaround::OppositeZeroProductsMerged`).
+    /// `-0.0` addend for it to answer. In either form a constant factor's `-0.0` components are
+    /// multiplied as `+0.0` and negated (`FunctionBuilder::binary`).
     pub product: ProductForm,
     /// How the module clears the bits above a narrow integer's width in a 32-bit container
     /// ([`ops::mask`]), decided by [`finish`] from the profile's driver workarounds:
@@ -837,7 +836,7 @@ pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
 /// entry Metal compiles with precise functions, [`libm::module_mode`]), record the notes of the
 /// operations that are Metal's own in a fast-math entry only where it is not
 /// ([`ArithPlan::unless_metal_fast`]), and choose the form of a multiply the device must round on
-/// its own by the same fact and the driver's workarounds ([`ArithPlan::product`]), and the form of
+/// its own by the same fact ([`ArithPlan::product`]), and the form of
 /// a narrow integer's mask by the driver's workarounds ([`ArithPlan::mask`]).
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.wide = legal::holds_wide(cx.profile);
@@ -885,18 +884,9 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         cx.precision.insert(PrecisionNote::NativeFma);
     }
     let metal = arith.metal_functions;
-    // The same fact decides the multiply's form, and on a driver that keeps one multiply for
-    // products by zeros of opposite sign, a constant `-0.0` factor's.
+    // The same fact decides the multiply's form.
     arith.product = match metal {
         Some(_) => ProductForm::NegativeZeroFma,
-        None if cx
-            .profile
-            .fields()
-            .workarounds
-            .contains(&DriverWorkaround::OppositeZeroProductsMerged) =>
-        {
-            ProductForm::PositiveZeroFactors
-        }
         None => ProductForm::Multiply,
     };
     // Precise `fmod` takes its routine but where the device's `OpFRem` is Metal's `fmod`.

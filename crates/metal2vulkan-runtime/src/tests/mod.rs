@@ -69,6 +69,7 @@ mod ring;
 mod sampler;
 mod sampling;
 mod shadow;
+mod signed_zeros;
 mod sites;
 mod spill;
 mod staging;
@@ -136,6 +137,23 @@ pub(crate) fn product_sources() -> Vec<(String, String)> {
             (label, text)
         })
         .collect()
+}
+
+/// The instructions of SPIR-V module `words` after its five-word header, each its words from the
+/// one that holds its word count and opcode; a count of 0 ends the walk.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) fn spirv_instructions(words: &[u32]) -> Vec<&[u32]> {
+    let mut out = Vec::new();
+    let mut at = 5;
+    while at < words.len() {
+        let count = (words[at] >> 16) as usize;
+        if count == 0 || at + count > words.len() {
+            break;
+        }
+        out.push(&words[at..at + count]);
+        at += count;
+    }
+    out
 }
 
 /// The sampler indices of a test's states, whose kernels number no constexpr sampler: a read's

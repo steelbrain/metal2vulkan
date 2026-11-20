@@ -1090,11 +1090,9 @@ fn a_multiply_without_contraction_is_the_product() {
 
 /// An `f32` product by a constant with `-0.0` components is IEEE's product bit for bit in every
 /// [`ProductForm`] (a NaN's bits aside), as `OpFMul` with the constant on either side, with and
-/// without contraction, and as `OpVectorTimesScalar` by a `-0.0` scalar or of a constant vector.
-/// Under [`ProductForm::PositiveZeroFactors`], the form of a driver that keeps one multiply for
-/// products of one value by zeros of opposite sign (`DriverWorkaround::OppositeZeroProductsMerged`,
-/// ANV), no product the module emits has a `-0.0` component in a constant factor; under
-/// [`ProductForm::Multiply`] the factor is the constant itself.
+/// without contraction, and as `OpVectorTimesScalar` by a `-0.0` scalar or of a constant vector,
+/// and in every form no product the module emits has a `-0.0` component in a constant factor: it
+/// multiplies by `+0.0` there and negates.
 #[test]
 fn a_product_by_a_negative_zero_factor_keeps_its_sign_in_every_form() {
     const NZ: u64 = 0x8000_0000;
@@ -1146,11 +1144,7 @@ fn a_product_by_a_negative_zero_factor_keeps_its_sign_in_every_form() {
             .count()
     };
     let vals = f32_values();
-    for form in [
-        ProductForm::Multiply,
-        ProductForm::NegativeZeroFma,
-        ProductForm::PositiveZeroFactors,
-    ] {
+    for form in [ProductForm::Multiply, ProductForm::NegativeZeroFma] {
         for contract in [Contraction::Forbidden, Contraction::Allowed] {
             for (lanes, shape, c) in factors {
                 let what = format!("{form:?} {contract:?} {shape:?} x{lanes} by {c:x?}");
@@ -1195,18 +1189,7 @@ fn a_product_by_a_negative_zero_factor_keeps_its_sign_in_every_form() {
                 };
                 let m = kernel_with(&[input], out, &body, true, false)
                     .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
-                let has_negative_zero = c.contains(&NZ);
-                match form {
-                    ProductForm::PositiveZeroFactors => {
-                        assert_eq!(negative_factors(&m), 0, "{what}: a -0.0 factor");
-                    }
-                    ProductForm::Multiply => assert_eq!(
-                        negative_factors(&m) > 0,
-                        has_negative_zero,
-                        "{what}: the factor as given"
-                    ),
-                    ProductForm::NegativeZeroFma => {}
-                }
+                assert_eq!(negative_factors(&m), 0, "{what}: a -0.0 factor");
                 let cases: Vec<Case> = vals
                     .iter()
                     .map(|x| vec![vec![*x; usize::from(x_lanes)]])
