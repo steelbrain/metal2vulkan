@@ -5010,7 +5010,18 @@ bound.
   filter choice, level and clamps are Metal's. Metal's fixed-point weights, exact grid sums, float
   accumulators and sixty-fourth level fractions are not reproduced: a lane may differ by a few grid
   steps (`1/4080` at 8 bits), by up to `2.1e-3` on an extended-range sRGB texture's bicubic sample,
-  and by up to `1/64` of the two levels' difference under a linear mip filter. Through a runtime
+  and by up to `1/64` of the two levels' difference under a linear mip filter. Measured for the
+  bicubic filter by the conformance case `bicubic-texel-classes` (Metal on an Apple M3 Max, macOS
+  27.0.1): Metal's results lie on the format's grid, a sixteenth of a code for `RGBA8Unorm`,
+  `R8Unorm` and `RGBA8Snorm`, a whole code for `RGBA16Unorm` and an exact `half` for
+  `RGBA16Float`, and at the six `RGBA16Float` samples whose sum lies exactly halfway between two
+  halves Metal rounds away from zero. Ours is the unrounded `f32` sum; `R32Float`'s samples
+  compare exactly. The largest difference per format, `float` and `half` results together, over
+  lavapipe, the M3 on KosmicKrisp and on MoltenVK, a Radeon 780M, an RTX 3090 and an Iris Xe:
+  `RGBA8Unorm` `2.44e-4`, `R8Unorm` `1.53e-4`, `RGBA8Snorm` `4.88e-4`, `RGBA16Float` `3.74e-4`,
+  `RGBA16Unorm` `2.16e-4` on lavapipe and KosmicKrisp and `7.8e-6` elsewhere (lavapipe's `half`
+  results keep their `f32` values), and `1.47e-3` for `RGBA8Unorm_sRGB` on the old runtime, which
+  decodes its taps in the module. Through a runtime
   sampler slot it is announced at a draw or dispatch only where the bound sampler filters (a linear
   minification or magnification filter, anisotropy, a cubic filter or a linear mip filter): a
   nearest sampler's sample is the decoded texel at Metal's position. Through an argument buffer it

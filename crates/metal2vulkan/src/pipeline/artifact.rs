@@ -918,7 +918,8 @@ pub enum PrecisionNote {
     /// weights are a fixed-point table (each within `4.83e-4` of the polynomial's per axis,
     /// together), it sums an 8- or 16-bit normalized or extended-range format's codes exactly onto
     /// the format's grid with half-up rounding (a linear sum's terms truncated first), it sums the
-    /// float formats through its own accumulators and rounds a half format's sum to `half`, and it
+    /// float formats through its own accumulators and rounds a half format's sum to `half` (away
+    /// from zero at the six ties the conformance case `bicubic-texel-classes` holds), and it
     /// truncates a linear mip filter's level fraction onto sixty-fourths: a lane may differ by a
     /// few grid steps (`1/4080` at 8 bits), by the weights' distance times the taps (`2.1e-3` at
     /// most on an extended-range `_sRGB` texture's taps), and by up to `1/64` of the two levels'
