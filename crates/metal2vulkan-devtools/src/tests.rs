@@ -4,13 +4,11 @@ use std::path::{Path, PathBuf};
 
 /// The trees, relative to the workspace, whose tests run from nextest archives carried to other
 /// machines (`cargo nextest run --archive-file ... --workspace-remap <checkout>`): all of the
-/// validation crate (its lib test binary holds the runtime lanes and the library code they call,
-/// its integration tests and binaries ride a full archive), and the runtime's lib tests
-/// (`src/tests/` and the test modules beside its sources).
-const CARRIED: [&str; 3] = [
+/// validation crate (its lib test binary and the library code it calls; its integration tests and
+/// binaries ride a full archive).
+const CARRIED: [&str; 2] = [
     "crates/metal2vulkan-validation/src",
     "crates/metal2vulkan-validation/tests",
-    "crates/metal2vulkan-runtime/src",
 ];
 
 /// The `.rs` files at or below `path`.

@@ -63,7 +63,7 @@ fn every_published_crate_carries_the_repository_license() {
     let published = published_crates(&crates);
     assert_eq!(
         published,
-        ["metal2vulkan", "metal2vulkan-air", "metal2vulkan-runtime"],
+        ["metal2vulkan", "metal2vulkan-air"],
         "the crates without `publish = false` changed: give a new one copies of the repository's \
          license files, then list it here"
     );

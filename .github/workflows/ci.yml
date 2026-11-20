@@ -87,9 +87,7 @@ jobs:
       # may build it. `--all-features` compiles every gated item, but an import or item that only
       # another feature (or only a test) uses is unused, or missing, without it; `--workspace`
       # cannot check that either, since the validation member enables most features for every
-      # build. Feature gates combine with platform cfgs, so both hosts run it. The runtime crate
-      # (`metal2vulkan-runtime`) has no feature and reaches the translator only
-      # through its public API: it is checked the same way.
+      # build. Feature gates combine with platform cfgs, so both hosts run it.
       - name: Clippy under each feature alone (warnings denied)
         run: |
           set -euo pipefail
@@ -98,9 +96,6 @@ jobs:
             cargo clippy -p metal2vulkan --all-targets --no-default-features --features "$features" -- -D warnings
             echo "::endgroup::"
           done
-          echo "::group::metal2vulkan-runtime"
-          cargo clippy -p metal2vulkan-runtime --all-targets -- -D warnings
-          echo "::endgroup::"
           # The AIR front end's crate as a consumer of `metal2vulkan-air` builds it
           # alone, with no feature and with `serde`, so nothing the translator or
           # validation enables in a workspace build hides an unused import or a missing item.
@@ -131,7 +126,7 @@ jobs:
           rustup target add x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc
           for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
             echo "::group::$target"
-            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-conformance --all-targets --all-features -- -D warnings
+            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-conformance --all-targets --all-features -- -D warnings
             echo "::endgroup::"
           done
 
@@ -180,7 +175,6 @@ jobs:
             metal2vulkan=0 \
             metal2vulkan-air=0 \
             metal2vulkan-rt=0 \
-            metal2vulkan-runtime=0 \
             metal2vulkan-validation=0 \
             metal2vulkan-conformance=0 \
             metal2vulkan-devtools=0 \
@@ -216,7 +210,7 @@ jobs:
       # With the AIR front end's crate's own tests, and the dev-tools crate's:
       # its tool runner and L3 checks.
       - name: Test metal2vulkan
-        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 
       # GPU-free on every host: tests that open a device compile only under `--cfg m2v_gpu` or
       # `--cfg m2v_cpu_icd`, and no device-opening code runs without one of them.

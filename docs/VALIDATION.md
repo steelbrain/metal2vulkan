@@ -197,27 +197,13 @@ note under `refs/notes/matrix`: one JSON document per commit, kept in the local 
 never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one line per leg.
 CONTRIBUTING.md says how to run it.
 
-Both end with one table: every harness row over its limit on every leg (the harness budget
-below), with its kind (GPU time, host time, own part for a creation row judged on the new runtime's own
-part, or count for the instructions gate), its ratio and
-limit, the frozen arm's verdict on it (`VOID` by either rule below, `stands`, `rebased` or `no base`), and its
-status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner, its
-age in rounds and the ratio it was owned at; a known gap, with the place it was ruled; or, for a
-row with neither, `NEW` in the first round it is over and `UNOWNED` after. A row of a card's own
-variance (`CARD_VARIANCE`) reads as its card's known gap. A row past its limit that an open
-record holds fails no leg while its ratio, after its re-time, is within 3% of the ratio it was
-owned at, and fails it past that; a known gap's row fails no leg unless a ruling gave it a
-ceiling (`HARNESS_CEILINGS`) and it is past it. Either is still listed. After the table, the
-report names every open record and gap whose rows are within their limits on every leg of their
-card that timed them, for removal from `status.tsv`.
-
 A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`, or `lint`. Each GPU runs on one node, and
 the nodes run at once; a node with several leg GPUs runs their device tests in turn in one job that
 holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `replay::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`), both runtimes in one process (`harness --runtime new,old`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `replay::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`) on the new runtime (`harness --runtime new`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests (under the validation layer) and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
 | `lavapipe` | The gate's suites and the device tests (`metal2vulkan-rt`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
@@ -257,151 +243,61 @@ changes the harness sets the base for the next.
 | Kind | What it counts | Fails when |
 |---|---|---|
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created; and the replay player's totals of a play on the new runtime (`replay-rt/STREAM/RANGE/NAME`, [REPLAY-STREAM.md](REPLAY-STREAM.md) section 10), each one two plays of one stream at one commit on one card gave alike, printed only by a play that finished its range and skipped nothing | It is larger than the base's; a replay total, when it differs from the base's either way, or when the base has it and the leg does not (`EQUAL_METRICS`) |
-| `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run, the p50 over the row's timed runs: the whole process's (`harness-<runtime>/<row>/per_run`), and where the runtime names its threads, theirs with the harness's thread (`.../own_per_run`) and the rest, a driver's own threads (`.../others_per_run`) | It is more than 1% over the base's; the harness's counts are judged by the instructions gate instead |
+| `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run, the p50 over the row's timed runs: the whole process's (`harness-<runtime>/<row>/per_run`), and where the runtime names its threads, theirs with the harness's thread (`.../own_per_run`) and the rest, a driver's own threads (`.../others_per_run`) | It is more than 1% over the base's; the harness's counts are judged by the instructions gate instead (below) |
 | `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100`; for the memory pool's `blocks`, which frees allocations an earlier workload left idle once the most bytes in use over its window falls and the device is quiet for 20 ms, only `@200` over `@100` |
-| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: for the frame rows (`frame`, `frame_5cb`), their throughput, two runs in flight, from one run's last completed handler to the next's, and their latency from idle as rows of their own (`<row>_from_idle`, held to the row's ceiling and floor), one run in flight, from its first commit to its last completed handler; for another workload that times its command buffers, its last command buffer's commit-to-complete time (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here and judged by the harness budget) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs. A leg with such an outlier of a harness row's time on the new runtime has its harness timed once more after every leg is in, and an outlier fails the leg only where both passes agree |
-| `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
+| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: for the frame rows (`frame`, `frame_5cb`), their throughput, two runs in flight, from one run's last completed handler to the next's, and their latency from idle as rows of their own (`<row>_from_idle`), one run in flight, from its first commit to its last completed handler; for another workload that times its command buffers, its last command buffer's commit-to-complete time (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs. A leg with such an outlier of a harness row's time on the new runtime has its harness timed once more after every leg is in, and an outlier fails the leg only where both passes agree |
+| `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | Never: it says what work the row's times measured |
 | `locks` | The lock budget's locked instructions per million added commands (`lock_budget/draw`, `lock_budget/bound_draw`, `lock_budget/dispatch`; rt's `tests::locks`), the whole process's in user space, on a node whose matrix setup names its CPU's event in `M2V_LOCK_EVENT` (`cpu_core/r21d0`, `r1e25`) | The test fails past 0.25 per added command, on every node alike; on a node whose setup names the event, a GPU leg missing any of the three fails; elsewhere each budget test passes counting nothing and prints `M2V-MATRIX uncounted lock_budget/<key>`, which the leg's line shows as `not counted` |
 
 Every cache has a test that fills it past its capacity and records its gauge.
 
-The old runtime takes no fixes until the cutover deletes it, so its failures that the matrix has
-met are parked (`PARKED_TESTS` and `PARKED_RECORDS` in `scripts/matrix/results.py`, each with its
-reason): a parked test's failure, a parked gauge's change between `@100` and `@200`, or a parked
-time's cross-GPU outlier is named on the leg's line and fails no leg. A parked gauge's `@drop` still fails. A workload that
-failed on the old runtime (`M2V-FAILED harness-old/<row>`, which the harness prints beside its
-`FAILED` line) fails no leg either: the budget below names its row as not compared. The list goes with the old
-runtime.
+Two kinds of harness record are parked (`PARKED_RECORDS` in `scripts/matrix/results.py`): the
+warm first-use records and the rows' GPU times, both below. A parked gauge's change between `@100`
+and `@200`, or a parked time's cross-GPU outlier, is named on the leg's line and fails no leg; a
+parked gauge's `@drop` still fails.
 
 The harness's first-use records (`harness-new/<set>/first_use_*`: how many of the new runtime's
 first pipeline uses waited, and for how long) depend on the driver's shader cache, which outlives a
-run. The two runtimes' rows are timed in one process, `harness --runtime new,old`: each workload
-runs on the new runtime, then on the old, so their passes alternate on the GPU, the node and the
-driver as they are at that moment, and a clock or a co-runner that moves one moves the other
-alike. The new runtime runs first in each workload, so its first uses compile before the old
-runtime's of the same workload, as cold as in a process of its own. The process has a fresh empty
-cache directory (`MESA_SHADER_CACHE_DIR` for
-Mesa, `__GL_SHADER_DISK_CACHE_PATH` for NVIDIA; on the Windows host, `LOCALAPPDATA` and
-`USERPROFILE` point into it, which the Intel driver's cache follows), and a fresh empty store for
-each runtime's own pipelines (the harness's `--store`: the old runtime's shader cache, the new
-runtime's cache directory), so its first uses and its `create_state` row are cold on both
-runtimes: those records are judged. A short second run on the same directory and store follows
-(`--runs 5 --warmup 1 --no-settle`), and its first-use records are kept as
+run. The harness times the new runtime's rows in one process, `harness --runtime new`, with a fresh
+empty cache directory (`MESA_SHADER_CACHE_DIR` for Mesa, `__GL_SHADER_DISK_CACHE_PATH` for NVIDIA;
+on the Windows host, `LOCALAPPDATA` and `USERPROFILE` point into it, which the Intel driver's cache
+follows), and a fresh empty store for the runtime's own pipelines (the harness's `--store`), so its
+first uses and its `create_state` row are cold. A short second run on the same directory and store
+follows (`--runs 5 --warmup 1 --no-settle`), and its first-use records are kept as
 `harness-new-warm/<set>/first_use_*`, the same first uses with both warm; they are parked.
 
-Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run alone after them,
-`--only 'create_*'`, in five rounds, each round one process per runtime (`--runtime new`,
-`--runtime old`, the order alternating from round to round), each process on a fresh empty cache
-directory and store. A cold first sample is so compared cold against cold: no row before it, and
-no work of the other runtime in its process, warms the driver for it. On an Iris Xe the driver's
-process-wide setup, paid by whichever runtime makes the process's first pipeline, took the old
-runtime's `create_state/first` from 16.7 ms alone to 5.3 ms behind the new runtime's in one
-process, which a shared process charged to the new runtime alone. The first round's records are
-kept whole, their devices' gauges at drop as `harness-<runtime>/creates/device/...`; of each later
-process, only the creation rows' first samples (`<row>/first`, `/first_call`,
-`/first_one_thread`, `/first_take`, `/next_take`, `/first_allocation_total`, `/device_first`,
-one sample per process), as `harness-first/<row>/<n>/<runtime>`, parked for the `time` rule.
-
-The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
-and the parked records. The old runtime, frozen, is its noise meter: on each GPU, the old
-runtime's time a row is judged on (its GPU time where it is judged on that, a creation row's
-median of five rounds) is compared with the same time in the leg's base, the previous round,
-and a row whose old time moved more than 10% either way is VOID for the round on that GPU: it is
-named on the leg's line and judged on nothing, and its comparison comes only from a re-time in
-one process with both runtimes interleaved. The report shows that move on every row the base has
-(`FROZEN_DRIFT` in `scripts/matrix/results.py`). A second rule voids a row judged by its host time
-and not re-timed in pairs whose excess over its limit (its ratio over the limit, less 1) is
-smaller than its own old time's move in the round, since the old runtime's drift alone could
-carry it there (`excess_void`). The leg's lines name the rows each rule voided. Neither rule makes
-a row red: a row past its limit is red only after its paired re-time agrees. It measures noise only between rounds of one
-harness, one old runtime and one timing shape: where the trees of `crates/metal2vulkan-harness`
-or `crates/metal2vulkan-runtime` differ between the two commits, every row but the creation rows
-reads `rebased` and voids nothing, and where the base was timed in another shape (the note's
-`shape`), every row does. Within a leg the old runtime's own spread across its passes is
-measured too: of each row the leg re-timed, its old time in the leg's main run and in each
-re-timed pair (the time the row is judged on), the largest over the smallest, less 1; a
-creation row's first samples, cold and judged cold against cold, never count. The leg's line
-names the largest as its base spread (`n/a` where no row was re-timed). Past 10%
-(`BASE_SPREAD`) the leg's times are VOID: the matrix times its harness once more, after the
-node's other jobs, and judges that timing; a leg VOID again reads `venue unstable` (verdict
-`UNSTABLE`), and its times fail nothing. On each GPU, a harness row timed on both runtimes in the leg
-(`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
-the old's, times the row's floor on that GPU where it has one: the widest ratio between two of
-the old runtime's own runs of the row there (`scripts/matrix/floors.tsv`, measured again when the
-harness or the old runtime's build changes), so a difference within the old runtime's own spread
-is not the new runtime's. A row with a GPU time on both runtimes is judged on its GPU time
-instead, against the floor of the old runtime's GPU time from the same runs
-(`scripts/matrix/gpu-floors.tsv`), its times shown beside it: a single kernel's GPU time spreads
-a few percent where its host time spreads up to 1.3 (the XTX's `simd_reduce`: GPU p50 36.96-37.12
-µs over 8 runs, host time 44.9-55.8 µs). The frame and burst rows (`WALL_ROWS` in
-`scripts/matrix/results.py`), whose GPU time spans the gaps between their command buffers and
-spreads as widely, stay on their times and floors, and where both runtimes counted them (Linux,
-a node that grants the counter), each must also pass the instructions gate, on the new runtime's
-own instructions per timed run: those of the threads it started, which `Gauges::threads` names,
-and of the harness's thread (`instructions harness-new/<row>/own_per_run`). A driver's own threads
-are left out (`.../others_per_run`, shown beside): they swing by millions of instructions per run
-between processes (NVIDIA's on `burst_160`, 0 to 25 million), where the runtime's own do not.
-EXACT: the own count is at most 1.03 times its stored count (`scripts/matrix/instructions.tsv`:
-one count per row where the legs agree within 3%, else one per driver family). A stored count
-only ratchets down: a leg more than 1% under it is named, and nothing raises it without a ruling;
-a row with none stored is named. LENIENT, named on every row: the own count is at most the old
-runtime's whole count (`.../per_run`), the old runtime naming none of its threads, so its driver's
-share cannot be taken out. A new runtime that records its whole count but not its own fails the
-row. A time that moves while its count holds names waits. Every row records its counts; only
-these are gated on them. On a node whose CPU's clock follows the load (`CLOCK_FOLLOWS_LOAD` in
-`scripts/matrix/results.py`, by potluck's CPU model: the Ryzen 7 7840HS, whose cores' mean clock
-tracked the frame rows' pass time on its Radeon 780M, r = -0.88 over twelve passes of one build),
-the frame rows (`frame`, `frame_5cb` and their `_from_idle` rows) of every card the node hosts
-are judged by the instructions gate alone, a latency from idle row by its workload's counts:
-their time is named on the leg's line and judged only as a cross-GPU outlier, the leg re-times
-none of them, and their old runtime's spread voids no leg. The leg's line names the rule that
-judged each row (`rows judged by ...`). A row whose GPU time varies on
-one card itself (`CARD_VARIANCE`: the XTX's `sampling` and `constant_managed`) is named on the
-leg's line as the card's variance and fails nothing. A row over it fails its leg unless a ruling, made after the work on that
-row, gave it a ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`); a ceiling
-is never taken from a measured ratio, and the greater of a row's ceiling and floor sets its limit.
-A listed row fails its leg past its ceiling times 1.03, the noise allowance parity gets, and one
-within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches,
-and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
-the medians of its five rounds, the new runtime's over the old's; a first sample alone is
-never past its limit. Where a ruling names the driver's part of a row on a GPU
-(`OWN_PART_GATES` in `scripts/matrix/results.py`: NVIDIA's `create_64MiB/first_take`, whose
-driver's part is the new runtime's `vkAllocateMemory` time in the same process,
-`/first_allocation_total`), the row is judged on the new runtime's own part, each process's
-first sample less its driver's part, against the old runtime's whole first sample, with the
-driver's part, the whole ratio and the gap's name shown beside it; an own part past the row's
-limit fails the leg as a regression. A compute pipeline state row's `/first` is its creation and one dispatch
-through to completion, one threadgroup of 64 by 1 by 1, the replay streams' commonest compute
-dispatch size (24% of their dispatches), since Metal compiles at the creation and a runtime may
-compile at the first dispatch instead, for the dispatch's size, as the old runtime does; its
-`/first_call`, the creation call alone, is shown beside it with the ratio of its medians and
-never judged, and so is `/first_one_thread`, another content's first dispatched as one thread,
-a size of few dispatches (under 4% of them). Each creation row's first sample
-is a fresh object's on a device that has gone that way once: the harness makes a warm-up of the
-row's kind first (a buffer of the same length, kept; a compute state of another kernel, with its
-dispatch; a render state of another fragment function), so what a device pays once, which a guest
-that keeps its device pays once in its life, stays out of the judged sample. The warm-up's own
-time, `/device_first`, is shown the same way and never judged. A row whose time
-either runtime recorded more than once fails, uncompared. A row whose size follows the device
-(`long_4cb`) is sized by the first runtime's pass, and the later runs, warm and re-timed ones
+Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run after them in a
+process of their own, `--only 'create_*'`, on a fresh empty cache directory and store, so no row
+before them warms the driver for them; that process's device records are kept as
+`harness-<runtime>/creates/device/...`, apart from the other process's. Each creation row's first
+sample is a fresh object's on a device that has gone that way once: the harness makes a warm-up of
+the row's kind first (a buffer of the same length, kept; a compute state of another kernel, with
+its dispatch; a render state of another fragment function), so what a device pays once, which a
+guest that keeps its device pays once in its life, stays out of the sample. A row whose size
+follows the device (`long_4cb`) is sized by the first run, and the later runs, warm and alone ones
 included, are given that size (the harness's `--size`); each run records it as
-`size harness-<runtime>/<row>`, and a row the two runtimes ran at different sizes fails,
-uncompared, its times measuring different work.
-A row over its limit is re-timed once in its leg before the leg ends: two pairs of runs of the row
-alone, old then new, then new then old (A B B A). It fails only if the median of the pairs' ratios,
-of the times it is judged on, is past its limit too. A leg re-times at most 8 rows, the furthest
-over first; a row it does not re-time is judged by its one time. The pairs are kept as
-`harness-retime/<row>/<pair>/<runtime>` and `harness-retime-gpu/<row>/<pair>/<runtime>` records,
-parked for the `time` rule.
-Each row's GPU time on each runtime, the p50 over its timed runs of a run's first GPU start to its
-last GPU end, is recorded as `time harness-gpu-<runtime>/<row>` where the row has one. The budget
-judges a row on it as above, and shows it beside the times of a row it does not judge on it; it is
-parked for the `time` rule. `run` and `show` print, under each leg's line, every harness row's time and GPU time
-on both runtimes and the ratio of the times, and where the leg counted them, its instructions per
-run (with the new runtime's own) and their ratios.
-The budget goes with the old runtime.
+`size harness-<runtime>/<row>`.
 
-The old runtime's translations do not move either. The golden hash table compiles through
+A harness row's time is judged by the `time` rule alone, as a cross-GPU outlier, and a row whose
+time was recorded more than once fails, with no one time to show. The frame and burst rows
+(`WALL_ROWS` in `scripts/matrix/results.py`), where the new runtime counted them (Linux, a node
+that grants the counter), must also pass the instructions gate, on the new runtime's own
+instructions per timed run: those of the threads it started, which `Gauges::threads` names, and of
+the harness's thread (`instructions harness-new/<row>/own_per_run`). A driver's own threads are
+left out (`.../others_per_run`): they swing by millions of instructions per run between processes
+(NVIDIA's on `burst_160`, 0 to 25 million), where the runtime's own do not. The own count is at
+most 1.03 times its stored count (`scripts/matrix/instructions.tsv`: one count per row where the
+legs agree within 3%, else one per driver family). A stored count only ratchets down: a leg more
+than 1% under it is named, and nothing raises it without a ruling; a row with none stored is named.
+A new runtime that records its whole count but not its own fails the row. Every row records its
+counts; only these are gated on them.
+
+Each row's GPU time, the p50 over its timed runs of a run's first GPU start to its last GPU end, is
+recorded as `time harness-gpu-<runtime>/<row>` where the row has one; it is parked, shown and not
+judged. `run` and `show` print, under each leg's line, every harness row's time, its GPU time and,
+where the leg counted them, its instructions per run (with the new runtime's own).
+
+The old runtime's translations do not move. The golden hash table compiles through
 `Device::new`, the old runtime's path. When its test reports a cell that changed under an unchanged
 key, or one under a changed profile fingerprint, the leg fails with `OLD PATH MOVED`. The one
 exception is a range where a commit since the table's last bless has a subject that starts with

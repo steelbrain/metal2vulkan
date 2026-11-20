@@ -13,62 +13,6 @@ slow-timeout = { period = "60s", terminate-after = 20 }
 filter = 'test(/::soak_/)'
 slow-timeout = { period = "300s", terminate-after = 24 }
 
-# The runtime's isolation tests of command queues sharing `VkQueue`s run alone. Each holds a
-# compositor's 99th percentile of commit-to-completion latency under 5 ms, and its stalls over
-# 10 ms to at most one, beside an application's 30 ms command buffers (and beside a queue waiting
-# on the GPU for them): a bound of the GPU's time, which other test processes' work on the same GPU
-# spends too. So does the held-head test, whose hold needs the long command buffer (about 30 ms of
-# GPU time as it measures it first) to have more than the hold's budget left when the next commits
-# come: other processes' work changes that time between its measure and its run. On the RTX 2080
-# the gpu-wait and held-head tests failed only beside the parallel suite, and pass alone. So does
-# the turns test, which holds each of a burst's command buffers to a submission at most 20 ms after
-# the GPU end of the one before it: on lavapipe (Mesa 26.2.4) on msi-laptop, beside two other build
-# and test jobs, the burst's eighth missed it (m3-max-51548), and the same tests on an idle node
-# passed 3 runs of 3 (m3-max-51697).
-[[profile.default.overrides]]
-filter = 'package(metal2vulkan-runtime) & test(/^tests::queue_share_device::(a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long|an_unshared_compositor_beside_a_long_queue_never_stalls|a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latency|an_unshared_head_behind_an_earlier_commit_of_the_held_queue_holds_nothing|a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst)$/)'
-threads-required = 'num-test-threads'
-
-# The runtime's GPU-start test of a command buffer's own long work runs alone. It holds the time
-# from the command buffer's kernel end to its GPU start under half its life, a bound the GPU's
-# queue sets: other test processes' work on the same GPU runs first. In an RTX 5080 Laptop GPU's
-# whole runtime suite the start came 14.5 ms after the kernel end, of a 25.8 ms life, where the
-# 64 dispatches' GPU span of 11.2 ms still held the work.
-[[profile.default.overrides]]
-filter = 'package(metal2vulkan-runtime) & test(/^tests::start_stamp::a_command_buffer_s_gpu_start_comes_before_its_own_long_work$/)'
-threads-required = 'num-test-threads'
-
-# The runtime's teardown test of the queue-switch check runs alone. It holds the teardown's wait
-# for the check (its stop at the next step, its release of its Vulkan objects and of its shares)
-# under the 16 ms the owner allows a wait. On an RTX 5080 Laptop GPU (NVIDIA 615.71.09) that wait
-# took 1.12 to 1.23 ms in 3 runs with the GPU to itself (the objects' release 0.79 to 0.93 ms, the
-# shares' 2 us), and 26.5 and 42.4 ms in runs where other test processes used the GPU.
-[[profile.default.overrides]]
-filter = 'package(metal2vulkan-runtime) & test(/^tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread$/)'
-threads-required = 'num-test-threads'
-
-# The runtime's test of command buffers made `Scheduled` behind a waiting host step runs alone. It
-# holds the long command buffer's commit call under the 16 ms the owner allows a wait in one of its
-# runs at least, by the call's own clock. That call is recording on the program's thread alone (no
-# pipeline wait, no wait for the scheduler's lock, no submission): on a Radeon 780M (RADV PHOENIX,
-# Ryzen 7 7840HS) its later calls took 1.1 to 1.2 ms in the unoptimized test build with the GPU to
-# itself, 0.10 to 0.26 ms in a release build. Beside the device suite's other processes (load
-# average 14 on 16 threads) the same work took many times the CPU time and waited for a CPU too:
-# 10.7 and 16.3 ms in the test build (8.2 and 10.4 ms of them on a CPU), and up to 38 ms in the
-# rounds' runs; 5.8 and 7.0 ms in a release build (4.7 and 7.3 ms on a CPU).
-[[profile.default.overrides]]
-filter = 'package(metal2vulkan-runtime) & test(/^tests::held_step_order::command_buffers_behind_a_waiting_step_read_scheduled$/)'
-threads-required = 'num-test-threads'
-
-# The runtime's video interop tests run alone on Linux. Each makes a device with extra compute and
-# video decode queues; on an RTX 3090 (NVIDIA 620.70.06) several such devices made at once by
-# processes of these tests now and then met an error the kernel logged (Xid 69, 32 or 13),
-# their devices lost, and another process's submission never completed (HOWTO.md, section 8).
-[[profile.default.overrides]]
-platform = 'cfg(target_os = "linux")'
-filter = 'package(metal2vulkan-runtime) & test(/^tests::video_interop::/)'
-threads-required = 'num-test-threads'
-
 # The new runtime's device test of accesses up to 2 GiB runs alone. Its buffer is one Shared block
 # of `MAX_BUFFER_LENGTH` (2 GiB), host memory where the Shared memory type is the host's (an RTX
 # 2080, NVIDIA 620.70.06). Beside the runtime's compute encoder tests and three other translate

@@ -57,9 +57,6 @@ feature_clippy() {
             -j "$jobs" -- -D warnings
         echo "::endgroup::"
     done
-    echo "::group::metal2vulkan-runtime"
-    cargo clippy -p metal2vulkan-runtime --all-targets -j "$jobs" -- -D warnings
-    echo "::endgroup::"
     for features in "" serde; do
         echo "::group::metal2vulkan-air features=${features:-none}"
         cargo clippy -p metal2vulkan-air --all-targets --no-default-features --features "$features" \
@@ -92,7 +89,7 @@ step "Package the published crates" \
     cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-devtools \
     -j "$jobs"
 step "Test metal2vulkan" \
-    cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime \
+    cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt \
     -p metal2vulkan-devtools --all-features --build-jobs "$jobs"
 step "Test validation suite" \
     cargo nextest run -p metal2vulkan-validation --all-features --build-jobs "$jobs"

@@ -162,14 +162,12 @@ done
 """
 
 
-class TimedAgainTests(unittest.TestCase):
-    def test_a_node_s_harnesses_are_timed_in_one_job_and_a_spread_past_the_line_once_more_after_it(self):
+class NodeTimingTests(unittest.TestCase):
+    def test_a_node_s_harnesses_are_timed_in_one_job_holding_the_node(self):
         run = run_of({})
         run.harness, run.layer, run.cfg = True, None, {}
         legs = [matrix.Leg("1002:744c", "n", "0000:06:00.0", "radeon"),
                 matrix.Leg("10de:1e87", "n", "0000:09:00.0", "nvidia")]
-        # Each timing's old runtime runs of its one re-timed row: the main run's, then its pairs'.
-        olds = {"1002:744c": [[100.0, 115.0], [100.0, 104.0], [100.0, 140.0]], "10de:1e87": [[100.0, 101.0]]}
         asked = []
 
         def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None,
@@ -180,12 +178,8 @@ class TimedAgainTests(unittest.TestCase):
                 return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-SUITE {leg.id} rt exit 0\n" for leg in these), {"id": name}
             lines = []
             for leg in these:
-                lines += [f"M2V-LEG {leg.id} begin", "M2V-MATRIX time harness-old/alu 100.0",
-                          "M2V-MATRIX time harness-new/alu 110.0"]
-                for pair, old in enumerate(olds[leg.id].pop(0), 1):
-                    lines += [f"M2V-MATRIX time harness-retime/alu/{pair}/old {old}",
-                              f"M2V-MATRIX time harness-retime/alu/{pair}/new {old * 1.1:.1f}"]
-                lines.append(f"M2V-SUITE {leg.id} harness exit 0")
+                lines += [f"M2V-LEG {leg.id} begin", "M2V-MATRIX time harness-new/alu 110.0",
+                          f"M2V-SUITE {leg.id} harness exit 0"]
             return 0, "\n".join(lines) + "\n", {"id": name}
 
         legs_of = legs
@@ -193,14 +187,12 @@ class TimedAgainTests(unittest.TestCase):
         with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
             run.gpu_node("n", legs, lambda: (("carry", "mirror", "rev"), None))
         # Both legs' harnesses are timed in ONE job holding the node alone, sized for two legs; it is
-        # the node's last planned job, so it tidies. The XTX's old runtime spread 15% in its first
-        # timing: it alone is timed once more, in one more such job, which lays the tree out again
-        # and tidies too; once more only.
+        # the node's last planned job, so it tidies.
         self.assertEqual(asked, [("rt-n", ["1002:744c", "10de:1e87"], False, 1, False),
-                                 ("harness-n", ["1002:744c", "10de:1e87"], True, 2, True),
-                                 ("harness-n-again", ["1002:744c"], True, 1, True)])
-        self.assertEqual([(round(spread, 2), row) for spread, row in legs[0].timings], [(0.15, "alu"), (0.04, "alu")])
-        self.assertEqual([(round(spread, 2), row) for spread, row in legs[1].timings], [(0.01, "alu")])
+                                 ("harness-n", ["1002:744c", "10de:1e87"], True, 2, True)])
+        for leg in legs:
+            self.assertEqual(leg.parsed["suites"][matrix.HARNESS_SUITE]["records"]["time"],
+                             {"harness-new/alu": 110.0})
         self.assertEqual(run.carried, {"n": ("carry", "mirror", "rev")})
 
 
@@ -221,7 +213,7 @@ class OutlierRetimeTests(unittest.TestCase):
         def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None, legs=1):
             asked.append((kind, node, name, list(gpus), list(carries), space, exclusive, legs,
                           'rm -rf "$S"' in script))
-            return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-MATRIX time harness-old/alu 100.0\n"
+            return 0, "".join(f"M2V-LEG {leg.id} begin\n"
                               f"M2V-MATRIX time harness-new/alu 101.0\nM2V-SUITE {leg.id} harness exit 0\n"
                               for leg in legs_of if leg.gpu in gpus), {"id": name}
 
@@ -237,7 +229,7 @@ class OutlierRetimeTests(unittest.TestCase):
         for leg, name in zip(legs, ("harness-n-outlier", "harness-n-outlier",
                                     "winharness-8086:3e9b-outlier")):
             self.assertEqual(leg.parsed["suites"][matrix.HARNESS_SUITE]["records"]["time"],
-                             {"harness-old/alu": 100.0, "harness-new/alu": 101.0})
+                             {"harness-new/alu": 101.0})
             self.assertEqual(leg.jobs, [name])
         self.assertEqual(run.failures, {"1002:15bf": ["its cross-GPU outlier's re-time found no carry on away"]})
 
@@ -256,7 +248,7 @@ class OutlierRetimeTests(unittest.TestCase):
 
 
 class HarnessRunTests(unittest.TestCase):
-    def test_both_runtimes_are_timed_in_one_process_and_each_runtime_s_creation_rows_in_its_own(self):
+    def test_the_rows_are_timed_in_one_process_and_the_creation_rows_in_their_own(self):
         with tempfile.TemporaryDirectory() as work:
             fake, log = Path(work) / "harness", Path(work) / "log"
             fake.write_text(FAKE_HARNESS)
@@ -266,23 +258,16 @@ class HarnessRunTests(unittest.TestCase):
                                  env={"PATH": "/usr/bin:/bin", "LOG": str(log), "TMPDIR": work})
             self.assertEqual(run.returncode, 0, run.stderr)
             calls = log.read_text().splitlines()
-        # One process times both runtimes, the new runtime's pass first in each workload; the warm
-        # run is the new runtime's; each of the five creation rounds times each runtime in a
-        # process of its own, cold against cold, the order alternating.
-        self.assertEqual(calls, ["new,old all", "new all"] + ["new create_*", "old create_*",
-                                                             "old create_*", "new create_*"] * 2
-                         + ["new create_*", "old create_*"])
+        # One process times the rows, a second the warm first uses, and a third the creation rows
+        # on a fresh cache and store.
+        self.assertEqual(calls, ["new all", "new all", "new create_*"])
         legs = matrix.results.parse_job("M2V-LEG a begin\n" + run.stdout)
         suites = legs["a"]["suites"]
         self.assertEqual(list(suites), [matrix.HARNESS_SUITE])
         times = suites[matrix.HARNESS_SUITE]["records"]["time"]
-        self.assertEqual(sorted(key for key in times if not key.startswith(matrix.results.HARNESS_FIRST)), [
+        self.assertEqual(sorted(times), [
             "harness-new-warm/authored/first_use_wait_total", "harness-new/alu",
-            "harness-new/authored/first_use_wait_total", "harness-new/create_state/first",
-            "harness-old/alu", "harness-old/authored/first_use_wait_total", "harness-old/create_state/first"])
-        self.assertEqual(sorted(key for key in times if key.startswith(matrix.results.HARNESS_FIRST)),
-                         [f"{matrix.results.HARNESS_FIRST}create_state/first/{n}/{runtime}"
-                          for n in range(2, 6) for runtime in ("new", "old")])
+            "harness-new/authored/first_use_wait_total", "harness-new/create_state/first"])
         self.assertEqual(suites[matrix.HARNESS_SUITE]["duplicated"], set())
 
     def test_a_cross_gpu_outlier_s_rows_are_timed_alone_in_fresh_processes_in_its_second_pass(self):
@@ -295,11 +280,11 @@ class HarnessRunTests(unittest.TestCase):
                                  env={"PATH": "/usr/bin:/bin", "LOG": str(log), "TMPDIR": work, "M2V_ALONE": "alu"})
             self.assertEqual(run.returncode, 0, run.stderr)
             calls = log.read_text().splitlines()
-        # After the first pass's runs, the row alone, in pairs, old then new, then new then old.
-        self.assertEqual(calls[-4:], ["old alu", "new alu", "new alu", "old alu"])
+        # After the first pass's runs, the row alone, in two processes of its own.
+        self.assertEqual(calls[-3:], ["new create_*", "new alu", "new alu"])
         times = matrix.results.parse_job("M2V-LEG a begin\n" + run.stdout)["a"]["suites"][matrix.HARNESS_SUITE]["records"]["time"]
         self.assertEqual(sorted(key for key in times if key.startswith(matrix.results.HARNESS_ALONE)),
-                         [f"{matrix.results.HARNESS_ALONE}alu/{pair}/{runtime}" for pair in (1, 2) for runtime in ("new", "old")])
+                         [f"{matrix.results.HARNESS_ALONE}alu/{pair}/new" for pair in (1, 2)])
         # A leg's alone rows reach its job's shell; a first pass names none.
         leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
         self.assertIn("leg 1002:15bf radeon '' ''", matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40,
@@ -307,17 +292,6 @@ class HarnessRunTests(unittest.TestCase):
         leg.alone = ["alu", "create_64MiB/device_first"]
         self.assertIn("leg 1002:15bf radeon '' 'alu create_64MiB/device_first'",
                       matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "harness", False))
-
-
-class JudgingRuleTests(unittest.TestCase):
-    def test_a_node_whose_cpu_clock_follows_the_load_re_times_no_frame_row(self):
-        cpu = next(iter(matrix.results.CLOCK_FOLLOWS_LOAD))
-        listed = matrix.harness_runs('"w"', '"h"', "a", cpu=cpu)
-        self.assertIn(f"-v skipre='{matrix.results.retime_skip(cpu)}'", listed)
-        self.assertIn("-v skipre='' ", matrix.harness_runs('"w"', '"h"', "a"))
-        script = matrix.gpu_script("abc", "", [matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")],
-                                   "POTLUCK_MIRROR_x", "0" * 40, "harness", False, cpu=cpu)
-        self.assertIn(f"-v skipre='{matrix.results.retime_skip(cpu)}'", script)
 
 
 class DeviceTestTests(unittest.TestCase):

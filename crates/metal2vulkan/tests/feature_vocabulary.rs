@@ -1,26 +1,19 @@
 //! The feature vocabulary against the member tables that must cover it.
 //!
-//! [`VkFeature`] is the vocabulary; a `VkFeature` by itself enables nothing. Four tables in three
+//! [`VkFeature`] is the vocabulary; a `VkFeature` by itself enables nothing. Two tables in two
 //! crates carry the structure member each feature sets or is read from, and the compiler holds
-//! none of them to the vocabulary:
+//! neither to the vocabulary:
 //!
 //! - `crates/metal2vulkan/src/device/khronos.rs`'s `FEATURE_MEMBERS`: the member name a captured
 //!   Khronos profile states the feature by. A feature with no row there is read from a device but
 //!   never from its committed profile, which is what stopped the RADV venue over `taskShader` and
 //!   `meshShader`.
-//! - `crates/metal2vulkan-runtime/src/enables.rs`'s `MEMBERS`: the member the runtime sets at
-//!   `vkCreateDevice`. A feature with no row there makes `Enables::of` answer
-//!   `RuntimeGap::FeatureEnable`, so `Device::new` fails on **every** device that reports the
-//!   feature.
-//! - the same file's `CORE_1_3`: that member in `VkPhysicalDeviceVulkan13Features`, the only place
-//!   a device at Vulkan 1.3 or later takes it. A feature Vulkan 1.3 promoted (an
-//!   [`Exposure::Promoted`] at 1.3) with no row there fails the same way on a 1.3 device alone.
 //! - `crates/metal2vulkan-validation/src/candidate/platform/enables.rs`'s `MEMBERS`: the member a
 //!   validation context enables and reads back. A feature mapped to `None` there (which reads as
 //!   the deliberate "no `VkFeature` of ours corresponds") rather than to its own name is enabled
 //!   by no context and reported as enabled by none.
 //!
-//! This test reads the four tables from the sources, as `refusal_surface` reads the runtime's
+//! This test reads the two tables from the sources, as `refusal_surface` reads the runtime's
 //! refusals, because each is private to its crate: a feature half-added to the vocabulary fails
 //! here, in the first crate's own suite, instead of in a later crate's run or on a device.
 //!
@@ -32,7 +25,7 @@
 //!   are not features, and that crate's own `every_feature_is_enabled_or_excluded_by_name` and
 //!   `a_member_the_vocabulary_does_not_name_carries_its_registry_name` hold them.
 
-use metal2vulkan::device::{ApiVersion, Exposure, VkFeature};
+use metal2vulkan::device::VkFeature;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -81,17 +74,6 @@ fn qualified_features(region: &str) -> Vec<String> {
         .collect()
 }
 
-/// The feature each `;`-terminated row of `region` names after its `=>`
-/// (`Core.core.shader_int64 => ShaderInt64;`, the runtime's rows).
-fn arrow_features(region: &str) -> Vec<String> {
-    region
-        .split(';')
-        .filter_map(|row| row.rsplit_once("=>"))
-        .map(|(_, value)| identifier(value.trim()))
-        .filter(|name| !name.is_empty())
-        .collect()
-}
-
 /// `table` in `path` covers exactly `expected`, each feature once.
 fn covers(path: &str, table: &str, found: &[String], expected: &BTreeSet<String>) {
     let mut once = BTreeSet::new();
@@ -126,9 +108,9 @@ fn vocabulary() -> BTreeSet<String> {
         .collect()
 }
 
-/// The runtime's `MEMBERS` and the validation context's `MEMBERS` name one structure member per
-/// vocabulary feature, and the Khronos reader names the member a profile states it by: a feature
-/// no table covers fails here rather than in the crate that holds the table.
+/// The validation context's `MEMBERS` names one structure member per vocabulary feature, and the
+/// Khronos reader names the member a profile states it by: a feature no table covers fails here
+/// rather than in the crate that holds the table.
 #[test]
 fn every_member_table_covers_the_vocabulary() {
     let expected = vocabulary();
@@ -149,36 +131,8 @@ fn every_member_table_covers_the_vocabulary() {
         &expected,
     );
 
-    let runtime = "crates/metal2vulkan-runtime/src/enables.rs";
-    let text = source(runtime);
-    let rows = region(runtime, &text, "    MEMBERS:", "}");
-    covers(runtime, "MEMBERS", &arrow_features(rows), &expected);
-
     let validation = "crates/metal2vulkan-validation/src/candidate/platform/enables.rs";
     let text = source(validation);
     let rows = region(validation, &text, "members! {", "}");
     covers(validation, "MEMBERS", &qualified_features(rows), &expected);
-}
-
-/// The runtime's `CORE_1_3` names the `VkPhysicalDeviceVulkan13Features` member of exactly the
-/// features Vulkan 1.3 promoted: a device at 1.3 or later takes those there and nowhere else, so a
-/// newly promoted feature without a row fails `Device::new` on a 1.3 device alone, which the
-/// committed profiles' recommendations need not reach.
-#[test]
-fn the_runtime_names_the_vulkan_1_3_member_of_every_promoted_feature() {
-    let expected: BTreeSet<String> = VkFeature::ALL
-        .iter()
-        .filter(|feature| {
-            matches!(
-                feature.exposure(),
-                Exposure::Promoted { version, .. } if version == ApiVersion::V1_3
-            )
-        })
-        .map(|feature| format!("{feature:?}"))
-        .collect();
-    assert!(expected.len() > 3, "{} promoted to 1.3", expected.len());
-    let runtime = "crates/metal2vulkan-runtime/src/enables.rs";
-    let text = source(runtime);
-    let rows = region(runtime, &text, "    CORE_1_3:", "}");
-    covers(runtime, "CORE_1_3", &arrow_features(rows), &expected);
 }

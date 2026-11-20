@@ -1,9 +1,9 @@
-//! The public surface of the three published crates, and of `metal2vulkan-rt`, which is published
+//! The public surface of the two published crates, and of `metal2vulkan-rt`, which is published
 //! under the runtime's name at the cutover, signature by signature.
 //!
 //! `api_surface` pins the **names** `metal2vulkan` exports and the construction class of each
 //! public type; `metal2vulkan-air`'s own `api_surface` pins its names. Neither pins a method's
-//! parameters or its return type, neither covers `metal2vulkan-runtime` or `metal2vulkan-rt` at
+//! parameters or its return type, neither covers `metal2vulkan-rt` at
 //! all, and neither sees a
 //! method or an enum variant disappear — so a parameter added to a public method, a return type
 //! widened to an `Option`, a unit variant that became a struct variant, and a `pub fn` that
@@ -162,7 +162,6 @@ fn the_table_covers_every_crate_it_pins() {
     }
     for (name, least) in [
         ("metal2vulkan", 1000),
-        ("metal2vulkan-runtime", 1000),
         ("metal2vulkan-air", 1000),
         ("metal2vulkan-rt", 20),
     ] {

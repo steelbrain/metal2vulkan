@@ -7,8 +7,7 @@ run through potluck, with the results attached to the commit as a git note
     scripts/matrix/matrix show [SHA]
 
 SHA defaults to development's tip. Both print each leg's verdict line, then every harness row's
-time and GPU time on both runtimes, with the old runtime's move on the leg's base, and the rows
-that move voids (results.harness_rows, results.FROZEN_DRIFT). A leg is a GPU, named by its PCI
+time, GPU time and instructions (results.harness_rows). A leg is a GPU, named by its PCI
 vendor:device (`1002:744c`), or `lavapipe`. docs/VALIDATION.md ("The matrix") has the legs, the
 records and the rules; CONTRIBUTING.md has how to run it.
 
@@ -62,19 +61,11 @@ NOTES = "refs/notes/matrix"
 LAYER = STATE / "validation-layer"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
 HARNESS = "m2v-matrix-harness"
-#: The runtimes the harness command times, in one process (`harness --runtime new,old`), in the
-#: order each workload runs on them: the new runtime first, so its first uses compile on the
-#: driver cache as it was before the workload (harness_runs). The process is the leg's one suite,
-#: HARNESS_SUITE; a failure names its runtime (`M2V-FAILED harness-<runtime>/<row>`).
-HARNESS_RUNTIMES = ("new", "old")
+#: The runtime the harness command times (`harness --runtime new`, harness_runs). The process is
+#: the leg's one suite, HARNESS_SUITE; a failure names its runtime (`M2V-FAILED
+#: harness-<runtime>/<row>`).
+HARNESS_RUNTIME = "new"
 HARNESS_SUITE = "harness"
-#: The runtimes whose first-use waits the harness also times warm (harness_runs): those that
-#: count first-use waits. The old runtime counts none.
-HARNESS_WARM = ("new",)
-#: The crates whose trees at two commits must be equal for the frozen arm to compare their legs'
-#: old runtime's times of the harness's command-buffer rows (frozen_rebase): the harness's and
-#: the old runtime's.
-FROZEN_CRATES = ("metal2vulkan-harness", "metal2vulkan-runtime")
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
@@ -167,18 +158,6 @@ def harness_tree(sha):
     return git("rev-parse", f"{sha}:crates/metal2vulkan-harness", check=False)
 
 
-def frozen_rebase(sha, shape, base_sha, base):
-    """How the leg at SHA, timed in SHAPE, differs from its base BASE (the leg at BASE_SHA) for the
-    frozen arm (results.frozen_rebased): results.REBASED_SHAPE where the base was timed in another
-    shape, results.REBASED_TREES where the harness's or the old runtime's crate tree differs
-    between the two commits, else None."""
-    if base.get("shape") != shape:
-        return results.REBASED_SHAPE
-    trees = [[git("rev-parse", f"{commit}:crates/{crate}", check=False) for crate in FROZEN_CRATES]
-             for commit in (sha, base_sha)]
-    return None if trees[0] == trees[1] else results.REBASED_TREES
-
-
 def base_times(sha, base_sha, base):
     """The times of BASE (the leg at BASE_SHA) that SHA's are judged against: none when the
     harness changed between them, and the run then sets the base for the next."""
@@ -193,8 +172,6 @@ class Leg:
     def __init__(self, leg_id, node, gpu=None, icd=None, select=False):
         self.id, self.node, self.gpu, self.icd, self.select = leg_id, node, gpu, icd, select
         self.jobs, self.parsed = [], dict(device={}, suites={})
-        # Each harness timing's old-runtime spread (results.base_spread), in order (Run.timed_again).
-        self.timings = []
         # The rows its harness's second pass re-times alone for a cross-GPU outlier (results.alone_rows).
         self.alone = []
         self.started = self.ended = None
@@ -312,10 +289,10 @@ echo "M2V-BUILD exit $a $h"
 """
 
 
-def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None, cpu=None):
+def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None):
     """A node's legs in turn, running SUITE: `rt` (the device tests, under the validation layer
-    LAYER carries, layer_lines) or `harness` (the timed workloads, both runtimes in one process,
-    harness_runs, on a node whose CPU model is CPU, without it). The node's LAST job removes the tree and its carry's mirror there
+    LAYER carries, layer_lines) or `harness` (the timed workloads, harness_runs, without it). The
+    node's LAST job removes the tree and its carry's mirror there
     (no other job reads it; potluck never prunes one), and any left by a job that never ran."""
     runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(results.card_of(leg.id) + "!" if leg.select else ""),
                                shlex.quote(" ".join(leg.alone))])
@@ -325,7 +302,7 @@ def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None, cpu=Non
     cargo nextest run --archive-file "$F" --workspace-remap "$S" -E '{DEVICE_TEST_FILTER}' {NEXTEST_OUT} 2>&1 | awk "$KEEP"
     exit ${{PIPESTATUS[0]}}"""
     else:
-        file, body = HARNESS, harness_runs('"$S/crates/metal2vulkan-harness"', '"$F"', '$1', cpu=cpu)
+        file, body = HARNESS, harness_runs('"$S/crates/metal2vulkan-harness"', '"$F"', '$1')
     tidy = """rm -rf "$S"
 m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
 find "$POTLUCK_HOME/mirrors" -maxdepth 1 -name 'm2v-matrix-*' -mmin +720 -exec rm -rf {{}} +""".format(mirror=mirror) if last else ""
@@ -354,45 +331,28 @@ exit $all
 """
 
 
-def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
+def harness_runs(manifest_dir, command, leg, windows=False):
     """The harness command on leg LEG, its one suite (HARNESS_SUITE); the shell's status is 1
-    where it failed. The two runtimes' rows are timed in one process, `--runtime` naming
-    HARNESS_RUNTIMES in order: each workload runs on each runtime in turn, so the runtimes'
-    passes alternate on the GPU, the node and the driver as they are at that moment, and a clock
-    or a co-runner that moves one moves the other alike. The process has a fresh empty driver
+    where it failed. The rows are timed in one process on HARNESS_RUNTIME, with a fresh empty driver
     shader cache (Mesa's MESA_SHADER_CACHE_DIR, NVIDIA's __GL_SHADER_DISK_CACHE_PATH; on WINDOWS,
     the Intel driver's, which follows LOCALAPPDATA and USERPROFILE), so its first uses compile
-    cold whatever ran on the node before; the new runtime runs first in each workload, so its
-    first uses, the judged ones, compile before the old runtime's of the same workload, as cold
-    as in a process of its own. For HARNESS_WARM, a short second run on the same cache follows,
-    before the suite's line, and its first-use records are kept under harness-<runtime>-warm/: the
-    same first uses with the driver's cache warm. These runs skip the creation rows
-    (results.HARNESS_CREATES): those run alone after them, in results.FIRST_RUNS rounds, each
-    round one process per runtime, the runtimes' order alternating from round to round, each
-    process on a fresh empty driver cache and store. So a creation's first sample is cold against
-    cold: no row before it, and no work of the other runtime in its process, warms the driver
-    for it (a driver's process-wide setup, paid by whichever runtime makes the process's first
-    pipeline, took one runtime's first state from 16.7 ms cold to 5.3 ms behind the other's on an
-    Iris Xe). The first round's two outputs are kept whole, their devices' records (totals and
-    gauges at drop) apart (results.CREATES_APART); of each later process's, only the first samples
-    (results.FIRST_KEEP), which results.harness_budget judges by the median of the rounds. Then the rows over their limits (results.RETIME_SELECT, at most
-    results.RETIME_ROWS, the furthest over first) are each re-timed alone in results.RETIME_PAIRS
-    pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
-    for results.harness_budget, but for those a node whose CPU model is CPU judges by their counts
-    (results.retime_skip); a frames workload's latency from idle row (results.FROM_IDLE)
-    by its workload's runs. In a cross-GPU outlier's second pass, the rows M2V_ALONE names
-    (results.alone_rows) are each run alone in results.RETIME_PAIRS pairs the same way, every
-    process on a fresh empty driver cache and store, their times kept (results.ALONE_KEEP) for
-    results.time_outliers, which judges such a row by its lowest level. A row whose size follows the device is sized by the first
-    runtime's pass, which the process gives the other, and every later run, warm and re-timed ones
-    included, is given that size (`--size`), so each runtime times the same work. The process has
-    a fresh empty store for its pipelines (`--store`, each runtime's apart in it), so its first
-    uses and its `create_state` row are cold for both runtimes; the warm run takes the same store,
-    warm; a re-timed row's runs each take a fresh store of the harness's own. The loader's
-    VK_LOADER_LAYERS_DISABLE (loader 1.3.234 and later) names the validation layer, and that layer
-    alone, since Mesa's device-select layer picks the card: whatever the node has installed, every
-    harness row is a release build without the layer."""
-    runtimes = ",".join(HARNESS_RUNTIMES)
+    cold whatever ran on the node before. A short second run on the same cache follows, before the
+    suite's line, and its first-use records are kept under harness-<runtime>-warm/: the same first
+    uses with the driver's cache warm. These runs skip the creation rows (results.HARNESS_CREATES):
+    those run after them in a process of their own on a fresh empty driver cache and store, so no
+    row before them warms the driver for them, its devices' records (totals and gauges at drop)
+    apart (results.CREATES_APART). In a cross-GPU outlier's second pass, the rows M2V_ALONE names
+    (results.alone_rows) are each run alone in results.RETIME_PAIRS processes, every one on a fresh
+    empty driver cache and store, their times kept (results.ALONE_KEEP) for results.time_outliers,
+    which judges such a row by its lowest level; a frames workload's latency from idle row
+    (results.FROM_IDLE) by its workload's runs. A row whose size follows the device is sized by the
+    first run, and every later run, warm and alone ones included, is given that size (`--size`),
+    so each times the same work. The process has a fresh empty store for its pipelines (`--store`),
+    so its first uses and its `create_state` row are cold; the warm run takes the same store, warm.
+    The loader's VK_LOADER_LAYERS_DISABLE (loader 1.3.234 and later) names the validation layer,
+    and that layer alone, since Mesa's device-select layer picks the card: whatever the node has
+    installed, every harness row is a release build without the layer."""
+    runtime = HARNESS_RUNTIME
     profile = unprofile = ""
     store = '"$(cygpath -w "$store")"' if windows else '"$store"'
     point = ""
@@ -404,62 +364,31 @@ def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
         unprofile = '\n    export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
     creates = f"'{results.HARNESS_CREATES}*'"
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
-    limits = "\n".join(f"      {leg_id}|{leg_id}@*) limits='{results.harness_limits(leg_id)}' "
-                        f"gpulimits='{results.harness_limits(leg_id, gpu=True)}' ;;"
-                        for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)
-                                             | set(results.HARNESS_GPU_FLOORS)))
     sized = r"s#^\([a-z0-9_]*\)  *[a-z]*  *sized to \([0-9][0-9]*\) .*#--size \1=\2#p"
     return f"""out=$(mktemp -d) || exit 3
     cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
     export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
     export VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation
-{profile}    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtimes} --skip {creates} --store {store} 2>&1 | tee "$out/timed"
+{profile}    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtime} --skip {creates} --store {store} 2>&1 | tee "$out/timed"
     r=${{PIPESTATUS[0]}}
     sizes=$(sed -n "{sized}" "$out/timed" | sort -u | tr '\\n' ' ')
-    for runtime in {" ".join(HARNESS_WARM)}; do
-      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
-        sed -n "{rename}"
-    done
-    for n in $(seq {results.FIRST_RUNS}); do
-      case $((n % 2)) in 1) order="{" ".join(HARNESS_RUNTIMES)}" ;; *) order="{" ".join(reversed(HARNESS_RUNTIMES))}" ;; esac
-      for runtime in $order; do
-        rm -rf "$cache" "$store"
-        cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
-        export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{point}        if [ $n -eq 1 ]; then
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
-            sed "{results.CREATES_APART}" | tee -a "$out/timed"
-        else
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
-            sed -n "{results.FIRST_KEEP}"
-        fi
-        [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
-      done
-    done
-    case "{leg}" in
-{limits}
-      *) limits= gpulimits= ;;
-    esac
-    select='{results.RETIME_SELECT}'
-    rows=$(awk -v limits="$limits" -v gpulimits="$gpulimits" -v wallre='{results.WALL_RE}' -v skipre='{results.retime_skip(cpu)}' -v budget={results.HARNESS_BUDGET!r} "$select" "$out/timed" | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
-    for row in $rows; do
-      for pair in $(seq {results.RETIME_PAIRS}); do
-        case $pair in 2) order="new old" ;; *) order="old new" ;; esac
-        for timed in $order; do
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{row%{results.FROM_IDLE}}}" 2>&1 | sed -n "{results.RETIME_KEEP}"
-        done
-      done
-    done
+    runtime={runtime}
+    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
+      sed -n "{rename}"
+    rm -rf "$cache" "$store"
+    cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+    export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{point}    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
+      sed "{results.CREATES_APART}" | tee -a "$out/timed"
+    [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
+    timed=$runtime
     for row in ${{M2V_ALONE:-}}; do
       workload=${{row%%/*}}
       for pair in $(seq {results.RETIME_PAIRS}); do
-        case $pair in 2) order="new old" ;; *) order="old new" ;; esac
-        for timed in $order; do
-          rm -rf "$cache" "$store"
-          cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
-          export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{point}          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{workload%{results.FROM_IDLE}}}" --store {store} 2>&1 | sed -n "{results.ALONE_KEEP}"
-        done
+        rm -rf "$cache" "$store"
+        cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+        export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{point}        CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{workload%{results.FROM_IDLE}}}" --store {store} 2>&1 | sed -n "{results.ALONE_KEEP}"
       done
     done
     unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
@@ -739,11 +668,8 @@ class Run:
     def gpu_node(self, node, legs, ready):
         """One node's GPU legs: their device tests in turn, in one job holding their GPUs, then
         their harnesses in turn, in ONE job that holds the node alone, so the node drains once for
-        all its timings; each leg still times its one GPU with nothing else running. The legs whose
-        old runtime spread past results.BASE_SPREAD are timed once more, together, in one more such
-        job. The node's last planned job tidies its tree and its carry's mirror; a once-more timing,
-        decided only after it, lays the tree out again (the dispatch pushes the carry's mirror
-        again) and tidies too. READY gives the carry."""
+        all its timings; each leg still times its one GPU with nothing else running. The node's
+        last planned job tidies its tree and its carry's mirror. READY gives the carry."""
         made, why = ready()
         if not made:
             return self.fail(legs, why)
@@ -757,35 +683,18 @@ class Run:
             suite, these, name = jobs.pop(0)
             layer = self.layer if suite == "rt" else None
             script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, not jobs,
-                                layer and layer[1:], self.nodes.get(node, {}).get("cpu_model"))
+                                layer and layer[1:])
             code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, name,
                                       gpus=[leg.gpu for leg in these],
                                       carries=[carry] + ([layer[0]] if layer else []), space="gpu",
                                       exclusive=suite == "harness", legs=len(these) if suite == "harness" else 1)
             self.finish(these, code, out, rec, suite)
-            if suite == "harness":
-                again = [leg for leg in these if leg.id not in self.failures and self.timed_again(leg)]
-                if again:
-                    jobs.append((suite, again, f"{name}-again"))
-
-    def timed_again(self, leg):
-        """Whether LEG's harness, just timed, is timed once more, after the node's other jobs: the
-        old runtime's own spread across its passes (results.base_spread) is past
-        results.BASE_SPREAD in its first timing. Each timing's spread is kept in LEG.timings."""
-        spread = results.base_spread(results.leg_records(leg.parsed)[0]["time"],
-                                     self.nodes.get(leg.node, {}).get("cpu_model"))
-        leg.timings.append(spread)
-        again = len(leg.timings) == 1 and spread is not None and spread[0] > results.BASE_SPREAD
-        if again:
-            log(f"{leg.id}: the old runtime's own spread {spread[0]:.1%} on {spread[1]} voids its times; "
-                "timed once more, later")
-        return again
 
     def retime(self, legs):
         """Each of LEGS's harness timed once more, after every leg is in: a leg whose one pass has
         a harness row's cross-GPU outlier (results.outliers_to_retime), which then fails it only
         where both passes agree (results.time_outliers). The second pass's records take the
-        first's, as a timing's do in timed_again. A Linux node's legs in turn in ONE job holding the
+        first's. A Linux node's legs in turn in ONE job holding the
         node alone, as a timing does, which lays the tree out again and tidies, as the node's last
         job had; a Windows node's leg in its own; the nodes at once."""
         by_node = {}
@@ -804,7 +713,7 @@ class Run:
                     elif node in self.carried:
                         carry, mirror, rev = self.carried[node]
                         script = gpu_script(self.short, self.setup(node), batch, mirror, rev, "harness",
-                                            True, None, self.nodes.get(node, {}).get("cpu_model"))
+                                            True, None)
                         code, out, rec = self.job("time", node, script, f"harness-{node}-outlier",
                                                   gpus=[leg.gpu for leg in batch], carries=[carry], space="gpu",
                                                   exclusive=True, legs=len(batch))
@@ -854,14 +763,12 @@ class Run:
         while suites:
             suite = suites.pop(0)
             layer = self.layer if suite == "rt" else None
-            name = f"win{suite}-{leg.id}" + ("-again" if suite == "harness" and leg.timings else "")
+            name = f"win{suite}-{leg.id}"
             code, out, rec = self.job("winrun" if suite == "rt" else "wintime", leg.node,
                                       winrun_script(leg, suite, layer and layer[1:]), name,
                                       gpus=[leg.gpu], carries=[layer[0]] if layer else [], space="win",
                                       exclusive=suite == "harness")
             self.finish([leg], code, out, rec, suite)
-            if suite == "harness" and self.timed_again(leg):
-                suites.append(suite)
 
     def lavapipe(self, leg):
         leg.node = self.build_node["node"]
@@ -958,18 +865,9 @@ def leg_entry(run, leg):
     problems += results.old_path_moved(parsed, run.since_bless)
     if leg.id not in CPU_LEGS and run.lock_budget:
         problems += results.lock_budget_missing(records, results.names_lock_event(run.setup(leg.node)))
-    rebased = base and frozen_rebase(run.sha, results.HARNESS_SHAPE, base_sha, base)
     cpu = run.nodes.get(leg.node, {}).get("cpu_model")
-    budget, budget_parked = results.harness_budget(leg.id, parsed, base and base["records"]["time"], rebased, cpu)
+    budget, budget_parked = results.harness_budget(leg.id, parsed)
     problems += budget
-    timed = None
-    if leg.timings:
-        # The old runtime's own spread in the timing judged (the last), and what came of the first.
-        first = leg.timings[0]
-        states = [f"VOID at {first[0]:.1%} on {first[1]}, timed again"] if len(leg.timings) > 1 else []
-        if results.base_spread_void(records["time"], cpu):
-            states.append("venue unstable" if len(leg.timings) > 1 else "VOID")
-        timed = dict(spread=results.base_spread(records["time"], cpu), states=states)
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]
@@ -984,10 +882,9 @@ def leg_entry(run, leg):
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
-        records=records, base=base_sha, base_records=base and base["records"], shape=results.HARNESS_SHAPE,
+        records=records, base=base_sha, base_records=base and base["records"],
         problems=problems, uncounted=results.leg_uncounted(parsed),
-        parked=results.leg_parked(parsed, records) + budget_parked,
-        **({"timed": timed} if timed is not None else {}))
+        parked=results.leg_parked(parsed, records) + budget_parked)
 
 
 def cross_gpu(sha, doc, entries):
@@ -1065,8 +962,7 @@ def run_cmd(sha, only, dry):
             entries[leg_id]["parked"] += lines
     for leg_id, e in entries.items():
         e.pop("base_records")
-        e["verdict"] = ("fail" if e["problems"] else
-                        "unstable" if "venue unstable" in e.get("timed", {}).get("states", []) else "pass")
+        e["verdict"] = "fail" if e["problems"] else "pass"
         doc["legs"][leg_id] = e
     wall = round((time.time() - started) / 60, 2)
     doc["runs"].append(dict(started=datetime.fromtimestamp(started, timezone.utc).isoformat(timespec="seconds"),
@@ -1075,72 +971,18 @@ def run_cmd(sha, only, dry):
     path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
     git("notes", f"--ref={NOTES}", "add", "-f", "-F", str(path), sha)
     for leg_id in sorted(entries):
-        print_leg(sha, leg_id, doc["legs"][leg_id])
-    print_over(sha, doc)
+        print_leg(leg_id, doc["legs"][leg_id])
     failed = sum(1 for e in entries.values() if e["verdict"] == "fail")
-    unstable = sum(1 for e in entries.values() if e["verdict"] == "unstable")
-    print(f"matrix {sha[:12]}: {len(entries) - failed - unstable} of {len(entries)} legs pass"
-          + (f", {unstable} venue unstable" if unstable else "") + f", {wall} min wall; note {NOTES}")
+    print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
     print("harness rows: release build, validation layer disabled (VK_LOADER_LAYERS_DISABLE)")
     return 1 if failed else 0
 
 
-def print_leg(sha, leg_id, leg):
-    """SHA's leg's verdict line, then each of its harness rows' times and GPU times, with the
-    frozen arm's move on its base (results.frozen_move, frozen_rebase), and the rows each of the
-    frozen arm's two rules voids (results.frozen_void, results.excess_voids)."""
+def print_leg(leg_id, leg):
+    """A leg's verdict line, then each of its harness rows' time, GPU time and instructions."""
     print(results.verdict_line(leg_id, leg))
-    base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
-    rebased = base and frozen_rebase(sha, leg.get("shape"), leg["base"], base)
-    base = base and base["records"]["time"]
-    for line in results.harness_rows(leg["records"], base, rebased):
+    for line in results.harness_rows(leg["records"]):
         print(f"  {line}")
-    if base:
-        void = results.frozen_void(leg["records"]["time"], base, rebased)
-        compared = {None: "every row", results.REBASED_SHAPE: "no row",
-                    results.REBASED_TREES: "the creation rows alone"}[rebased]
-        print(f"  frozen arm against {leg['base'][:10]}{f', {rebased}' if rebased else ''}: {compared} "
-              f"compared, {len(void)} VOID, old moved past {results.FROZEN_DRIFT:.0%}"
-              + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
-        excess = results.excess_voids(leg_id, leg["records"], base, rebased, leg.get("cpu"))
-        print(f"  frozen arm, past its limit by less than old's own move: {len(excess)} VOID"
-              + "".join(f"; {row} {ratio:.3f} over {limit:.3f}, old {move:+.1%}" for row, ratio, limit, move in excess))
-
-
-def rounds_since(sha, since):
-    """How many rounds ran on SHA's first-parent line from the commit SINCE on, SHA's included:
-    its noted commits; None where SINCE is not on that line within 500 commits."""
-    noted = {line.split()[1] for line in git("notes", f"--ref={NOTES}", "list").splitlines() if line}
-    since = git("rev-parse", "--verify", "--quiet", f"{since}^{{commit}}", check=False)
-    count = 0
-    for commit in git("rev-list", "--first-parent", "--max-count=500", sha, check=False).splitlines():
-        count += commit in noted
-        if commit == since:
-            return count
-    return None
-
-
-def print_over(sha, doc):
-    """The report's one table: every row over its limit on each leg of SHA's note DOC
-    (results.over_lines), with the frozen arm's verdict on its base and its status
-    (results.row_status, status.tsv); then the status entries whose rows are all within their
-    limits, to remove (results.entries_within)."""
-    lines = []
-    for leg_id, leg in sorted(doc["legs"].items()):
-        if not (leg.get("records") or {}).get("time"):
-            continue
-        base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
-        rebased = base and frozen_rebase(sha, leg.get("shape"), leg["base"], base)
-        lines += results.over_lines(leg_id, leg["records"], base and base["records"], rebased,
-                                    lambda since: rounds_since(sha, since), leg.get("cpu"))
-    print(f"rows over their limits: {len(lines)}")
-    for line in lines:
-        print(f"  {line}")
-    within = results.entries_within({leg_id: (leg.get("records") or {}, leg.get("cpu"))
-                                     for leg_id, leg in doc["legs"].items() if (leg.get("records") or {}).get("time")})
-    print(f"status.tsv entries whose rows are within their limits, to remove: {len(within)}")
-    for card, row, status, who in within:
-        print(f"  {card} {row} ({status}, {who}): within its limit on every leg of its card that timed it")
 
 
 def show_cmd(sha):
@@ -1148,8 +990,7 @@ def show_cmd(sha):
     if not doc:
         sys.exit(f"no matrix note on {sha}")
     for leg_id in sorted(doc["legs"]):
-        print_leg(sha, leg_id, doc["legs"][leg_id])
-    print_over(sha, doc)
+        print_leg(leg_id, doc["legs"][leg_id])
     last = doc["runs"][-1]
     print(f"matrix {sha[:12]}: last run {last['started']}, {last['minutes']} min wall, jobs {' '.join(last['jobs'])}")
 

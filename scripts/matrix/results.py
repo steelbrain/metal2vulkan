@@ -11,7 +11,7 @@ import re
 import statistics
 from pathlib import Path
 
-#: `size` is the size a harness row whose size follows the device ran at (harness_budget).
+#: `size` is the size a harness row whose size follows the device ran at, which nothing judges.
 KINDS = ("metric", "instructions", "gauge", "time", "size", "locks")
 #: A gauge's key ends in the point it was read at.
 GAUGE_POINTS = ("100", "200", "drop")
@@ -36,50 +36,13 @@ TIME_OUTLIER = 1.25
 #: ...of at least this many GPUs.
 TIME_MIN_GPUS = 3
 
-#: The old runtime's failures the matrix reports on a leg's line but fails no leg for: the old
-#: runtime takes no fixes until the cutover deletes it, and this list goes with it. A test, by its
-#: nextest name, with the reason it fails.
-PARKED_TESTS = {
-    "metal2vulkan-validation runtime_lane::cross_queue_shadows::"
-    "a_cpu_write_while_a_command_buffer_runs_reaches_none_of_its_encoders":
-        "a GPU-hazard test whose spin can end before the host's write on a loaded host",
-    "metal2vulkan-validation runtime_lane::compute_inherited_buffers::"
-    "a_host_step_orders_the_commands_by_their_barriers_alone":
-        "the old runtime's barrier count moves with its background pipeline builds",
-    # Each of these failed in one lavapipe run and passed in the runs around it, the old
-    # runtime's code unchanged between them.
-    "metal2vulkan-runtime tests::view_check_device::the_check_stands_by_while_the_device_s_work_goes_on":
-        "failed once on lavapipe (cfa389aa9b) between passing runs of unchanged code",
-    "metal2vulkan-runtime tests::queue_share_device::"
-    "a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst":
-        "failed once on lavapipe (c944d63548) between passing runs of unchanged code",
-    "metal2vulkan-runtime tests::host_ram_device::"
-    "a_chunk_an_object_waited_for_the_thread_s_import_of_is_not_given_back":
-        "failed once on lavapipe (73e0af4b66) between passing runs of unchanged code",
-    "metal2vulkan-validation runtime_lane::commit_work::"
-    "fills_across_rounds_reuse_a_bounded_set_of_command_pools":
-        "failed once on lavapipe (cfa389aa9b) between passing runs of unchanged code",
-    "metal2vulkan-validation runtime_lane::first_use::new_resources_wait_for_no_gpu_work":
-        "failed on lavapipe at c944d63548 and bfe63b5097 between passing runs of unchanged code",
-    "metal2vulkan-validation runtime_lane::host_memory::"
-    "memory_metal_makes_no_buffer_over_is_refused_when_it_is_made":
-        "failed once on lavapipe (7fa6662170) between passing runs of unchanged code",
-}
 #: Record keys, by prefix, whose gauge @100-to-@200 flatness and cross-GPU time outliers are parked
-#: for the same reason (a gauge's @drop still fails): the old runtime frees idle memory blocks at
-#: times of its own, and its frame timing on the UHD 630 swings by half between runs of unchanged
-#: code (1.58x at a68d520bee, 1.47x at 9af29fbb20). A harness workload's failure on the old
-#: runtime (`M2V-FAILED harness-old/<row>`, one burst_2000x5 run on the UHD 630 ended in a GPU
-#: recovery at 8b15f6574b) is parked too: harness_budget names its row as not compared. The
-#: harness's warm first-use records (harness-new-warm/, the matrix's harness_runs) are parked as
-#: well: the cold ones, timed on a fresh driver cache, are the gated ones, and a warm one reads the
-#: entries the cold run just wrote, a fraction of a millisecond on Mesa. So are the re-timed pairs
-#: of a row over its budget (harness-retime/, RETIME_PAIRS), and the creation rows' first samples
-#: from the later processes (harness-first/, FIRST_RUNS): harness_budget judges them. So are the
-#: rows' GPU times (harness-gpu-<runtime>/, HARNESS_GPU) and their re-timed pairs'
-#: (harness-retime-gpu/): harness_budget judges a row on its GPU time where gpu_judged says so.
-PARKED_RECORDS = ("harness-old/", "harness-new-warm/", "harness-retime/", "harness-first/",
-                  "harness-gpu-", "harness-retime-gpu/")
+#: (a gauge's @drop still fails): the harness's warm first-use records (harness-new-warm/, the
+#: matrix's harness_runs), as the cold ones, timed on a fresh driver cache, are the gated ones, and
+#: a warm one reads the entries the cold run just wrote, a fraction of a millisecond on Mesa; and
+#: the rows' GPU times (harness-gpu-<runtime>/, HARNESS_GPU), which harness_rows shows and nothing
+#: judges.
+PARKED_RECORDS = ("harness-new-warm/", "harness-gpu-")
 
 #: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
 #: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the
@@ -256,8 +219,7 @@ def lock_budget_missing(records, named):
 
 def card_of(leg_id):
     """The card LEG_ID runs on, by its PCI vendor:device: the leg's name, or an extra leg's
-    (extra_leg_id) before its `@`. A card's ceilings, floors and variance rows hold on each of its
-    legs."""
+    (extra_leg_id) before its `@`."""
     return leg_id.split("@", 1)[0]
 
 
@@ -268,9 +230,8 @@ def extra_leg_id(card, node):
 
 
 def leg_parked(leg, records):
-    """The leg's parked failures (PARKED_TESTS and PARKED_RECORDS' gauges), one line each."""
-    out = [f"test {test}" for suite in leg["suites"].values() for test in suite["failed"]
-           if test in PARKED_TESTS]
+    """The leg's parked gauges (PARKED_RECORDS'), one line each."""
+    out = []
     gauges = records["gauge"]
     for key, value in sorted(gauges.items()):
         name, _, point = key.rpartition("@")
@@ -282,12 +243,10 @@ def leg_parked(leg, records):
 
 def leg_problems(leg, records, base):
     """What fails a leg: a suite that failed, a record's own problem, and the rules against the
-    base leg's records (BASE None: no base, so only the rules that need none). A suite whose every
-    failed test is parked (PARKED_TESTS, or a harness workload of PARKED_RECORDS) has not failed."""
+    base leg's records (BASE None: no base, so only the rules that need none)."""
     problems = []
     for name, suite in leg["suites"].items():
-        failed = [test for test in suite["failed"]
-                  if test not in PARKED_TESTS and not test.startswith(PARKED_RECORDS)]
+        failed = suite["failed"]
         if failed or (suite["exit"] != 0 and not suite["failed"]):
             shown = ", ".join(failed[:5]) + (" ..." if len(failed) > 5 else "")
             problems.append(f"suite {name} exited {suite['exit']}"
@@ -364,12 +323,11 @@ def outliers_to_retime(found):
 
 #: A host can give each process a level of its own: on the RTX 3090 at homelab-um870-1,
 #: sampling_deep_4x16x252 took about 37 or about 80 us of wall a run, one level a process, at equal
-#: GPU time and CPU instructions, and the old runtime drew the levels as well (rounds b0c08e51b5,
-#: 7cda47f536 and 6b535f55c9; m3-max-51629: 39 processes over 13 commits at 36.8 to 40.0 us). Two
-#: passes, two processes, both landed high in 6b535f55c9. So a harness row's outlier in both passes
-#: is judged by its lowest level: the second pass re-times each such row of the leg (alone_rows)
-#: alone in RETIME_PAIRS pairs of processes, old then new, then new then old, each with a fresh
-#: driver cache and store, its times kept as `harness-alone/<row>/<pair>/<runtime>` (ALONE_KEEP);
+#: GPU time and CPU instructions (rounds b0c08e51b5, 7cda47f536 and 6b535f55c9; m3-max-51629: 39
+#: processes over 13 commits at 36.8 to 40.0 us). Two passes, two processes, both landed high in
+#: 6b535f55c9. So a harness row's outlier in both passes is judged by its lowest level: the second
+#: pass re-times each such row of the leg (alone_rows) alone in RETIME_PAIRS processes, each with a
+#: fresh driver cache and store, its times kept as `harness-alone/<row>/<pair>/<runtime>` (ALONE_KEEP);
 #: time_outliers compares the lowest of the new runtime's samples (both passes and the alone runs)
 #: with the lowest the base recorded of the row (levels). A real regression raises the low level and
 #: still fails; a row high in every process fails; a row the lowest brings back is named with every
@@ -378,6 +336,9 @@ HARNESS_ALONE = "harness-alone/"
 #: The sed program (`sed -n`) each alone run's output goes through: the row's time alone, the shell
 #: giving `$timed`, `$row` and `$pair`.
 ALONE_KEEP = r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-alone/$row/$pair/$timed #p"
+#: How many processes a row alone runs in, and at most how many of a leg's rows run alone.
+RETIME_PAIRS = 2
+RETIME_ROWS = 8
 
 
 def alone_rows(keys):
@@ -445,115 +406,36 @@ def time_outliers(times, bases, first=None):
     return out, parked
 
 
-#: The harness budget: on each GPU, a harness row's time on the new runtime over its time on the
-#: old, both timed in the same leg, is at most this. A row with a GPU time on both runtimes is
-#: judged on it (gpu_judged), its host time shown beside it: on the GPUs measured, the old
-#: runtime's own spread of a single kernel's GPU time is a few percent where its host time spreads
-#: up to 1.3 (gpu-floors.tsv against floors.tsv). The others, and the frame and burst rows
-#: (WALL_ROWS), are judged on their time as a program waits on it, timed on the host (the
-#: harness's `run::matrix_time`): a run's mean commit-to-complete time where the row times its
-#: command buffers', else the host wall time a run adds. It is a rule of its own, apart from
-#: TIME_OUTLIER and PARKED_RECORDS: those judge a time against its base commit's across GPUs and
-#: park the old runtime's outliers, while this compares the two runtimes within one leg, the old
-#: runtime's time the reference. It ends with the cutover, with the old runtime.
-HARNESS_BUDGET = 1.03
+#: A harness row's time on the new runtime, `harness-new/<row>`. Its time is judged only as a
+#: cross-GPU outlier (time_outliers); the frame and burst rows (WALL_ROWS) are also held to their
+#: stored instruction counts (instruction_gate).
 HARNESS_NEW = "harness-new/"
-HARNESS_OLD = "harness-old/"
-#: A harness row's GPU time on each runtime, `harness-gpu-<runtime>/<row>`: the p50 over its timed
-#: runs of a run's first GPU start to its last GPU end, scaled like its time where the device
-#: sizes the row, and absent where the row has none. harness_budget judges a row on it where
-#: gpu_judged says so, and shows it beside the row's time otherwise; it is parked for TIME_OUTLIER
+#: A harness row's GPU time, `harness-gpu-<runtime>/<row>`: the p50 over its timed runs of a run's
+#: first GPU start to its last GPU end, scaled like its time where the device sizes the row, and
+#: absent where the row has none. harness_rows shows it beside the row's time; nothing judges it
 #: (PARKED_RECORDS).
 HARNESS_GPU = "harness-gpu-"
-#: The rows judged on their host time even where they have a GPU time, by the start of their
-#: names: a frame's or a burst's command buffers, whose GPU time spans the gaps between them and
-#: spreads on the old runtime as widely as the host time on several GPUs (gpu-floors.tsv's
-#: measurement: 1.68 on the Iris Xe's frame_5cb, 1.43 on the UHD 630's burst_160_shared). The
-#: planner's ruling: these keep the host time's floor and the instructions gate.
+#: The rows the instructions gate holds, by the start of their names: a frame's or a burst's
+#: command buffers.
 WALL_ROWS = ("frame", "burst")
-#: WALL_ROWS as the re-time selection's awk pattern.
-WALL_RE = "^(" + "|".join(WALL_ROWS) + ")"
-#: The CPUs whose cores' clock follows the load, by their model as potluck's node facts give it
-#: (`cpu_model`, kept in a leg's note as `cpu`), each with what was seen there. On a node with one,
-#: a frame row's host time moves with the clock its passes found, so the frame rows (FRAME_ROWS) of
-#: every card the node hosts are judged by the new runtime's instructions per frame
-#: (instruction_gate; a latency from idle row by its workload's), and their time only as a
-#: cross-GPU outlier (time_outliers): harness_budget names their time and judges nothing on it,
-#: the leg re-times none of them (RETIME_SELECT, retime_skip), and the old runtime's spread on them
-#: voids no leg (base_spread). The planner's ruling.
-CLOCK_FOLLOWS_LOAD = {
-    "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics":
-        "the cores' mean clock tracked the frame rows' pass time, r = -0.88 over twelve passes of one "
-        "build on its Radeon 780M (m3-max-49287)",
-}
-#: The frame rows, by the start of their names: the frames workloads' rows and their latency from
-#: idle rows (FROM_IDLE).
-FRAME_ROWS = ("frame",)
 
 
-def counts_judge(cpu, row):
-    """Whether ROW is judged by instructions per frame on a node whose CPU model is CPU
-    (CLOCK_FOLLOWS_LOAD), its time only as a cross-GPU outlier."""
-    return cpu in CLOCK_FOLLOWS_LOAD and row.startswith(FRAME_ROWS)
-
-
-def retime_skip(cpu):
-    """The rows a leg on a node whose CPU model is CPU does not re-time, as RETIME_SELECT's awk
-    pattern SKIPRE: the rows counts_judge judges by their counts, or none (empty)."""
-    return "^(" + "|".join(FRAME_ROWS) + ")" if cpu in CLOCK_FOLLOWS_LOAD else ""
-#: Rows whose GPU time varies on one card itself, run to run or with its driver's register
-#: assignment of an unchanged loop, by GPU leg, with what was seen: harness_budget judges them on
-#: their GPU time against their GPU floor like any other, never fails a leg for them, and names
-#: them as the card's variance, so no one chases them as the new runtime's.
-CARD_VARIANCE = {
-    "1002:744c": {
-        "sampling": "its GPU p50 on the old runtime ran 16.3-20.3 us over 8 runs (m3-max-45546)",
-        "constant_managed": "its GPU p50 on the old runtime is 66.8-69.2 or 74.4 us run to run "
-                            "(m3-max-45546)",
-    },
-    # Informational on the Iris Xe until the harness kernels are authored not to depend on it:
-    # with the loop's instructions unchanged, ANV's register assignment moves these rows' GPU time
-    # in equal steps, one per two-source instruction whose two vector sources start at GRF numbers
-    # equal modulo 16 (m3-max-47683: 0 to 40 dead multiply-adds ahead of the loop). No lane claims
-    # a gain or a loss on these rows here without the loop's dump.
-    "8086:a7a0": {
-        "zero_products": "its GPU p50 ran 4377-5308 us over the same loop code, in steps of 232 us "
-                         "(m3-max-47683)",
-        "vote_loop": "its GPU p50 ran 824-930 us over the same loop code (m3-max-47683)",
-    },
-}
-
-
-def gpu_judged(times, row):
-    """Whether harness_budget judges ROW on its GPU time: it has one on both runtimes in TIMES, and
-    it is not a WALL_ROWS row."""
-    return not row.startswith(WALL_ROWS) and all(
-        (times.get(f"{HARNESS_GPU}{runtime}/{row}") or 0) > 0 for runtime in ("old", "new"))
-
-
-def gpu_beside(times, runtime, row):
-    """ROW's GPU time on RUNTIME as its time's lines show it, ` (GPU p50 N us)`, or nothing."""
-    gpu = times.get(f"{HARNESS_GPU}{runtime}/{row}")
-    return "" if gpu is None else f" (GPU p50 {gpu:.1f} us)"
-
-
-#: The instructions gate of the frame and burst rows (WALL_ROWS), beside the judgement of their
-#: time, on Linux's user-space instructions per timed run, each the p50 over the row's timed runs.
-#: The harness records the whole process's (`instructions harness-<runtime>/<row>/per_run`), and
-#: where the runtime names the threads it started (the new runtime's `Gauges::threads`), the count
-#: of those and the harness's own thread (`.../own_per_run`) and the rest, the threads a driver
-#: started for itself (`.../others_per_run`). A driver's threads swing by millions of instructions
-#: per run between processes (NVIDIA's on burst_160: 0 to 25 million), the runtime's own do not.
-#: The gate is on the runtime's own: EXACT, the new runtime's own count at most HARNESS_BUDGET
-#: times its stored count (STORED_INSTRUCTIONS), which ratchets down; and LENIENT, printed on
-#: every row, the new runtime's own count at most the old's whole count, the old runtime naming
-#: none of its threads, so its driver's share cannot be taken out. The base comparison of
-#: leg_problems skips the harness's counts: this gate judges them. A leg that records no
-#: instructions (the kernel refused the counter, or Windows) has no gate. Every row records its
-#: counts; only these are gated on them.
+#: The instructions gate of the frame and burst rows (WALL_ROWS), on Linux's user-space
+#: instructions per timed run, each the p50 over the row's timed runs. The harness records the
+#: whole process's (`instructions harness-<runtime>/<row>/per_run`), and where the runtime names
+#: the threads it started (the new runtime's `Gauges::threads`), the count of those and the
+#: harness's own thread (`.../own_per_run`) and the rest, the threads a driver started for itself
+#: (`.../others_per_run`). A driver's threads swing by millions of instructions per run between
+#: processes (NVIDIA's on burst_160: 0 to 25 million), the runtime's own do not. The gate is on the
+#: runtime's own: at most HARNESS_BUDGET times its stored count (STORED_INSTRUCTIONS), which
+#: ratchets down. The base comparison of leg_problems skips the harness's counts: this gate judges
+#: them. A leg that records no instructions (the kernel refused the counter, or Windows) has no
+#: gate. Every row records its counts; only these are gated on them.
 INSTRUCTIONS_PER_RUN = "/per_run"
 #: The new runtime's own threads' count of a row, and the rest of the process's.
 OWN_PER_RUN, OTHERS_PER_RUN = "/own_per_run", "/others_per_run"
+#: The instructions gate's allowance: a row's own count is at most this times its stored count.
+HARNESS_BUDGET = 1.03
 
 
 def read_counts(text):
@@ -593,21 +475,20 @@ def stored_count(leg_id, row):
 
 def instruction_gate(leg_id, row, records):
     """ROW's instructions gate on LEG_ID from the leg's RECORDS: (problems, parked), both empty
-    where ROW is not a WALL_ROWS row or a runtime recorded no whole count. EXACT: the new runtime's
+    where ROW is not a WALL_ROWS row or the new runtime recorded no whole count. The new runtime's
     own count past HARNESS_BUDGET times the stored count is a problem; one more than
-    INSTRUCTIONS_BAND under it, or a row with none stored, is named. LENIENT, named on every row:
-    the new runtime's own count over the old's whole count is a problem. A new runtime that
-    recorded its whole count but not its own is a problem: the gate could not run."""
+    INSTRUCTIONS_BAND under it, or a row with none stored, is named. A new runtime that recorded
+    its whole count but not its own is a problem: the gate could not run."""
     counted = records["instructions"]
-    new, old = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
-    if not row.startswith(WALL_ROWS) or not new or not old:
+    new = counted.get(f"harness-new/{row}{INSTRUCTIONS_PER_RUN}")
+    if not row.startswith(WALL_ROWS) or not new:
         return [], []
-    own, others = (counted.get(f"harness-new/{row}{part}") for part in (OWN_PER_RUN, OTHERS_PER_RUN))
+    own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
     if own is None:
         return [f"harness budget {row}: instructions new {new} per run, but no count of its own threads"], []
     problems, parked = [], []
     stored = stored_count(leg_id, row)
-    exact = f"harness budget {row}: EXACT instructions new own {own} per run, " + (
+    exact = f"harness budget {row}: instructions new own {own} per run, " + (
         f"stored {stored}, is {own / stored:.3f}" if stored else "none stored")
     if stored and own > HARNESS_BUDGET * stored:
         problems.append(f"{exact}: past {HARNESS_BUDGET} times the stored count")
@@ -616,854 +497,76 @@ def instruction_gate(leg_id, row, records):
                       "down to it")
     elif not stored:
         parked.append(exact)
-    lenient = (f"harness budget {row}: LENIENT instructions new own {own} per run over old whole {old} is "
-               f"{own / old:.3f}; new others {others}, old's driver threads not separable")
-    (problems if own > old else parked).append(lenient + (": new own over old whole" if own > old else ""))
     return problems, parked
-
-
-#: The harness rows over HARNESS_BUDGET that a ruling gave a ceiling, per GPU leg, each a ratio of
-#: the times its row is judged on (gpu_judged): a row past its ceiling fails its leg, so an open
-#: row can neither hide nor grow. A
-#: ceiling is ruled after the work on its row, never taken from a measured ratio; a fix lowers it
-#: to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list. A row over
-#: HARNESS_BUDGET with no ceiling fails its leg.
-HARNESS_CEILINGS = {
-    # Ruled by the planner, 1.05, on the rows' medians of 1.040 and 1.032 (e632e01478): a second
-    # Shared buffer of 64 MiB on the 780M is rt's memset of the memory the first gave back
-    # against old's import of fresh pages, the same zeroing by another hand.
-    "1002:15bf": {"create_64MiB/next_take": 1.05},
-    "1002:1900": {"create_64MiB/next_take": 1.05},
-    # Ruled by the planner on the row's measured median, 1.877: old carves the buffer from a
-    # Private block it already holds, and rt takes a new block. rt's own costs inside the row, its
-    # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
-    # fixes lower the ceiling.
-    "8086:a7a0": {"create_private_16MiB/first_take": 1.88,
-                  # Ruled by the planner on 2026-11-19, a recorded gap (the rt README's Gen12 line on
-                  # the biased slot word): on the Iris Xe a change in the code before an otherwise
-                  # identical loop moves a kernel by -18% to +14% by a mechanism not shown, the
-                  # median of the 38 workloads +0.03% (the neutral arm, m3-max-51663). Medians in
-                  # round 951b93a645 (m3-max-51733): alu 1.139, long_4cb 1.141. A row back within
-                  # HARNESS_BUDGET leaves the list.
-                  "alu": 1.14, "long_4cb": 1.15},
-    # Ruled by the planner on 2026-11-18, 1.40: NVIDIA's driver holds a submit for the whole of
-    # another thread's vkAllocateMemory, and the first take, the first to take a new Private block,
-    # sets the block-maker making the class's next 16 MiB allocation, which its own first
-    # submission then waits out (the rt README's known gaps of memory blocks). Driver 620.70.06,
-    # rt at ac1896537f: a submit of 603 us inside an allocation of 661 us on the 3090, 579 us inside
-    # 647 us on the 2080, against a median submit of 2 to 3 us. The hold is one allocation per
-    # block made, about as long as the take would spend allocating on its own thread.
-    "10de:1e87": {"create_private_16MiB/first_take": 1.40,
-                  # Ruled by the planner on 2026-11-19 on the rows' medians in the alternated run
-                  # m3-max-51634, the higher of base and head: a known gap, the driver's allocation
-                  # of host-visible system memory, about 12.5 ms for 64 MiB where the old runtime's
-                  # import of its own pages takes about 5.8 (m3-max-48212); only a driver-owned form
-                  # at that cost reopens it. The 3090 takes the line from its own rows.
-                  "create_64MiB/first_take": 2.30, "create_64MiB/device_first": 2.14},
-    "10de:2204": {"create_private_16MiB/first_take": 1.40,
-                  # Ruled by the planner on 2026-11-19, as the 2080's line: a known gap, the driver's
-                  # allocation of host-visible system memory against the old runtime's import of
-                  # its own pages; only a driver-owned form at that cost reopens it. One line serves
-                  # both 3090s at the higher card's medians in round 951b93a645: first_take 2.841
-                  # and device_first 1.943 on um870 (m3-max-51756), 2.359 and 1.673 on ms01
-                  # (m3-max-51747). The new runtime's own time is level on both (15.0 and 14.4 ms);
-                  # old's import differs by host (5.3 and 6.1 ms). Later takes run 4 to 6 times
-                  # faster than old's (next_take 0.16 and 0.25).
-                  "create_64MiB/first_take": 2.85, "create_64MiB/device_first": 1.95},
-    # 8086:3e9b's zero_products has none: the row runs level with old, the new runtime about 1%
-    # ahead (m3-max-47846). A grid-edge test that decodes and compares the position ahead of the
-    # region's ragged branch once ran 5-6% faster on this card, by the driver compiler's accident
-    # on that kernel. Its looped executable had the most instructions of the forms timed (149, and
-    # 507 static cycles), yet ran fastest:
-    # - the form that branches on the flag first: 153 and 520;
-    # - no edge test at all: 117 and 375;
-    # - old's: 100 and 336.
-    # The driver returns no representation of its code to say why. No form of the test kept both
-    # that speed and the sampling rows' gains (m3-max-47851).
-}
-
-
-def read_floors(text):
-    """The floors table's TEXT: `#` comments, a header of `row` and GPU leg ids, then per line a
-    harness row and its floor on each leg, `-` for none. Returns {leg: {row: floor}}."""
-    floors, legs = {}, None
-    for line in text.splitlines():
-        if not line.strip() or line.startswith("#"):
-            continue
-        cells = line.split()
-        if legs is None:
-            legs = cells[1:]
-            continue
-        for leg, cell in zip(legs, cells[1:]):
-            if cell != "-":
-                floors.setdefault(leg, {})[cells[0]] = float(cell)
-    return floors
-
-
-#: The old runtime's own spread per harness row on each GPU leg, the row's floor: the widest ratio
-#: between two of the old runtime's runs of the row in one leg, old over old (`floors.tsv`, beside
-#: this file), of its host time; HARNESS_GPU_FLOORS is the same of its GPU time (`gpu-floors.tsv`,
-#: from the same runs), the floor of a row judged on it (gpu_judged). A row is past its limit only
-#: past HARNESS_BUDGET times the greater of its floor and its ceiling (row_limit): a difference
-#: within the old runtime's own spread is not the new runtime's. The tables are measured again
-#: when the harness or the old runtime's build changes; a row or leg one does not list has a floor
-#: of 1 there.
-HARNESS_FLOORS = read_floors((Path(__file__).resolve().parent / "floors.tsv").read_text())
-HARNESS_GPU_FLOORS = read_floors((Path(__file__).resolve().parent / "gpu-floors.tsv").read_text())
 
 
 #: The end of the name of a frames workload's row of its latency from idle, after the workload's
 #: name (the harness's `FROM_IDLE`): `frame_from_idle` beside `frame`, whose time is the frames'
-#: throughput. Each of the two takes the ceiling and the floor its workload's row has (listed_row).
+#: throughput. A row alone (HARNESS_ALONE) of one runs its workload.
 FROM_IDLE = "_from_idle"
 
 
-def listed_row(row):
-    """The row whose ceiling and floor ROW takes: a frames workload's row for its latency from idle
-    (FROM_IDLE), else ROW."""
-    return row[:-len(FROM_IDLE)] if row.endswith(FROM_IDLE) else row
-
-
-def row_floor(leg_id, row, gpu=False):
-    """ROW's floor on LEG_ID: of its GPU time where GPU, else of its host time; 1 where none is
-    listed (for listed_row)."""
-    return (HARNESS_GPU_FLOORS if gpu else HARNESS_FLOORS).get(card_of(leg_id), {}).get(listed_row(row), 1.0)
-
-
-def row_limit(leg_id, row, gpu=False):
-    """ROW's limit on LEG_ID, new over old: HARNESS_BUDGET times the greater of its ceiling
-    (HARNESS_CEILINGS) and its floor (row_floor, of its GPU time where GPU), each 1 where none is
-    listed (for listed_row)."""
-    return HARNESS_BUDGET * max(HARNESS_CEILINGS.get(card_of(leg_id), {}).get(listed_row(row), 1.0),
-                                row_floor(leg_id, row, gpu))
-
-
-def past_limit(leg_id, row, gpu=False):
-    """How a line names ROW's limit on LEG_ID once past it: the budget, or its ceiling or floor
-    (its GPU floor where GPU), whichever sets it, with the allowance."""
-    ceiling = HARNESS_CEILINGS.get(card_of(leg_id), {}).get(listed_row(row), 1.0)
-    floor = row_floor(leg_id, row, gpu)
-    if max(ceiling, floor) <= 1.0:
-        return f"past {HARNESS_BUDGET}"
-    name, value = ("ceiling", ceiling) if ceiling >= floor else ("GPU floor" if gpu else "floor", floor)
-    return f"past its {name} {value} with its allowance, {row_limit(leg_id, row, gpu):.3f}"
-
-
 #: The harness's creation rows, by the start of their names. A leg times them apart from the
-#: other rows (the matrix's harness_runs): the process that times the others on both runtimes
-#: skips them, and they run alone after it, in FIRST_RUNS rounds, each round one process per
-#: runtime on a fresh driver cache and store, so no row before them and no work of the other
-#: runtime moves their times: a cold first sample is compared cold against cold.
+#: other rows (the matrix's harness_runs): the process that times the others skips them, and they
+#: run after it in a process of their own on a fresh driver cache and store, so no row before them
+#: moves their times.
 HARNESS_CREATES = "create_"
-#: A creation row's first samples (`<row>/first`, `/first_take`, `/next_take`,
-#: `/first_allocation_total`, `/device_first`) are one sample per process, so harness_budget judges
-#: each by the median of FIRST_RUNS rounds' processes per runtime: the first round's own records
-#: and the later rounds' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its
-#: limit.
-FIRST_RUNS = 5
-HARNESS_FIRST = "harness-first/"
-#: A compute creation row's `/first` sample is its creation and one dispatch through to completion,
-#: as Metal compiles at the creation and a runtime may compile at the dispatch instead (the old
-#: runtime does). A creation row's first sample is a fresh object's on a device that has made one of
-#: its kind: the harness makes a warm-up of the row's kind first. The first samples SHOWN_FIRST
-#: names are shown with the ratio of their medians, and never judged, each for its reason: the
-#: creation call alone (`/first_call`), the warm-up (`/device_first`), which holds what the
-#: device pays once, which a guest that keeps its device pays once in its life, and a compute
-#: state's first dispatched as one thread (`/first_one_thread`), beside the judged first, whose
-#: dispatch is a threadgroup of the replay streams' commonest size.
-SHOWN_FIRST = {
-    "/first_call": "the creation call alone, which old returns from before it makes its pipeline",
-    "/device_first": "the warm-up, the first object of its kind on the device",
-    "/first_one_thread": "a first dispatched as one thread, a size of few dispatches",
-}
-#: The sed program the first creation round's outputs go through: every record of the device's
-#: life, of any kind (the runtime's totals, its gauges at drop), becomes
+#: The sed program the creation process's output goes through: every record of the device's life,
+#: of any kind (the runtime's totals, its gauges at drop), becomes
 #: `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each key is
 #: recorded once.
 CREATES_APART = (r"s#^M2V-MATRIX \([a-z]*\) harness-\([a-z]*\)/device/#"
                  r"M2V-MATRIX \1 harness-\2/creates/device/#")
-#: The sed program (`sed -n`) each later creation process's output goes through: its first samples
-#: alone, each runtime's as `harness-first/<row>/<n>/<runtime>`, the shell giving `$n`.
-FIRST_KEEP = (r"s#^M2V-MATRIX time harness-\([a-z]*\)/\(create_[A-Za-z0-9_]*/[a-z_]*\) #"
-              r"M2V-MATRIX time harness-first/\2/$n/\1 #p")
 
 
-def first_row(row):
-    """Whether ROW is a creation row's first sample, judged by the median of FIRST_RUNS."""
-    return row.startswith(HARNESS_CREATES) and "/" in row
-
-
-#: The creation rows a ruling judges on the new runtime's own part, per GPU leg: each row's first
-#: sample less the driver's part, the time inside the driver's calls the same process recorded for
-#: it (a row of its own, recorded by the new runtime alone), against the old runtime's whole first
-#: sample, each the median of FIRST_RUNS processes (own_part); the row's limit is row_limit's. The
-#: driver's part and the whole ratio are shown beside it, with the gap the ruling named; an own part
-#: past the limit fails the leg, as a regression of the new runtime's own.
-#:
-#: Ruled by the planner on 2026-11-18 for NVIDIA's legs: old imports fresh anonymous pages for a
-#: Shared buffer of 64 MiB, a form chosen by a run-time check, and rt allocates and zeroes. Most of
-#: rt's first take is NVIDIA's `vkAllocateMemory` (5f2494bfc5: 9902 of the 2080's 12521 us, and
-#: 14164 of 17013 us and 10013 of 15066 us on the 3090's two legs; 954 to 1061 us on RADV). The
-#: driver's part is rt's `vkAllocateMemory` time on the harness's thread
-#: (`first_allocation_total`); rt counts no `vkMapMemory` time, so its map stays in the own part.
-OWN_PART_GATES = {
-    card: {"create_64MiB/first_take": ("create_64MiB/first_allocation_total",
-                                       "NVIDIA's large Shared allocation (the planner's ruling of 2026-11-18)")}
-    for card in ("10de:1e87", "10de:2204")
-}
-
-
-def own_part(leg_id, times, row):
-    """ROW's own-part gate on LEG_ID (OWN_PART_GATES): None where it has none, else (the median of
-    FIRST_RUNS processes' own parts, each its new first sample less the driver's part it recorded,
-    the median of the driver's parts, the gap's name), the first two None unless every process
-    recorded both."""
-    gate = OWN_PART_GATES.get(card_of(leg_id), {}).get(row)
-    if gate is None:
-        return None
-    driver_row, gap = gate
-
-    def news(of):
-        values = [times.get(f"{HARNESS_NEW}{of}")]
-        values += [times.get(f"{HARNESS_FIRST}{of}/{n}/new") for n in range(2, FIRST_RUNS + 1)]
-        return None if any(value is None for value in values) else values
-
-    whole, driver = news(row), news(driver_row)
-    if whole is None or driver is None:
-        return None, None, gap
-    return statistics.median(w - d for w, d in zip(whole, driver)), statistics.median(driver), gap
-
-
-def first_samples(times, row):
-    """ROW's first samples per runtime, (old, new), each FIRST_RUNS long, or None unless every
-    process recorded both."""
-    samples = []
-    for runtime in ("old", "new"):
-        values = [times.get(f"harness-{runtime}/{row}")]
-        values += [times.get(f"{HARNESS_FIRST}{row}/{n}/{runtime}") for n in range(2, FIRST_RUNS + 1)]
-        if any(value is None for value in values):
-            return None
-        samples.append(values)
-    return tuple(samples)
-
-
-#: A row over its limit in a leg (row_limit) is re-timed once in that leg before the leg ends
-#: (the matrix's harness_runs): RETIME_PAIRS pairs of runs of the row alone, old then new, then new
-#: then old (A B B A), its times kept as `harness-retime/<row>/<pair>/<runtime>` and its GPU times
-#: as `harness-retime-gpu/<row>/<pair>/<runtime>` (RETIME_KEEP). harness_budget judges such a row
-#: by the median of its pairs' ratios, new over old, of the times it judges the row on, so a clock
-#: episode in one run decides nothing while a regression in every pair still fails. At most
-#: RETIME_ROWS rows of a leg, the furthest over first; a row that was not re-timed is judged by its
-#: one time.
-RETIME_PAIRS = 2
-RETIME_ROWS = 8
-HARNESS_RETIME = "harness-retime/"
-HARNESS_RETIME_GPU = "harness-retime-gpu/"
-#: The sed program (`sed -n`) each re-timed run's output goes through: the row's time and GPU time
-#: alone, the shell giving `$timed`, `$row` and `$pair`.
-RETIME_KEEP = (r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-retime/$row/$pair/$timed #p;"
-               r"s#^M2V-MATRIX time harness-gpu-$timed/$row #M2V-MATRIX time harness-retime-gpu/$row/$pair/$timed #p")
-#: The awk program the leg runs over its runtimes' output to choose the rows it re-times: each row
-#: timed on both whose ratio, new over old, is over its limit, as `ratio row`: of its GPU times
-#: where it has them on both and does not match WALLRE (gpu_judged), against GPULIMITS', else of
-#: its times, against LIMITS' (`row=limit ...`, harness_limits), or BUDGET where a row has no
-#: limit listed, a latency from idle row (FROM_IDLE) against its workload's row's (listed_row):
-#: harness_budget's comparison, of the same decimals. None that matches SKIPRE (retime_skip), where
-#: it is not empty: their times judge nothing.
-RETIME_SELECT = r"""function read(text, into,   n, i, l, p) { n = split(text, l, " "); for (i = 1; i <= n; i++) { split(l[i], p, "="); into[p[1]] = p[2] } }
-BEGIN { read(limits, limit); read(gpulimits, glimit) }
-$1 == "M2V-MATRIX" && $2 == "time" && $3 ~ /^harness-(old|new)\/[^\/]+$/ {
-  split($3, k, "/"); t[k[1] "/" k[2]] = $4; rows[k[2]] = 1
-}
-$1 == "M2V-MATRIX" && $2 == "time" && $3 ~ /^harness-gpu-(old|new)\/[^\/]+$/ {
-  split($3, k, "/"); g[k[1] "/" k[2]] = $4
-}
-END {
-  for (row in rows) {
-    old = t["harness-old/" row]; new = t["harness-new/" row]
-    if (old == "" || new == "" || old + 0 <= 0) continue
-    if (skipre != "" && row ~ skipre) continue
-    gold = g["harness-gpu-old/" row] + 0; gnew = g["harness-gpu-new/" row] + 0
-    lr = row; sub(/_from_idle$/, "", lr)
-    if (row !~ wallre && gold > 0 && gnew > 0) { r = gnew / gold; m = (lr in glimit) ? glimit[lr] + 0 : budget + 0 }
-    else { r = new / old; m = (lr in limit) ? limit[lr] + 0 : budget + 0 }
-    if (r > m) printf "%.6f %s\n", r, row
-  }
-}"""
-
-
-def harness_limits(leg_id, gpu=False):
-    """The rows of LEG_ID with a ceiling or a floor (of their GPU time where GPU) as
-    RETIME_SELECT's LIMITS (GPULIMITS where GPU), `row=limit ...`: each its row_limit, written so
-    that it reads back as the same double."""
-    floors = HARNESS_GPU_FLOORS if gpu else HARNESS_FLOORS
-    rows = set(HARNESS_CEILINGS.get(card_of(leg_id), {})) | set(floors.get(card_of(leg_id), {}))
-    return " ".join(f"{row}={row_limit(leg_id, row, gpu)!r}" for row in sorted(rows)
-                    if row_limit(leg_id, row, gpu) != HARNESS_BUDGET)
-
-
-def retimed(times, row, gpu=False):
-    """ROW's re-timed pairs' ratios, new over old, of its GPU times where GPU, else of its times, in
-    pair order; None unless every pair has both."""
-    kept = HARNESS_RETIME_GPU if gpu else HARNESS_RETIME
-    ratios = []
-    for pair in range(1, RETIME_PAIRS + 1):
-        old, new = (times.get(f"{kept}{row}/{pair}/{runtime}") for runtime in ("old", "new"))
-        if not old or new is None:
-            return None
-        ratios.append(new / old)
-    return ratios
-
-
-#: The frozen arm is the noise meter. The old runtime takes regression fixes only, so its time of a
-#: harness row moves from one round to the next with the node, the driver and the harness, not
-#: with the change under test. Each round compares, per card and row, the old runtime's time that
-#: harness_budget judges the row on (frozen_old) with the same time in the previous round: the
-#: leg's base, the nearest first-parent ancestor whose note has the leg. Where it moved more than
-#: FROZEN_DRIFT either way, the row's comparison is VOID for the round on that card: harness_budget
-#: names it and judges nothing from it, and it is re-timed in one process with both runtimes
-#: interleaved. harness_rows shows the move on every row the base has. The arm measures noise only
-#: between rounds of one harness, one old runtime and one timing shape: where the base differs
-#: (the matrix's frozen_rebase), the rows it cannot compare (frozen_rebased) read `rebased` and
-#: void nothing.
-FROZEN_DRIFT = 0.10
-#: Why a base differs: its leg was timed in another shape (HARNESS_SHAPE), so the arm compares no
-#: row with it; or the harness's or the old runtime's tree differs at its commit, so the arm
-#: compares only the creation rows, which time the creation calls and no command buffer of the
-#: harness's.
-REBASED_SHAPE, REBASED_TREES = "another timing shape", "another harness or old runtime"
-#: The shape the matrix times a leg's harness rows in (its harness_runs), kept in the leg's note:
-#: both runtimes in one process, their passes alternating, the new runtime's first.
-HARNESS_SHAPE = "one process, new then old"
-#: The old runtime's own spread across its passes in a leg, past which the leg's times judge
-#: nothing (base_spread): the leg is VOID, and the matrix times it once more, later; a leg VOID
-#: again reads "venue unstable", its times never failing it.
-BASE_SPREAD = 0.10
-
-
-def base_spread(times, cpu=None):
-    """The old runtime's own spread across its passes in a leg's TIMES, as (spread, row), or None
-    where no steady row has two: of each row the leg re-timed (RETIME_PAIRS), on the times it is
-    judged on (gpu_judged), the old runtime's main run's and its re-timed runs', the largest over
-    the smallest less 1, and of the rows, the largest. A creation row's first samples are cold,
-    spread by nature and judged cold against cold, so none counts; nor does a row judged by its
-    counts on a node whose CPU model is CPU (counts_judge), whose time judges nothing."""
-    widest = None
-    for row in sorted({key[len(HARNESS_RETIME):].rsplit("/", 2)[0] for key in times if key.startswith(HARNESS_RETIME)}):
-        if first_row(row) or counts_judge(cpu, row):
-            continue
-        gpu = gpu_judged(times, row)
-        main, again = (f"{HARNESS_GPU}old/{row}", HARNESS_RETIME_GPU) if gpu else (f"{HARNESS_OLD}{row}", HARNESS_RETIME)
-        values = [times.get(main)] + [times.get(f"{again}{row}/{pair}/old") for pair in range(1, RETIME_PAIRS + 1)]
-        values = [value for value in values if value]
-        if len(values) >= 2 and (widest is None or max(values) / min(values) - 1 > widest[0]):
-            widest = (max(values) / min(values) - 1, row)
-    return widest
-
-
-def base_spread_void(times, cpu=None):
-    """Whether a leg's TIMES, on a node whose CPU model is CPU, are VOID by the old runtime's own
-    spread (base_spread, BASE_SPREAD)."""
-    spread = base_spread(times, cpu)
-    return spread is not None and spread[0] > BASE_SPREAD
-
-
-def frozen_old(times, row, gpu):
-    """The old runtime's time of ROW in TIMES that harness_budget judges it on: the median of the
-    FIRST_RUNS processes' samples for a creation row's first sample (first_row), else its GPU time
-    where GPU, else its time; None where TIMES lacks any of it."""
-    if first_row(row):
-        values = [times.get(f"{HARNESS_OLD}{row}")]
-        values += [times.get(f"{HARNESS_FIRST}{row}/{n}/old") for n in range(2, FIRST_RUNS + 1)]
-        return None if None in values else statistics.median(values)
-    return times.get(f"{HARNESS_GPU}old/{row}" if gpu else f"{HARNESS_OLD}{row}")
-
-
-def frozen_rebased(row, rebased):
-    """Whether the frozen arm compares ROW with nothing, its base differing by REBASED (None, or
-    REBASED_SHAPE or REBASED_TREES): every row on another shape, every row but the creation rows
-    (HARNESS_CREATES) on another harness or old runtime."""
-    return rebased == REBASED_SHAPE or (rebased == REBASED_TREES and not row.startswith(HARNESS_CREATES))
-
-
-def frozen_move(times, base, row):
-    """The old runtime's move on ROW from the base's times, BASE, to TIMES, of the time it is
-    judged on in TIMES (gpu_judged): (base's, now, now over base's less one), or None where
-    either has none."""
-    gpu = gpu_judged(times, row)
-    was, now = frozen_old(base or {}, row, gpu), frozen_old(times, row, gpu)
-    if not was or not now:
-        return None
-    return was, now, now / was - 1
-
-
-def frozen_void(times, base, rebased=None):
-    """The rows of TIMES whose comparison the frozen arm voids against BASE (FROZEN_DRIFT), each
-    `(row, base's, now, move)`, in row order; none of the rows REBASED leaves uncompared
-    (frozen_rebased)."""
-    rows = sorted({key[len(HARNESS_OLD):] for key in times if key.startswith(HARNESS_OLD)})
-    moves = ((row, frozen_move(times, base, row)) for row in rows if not frozen_rebased(row, rebased))
-    return [(row, *move) for row, move in moves if move and abs(move[2]) > FROZEN_DRIFT]
-
-
-#: The frozen arm's second rule, beside FROZEN_DRIFT: a row judged by its host time (not by its GPU
-#: time, and not by re-timed pairs, which judge themselves) that is past its limit by less than its
-#: own old time moved from the base in the round is VOID for the round too, as the old runtime's
-#: own drift could carry it there. Its excess is the ratio over the limit less one, the move the
-#: size of frozen_move's. Neither rule makes a row red; a row past its limit is red only after its
-#: paired re-time agrees.
-def excess_void(move, ratio, limit):
-    """Whether a host-time row judged at RATIO past its LIMIT is VOID by its own frozen arm's MOVE
-    (frozen_move, or None): its excess over the limit smaller than the move's size."""
-    return move is not None and ratio > limit and ratio / limit - 1 < abs(move[2])
-
-
-def excess_voids(leg_id, records, base, rebased=None, cpu=None):
-    """The rows of a leg's RECORDS on LEG_ID past their limits by host time (over_rows) that the
-    second rule voids (excess_void) against BASE, the base leg's times, and the first (FROZEN_DRIFT)
-    does not: each `(row, ratio, limit, move)`, in row order; none where REBASED leaves the row
-    uncompared (frozen_rebased) or its re-timed pairs judged it. CPU: the CPU model of the leg's
-    node."""
-    out = []
-    for row, kind, ratio, limit in over_rows(leg_id, records, cpu):
-        if kind == "GPU time" or kind == "count" or frozen_rebased(row, rebased):
-            continue
-        if retimed(records["time"], row) is not None:
-            continue
-        move = frozen_move(records["time"], base, row)
-        if move and abs(move[2]) <= FROZEN_DRIFT and excess_void(move, ratio, limit):
-            out.append((row, ratio, limit, move[2]))
-    return out
-
-
-def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
-    """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
-    (`harness-new/<row>` and `harness-old/<row>`) against its limit, row_limit: HARNESS_BUDGET times
-    the greater of its ceiling (HARNESS_CEILINGS) and its floor. A row with a GPU time on both
-    runtimes that is not a WALL_ROWS row (gpu_judged) is judged on its GPU times against its GPU
-    floor (HARNESS_GPU_FLOORS), its times shown beside them; any other on its times against its
-    floor (HARNESS_FLOORS). A CARD_VARIANCE row is never a problem: past its limit, or over the
-    budget within it, it is named with what its card was seen to do. Returns
-    (problems, parked): a row past its limit is a problem, and so is a row whose time was recorded
-    more than once (twice by a suite, or by two suites), which has no one time to judge. A row past
-    its limit that the leg re-timed (RETIME_PAIRS) is judged by the median of its pairs' ratios
-    instead: a problem past the limit, else named with its pairs. A creation row's first sample
-    (first_row) is judged by the ratio of the medians of its FIRST_RUNS processes, and is never a
-    problem on its one sample: without every process's, it is named as not judged. A listed row
-    passes up to its ceiling times HARNESS_BUDGET, the noise allowance parity gets, and is named
-    with its ceiling; one within the budget is named as leaving the list. A row whose run failed on the old runtime
-    (`M2V-FAILED harness-old/<row>`) is named as not compared and fails nothing here (PARKED_RECORDS);
-    one that failed on the new runtime fails its suite (leg_problems). A row whose size follows the
-    device (`size` records) is compared only where both runtimes ran it at one size: at two, the
-    row is a problem, its times measuring different work. BASE is the times of the leg's base: a
-    judged row whose old time moved past FROZEN_DRIFT from the base's is VOID, named and not
-    judged (frozen_move), unless REBASED, how the base differs, leaves it uncompared
-    (frozen_rebased). Where the old runtime's own spread across its passes in the leg is past
-    BASE_SPREAD (base_spread), every row its times would fail is named VOID and fails nothing;
-    the problems of its records and its counts stand. On a node whose CPU model is CPU, a row
-    counts_judge judges by its counts is judged by the instructions gate alone, its time named. A
-    row past its limit that status.tsv holds (owned_verdict) is named and fails nothing: an open
-    record's within OWNED_WORSE of the ratio it was owned at, judged after its re-time, and a
-    gap's without a ruled ceiling; past that, it fails as any row."""
-    problems, parked, timed = [], [], []
-
-    def past_its_limit(row, line, ratio):
-        """ROW past its limit, LINE naming it, judged by RATIO: a problem (timed) unless its status
-        holds it (owned_verdict), in which case it is named with that and fails nothing."""
-        verdict = owned_verdict(leg_id, row, ratio)
-        if verdict is None:
-            timed.append(line)
-        else:
-            (timed if verdict[0] else parked).append(f"{line}: {verdict[1]}")
-
+def harness_budget(leg_id, leg):
+    """The harness rows of LEG, the parsed leg LEG_ID, held to the instructions gate
+    (instruction_gate). Returns (problems, parked): a gated row's problems and named lines, and a
+    row whose time was recorded more than once (twice by a suite, or by two suites), which has no
+    one time to show, is a problem. A row's time is judged only as a cross-GPU outlier
+    (time_outliers)."""
+    problems, parked = [], []
     suites = leg["suites"].values()
-    for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
-                       if test.startswith(HARNESS_OLD)}):
-        parked.append(f"harness budget {row}: old failed, not compared")
     records = leg_records(leg)[0]
-    times, sizes = records["time"], records["size"]
     keys = [key for suite in suites for key in suite["records"]["time"]]
     twice = ({key for key in keys if keys.count(key) > 1}
              | {key for suite in suites for kind, key in suite.get("duplicated", ()) if kind == "time"})
-    ceilings = HARNESS_CEILINGS.get(card_of(leg_id), {})
-    for key, new in sorted(times.items()):
+    for key in sorted(records["time"]):
+        if not key.startswith(HARNESS_NEW):
+            continue
         row = key[len(HARNESS_NEW):]
-        old = times.get(HARNESS_OLD + row)
-        if not key.startswith(HARNESS_NEW) or not old:
-            continue
-        if {key, HARNESS_OLD + row} & twice:
+        if key in twice:
             problems.append(f"harness budget {row}: its time is recorded more than once, so it has no one "
-                            "time to judge")
+                            "time to show")
             continue
-        new_size, old_size = sizes.get(key), sizes.get(HARNESS_OLD + row)
-        if new_size != old_size:
-            problems.append(f"harness budget {row}: new ran at size {new_size}, old at {old_size}, so its "
-                            "times measure different work")
-            continue
-        limit = row_limit(leg_id, row)
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
         parked += named
-        if counts_judge(cpu, row):
-            whose = "its workload's" if row.endswith(FROM_IDLE) else "its"
-            parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {new / old:.3f}, "
-                          f"not judged: judged by {whose} instructions per frame, its time only as a "
-                          "cross-GPU outlier, as its node's CPU clock follows the load")
-            continue
-        shown = next((why for end, why in SHOWN_FIRST.items() if row.endswith(end)), None)
-        if first_row(row) and shown:
-            samples = first_samples(times, row)
-            if samples is not None:
-                old, new = (statistics.median(values) for values in samples)
-                parked.append(f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us "
-                              f"over old {old:.1f} us is {new / old:.3f}: shown, not judged: {shown}")
-            continue
-        move = None if frozen_rebased(row, rebased) else frozen_move(times, base, row)
-        if move and abs(move[2]) > FROZEN_DRIFT:
-            parked.append(f"harness budget {row}: VOID: old moved {move[2]:+.1%} from the base's, "
-                          f"{move[0]:.1f} us to {move[1]:.1f} us, so the round judges nothing from it: "
-                          "re-time it in one process, both runtimes interleaved")
-            continue
-
-        def within_drift(line, ratio):
-            """Whether ROW past its limit at RATIO is VOID by the second rule (excess_void),
-            naming it after LINE when it is."""
-            if not excess_void(move, ratio, limit):
-                return False
-            parked.append(f"{line}: VOID: past its limit {limit:.3f} by {ratio / limit - 1:.1%}, less than "
-                          f"old's own move of {move[2]:+.1%} from the base's, so the round judges nothing "
-                          "from it: re-time it in one process, both runtimes interleaved")
-            return True
-        if first_row(row):
-            samples = first_samples(times, row)
-            if samples is None:
-                if new / old > limit:
-                    parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is "
-                                  f"{new / old:.3f}, one sample: a first sample is judged by the median "
-                                  f"of {FIRST_RUNS} processes, not judged")
-                continue
-            old, new = (statistics.median(values) for values in samples)
-            line = (f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us over old "
-                    f"{old:.1f} us is {new / old:.3f}")
-            gate = own_part(leg_id, times, row)
-            if gate is not None:
-                own, driver, gap = gate
-                if own is None:
-                    timed.append(f"{line}: judged on the new runtime's own part ({gap}), which needs "
-                                    "the driver's part from every process")
-                    continue
-                line = (f"harness budget {row}: median of {FIRST_RUNS} processes, the new runtime's own "
-                        f"part {own:.1f} us over old's whole {old:.1f} us is {own / old:.3f}; the "
-                        f"driver's part {driver:.1f} us, new {new:.1f} us whole is {new / old:.3f}: {gap}")
-                if own / old > limit:
-                    if not within_drift(line, own / old):
-                        past_its_limit(row, f"{line}, {past_limit(leg_id, row)}: a regression of its own",
-                                       own / old)
-                else:
-                    parked.append(line)
-                continue
-            if new / old > limit:
-                if not within_drift(line, new / old):
-                    past_its_limit(row, f"{line}, {past_limit(leg_id, row)}", new / old)
-            elif listed_row(row) in ceilings:
-                parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
-            continue
-        gpu = gpu_judged(times, row)
-        if gpu:
-            limit = row_limit(leg_id, row, gpu)
-            gnew, gold = (times[f"{HARNESS_GPU}{runtime}/{row}"] for runtime in ("new", "old"))
-            ratio = gnew / gold
-            line = (f"harness budget {row}: GPU p50 new {gnew:.1f} us over old {gold:.1f} us is "
-                    f"{ratio:.3f} (time new {new:.1f} us over old {old:.1f} us is {new / old:.3f})")
-        else:
-            ratio = new / old
-            line = (f"harness budget {row}: new {new:.1f} us{gpu_beside(times, 'new', row)} over old "
-                    f"{old:.1f} us{gpu_beside(times, 'old', row)} is {ratio:.3f}")
-        variance = CARD_VARIANCE.get(card_of(leg_id), {}).get(row)
-        if ratio > limit:
-            past = f"{line}, {past_limit(leg_id, row, gpu)}"
-            ratios = retimed(times, row, gpu)
-            judged = ratio
-            if ratios is not None:
-                judged = statistics.median(ratios)
-                past = (f"{past}; re-timed in {RETIME_PAIRS} pairs, "
-                        f"{', '.join(f'{r:.3f}' for r in ratios)}, median {judged:.3f}")
-                if judged <= limit:
-                    parked.append(f"{past}, within: judged by the median")
-                    continue
-            elif not gpu and within_drift(line, ratio):
-                continue
-            if variance:
-                parked.append(f"{past}: the card's own variance, not judged ({variance})")
-            else:
-                past_its_limit(row, past, judged)
-        elif variance and ratio > HARNESS_BUDGET:
-            parked.append(f"{line}, within its limit: the card's own variance ({variance})")
-        elif listed_row(row) not in ceilings:
-            continue
-        elif ratio > HARNESS_BUDGET:
-            parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
-        else:
-            parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[listed_row(row)]} leaves the list")
-    spread = base_spread(times, cpu)
-    if spread is not None and spread[0] > BASE_SPREAD:
-        parked.append(f"harness budget VOID: the old runtime's own spread across its passes is {spread[0]:.1%} "
-                      f"on {spread[1]}, past {BASE_SPREAD:.0%}, so the leg's times judge nothing")
-        parked += [f"VOID: {line}" for line in timed]
-    else:
-        problems += timed
     return problems, parked
 
 
-def over_rows(leg_id, records, cpu=None):
-    """Every harness row of a leg's RECORDS past its limit on LEG_ID as harness_budget judges it,
-    each `(row, kind, ratio, limit)`, in row order: kind `GPU time` for a row judged on its GPU
-    time (gpu_judged), `host time` for one judged on its time, `own part` for a creation row judged
-    on the new runtime's own part (OWN_PART_GATES, its ratio that part over old's whole), `count`
-    for the instructions gate
-    (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
-    new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
-    processes' medians for a creation row's first sample). A row its re-timed pairs bring within
-    is not over; a shown row (SHOWN_FIRST) is never judged, so never over; nor is the time of a row
-    judged by its counts on a node whose CPU model is CPU (counts_judge)."""
+def harness_rows(records):
+    """Every harness row timed in a leg's RECORDS, one line each: its time, its GPU time
+    (HARNESS_GPU) and, where recorded, its instructions per run (with its own threads' where the
+    runtime names them), `-` where it has none."""
     times, counted = records["time"], records["instructions"]
-    out = []
-    for key in sorted(times):
-        row = key[len(HARNESS_NEW):]
-        if not key.startswith(HARNESS_NEW) or not times.get(HARNESS_OLD + row):
-            continue
-        new_i, old_i = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
+    lines = []
+    for row in sorted(key[len(HARNESS_NEW):] for key in times if key.startswith(HARNESS_NEW)):
+        wall, gpu = times.get(HARNESS_NEW + row), times.get(f"{HARNESS_GPU}new/{row}")
+        line = (f"{row:<36} {'-' if wall is None else f'{wall:.1f}':>10} us, "
+                f"GPU p50 {'-' if gpu is None else f'{gpu:.1f}':>10} us")
+        instructions = counted.get(f"harness-new/{row}{INSTRUCTIONS_PER_RUN}")
+        if instructions is not None:
+            line += f", {instructions} instructions"
         own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
-        if row.startswith(WALL_ROWS) and new_i and old_i and own is not None:
-            stored = stored_count(leg_id, row)
-            if stored and own > HARNESS_BUDGET * stored:
-                out.append((row, "count", own / stored, HARNESS_BUDGET))
-            if own > old_i:
-                out.append((row, "count", own / old_i, 1.0))
-        if counts_judge(cpu, row) or (first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST)):
-            continue
-        if first_row(row):
-            samples = first_samples(times, row)
-            if samples is None:
-                continue
-            old, new = (statistics.median(values) for values in samples)
-            kind, ratio, limit = "host time", new / old, row_limit(leg_id, row)
-            gate = own_part(leg_id, times, row)
-            if gate is not None and gate[0] is not None:
-                kind, ratio = "own part", gate[0] / old
-        else:
-            gpu = gpu_judged(times, row)
-            prefix = HARNESS_GPU if gpu else "harness-"
-            new, old = (times[f"{prefix}{runtime}/{row}"] for runtime in ("new", "old"))
-            kind, ratio, limit = ("GPU time" if gpu else "host time"), new / old, row_limit(leg_id, row, gpu)
-            ratios = retimed(times, row, gpu) if ratio > limit else None
-            if ratios is not None:
-                ratio = statistics.median(ratios)
-        if ratio > limit:
-            out.append((row, kind, ratio, limit))
-    return out
-
-
-#: The status of each row a report lists over its limit (over_rows), by card and row, read from
-#: status.tsv (read_status): `open`, an open record, with its owner, the round it first went over
-#: and the ratio it was owned at; `gap`, a known gap, with the place it was ruled; `note`, a note
-#: alone. A row with no open record or gap reads NEW in the first round it is over (not over in
-#: its leg's base) and UNOWNED after; a CARD_VARIANCE row reads as its card's known gap. An open
-#: record's row past its limit fails its leg only more than OWNED_WORSE worse than its owned ratio,
-#: and a gap's only past the ceiling a ruling gave it (HARNESS_CEILINGS); both are listed
-#: (owned_verdict). An entry whose rows are all within their limits is named for removal
-#: (entries_within).
-STATUSES = ("open", "gap", "note")
-#: How much worse than the ratio it was owned at an open record's row may judge before it fails
-#: its leg again: its owner's work holds it there, and a row that grows past it is a new
-#: regression on top of the owned one.
-OWNED_WORSE = 1.03
-
-
-def read_status(text):
-    """The status table's TEXT: `#` comments, a header line, then one entry a line, `|` between
-    its fields: card (`vendor:device`), row (`*` matches any run of characters), status
-    (STATUSES), who owns it or where it was ruled, since (an open record's first round, a commit;
-    else `-`), owned (an open record's ratio when it was owned, new over old as the row is judged;
-    else `-`) and a note (or `-`). Returns [(card, row, status, who, since, owned, note)], owned a
-    float or None; a malformed line raises ValueError."""
-    entries = []
-    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-    for line in lines[1:]:
-        fields = [field.strip() for field in line.split("|")]
-        if len(fields) != 7:
-            raise ValueError(f"status.tsv: {len(fields)} fields, not 7: {line}")
-        card, row, status, who, since, owned, note = fields
-        if (not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", card) or status not in STATUSES or not row
-                or (status == "open") != bool(re.fullmatch(r"[0-9a-f]{7,40}", since))
-                or (status == "open") != bool(re.fullmatch(r"[0-9]+\.[0-9]+", owned))
-                or (status != "open" and owned != "-")
-                or (status != "note" and who == "-")):
-            raise ValueError(f"status.tsv: malformed entry: {line}")
-        entries.append((card, row, status, who, since, float(owned) if status == "open" else None, note))
-    return entries
-
-
-STATUS = read_status((Path(__file__).resolve().parent / "status.tsv").read_text())
-
-
-def status_entries(leg_id, row):
-    """The status entries (STATUS) of LEG_ID's card whose row matches ROW."""
-    return [entry for entry in STATUS
-            if entry[0] == card_of(leg_id) and re.fullmatch(re.escape(entry[1]).replace(r"\*", ".*"), row)]
-
-
-def row_status(leg_id, row, over_before, rounds_since, ratio=None):
-    """ROW's status on LEG_ID for the report's table: `open, <who>'s, <n> rounds` (ROUNDS_SINCE
-    gives the rounds from a commit on, this one's included, or None) with the ratio it was owned
-    at and, given the RATIO it is judged by now, whether that is within OWNED_WORSE of it;
-    `known gap: <where>`; `NEW`, or `UNOWNED` where OVER_BEFORE (the row was over in the leg's
-    base), each with the entries' notes."""
-    entries = status_entries(leg_id, row)
-    notes = "".join(f"; {note}" for *_, note in entries if note != "-")
-    for _, _, status, who, since, owned, _ in entries:
-        if status == "open":
-            age = rounds_since(since)
-            line = f"open, {who}'s, {'?' if age is None else age} round{'' if age == 1 else 's'}, owned at {owned:.3f}"
-            if ratio is not None:
-                line += (f", within {owned * OWNED_WORSE:.3f}" if ratio <= owned * OWNED_WORSE
-                         else f", WORSE than {owned * OWNED_WORSE:.3f}: fails its leg")
-            return line + notes
-        if status == "gap":
-            return f"known gap: {who}" + notes
-    if row in CARD_VARIANCE.get(card_of(leg_id), {}):
-        return "known gap: the card's own variance (CARD_VARIANCE)" + notes
-    return ("UNOWNED" if over_before else "NEW") + notes
-
-
-def entries_within(legs):
-    """The open records and gaps of status.tsv (STATUS) whose rows are back within their limits, so
-    the report names them for removal and no entry outlives its problem. LEGS: {leg_id: (records,
-    cpu)}, a note's legs. An entry is within where it matches a row timed on both runtimes on a
-    leg of its card and no row it matches is over its limit on any such leg (over_rows, of any
-    kind); an entry that matches no timed row says nothing. Each `(card, row, status, who)`, in the
-    table's order."""
-    out = []
-    for card, row, status, who, *_ in STATUS:
-        if status == "note":
-            continue
-        pattern = re.escape(row).replace(r"\*", ".*")
-        timed = over = False
-        for leg_id, (records, cpu) in sorted(legs.items()):
-            times = records.get("time") or {}
-            if card_of(leg_id) != card:
-                continue
-            if any(key.startswith(HARNESS_NEW) and times.get(HARNESS_OLD + key[len(HARNESS_NEW):])
-                   and re.fullmatch(pattern, key[len(HARNESS_NEW):]) for key in times):
-                timed = True
-                over = over or any(re.fullmatch(pattern, r) for r, *_ in over_rows(leg_id, records, cpu))
-        if timed and not over:
-            out.append((card, row, status, who))
-    return out
-
-
-def owned_verdict(leg_id, row, ratio):
-    """How a row past its limit on LEG_ID, judged by RATIO (new over old, after its re-time where
-    it was re-timed), stands by its status (STATUS): None where no open record or gap holds it, so
-    it fails its leg as any row; else (fails, why). An open record's row fails only past its owned
-    ratio times OWNED_WORSE; a gap's row fails only where a ruling gave it a ceiling
-    (HARNESS_CEILINGS), being past it, as a row past its ceiling always has; both are still
-    listed (over_lines)."""
-    for _, _, status, who, _, owned, _ in status_entries(leg_id, row):
-        if status == "open":
-            bound = owned * OWNED_WORSE
-            if ratio > bound:
-                return True, (f"owned by {who} at {owned:.3f}, and {ratio:.3f} is more than "
-                              f"{OWNED_WORSE - 1:.0%} worse ({bound:.3f})")
-            return False, f"owned by {who} at {owned:.3f}, within {bound:.3f}: listed, fails nothing"
-        if status == "gap":
-            if listed_row(row) in HARNESS_CEILINGS.get(card_of(leg_id), {}):
-                return True, f"a known gap ({who}), past the ceiling its ruling gave it"
-            return False, f"a known gap ({who}): listed, fails nothing"
-    return None
-
-
-def over_lines(leg_id, records, base, rebased, rounds_since, cpu=None):
-    """The report's table on LEG_ID: one line per row over its limit in the leg's RECORDS
-    (over_rows): its kind, its ratio and limit, the frozen arm's verdict against BASE, the base
-    leg's records (`VOID` by either of its rules, FROZEN_DRIFT and excess_voids, `stands`,
-    `rebased` where REBASED leaves it uncompared, `no base`; `-`
-    for a count; `VOID` on every time where the old runtime's own spread voids the leg,
-    base_spread), and its status (row_status). CPU: the CPU model of the leg's node."""
-    base_times = base and base["time"]
-    before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base, cpu)} if base else set()
-    void = base_spread_void(records["time"], cpu)
-    lines = []
-    excess = {row for row, *_ in excess_voids(leg_id, records, base_times, rebased, cpu)} if base else set()
-    for row, kind, ratio, limit in over_rows(leg_id, records, cpu):
-        move = frozen_move(records["time"], base_times, row)
-        meter = ("-" if kind == "count" else "VOID" if void or row in excess else "no base" if move is None
-                 else "rebased" if frozen_rebased(row, rebased) else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
-        status = row_status(leg_id, row, (row, kind) in before, rounds_since, None if kind == "count" else ratio)
-        lines.append(f"{leg_id:<24} {row:<36} {kind:<9} {ratio:6.3f} over {limit:.3f}  {meter:<7}  {status}")
-    return lines
-
-
-def harness_rows(records, base=None, rebased=None):
-    """Every harness row timed on either runtime in a leg's RECORDS, one line each: its time, its
-    GPU time (HARNESS_GPU) and, where recorded, its instructions per run (with its own threads'
-    where the runtime names them), on the new runtime and on the old, `-` where it has none, and
-    new over old of the times and of the instructions (and of new's own over old's whole). Where
-    BASE, the times of the leg's base, has the row, the frozen arm's move: the old runtime's time
-    the row is judged on against the base's (frozen_move), VOID past FROZEN_DRIFT, or `rebased`
-    where REBASED, how the base differs, leaves the row uncompared (frozen_rebased)."""
-    times, counted = records["time"], records["instructions"]
-    rows = sorted({key.split("/", 1)[1] for key in times if key.startswith((HARNESS_NEW, HARNESS_OLD))})
-    lines = []
-    for row in rows:
-        cells = []
-        for runtime in ("new", "old"):
-            wall, gpu = times.get(f"harness-{runtime}/{row}"), times.get(f"{HARNESS_GPU}{runtime}/{row}")
-            cell = (f"{runtime} {'-' if wall is None else f'{wall:.1f}':>10} us, "
-                    f"GPU p50 {'-' if gpu is None else f'{gpu:.1f}':>10} us")
-            instructions = counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}")
-            if instructions is not None:
-                cell += f", {instructions} instructions"
-            own = counted.get(f"harness-{runtime}/{row}{OWN_PER_RUN}")
-            if own is not None:
-                cell += f" ({own} own)"
-            cells.append(cell)
-        new, old = times.get(HARNESS_NEW + row), times.get(HARNESS_OLD + row)
-        ratio = f"{new / old:.3f}" if new is not None and old else "-"
-        line = f"{row:<36} {cells[0]} | {cells[1]} | {ratio}"
-        new_i, old_i = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
-        if new_i is not None and old_i:
-            line += f", instructions {new_i / old_i:.3f}"
-            own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
-            if own is not None:
-                line += f", own over old {own / old_i:.3f}"
-        move = frozen_move(times, base, row)
-        if move and frozen_rebased(row, rebased):
-            line += ", old rebased on the base"
-        elif move:
-            line += f", old {move[2]:+.1%} on the base" + (" VOID" if abs(move[2]) > FROZEN_DRIFT else "")
+        if own is not None:
+            line += f" ({own} own)"
         lines.append(line)
     return lines
 
 
-def judging_rules(cpu, times):
-    """Which rule judged each harness row of a leg's TIMES, on a node whose CPU model is CPU, as
-    the verdict line names it: the rows judged by instructions per frame (counts_judge) by name,
-    the rest, judged by time (harness_budget), counted; nothing where the leg compared no row."""
-    rows = sorted({key[len(HARNESS_NEW):] for key in times
-                   if key.startswith(HARNESS_NEW) and times.get(HARNESS_OLD + key[len(HARNESS_NEW):])})
-    if not rows:
-        return ""
-    counted = [row for row in rows if counts_judge(cpu, row)]
-    if not counted:
-        return f"; rows judged by time: all {len(rows)}"
-    return (f"; rows judged by instructions per frame, time as a cross-GPU outlier only ({cpu}): "
-            f"{', '.join(counted)}; by time: the other {len(rows) - len(counted)}")
-
-
 def verdict_line(leg_id, leg):
-    """The one line `run` and `show` print for a leg of a note, with the rule that judged each of
-    its harness rows (judging_rules, by its node's CPU model, `cpu`)."""
+    """The one line `run` and `show` print for a leg of a note."""
     tests = ", ".join(f"{name} {s['passed']}/{s['run']}" if s["run"] else f"{name} exit {s['exit']}"
                       for name, s in leg.get("suites", {}).items())
     counted = sum(len(values) for values in leg.get("records", {}).values())
@@ -1472,11 +575,6 @@ def verdict_line(leg_id, leg):
     head = f"{verdict} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"
     tail = (f"{tests or 'no suite ran'}; {counted} records; base {(leg.get('base') or 'none')[:10]}; "
             f"jobs {' '.join(leg.get('jobs', [])) or '-'}")
-    tail += judging_rules(leg.get("cpu"), (leg.get("records") or {}).get("time") or {})
-    if "timed" in leg:
-        spread = leg["timed"]["spread"]
-        tail += "; base spread " + ("n/a" if spread is None else f"{spread[0]:.1%} on {spread[1]}")
-        tail += "".join(f", {state}" for state in leg["timed"]["states"])
     if leg["problems"]:
         tail += " | " + " | ".join(leg["problems"][:4]) + (" ..." if len(leg["problems"]) > 4 else "")
     if leg.get("uncounted"):

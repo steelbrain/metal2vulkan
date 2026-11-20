@@ -353,7 +353,7 @@ For a row here **this axis has no denominator**: *declared* is our own sources' 
 
 | Metal type | the tree's type | declared | stated by a recorded case | shared only |
 |---|---|---|---|---|
-| `MTLResourceOptions` | `ResourceOptions` | — a bit set | 0 | 0 |
+| `MTLCommandBufferError` | `CommandBufferError` | 2 | 0 | 0 |
 
 ## By container
 

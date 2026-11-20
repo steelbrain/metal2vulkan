@@ -133,79 +133,6 @@ feature	RenderTargetSize	rare	a render area past a device's framebuffer limits
 feature	IndirectRenderState	rare	render state set by a kernel on an indirect command
 feature	GlobalBuiltinInFragment	rare	Metal 3.1 global built-ins in fragment functions
 feature	(computed)	none	helpers that build a refusal for a feature their callers name: see the "via a helper" rows
-gap	Textures	rare	texture forms the runtime has not built (texture buffers of some forms, X24Stencil8 views)
-gap	ResourceHeap	rare	the resource-ID heap's remaining forms
-gap	SparseHeaps	rare	sparse heaps
-gap	SparseTileMaps	rare	sparse texture emulation's unbuilt pieces
-gap	HeapPastMaxBufferSize	rare	a heap past maxBufferSize
-gap	RotatedTexture	rare	a rotated drawable's views, rows past its buffer
-gap	HeapTextureAlignment	rare	a heap texture needing more than 256 KiB alignment
-gap	HeapTextureMemory	app	a heap texture the heap's memory type does not take
-gap	FunctionTablePastMaxBufferLength	none	a function table past one buffer
-gap	IndirectCommandBufferPastMaxBufferLength	none	an ICB past one buffer
-gap	IndirectRenderCommands	rare	indirect render commands' remaining pieces
-gap	IndirectImageblockSize	none	an imageblock side past 65535
-gap	CommandReplay	rare	the device replay of indirect command buffers
-gap	RenderAttachments	rare	render attachment forms not built
-gap	AccelerationStructures	rare	ray tracing (out of scope by ruling)
-gap	FeatureEnable	none	device creation with a feature the runtime's chain lacks
-gap	ExtensionEnable	none	device creation with an extension under an unknown name
-gap	Render	system	render pass, resolve and attachment forms not built (20 sites: see the appendix)
-gap	TexelsPastBufferLength	rare	a YCbCr, two-plane, 4:2:2, depth, BC or rotated texture over an IOSurface plane past its surface
-gap	OverlappingSurfaceRows	rare	an IOSurface plane whose rows overlap
-gap	MemorylessSurfacePlane	rare	a memoryless texture over an IOSurface plane
-gap	SurfacePlaneShape	rare	a texture over an IOSurface plane past one 2D image of its rows, or a BC one of 16-byte blocks off 16
-gap	IndirectCommandPastSize	none	an indirect command at or past the buffer's size
-gap	ExecutionRangePastBuffer	rare	an execution range whose 8 bytes run past its buffer
-gap	ExecutionRangeOffFour	rare	an execution range at an offset off 4 bytes
-gap	IndirectCommandUnstridedBuffer	rare	an executed indirect command's buffer bound without the attribute stride the dynamic layout of its pipeline reads, where the pipeline's descriptor turned `support_dynamic_attribute_stride` on (with it off there is no stride word, and the runtime answers the bind at stride 0 as Metal does)
-gap	SamplePositionsAtBegin	rare	custom sample positions Vulkan takes only at begin
-gap	InterpolateAtSampleWithPositions	rare	interpolate_at_sample in a pass at custom sample positions
-gap	ExportableMemory	none	a runtime extension's exportable buffer on a device without the opaque-fd export
-gap	DmaBufExport	none	a runtime extension's dma-buf-exportable buffer on a device without the dma-buf export
-gap	ExportableSemaphore	none	a runtime extension's exportable shared event on a device without the opaque-fd export
-gap	SyncFileExport	none	a runtime extension's completion sync file on a device without the sync-file export
-gap	SharedEventAcrossDevices	rare	a shared event opened on another device
-gap	VkImagePlaneCopy	none	a runtime extension's texture over a plane of the caller's VkImage copied, filled, mipmapped or rendered to
-gap	ViewportDepthRange	rare	viewport depth outside [0, 1] without the device features
-gap	NonFiniteDepthBias	rare	NaN or infinite depth bias
-gap	DepthNeverWithoutAttachment	rare	depth compare Never with no depth attachment
-gap	HiddenDepthStencil	app	a depth-stencil state using depth or stencil the pass lacks
-gap	IndirectDrawArguments	rare	indirect draws whose arguments the CPU must read
-gap	DepthStencilResolve	rare	depth/stencil resolve modes a device lacks
-gap	TileAtSampleCount	none	tile memory at a sample count Apple's GPUs lack
-gap	ImageblockMasters	rare	imageblocks of mixed sizes in one pass
-gap	TileAndFragmentImageblocks	rare	explicit imageblocks shared by tile and fragment functions
-gap	Metal4Api	app	Metal 4 (the API is missing: METAL-COVERAGE.md)
-gap	CounterSampleBuffers	app	GPU counters and timestamps by sample buffer (missing API)
-gap	ResidencySets	app	residency sets (missing API)
-gap	TextureAccessCounters	rare	sparse texture access counters
-gap	IoCommandQueues	rare	fast resource loading (missing API)
-gap	TextureViewPools	rare	texture view pools (missing API)
-gap	ColorAttachmentMapping	rare	color attachment mapping (missing API)
-gap	LossyTextureCompression	rare	lossy texture compression
-gap	ShaderValidation	rare	per-pipeline shader validation
-gap	ShaderLogging	rare	shader os_log
-gap	DeviceNotifications	rare	device hotplug notifications (deprecated)
-gap	RateMapRegions	rare	draws in rate-mapped passes the region path does not draw
-gap	LayeredPass	rare	layered passes needing a per-layer color resolve
-gap	OverlappingTextureCopies	rare	overlapping texture copies (Metal races)
-gap	EmptyFillPattern	none	a fill of no pattern bytes through the Apple-private fillTexture:...:bytes:length:
-gap	RebindTextures	none	a runtime extension's rebind with a live texture
-gap	DetachTextures	none	a runtime extension's detach with a texture no stand-in presents exactly
-gap	DetachedTexelAccess	none	CPU texel access while a runtime extension detached the bytes
-gap	TextureBufferLevels	rare	a texture buffer of more than one level (public, unusual)
-gap	WriteSwizzle	none	Apple-private writeSwizzleEnabled with a swizzle that writes
-gap	PvrtcBlockOrder	rare	PVRTC regions off whole levels
-gap	DecodedHeapTexture	app	an ASTC texture in a heap on a device without ASTC
-gap	VertexFetchPast4GiB	rare	vertex fetch past 4 GiB of a bind offset
-gap	StageInFetchPast4GiB	rare	stage-in fetch past 4 GiB of a bind offset
-apple	ProtectedContent	none	Apple-private (no public header)
-apple	ViewportTransformDisabled	none	Apple-private (no public header)
-apple	VertexAmplificationMode	none	Apple-private (no public header)
-apple	DepthCleared	none	Apple-private (no public header)
-apple	StencilCleared	none	Apple-private (no public header)
-apple	SurfaceClientDirection	none	an IOSurface key in no public header
 bind	DescriptorRangeExceeded	app	a buffer window past a device's descriptor range
 bind	TexelBufferTooLarge	rare	a texture buffer past maxTexelBufferElements its parts do not bind
 bind	HeapTooLarge	rare	more resident textures than the pipeline's heap holds (bindless at scale)
@@ -229,30 +156,16 @@ limit	LayoutNesting	none	argument-buffer layouts nested past the cap
 limit	ConstructNesting	none	control flow nested past the cap
 limit	PrivateArenaBytes	none	a private arena past 4 GiB
 limit	CallStackBytes	rare	deep visible-function call stacks
-gap	MappedTextureSampling	none	a runtime extension's texture (address_mode_map) sampled where the runtime cannot map it; no Metal API path
 ratemap	ScreenExtent	rare	a rate map whose screen is past 16384 a side
 ratemap	LayerCount	none	a rate map of more than two layers, which Apple's compile crashes on
 ratemap	DenseSamples	rare	a rate map axis with more quality samples than screen pixels
 ratemap	SampleOutOfRange	rare	a rate map quality sample outside [0, 1] among others
 ratemap	SampleCount	rare	a rate map axis of more distinct samples than measured (9 on one layer, 4 on two)
 budget	Time	none	a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds)
-gap	LibrarySource	app	a library compiled from Metal source (newLibraryWithSource:); the runtime takes metallibs and AIR
-gap	RestartedStrip	none	a strip after the Apple-private setPrimitiveRestartEnabled:index: whose rewrite pass cannot run as Metal draws
-gap	ProvokingVertex	none	a draw after the Apple-private setProvokingVertexMode: 1, on a device without the last provoking vertex, whose rotated list cannot draw as Metal draws
-gap	PrivatePrimitives	none	a draw of an Apple-private primitive type (OpenGL on Metal's quads and kin) whose list cannot draw as Metal draws: a list past a u32 or one storage range, indices or arguments an unordered earlier draw wrote
-gap	PrimitiveIdIndices	rare	an indexed draw of a primitive_id pipeline, on a device without geometry or tessellation shaders, whose indices the encoder wrote since its last barrier
 feature	PrivateRenderState	none	Apple-private pipeline fields of OpenGL on Metal (no public header)
-gap	SurfaceDepthStencil	rare	a blit of the stencil of a Depth32Float_Stencil8 texture over a plane of an IOSurface with planes, or a pass on an X32_Stencil8 one's view as Depth32Float_Stencil8
 feature	ExtendedRangeBlend	system	an extended-range (XR10) attachment blended from an output other than four half or float lanes; a 16-bit float attachment's storage-form blend of a second-source factor or a one-color-channel mask under fast math; the consumer's guests blend RGB10A8_2P_XR10 attachments
 feature	CommandPredication	none	Apple-private command predication on a device without buffer device addresses
 feature	ProgramScopeBinding	app	MSL 3.2 program-scope buffer bindings (macOS 15 and later)
 feature	GenericPointer	system	MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later)
 feature	SeqCstFence	rare	a seq_cst fence in a vertex or fragment stage without its stores and atomics
-gap	MultisampledBufferCopy	rare	a buffer<->multisampled-texture copy on a device without sample-rate shading, an integer multisample attachment at the count, or the copy format's storage; and, where maintenance8's depth/colour copies are missing or wrong, what the sample-rate draws cannot move: a 16-bit depth on a driver whose codes the fragment-depth draw is not measured to keep, or a depth or stencil texture they cannot sample or render to (emulated elsewhere; the consumer's Maps pans and screensaver make the copy)
-gap	MultisampledBufferLayout	rare	a buffer<->multisampled-texture copy at a bytesPerRow of 0 from an offset that is a multiple of 16, or of pixels of 32 bytes or more at a pitch below a row or off the pixel: Metal copies these by rules not yet reduced, and its API validation rejects them
-gap	ColorAttachmentGroups	app	in a render pass of more color attachments than the device draws at once (five or more on a device of four), or one at an index past them: a pipeline state of other colors, a tile state, an execution of render commands, a draw reading another group's attachment
-gap	MadeBeforeRecovery	app	any object a program made before its device recovered from a lost VkDevice that the recovery does not carry (a pooled Shared or Managed buffer in memory the device allocated, a texture, a pipeline state), used after the recovery
-gap	AdoptedDeviceRecovery	none	the recovery test hook on a device the consumer made itself
-gap	RemadeAfterRecoveryFailed	app	a pipeline state made before its device recovered from a lost VkDevice whose making again on the new one failed, bound after the recovery
 feature	WideLines	none	a line under the Apple-private setLineWidth: at a width other than 1 drawn as the band, whose pipeline form the translator does not build (a selected slice or viewport, barycentric weights, multiview, synthesized geometry, too many stage outputs)
-gap	WideLines	none	under the Apple-private setLineWidth: at a width other than 1, a line strip drawn as the band whose list of segments the runtime cannot draw (past what a u32 counts or one storage range binds, or indices an unordered draw wrote)
