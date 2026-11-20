@@ -2055,8 +2055,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
   (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
   floor does not make (a multisample texture, a format of depth and stencil both, one pixel format
-  held in two Vulkan formats by the textures' usages, a 1D texture with another type), and one
-  level and slice of a texture into itself.
+  held in two Vulkan formats by the textures' usages, a 1D texture with another type), and
+  overlapping regions of one level and slice of one image, which Metal leaves undefined (Apple's
+  `copy(from:...to:...)` page: "unexpected behavior").
+- Within one level and slice of one image (a texture into itself, or a texture and its view,
+  which shares its image), regions apart copy with one `vkCmdCopyImage`, that subresource in the
+  general layout: one barrier moves it there and one home, the same three barriers as any copy.
+  The same region copies nothing and records no command, every texel already its own.
 - `copy_from_buffer` is `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`
   `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
   `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`

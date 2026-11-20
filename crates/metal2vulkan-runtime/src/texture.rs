@@ -3229,12 +3229,15 @@ impl TextureInner {
 
     /// The barrier that moves `placed`'s level and layer back home from the copy layout of
     /// `layout` once a copy has run, its writes (a copy into the image, whose transfer layout is
-    /// `TRANSFER_DST_OPTIMAL`) visible to every later command.
+    /// `TRANSFER_DST_OPTIMAL`, or within one subresource, in `GENERAL`) visible to every later
+    /// command.
     fn back(&self, placed: &Placed, layout: vk::ImageLayout) -> vk::ImageMemoryBarrier2<'static> {
         use vk::AccessFlags2 as Access;
         use vk::PipelineStageFlags2 as Stage;
         let written = match layout {
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL => Access::TRANSFER_WRITE,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL | vk::ImageLayout::GENERAL => {
+                Access::TRANSFER_WRITE
+            }
             _ => Access::NONE,
         };
         self.barrier(placed, self.image.copy_layout(layout), self.image.home)

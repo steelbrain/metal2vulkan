@@ -135,13 +135,16 @@ impl BlitCommandEncoder {
     /// deep copies into or out of
     /// a 2D slice. A size of 0 on an axis one of the textures lacks (depth on any but a 3D
     /// texture, height on a 1D one) copies one texel there, and a size of 0 on another axis copies
-    /// nothing, as plain Metal does where its validation stops the call. The command buffer keeps
-    /// both textures until it retires.
+    /// nothing, as plain Metal does where its validation stops the call. Within one level and
+    /// slice of one image (the texture into itself, or a texture and its view), regions apart
+    /// copy with that subresource in the general layout, and the same region copies nothing and
+    /// records no command, every texel already its own; Metal leaves overlapping regions
+    /// undefined. The command buffer keeps both textures until it retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::TextureRegion`] for
     /// a level, slice or region outside either texture or off its format's block grid;
-    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`]; [`Error::Vulkan`] where the
-    /// command buffer cannot record.
+    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`], overlapping regions of one
+    /// subresource among it; [`Error::Vulkan`] where the command buffer cannot record.
     pub fn copy_from_texture(
         &mut self,
         source: &Texture,
@@ -174,19 +177,36 @@ impl BlitCommandEncoder {
             building.wrote_host();
         }
         building.overs_after(overs, false);
-        let (read, write) = (
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
+        let (read, write) = match copy.shared {
+            false => (
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            ),
+            true => (vk::ImageLayout::GENERAL, vk::ImageLayout::GENERAL),
+        };
         let earlier = [memory_barrier(Reach::Commands)];
-        let away = [
-            source.away(&copy.from, read, vk::AccessFlags2::TRANSFER_READ),
-            destination.away(&copy.to, write, vk::AccessFlags2::TRANSFER_WRITE),
-        ];
-        let back = [
-            source.back(&copy.from, read),
-            destination.back(&copy.to, write),
-        ];
+        // Regions apart in one subresource: one barrier moves it to the general layout and one
+        // home, the copy reading and writing it there.
+        let (away_two, back_two, away_one, back_one);
+        let (away, back): (&[_], &[_]) = match copy.shared {
+            false => {
+                away_two = [
+                    source.away(&copy.from, read, vk::AccessFlags2::TRANSFER_READ),
+                    destination.away(&copy.to, write, vk::AccessFlags2::TRANSFER_WRITE),
+                ];
+                back_two = [
+                    source.back(&copy.from, read),
+                    destination.back(&copy.to, write),
+                ];
+                (&away_two, &back_two)
+            }
+            true => {
+                let both = vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::TRANSFER_WRITE;
+                away_one = [destination.away(&copy.to, write, both)];
+                back_one = [destination.back(&copy.to, write)];
+                (&away_one, &back_one)
+            }
+        };
         let regions = [vk::ImageCopy {
             src_subresource: copy.from.layers(copy.aspect),
             src_offset: copy.from.offset(),
@@ -197,15 +217,15 @@ impl BlitCommandEncoder {
         let device = &core.device;
         let (named_read, named_write) = (source.copy_layout(read), destination.copy_layout(write));
         // SAFETY: the command buffer records outside any render pass and keeps both images until
-        // it retires; each subresource is in its home layout between commands, and the two are
-        // different subresources where the textures are one (`texture_copy`), in their copy
-        // layouts between the barriers; the region lies in both.
+        // it retires; each subresource is in its home layout between commands, and in its copy
+        // layout between the barriers: two subresources, or one in the general layout whose two
+        // regions lie apart (`texture_copy`); the region lies in both.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
                 &vk::DependencyInfo::default()
                     .memory_barriers(&earlier)
-                    .image_memory_barriers(&away),
+                    .image_memory_barriers(away),
             );
             device.cmd_copy_image(
                 command,
@@ -215,7 +235,7 @@ impl BlitCommandEncoder {
                 named_write,
                 &regions,
             );
-            close(core, command, &back);
+            close(core, command, back);
         }
         building.count(Metric::Barriers);
         building.count(Metric::Barriers);
@@ -1063,11 +1083,14 @@ impl<'a> Side<'a> {
     }
 }
 
-/// A copy between two textures, checked: the region in each, and the aspect it copies.
+/// A copy between two textures, checked: the region in each, the aspect it copies, and whether
+/// the two regions lie apart in one subresource of one image, which the copy takes in the
+/// general layout.
 pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,
+    pub(crate) shared: bool,
 }
 
 /// Checks a fill of `range` of a buffer at `base` in its block, `len` bytes long: its offset in
@@ -1391,14 +1414,26 @@ pub(crate) fn texture_copy(
     let (Some(from), Some(to)) = placed else {
         return Ok(None);
     };
-    // One subresource is in one layout at a time.
-    if same && from.level == to.level && from.layer == to.layer {
+    // One subresource of one image, the textures one or a texture and its view: Metal leaves a
+    // copy whose regions overlap undefined (Apple's `copy(from:...to:...)` page: "unexpected
+    // behavior"). The same region copies nothing, every texel already its own; disjoint regions
+    // copy in the general layout (`VUID-vkCmdCopyImage-srcImage-09460`, `-pRegions-00124`).
+    let shared = same && from.level == to.level && from.layer == to.layer;
+    if shared && from.origin == to.origin {
+        return Ok(None);
+    }
+    let apart = (0..3).any(|axis| {
+        let (a, b, extent) = (from.origin[axis], to.origin[axis], from.size[axis]);
+        a + extent <= b || b + extent <= a
+    });
+    if shared && !apart {
         return Err(gap());
     }
     Ok(Some(ImageCopy {
         from,
         to,
         aspect: unit.aspect,
+        shared,
     }))
 }
 

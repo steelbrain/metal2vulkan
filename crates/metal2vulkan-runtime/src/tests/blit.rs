@@ -3,7 +3,10 @@
 //! - The rules: a texture copies into one of its own pixel format and sample count; two formats
 //!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
 //!   what one copy command in the floor does not make, one pixel format held in two Vulkan formats
-//!   among it, is `Gap::TextureCopy`; a level, slice or region outside a texture or
+//!   among it, is `Gap::TextureCopy`; within one level and slice of one image (one texture, or a
+//!   texture and its view), regions apart copy in the general layout, the same region copies
+//!   nothing, and overlapping regions, which Metal leaves undefined, are `Gap::TextureCopy`; a
+//!   level, slice or region outside a texture or
 //!   off its block grid is `Refusal::TextureRegion`; a size of 0 on an axis a texture lacks copies
 //!   one texel there, and on another copies nothing; a 3D texture's image copies to and from a 2D
 //!   slice.
@@ -11,7 +14,8 @@
 //!   land in a slice of a 2D array, a cube's face in an
 //!   image of a 3D texture, an image of a 3D texture in a 2D texture, a slice of an array in
 //!   another slice of it, and a block-compressed region in another texture where the device makes
-//!   one, everything around each region kept. One copy alone is one submission, two barriers and
+//!   one, everything around each region kept; a texture's region into another of the same level
+//!   and slice, from the texture or from its view, the same. One copy alone is one submission, two barriers and
 //!   the segment's end, and copies no byte of the runtime's own; a barrier an encoder owed is paid
 //!   by the copy's first. Every gauge comes back to zero with the device. The bytes each copy
 //!   must leave are plain Metal's: their FNV-1a 64 hashes are those of probe `blit_copy_layouts.m`
@@ -229,34 +233,38 @@ fn a_3d_image_copies_to_and_from_a_2d_slice_and_a_cube_face_is_its_slice() {
         )),
         Refusal::TextureRegion { .. }
     ));
-    // One texture's two slices copy; one slice into itself is not built.
+    // One texture's two slices copy; within one slice, regions apart copy in the general layout,
+    // the same region copies nothing, and overlapping regions are not built.
     let mut array = descriptor(TextureType::Type2DArray, PixelFormat::R8Unorm, [4, 4, 1]);
     array.array_length = 2;
     let a = side(&array, vk::Format::R8_UNORM, color(1));
-    assert!(texture_copy(
-        &a,
-        at(0, 0, [0; 3]),
-        [2, 2, 1],
-        &a,
-        at(1, 0, [2, 2, 0]),
-        true
-    )
-    .expect("a copy")
-    .is_some());
-    assert_eq!(
-        gap(texture_copy(
-            &a,
-            at(0, 0, [0; 3]),
-            [2, 2, 1],
-            &a,
-            at(0, 0, [2, 2, 0]),
-            true
-        )),
-        Gap::TextureCopy {
-            source: PixelFormat::R8Unorm,
-            destination: PixelFormat::R8Unorm
-        }
-    );
+    let within = |to, size| texture_copy(&a, at(0, 0, [0; 3]), size, &a, to, true);
+    let across = copied(within(at(1, 0, [0; 3]), [2, 2, 1]));
+    assert!(!across.shared, "two slices");
+    for (to, size) in [
+        ([2, 2, 0], [2, 2, 1]),
+        ([2, 0, 0], [2, 4, 1]),
+        ([0, 3, 0], [4, 1, 1]),
+    ] {
+        let apart = copied(within(at(0, 0, to), size));
+        assert!(apart.shared, "{to:?} {size:?}");
+        assert_eq!(apart.to, placed(0, 0, to, size));
+    }
+    assert!(matches!(within(at(0, 0, [0; 3]), [3, 3, 1]), Ok(None)));
+    for (to, size) in [
+        ([1, 1, 0], [2, 2, 1]),
+        ([1, 0, 0], [2, 1, 1]),
+        ([0, 1, 0], [4, 2, 1]),
+    ] {
+        assert_eq!(
+            gap(within(at(0, 0, to), size)),
+            Gap::TextureCopy {
+                source: PixelFormat::R8Unorm,
+                destination: PixelFormat::R8Unorm
+            },
+            "{to:?} {size:?}"
+        );
+    }
 }
 
 #[test]
@@ -1316,6 +1324,131 @@ pub(crate) mod on_device {
                 command_buffer.blit_command_encoder(),
                 Err(Error::Refused(Refusal::Committed))
             ));
+        });
+    }
+
+    /// A copy within one subresource of one image, from a texture's view or from the texture
+    /// itself into the texture: disjoint regions copy, one submission and three barriers as any
+    /// copy, everything around the region kept; the same region copies nothing and records no
+    /// command; overlapping regions, which Metal leaves undefined, are `Gap::TextureCopy`.
+    #[test]
+    fn every_device_copies_within_one_subresource_of_a_texture_and_its_view() {
+        each_device("blit_within", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 4)
+                .expect("a grant");
+            let texture = texture(
+                &device,
+                TextureType::Type2D,
+                PixelFormat::RGBA8Unorm,
+                [8, 8, 1],
+                TextureUsage::SHADER_READ,
+                4096,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let view = (texture.new_texture_view(
+                PixelFormat::RGBA8Unorm,
+                TextureType::Type2D,
+                0..1,
+                0..1,
+                Some(4097),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: the view: {error}"));
+            let level = |texture| Level {
+                texture,
+                slice: 0,
+                level: 0,
+                unit: 4,
+                block: 1,
+            };
+            let (whole, through_view) = (level(&texture), level(&view));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            let mut source = whole.write(11);
+            // The upload goes with a command buffer of its own, one with commands.
+            let first = queue.command_buffer().expect("a command buffer");
+            first
+                .record_for_test(&[], |_, _| {})
+                .expect("a command buffer's commands");
+            first.commit().expect("a commit");
+            finished(name, &first);
+            for (case, from) in [("from the view", &through_view), ("from itself", &whole)] {
+                let copy = Expect {
+                    from,
+                    source: &source,
+                    at: [0, 0, 0],
+                    to: &whole,
+                    before: source.clone(),
+                    to_at: [4, 3, 0],
+                    size: [4, 2, 1],
+                };
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                copy.record(name, &command_buffer);
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: {case}");
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.submissions - before.submissions,
+                        after.barriers - before.barriers,
+                        after.bytes_copied - before.bytes_copied,
+                    ),
+                    (1, 3, 0),
+                    "{name}: {case}: submissions, barriers, bytes copied"
+                );
+                let expected = copy.after();
+                assert_eq!(whole.read(), expected, "{name}: {case}");
+                source = expected;
+            }
+
+            // The same region: nothing to copy, no command, every byte kept.
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            let at = |origin| TexturePlace {
+                slice: 0,
+                level: 0,
+                origin,
+            };
+            (encoder.copy_from_texture(&view, at([2, 1, 0]), [3, 3, 1], &texture, at([2, 1, 0])))
+                .unwrap_or_else(|error| panic!("{name}: the same region: {error}"));
+            // Overlapping regions are not built.
+            assert!(
+                matches!(
+                    encoder.copy_from_texture(
+                        &view,
+                        at([0, 0, 0]),
+                        [4, 4, 1],
+                        &texture,
+                        at([2, 2, 0])
+                    ),
+                    Err(Error::Unsupported(Gap::TextureCopy { .. }))
+                ),
+                "{name}: overlapping regions"
+            );
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers
+                ),
+                (0, 0),
+                "{name}: the same region records nothing"
+            );
+            assert_eq!(
+                whole.read(),
+                source,
+                "{name}: the same region keeps every byte"
+            );
+            println!("{name}: copies within one subresource, through a view and of itself");
         });
     }
 
