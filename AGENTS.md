@@ -6,20 +6,19 @@ the current task.
 ## The project
 
 metal2vulkan runs Metal shaders and Metal programs on Vulkan. It is a Cargo workspace (a virtual
-manifest at the root) of eight crates under `crates/`:
+manifest at the root) of seven crates under `crates/`:
 
 | Crate | Published | What it is |
 |---|---|---|
 | `crates/metal2vulkan` | yes | The translator: Metal AIR to SPIR-V through a Metal-shaped API (device, library, pipelines, binding plans), and the `metal2vulkan` command (feature `cli`) |
-| `crates/metal2vulkan-rt` | no | The new runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API. It replaces `metal2vulkan-runtime` and takes its name at the cutover |
-| `crates/metal2vulkan-runtime` | yes | The old runtime. Frozen: regression fixes only, by at most one lane; deleted at the cutover |
+| `crates/metal2vulkan-rt` | no | The runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API. Unpublished until it takes the name `metal2vulkan-runtime` |
 | `crates/metal2vulkan-air` | yes | The AIR front end: container, bitstream, bitcode, typed IR, metadata ABI, intrinsics, canonicalization, `graph`, `budget` |
 | `crates/metal2vulkan-validation` | no | Authored semantic cases, Metal and Vulkan execution, harvest, the corpus index and audits |
 | `crates/metal2vulkan-conformance` | no | The Metal conformance suite: one case run on Metal and on the runtime, recorded and compared field by field. Independent of the harvested corpus |
 | `crates/metal2vulkan-devtools` | no | The external-tool runner, fixture assemblers and fixture paths the tests share |
-| `crates/metal2vulkan-harness` | no | The runtimes' compute harness: one set of compute workloads through each runtime's Metal-shaped API on one GPU, checked against CPU references, then timed. The regression gate between the old runtime and the new |
+| `crates/metal2vulkan-harness` | no | The runtime's compute harness: one set of compute workloads through the runtime's Metal-shaped API on one GPU, checked against CPU references, then timed |
 
-The three published crates share one version; `metal2vulkan` pins `metal2vulkan-air` exactly
+The two published crates share one version; `metal2vulkan` pins `metal2vulkan-air` exactly
 (`=0.x.y`). License: dual, `GPL-2.0-or-later OR LGPL-3.0-or-later`, at the recipient's choice. The
 root `LICENSE` is the notice; `LICENSE-GPL-2.0`, `LICENSE-LGPL-3.0` and `LICENSE-GPL-3.0` (which the
 LGPL v3 incorporates) are the texts. Each published crate carries copies of all four, held equal to
@@ -33,11 +32,10 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 |---|---|
 | `README.md` | What it is, install, command line, quick library use |
 | `docs/API.md` | The translator's API guide; the degrade-notice catalogue; accepted differences |
-| `crates/metal2vulkan-rt/README.md` | The new runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
-| `crates/metal2vulkan-runtime/README.md` | The old runtime's guide |
+| `crates/metal2vulkan-rt/README.md` | The runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
 | `docs/HOWTO.md` | Integration: tools, caching, failures, isolation |
 | `docs/ARCHITECTURE.md` | The translator's stages and module map |
-| `docs/FAST-PATHS.md` | The old runtime's and the translator's speed-for-accuracy switches, until the cutover deletes them |
+| `docs/FAST-PATHS.md` | The translator's speed-for-accuracy switches, until the cutover deletes them |
 | `docs/VALIDATION.md` | The validation ladder |
 | `docs/REPLAY-STREAM.md` | The replay stream format and its player |
 | `docs/RESOURCE-ID.md` | The resource ID: its index classes, the texture and sampler words, and their test vectors |
@@ -126,7 +124,7 @@ fact-table row, a device check or a ledger row.
   defect. No behavior keyed to an app, a shader hash or a corpus census.
 - **Honest FALLBACK.** Unsupported input returns a typed `Err` (the command line prints
   `FALLBACK`). Never emit wrong-but-valid SPIR-V to silence a gate.
-- **Scope.** The new runtime has a floor: one Vulkan version plus a fixed extension list
+- **Scope.** The runtime has a floor: one Vulkan version plus a fixed extension list
   (`crates/metal2vulkan-rt/README.md`); a device below it gets a typed refusal. Above the floor,
   refuse only what the device truly lacks, and implement the rest. A Metal feature that no guest
   has used, in a replay stream or a live session, is a typed refusal until one does; a refusal a
@@ -250,8 +248,8 @@ in either).
   `crates/metal2vulkan/src/spirv_binary/table.rs` (the test parser's table, test-only) come from
   `scripts/regen-spirv-grammar/`, from Khronos's grammar JSON alone; never hand-edit them. A
   newly named opcode or enumerant goes in that script's `items.txt`, then regenerate.
-- The published crates (`metal2vulkan`, `metal2vulkan-air`, `metal2vulkan-runtime`, and
-  `metal2vulkan-rt`, which is published under the runtime's name at the cutover) take only
+- The published crates (`metal2vulkan`, `metal2vulkan-air`, and `metal2vulkan-rt`, which is
+  published as `metal2vulkan-runtime` once it takes that name) take only
   dependencies that offer a GPL-2.0-compatible license (MIT, BSD, ISC, Unlicense or a similar
   option); never one that is Apache-2.0-only, GPL-3.0-only or LGPL-3.0-only. The dual license's
   GPL-2.0 option must hold for consumers that link the crates into GPL-2.0 programs. Code in
@@ -273,7 +271,7 @@ doctests, so they have their own line. The gate:
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
