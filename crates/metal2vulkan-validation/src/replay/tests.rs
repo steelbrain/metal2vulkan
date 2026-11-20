@@ -12,8 +12,8 @@ use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{judged_records, Ended};
 use super::pixels::{difference, Shape};
 use super::player::{
-    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, ReadCopy, Report,
-    Shown, TextureWrites, WAIT_COMPLETED,
+    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, ReadCopy, Relaid,
+    Report, Shown, TextureWrites, WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
@@ -683,6 +683,15 @@ fn addressed(address: u64, length: u64) -> [(&'static str, Value); 2] {
         ("gpuAddress", Value::Address(address)),
         ("gpuLength", Value::Uint(length)),
     ]
+}
+
+/// A heap descriptor of `size` bytes and type `kind` (`MTLHeapType`).
+fn heap_of(size: u64, kind: u64) -> [Value; 1] {
+    [map(&[
+        ("size", Value::Uint(size)),
+        ("heapType", Value::Uint(kind)),
+        ("options", Value::List(Vec::new())),
+    ])]
 }
 
 /// Two frames, each one command buffer committed; `inside` adds its calls to the first frame,
