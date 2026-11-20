@@ -1841,7 +1841,7 @@ fn a_refused_stage_in_row_is_its_refusal_alone() {
             "pipeline",
             Failure::named(
                 "Error::Unsupported",
-                "the kernel reads an input the compute encoder does not supply yet",
+                "the kernel reads an input the compute encoder does not supply yet: StageIn",
             ),
         );
         let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
