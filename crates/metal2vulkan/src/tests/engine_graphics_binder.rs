@@ -663,9 +663,9 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
 /// attributes pulled and recorded in `variant_pulled`), and its plan for the same shape states the
 /// same key; it keeps stating it for an aligned shape, since the pipeline pulls the layout for any
 /// bind. The variant's keys (`render_variant_key`) give its stages as a consumer lowers them: the
-/// vertex function under its inputs, then the fragment function under its inputs with its push
-/// fields from the vertex function's end (`CompiledFunction::fragment_push_base`), which together
-/// make the variant's pipeline. The variant's draw binds no vertex buffer: the layout's buffer is
+/// vertex function under its inputs, then the fragment function under its inputs, whose push fields
+/// start at the vertex function's end (`CompiledFunction::fragment_push_base`), which together make
+/// the variant's pipeline. The variant's draw binds no vertex buffer: the layout's buffer is
 /// one storage binding the fetch reads from the bind offset at the static stride.
 #[test]
 fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
@@ -711,6 +711,7 @@ fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
                 &crate::pipeline::StageEntries::new(),
             )
             .expect("variant keys");
+        assert_eq!(keys.pipeline, v.key, "{stem}");
         let lowered = |source: &StageSource, inputs: &crate::pipeline::LoweringInputs| {
             let StageSource::Function(f) = source else {
                 panic!("{stem}: a function stage");
@@ -722,8 +723,12 @@ fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
             &d.vertex,
             keys.vertex_inputs.as_ref().expect("vertex inputs"),
         );
-        let mut fragment_inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-        fragment_inputs.push_base = vertex.fragment_push_base();
+        let fragment_inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+        assert_eq!(
+            fragment_inputs.push_base,
+            vertex.fragment_push_base(),
+            "{stem}"
+        );
         let fragment = lowered(d.fragment.as_ref().expect("fragment"), &fragment_inputs);
         let mut e = d.clone();
         e.vertex = StageSource::Compiled(vertex);

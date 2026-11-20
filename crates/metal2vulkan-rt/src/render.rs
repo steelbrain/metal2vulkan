@@ -763,18 +763,12 @@ fn lower_stages(
         lowerings.vertex = Some(*function.key().digest());
         lowered.vertex = StageSource::Compiled(function);
     }
-    // The fragment function's push fields follow the vertex function's in the floor's one
-    // range, from the vertex function's end.
-    let base = match &lowered.vertex {
-        StageSource::Compiled(vertex) => vertex.fragment_push_base(),
-        StageSource::Function(_) => 0,
-    };
+    // The keys' fragment inputs start its push fields at the vertex function's end, in the
+    // floor's one range.
     if let (Some(StageSource::Function(function)), Some(inputs)) =
         (&descriptor.fragment, &keys.fragment_inputs)
     {
-        let mut inputs = inputs.clone();
-        inputs.push_base = base;
-        let function = lower(core, function, &inputs, budget, entries);
+        let function = lower(core, function, inputs, budget, entries);
         let function = function.map_err(Error::Translation)?;
         lowerings.fragment = Some(*function.key().digest());
         lowered.fragment = Some(StageSource::Compiled(function));

@@ -3697,9 +3697,9 @@ fn a_fragment_reading_through_a_loaded_pointer_runs_at_pixel_rate() {
 /// which its push window holds and each draw writes from `BindState::viewport_count`, and writes
 /// the index as written to a flat varying (`IoRole::ViewportIndex`). In its pipeline a fragment
 /// function that reads the index compiles under `viewport_index_varying` and reads that varying, as
-/// `render_pipeline_key` names; compiled on its own under those inputs and the vertex function's
-/// push end (`CompiledFunction::fragment_push_base`), it is the pipeline's. One that does not read
-/// it compiles without `viewport_index_varying`. A reading fragment compiled for the other kind of
+/// `render_pipeline_key` names, its push fields from the vertex function's push end
+/// (`CompiledFunction::fragment_push_base`); one that does not read it compiles without
+/// `viewport_index_varying`. A reading fragment compiled for the other kind of
 /// vertex function is `NeedsInput(ViewportIndex)` either way. Every module passes L3.
 #[test]
 fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
@@ -3767,6 +3767,7 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
     let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
     assert!(inputs.viewport_index_varying);
     let pipe = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
+    assert_eq!(pipe.key, keys.pipeline);
     for s in &pipe.stages {
         l3(&s.spirv, &pipe.requirements, &dev);
     }
@@ -3774,28 +3775,10 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::ViewportCount));
-    assert_eq!(
-        Some(dev.function_compile_key(&reader, &inputs)),
-        keys.fragment
-    );
-    let vertex_inputs = keys.vertex_inputs.as_ref().expect("vertex inputs");
-    let staged_vertex = dev
-        .compile_function(&function(&lib, "rt6_select"), vertex_inputs, &budget)
-        .expect("vertex");
-    assert_eq!(*staged_vertex.key(), keys.vertex);
-    let mut inputs = inputs;
-    inputs.push_base = staged_vertex.fragment_push_base();
     let fragment = dev
         .compile_function(&reader, &inputs, &budget)
         .expect("fragment");
-    let staged = pipeline(
-        StageSource::Compiled(staged_vertex),
-        StageSource::Compiled(fragment.clone()),
-    );
-    let staged = dev
-        .compile_render_pipeline(&staged, &budget)
-        .expect("staged");
-    assert_eq!(staged.key, pipe.key);
+    assert_eq!(Some(*fragment.key()), keys.fragment);
     let io = &fragment.artifact().interface.io;
     assert!(io.inputs.iter().any(|v| v.role == IoRole::ViewportIndex));
     assert!(!io.builtins.contains(&StageBuiltin::ViewportIndex));

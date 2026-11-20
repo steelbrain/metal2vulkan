@@ -953,8 +953,9 @@ pub struct LoweringInputs {
     /// the vertex function's push end
     /// ([`CompiledFunction::fragment_push_base`](crate::library::CompiledFunction::fragment_push_base)).
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the vertex
-    /// function it compiled; a fragment compiled on its own for such a pipeline compiles under the
-    /// same offset, and link refuses a fragment whose fields start below the vertex function's push
+    /// function it compiled, and `Device::render_pipeline_key` hands it out in the fragment
+    /// function's inputs from the vertex function's plan; a fragment compiled on its own for such a
+    /// pipeline compiles under the same offset, and link refuses a fragment whose fields start below the vertex function's push
     /// end. A fragment function whose fields do not fit in `[push_base, 256)` pushes its parameter
     /// block's address at `push_base` rounded up to 8 (the address's alignment) and spills the
     /// rest into the block, as a kernel spills past its window; the vertex function's window ends

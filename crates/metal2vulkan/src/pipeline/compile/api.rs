@@ -44,7 +44,8 @@ use crate::pipeline::compile::key::{
 use crate::pipeline::compile::{
     color_group, compile_stage, compile_stage_from, dynamic_order, guarded,
     kernel_observes_partition, linked_keys, primitive_id_carried_on, reads_primitive_id_varying,
-    stage_inputs, FragmentPass, InputsFrom, RawIndices, StageEntries, NO_PRIMITIVE_VARYINGS,
+    stage_inputs, vertex_push_end, FragmentPass, InputsFrom, RawIndices, StageEntries,
+    NO_PRIMITIVE_VARYINGS,
 };
 use crate::pipeline::descriptor::{
     ComputePipelineDescriptor, FunctionDescriptor, MeshPipelineDescriptor,
@@ -387,10 +388,12 @@ impl Device {
         })
     }
 
-    /// The keys of the render pipeline `d`, with the lowering inputs of each `Function` stage. A
-    /// `Function` vertex stage is decoded and specialized under `b` (not lowered) to learn the
-    /// attributes it reads, and a `Function` fragment stage to learn the colors it writes and
-    /// reads.
+    /// The keys of the render pipeline `d`, with the lowering inputs of each `Function` stage: the
+    /// keys of [`Device::compile_render_pipeline`]'s compile. A `Function` vertex stage is decoded,
+    /// specialized and selected under `b` (not emitted) to learn the attributes it reads and where
+    /// its push fields end, from which the fragment function's start on the floor
+    /// (`CompiledFunction::fragment_push_base`); a `Compiled` one states that end. A `Function`
+    /// fragment stage is decoded and specialized to learn the colors it writes and reads.
     pub fn render_pipeline_key(
         &self,
         d: &RenderPipelineDescriptor,
@@ -435,23 +438,23 @@ impl Device {
                 )?,
                 false => false,
             };
-            let (vertex, vertex_inputs, written, varyings, uniform) = match &d.vertex {
+            let from = || {
+                InputsFrom::Vertex(
+                    d.vertex_descriptor.as_ref(),
+                    v,
+                    d.max_vertex_call_stack_depth,
+                    primitive_id,
+                    d.tessellation.as_ref(),
+                )
+            };
+            let (vertex, vertex_inputs, written, varyings, uniform, push_end) = match &d.vertex {
                 StageSource::Function(f) => {
-                    let s = stage_inputs(
-                        f,
-                        p,
-                        InputsFrom::Vertex(
-                            d.vertex_descriptor.as_ref(),
-                            v,
-                            d.max_vertex_call_stack_depth,
-                            primitive_id,
-                            d.tessellation.as_ref(),
-                        ),
-                        entries,
-                        &mut Meter::new(b),
-                    )?;
+                    let s = stage_inputs(f, p, from(), entries, &mut Meter::new(b))?;
                     let key = self.function_compile_key(f, &s.inputs);
-                    (key, Some(s.inputs), s.writes, s.varyings, s.uniform)
+                    // The fragment function's push fields follow the vertex function's on the
+                    // floor, as `render_pipeline` compiles them.
+                    let end = vertex_push_end(f, p, from(), entries, &mut Meter::new(b))?;
+                    (key, Some(s.inputs), s.writes, s.varyings, s.uniform, end)
                 }
                 StageSource::Compiled(c) => (
                     *c.key(),
@@ -459,6 +462,7 @@ impl Device {
                     raw_indices_written(c.artifact()),
                     varyings_written(c.artifact()),
                     uniform_written(c.artifact()),
+                    c.fragment_push_base(),
                 ),
             };
             let (fragment, fragment_inputs) = match &d.fragment {
@@ -474,6 +478,7 @@ impl Device {
                     let mut pass: FragmentPass<'_> = d.into();
                     pass.color_group = group.as_ref();
                     pass.logic_operation = logic;
+                    pass.push_base = push_end;
                     if crate::pipeline::private_state::applied_masks(d).is_some() {
                         let inputs = InputsFrom::Fragment(
                             pass,

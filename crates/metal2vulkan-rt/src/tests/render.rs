@@ -422,7 +422,9 @@ mod on_device {
     /// or for a plain answer). The negative control: with the record removed, a device reads the
     /// same two lowerings but reads both functions' AIR again, and keeps the record again. A record
     /// whose fragment lowering was removed is stale, counted, and the device lowers that function
-    /// again and reads the vertex function's lowering.
+    /// again and reads the vertex function's lowering. The record names the lowerings of the
+    /// translator's keys of the content (`Device::render_variant_key`), whose fragment inputs start
+    /// its push fields at the vertex function's end, as the lowering does.
     #[test]
     fn every_device_takes_a_render_content_by_its_record_without_specializing() {
         let Some(library) = library() else {
@@ -436,6 +438,7 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-record-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let mut key = None;
+            let mut recorded = None;
             for round in 0..4 {
                 if round == 2 {
                     for record in kept_files(&dir, "renders") {
@@ -448,6 +451,7 @@ mod on_device {
                     let bytes = std::fs::read(&records[0]).expect("the record");
                     let key = key.expect("the content's key");
                     let lowerings = read_record(&bytes, &key).expect("a record of the content");
+                    recorded = Some((lowerings.vertex, lowerings.fragment));
                     let fragment = hex(&lowerings.fragment.expect("the fragment's lowering"));
                     let lowered = kept_files(&dir, "translations");
                     let file = lowered.iter().find(|file| file.ends_with(&fragment));
@@ -479,6 +483,20 @@ mod on_device {
                     "{name}: device {round} read a stage's AIR {reads} times"
                 );
                 drop(made);
+                if let Some(names) = recorded {
+                    let keys = (device.core().translator).render_variant_key(
+                        &d,
+                        &VariantKey::new(),
+                        &Budget::standard(),
+                        &StageEntries::new(),
+                    );
+                    let keys = keys.unwrap_or_else(|error| panic!("{name}: the keys: {error}"));
+                    let want = (
+                        Some(*keys.vertex.digest()),
+                        keys.fragment.map(|k| *k.digest()),
+                    );
+                    assert_eq!(names, want, "{name}: the record names the keys' lowerings");
+                }
                 torn_down(device);
                 let records = kept_files(&dir, "renders").len();
                 assert_eq!(records, 1, "{name}: device {round} leaves one record");

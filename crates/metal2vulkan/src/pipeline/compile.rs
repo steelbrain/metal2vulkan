@@ -669,6 +669,38 @@ pub fn stage_inputs(
     })
 }
 
+/// Where the fragment function's push fields start behind vertex stage `fd` compiled under
+/// `inputs` on the floor ([`CompiledFunction::fragment_push_base`] of that compile): the end of the
+/// push range its plan places, from a selection alone. The entry is decoded and specialized as
+/// [`stage_inputs`] does (the one `entries` holds, or one made there now), analyzed and selected;
+/// nothing is emitted. A vertex stage is selected once ([`stage_bound`]'s second selection is a
+/// kernel's alone), so the plan is the compile's.
+pub(crate) fn vertex_push_end(
+    fd: &FunctionDescriptor,
+    p: &DeviceProfile,
+    inputs: InputsFrom<'_>,
+    entries: &StageEntries,
+    m: &mut Meter,
+) -> Result<u32, Error> {
+    guarded(|| {
+        with_request_shared(
+            &fd.function,
+            &fd.constants,
+            (&fd.linked, &fd.libraries),
+            inputs,
+            Shared::Entry(entries, fd),
+            |r| {
+                m.weighted(weights::REST, |m| {
+                    let analyzed = analyze_one(r, p, m)?;
+                    let widest = crate::lower::simd::WidestPin::Weighed;
+                    let (plan, _) = analyzed.select(p, widest, m)?;
+                    Ok((plan.push.push_range).map_or(0, |(offset, size)| offset + size))
+                })
+            },
+        )
+    })
+}
+
 /// The layout of the argument buffer function `f` takes at buffer `index`, with the function
 /// constants `consts` (`newArgumentEncoderWithBufferIndex:`): decode only, reading the entry's
 /// `air.struct_type_info` as it stands; and where a function constant decides it (a parameter at
