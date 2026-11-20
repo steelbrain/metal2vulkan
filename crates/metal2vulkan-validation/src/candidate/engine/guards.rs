@@ -5,9 +5,7 @@
 
 use super::ComputeCase;
 use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
-use crate::executor_contract::out_of_bounds::{
-    self, Check, EscapeCause, Medium, OutOfBoundsRun, ReadCause,
-};
+use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun};
 use std::collections::BTreeMap;
 
 /// What a run changed around a guarded target.
@@ -31,17 +29,6 @@ pub struct GuardReach {
 /// The least guard on either side of a guarded target, so a stray access just before or past
 /// the target is caught even where the case declares no reach on that side.
 pub const MIN_GUARD: u64 = 256;
-
-/// Where a candidate places its guarded targets, which decides what memory their guards are.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Placement {
-    /// Each target in an allocation of its own (the executor's context): the guard lies outside
-    /// the memory bound to the target.
-    Allocation,
-    /// Each target placed in a heap of its own (the runtime path): the guard is the heap's other
-    /// bytes, memory bound to the heap's one buffer.
-    Heap,
-}
 
 /// The guard reach of `resource` when `targets` declares it an out-of-bounds target.
 pub fn declared_reach(
@@ -109,15 +96,10 @@ pub fn texel_guard_reach(case: &ComputeCase, binding: u32) -> Option<GuardReach>
 
 /// `run` with the guard and padding bytes the run changed around each target it guarded (a
 /// buffer, an argument buffer's included, an attribute buffer, an index buffer, or a texture
-/// buffer), as it counted them by target, its targets placed by `placement`. A target placed in a
-/// heap whose guard changed under `robustBufferAccess` alone records the cause
-/// ([`EscapeCause::HeapBoundMemory`]): still an escape, never a match. A target that
-/// fixed-function vertex input fetches from a heap records why a read past it may return the
-/// heap's bytes ([`ReadCause::HeapBoundRange`]).
+/// buffer), as it counted them by target, each target in an allocation of its own.
 pub fn with_escaped(
     run: OutOfBoundsRun,
     escaped: &BTreeMap<OutOfBoundsResource, GuardCount>,
-    placement: Placement,
 ) -> OutOfBoundsRun {
     OutOfBoundsRun {
         targets: run
@@ -125,28 +107,12 @@ pub fn with_escaped(
             .into_iter()
             .map(|target| {
                 let count = escaped.get(&target.resource);
-                let escape_cause = count
-                    .filter(|count| {
-                        count.escaped > 0
-                            && placement == Placement::Heap
-                            && target.mechanism.check == Check::Robust
-                    })
-                    .map(|_| EscapeCause::HeapBoundMemory);
-                let read_cause = (count.is_some()
-                    && placement == Placement::Heap
-                    && target.mechanism.medium == Medium::VertexInput)
-                    .then_some(ReadCause::HeapBoundRange);
                 out_of_bounds::TargetRun {
                     escaped: count.map(|count| count.escaped),
                     past_end: count.map(|count| count.past_end),
-                    escape_cause,
-                    read_cause,
                     ..target
                 }
             })
             .collect(),
     }
 }
-
-#[cfg(test)]
-mod tests;

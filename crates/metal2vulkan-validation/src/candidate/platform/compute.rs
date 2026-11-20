@@ -19,7 +19,7 @@ use crate::candidate::engine::argument_buffers::{
 };
 use crate::candidate::engine::guards::{
     buffer_target, embedded_guard_reach, guard_reach, texel_guard_reach, with_escaped, GuardCount,
-    GuardReach, Placement,
+    GuardReach,
 };
 use crate::candidate::engine::tables::TableBuffers;
 use crate::candidate::engine::{
@@ -348,7 +348,7 @@ fn run(
         planned.as_ref(),
     )?;
     modules.extend(children);
-    let out_of_bounds = out_of_bounds.map(|run| with_escaped(run, &escaped, Placement::Allocation));
+    let out_of_bounds = out_of_bounds.map(|run| with_escaped(run, &escaped));
     let census = executed_census(context, modules, out_of_bounds);
     let mut environment = environment(context, device, "engine-compute");
     command_replay(&mut environment, &replayed);

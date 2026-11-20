@@ -1243,8 +1243,6 @@ pub(crate) fn out_of_bounds_run(
                 written: contained.written,
                 escaped: None,
                 past_end: None,
-                escape_cause: None,
-                read_cause: None,
             })
         })
         .collect::<Result<Vec<_>, ExecutorError>>()?;

@@ -84,7 +84,7 @@ use crate::candidate::engine::argument_buffers::{
 use crate::candidate::engine::graphics::{
     self, stage_of, Assembly, ColorTarget, RenderCase, RenderFinals, RenderOutput,
 };
-use crate::candidate::engine::guards::{declared_reach, with_escaped, GuardCount, Placement};
+use crate::candidate::engine::guards::{declared_reach, with_escaped, GuardCount};
 use crate::candidate::engine::{
     bind_refusal, draw_out_of_bounds_run, engine_fingerprint, resources, status_verdict,
     BufferAddress, CompiledCase, ComputeRun, RunAttempt,
@@ -241,7 +241,7 @@ fn run(
     let mut census = executed_census(
         context,
         modules,
-        out_of_bounds.map(|run| with_escaped(run, &escaped, Placement::Allocation)),
+        out_of_bounds.map(|run| with_escaped(run, &escaped)),
     );
     census.rate_map_pass = rate_map
         .zip(regions.as_ref())

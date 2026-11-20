@@ -29,20 +29,13 @@
 //!   `robustBufferAccess` alone zero, `(0, 0, 0, x)`, or a value of the buffer's own memory. A
 //!   read through a handle past a handle array returns a texel of a texture the case binds, or
 //!   zero (the null handle). An index read past an index buffer is index 0 or none, so the
-//!   vertex ids only a read past it gives stay unshaded. A fixed-function vertex fetch past an
-//!   attribute buffer the runtime path places in a heap of its own reads the heap's memory: the
-//!   runtime binds a placed vertex buffer to the end of the heap's one buffer, as Metal's fetch
-//!   reads a heap neighbour's bytes, and the run records that cause ([`ReadCause`],
-//!   [`TargetRun::read_rule`]).
+//!   vertex ids only a read past it gives stay unshaded.
 //! - **Nothing escapes**: every byte of the guard the candidate allocates around a buffer (an
 //!   argument buffer's included) or texture buffer target is unchanged ([`TargetRun::escaped`]),
 //!   and so is the memory bound to it past its end ([`TargetRun::past_end`]) except under
 //!   `robustBufferAccess` alone, where a write may change any byte of the target's own memory, so
-//!   the output bytes of a written buffer target are not compared there either. A target the
-//!   runtime path places in a heap of its own has no memory of its own past its length padded to
-//!   16: every other byte of the heap is its guard, so a write there escapes even under
-//!   `robustBufferAccess` alone, which lets it land in the heap's memory, and the run records that
-//!   cause ([`EscapeCause`]). An attribute buffer and an index buffer are guarded as a buffer is.
+//!   the output bytes of a written buffer target are not compared there either. An attribute
+//!   buffer and an index buffer are guarded as a buffer is.
 //!   An image's memory is opaque: its out-of-bounds writes are judged by its compared contents
 //!   alone. A thread-local array and a handle array have no guard: what their accesses past them
 //!   reach is the case's own layout, whose output bytes witness it.
@@ -200,58 +193,19 @@ pub struct TargetRun {
     /// stay in its argument buffer or the case's bound texture slots.
     pub escaped: Option<u64>,
     /// Bytes of the memory bound to a guarded target past its end that the run changed: its memory
-    /// requirement past its length in an allocation of its own, its length padded to 16 in a heap
-    /// of its own, filled with [`PAD_FILL`]. Only robustness 1 may write there ("within the memory
-    /// range(s) bound to the buffer"); `None` without a guard.
+    /// requirement past its length in an allocation of its own, filled with [`PAD_FILL`]. Only
+    /// robustness 1 may write there ("within the memory range(s) bound to the buffer"); `None`
+    /// without a guard.
     #[serde(default)]
     pub past_end: Option<u64>,
-    /// What explains the guard bytes the run changed ([`TargetRun::escaped`]) without the
-    /// device breaking Vulkan's containment, where something does ([`EscapeCause`]). The run
-    /// escaped all the same: such a row is never a match.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub escape_cause: Option<EscapeCause>,
-    /// Why an out-of-bounds read of the target may return other values than its mechanism's
-    /// ([`read_rule`]) because of where the candidate placed it ([`ReadCause`]); the rule the
-    /// run's reads are judged by is [`TargetRun::read_rule`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_cause: Option<ReadCause>,
 }
 
 impl TargetRun {
     /// What an out-of-bounds read of the target may return in this run: its mechanism's rule
-    /// ([`read_rule`]), or the memory of the heap the candidate placed it in where a
-    /// [`ReadCause`] says the read reaches it ([`ReadRule::HeapWords`]).
+    /// ([`read_rule`]).
     pub fn read_rule(&self) -> ReadRule {
-        match self.read_cause {
-            Some(ReadCause::HeapBoundRange) => ReadRule::HeapWords,
-            None => read_rule(self.form, self.mechanism, self.written),
-        }
+        read_rule(self.form, self.mechanism, self.written)
     }
-}
-
-/// Why an out-of-bounds read of a target may return other values than its mechanism's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReadCause {
-    /// Fixed-function vertex input fetched the target ([`Medium::VertexInput`]), and the
-    /// candidate placed it in a heap of its own (the runtime path): the runtime binds a placed
-    /// vertex buffer at its offset in the heap's one buffer with no size, so the binding's range,
-    /// which buffer robustness checks the fetch against, runs to the heap's end, and a fetch past
-    /// the target reads the heap's bytes there. Metal's own fetch past a placed buffer reads its
-    /// heap neighbour's bytes, a result Metal leaves undefined.
-    HeapBoundRange,
-}
-
-/// Why a run changed guard bytes around a target its device contained as Vulkan allows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EscapeCause {
-    /// `robustBufferAccess` alone contained the target ([`Check::Robust`]), and the candidate
-    /// placed it in a heap of its own (the runtime path): Vulkan lets an out-of-bounds write change
-    /// any byte of the memory bound to the buffer, which for a heap's buffer is the whole heap, so
-    /// the write landed in the guard. On Metal such a write changes a heap neighbour's bytes: a
-    /// real finding, recorded as an escape.
-    HeapBoundMemory,
 }
 
 /// The out-of-bounds facts of one candidate run, in the order of the case's targets.
@@ -298,16 +252,11 @@ pub enum ReadRule {
     /// Each 32-bit word is zero (the null handle's texel) or a word of the initial bytes of a
     /// texture the case binds (a handle the table resolves).
     ResidentTexels,
-    /// Each 32-bit word is a word of the memory of the heap of its own the candidate placed the
-    /// target in (the target's initial bytes, the padding fill past its length, the guard fill
-    /// around it), or, past the heap's end, zero or a component of Vulkan's `(0, 0, 0, x)`
-    /// ([`ReadCause::HeapBoundRange`]).
-    HeapWords,
 }
 
 /// What an out-of-bounds read of a target of `form` contained by `mechanism` may return, where
-/// the module writes the target if `written`: the mechanism's rule, which a run's reads are judged
-/// by unless where the candidate placed the target says otherwise ([`TargetRun::read_rule`]).
+/// the module writes the target if `written`: the rule a run's reads are judged by
+/// ([`TargetRun::read_rule`]).
 pub fn read_rule(form: ContainmentForm, mechanism: Mechanism, written: bool) -> ReadRule {
     match (mechanism.medium, mechanism.check) {
         // An id past the handle array is another handle of the argument buffer, which the table
@@ -846,14 +795,6 @@ pub fn matches(
                     let word = u32::from_le_bytes(*word);
                     VECTOR_FILLS.contains(&word) || own.contains(&word) || word == padding
                 })
-            }
-            ReadRule::HeapWords => {
-                let own = own_words(case, declared.resource);
-                let fills = [PAD_FILL, GUARD_FILL].map(|fill| u32::from_ne_bytes([fill; 4]));
-                bytes.as_chunks::<4>().0.iter().all(|word| {
-                    let word = u32::from_le_bytes(*word);
-                    VECTOR_FILLS.contains(&word) || own.contains(&word) || fills.contains(&word)
-                }) && bytes.len() % 4 == 0
             }
         };
         if !allowed {

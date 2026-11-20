@@ -45,8 +45,6 @@ fn run(form: ContainmentForm, medium: Medium, check: Check, written: bool) -> Ou
             written,
             escaped: Some(0),
             past_end: Some(0),
-            escape_cause: None,
-            read_cause: None,
         }],
     }
 }
@@ -279,8 +277,6 @@ fn moltenvk_refuses_exactly_the_forms_its_robust_encoding_leaves_uncontained() {
         written: true,
         escaped: Some(0),
         past_end: Some(0),
-        escape_cause: None,
-        read_cause: None,
     };
     use ContainmentForm as F;
     let robust_load = target(F::StorageBuffer, Medium::DescriptorView, Check::Robust);
@@ -345,8 +341,6 @@ fn a_texel_buffer_target_is_judged_by_its_guard() {
             written: true,
             escaped,
             past_end,
-            escape_cause: None,
-            read_cause: None,
         }],
     };
     let output = golden();
@@ -373,8 +367,6 @@ fn a_texel_buffer_target_is_judged_by_its_guard() {
             written: true,
             escaped,
             past_end,
-            escape_cause: None,
-            read_cause: None,
         }],
     };
     let judge = |run: OutOfBoundsRun| matches(&image, &class, &output, &output, Some(&run));
@@ -460,8 +452,6 @@ fn embedded_run(
             written: true,
             escaped: guard,
             past_end: guard,
-            escape_cause: None,
-            read_cause: None,
         }],
     }
 }
@@ -1018,8 +1008,6 @@ fn a_draws_targets_are_contained_by_their_fetch() {
         written: false,
         escaped: Some(0),
         past_end: Some(0),
-        escape_cause: None,
-        read_cause: None,
     };
     assert_eq!(
         uncontained(&[vertex_input], moltenvk),
