@@ -77,6 +77,10 @@
 //!   the places hold the sum of both.
 //! - A word that looks like an address (its value lies in a live recorded range, as two 32-bit
 //!   indices can) plays as written, and the census of such words is the same on both runtimes.
+//! - A tiled texture over a buffer of two levels (the SPI
+//!   `newTiledTextureWithDescriptor:offset:bytesPerRow:`) takes the buffer's bytes into its first
+//!   level and makes its second from them at its first use, as the old runtime plays the call:
+//!   blits of both levels read the same texels on both runtimes, and the take is counted once.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -1194,6 +1198,116 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
         checked(&rt),
         "both runtimes' digest of one picture"
     );
+}
+
+/// A tiled texture over Shared buffer #3 (`newTiledTextureWithDescriptor:offset:bytesPerRow:`),
+/// 128 by 2 RGBA8Unorm texels of two levels, 512 bytes a row: the buffer's texels come in 2 by 2
+/// squares of one colour each, so the second level made from the first by a filter of each square
+/// is that square's colour exactly. A blit encoder copies the first level into #5 and the second
+/// into #6, each shown at a present. On the new runtime the use takes the buffer's bytes into the
+/// first level and makes the second from it, once; the old runtime's play of the stream shows the
+/// same texels.
+#[test]
+fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
+    let dir = ScratchDir::new("rt-replay-tiled").unwrap();
+    let colour = |x: u64| [(x / 2 * 4) as u8, 0xff - (x / 2 * 4) as u8, 0x40, 0xff];
+    let first: Vec<u8> = (0..2).flat_map(|_| (0..128).flat_map(colour)).collect();
+    let second: Vec<u8> = (0..64).flat_map(|x| colour(2 * x)).collect();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let made = [Value::Uint(1024), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &made, &[])?;
+        let write = [Value::Uint(0), Value::Bytes(first.clone())];
+        w.call("m2v.write", 3, 0, &write, &[])?;
+        // Shared, shader-read.
+        let texture = |width, height, levels| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", 70),
+                ("width", width),
+                ("height", height),
+                ("mipmapLevelCount", levels),
+                ("usage", 1),
+                ("storageMode", 0),
+            ])
+        };
+        let tiled = [texture(128, 2, 2), Value::Uint(0), Value::Uint(512)];
+        let selector = "newTiledTextureWithDescriptor:offset:bytesPerRow:";
+        w.call(selector, 3, 4, &tiled, &[])?;
+        w.call(
+            "newTextureWithDescriptor:",
+            1,
+            5,
+            &[texture(128, 2, 1)],
+            &[],
+        )?;
+        w.call("newTextureWithDescriptor:", 1, 6, &[texture(64, 1, 1)], &[])?;
+        w.call("commandBuffer", 2, 7, &[], &[])?;
+        w.call("blitCommandEncoder", 7, 8, &[], &[])?;
+        let blit = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:\
+                    destinationSlice:destinationLevel:destinationOrigin:";
+        let origin = uints(&[("x", 0), ("y", 0), ("z", 0)]);
+        for (level, (width, height), into) in [(0, (128, 2), 5), (1, (64, 1), 6)] {
+            let size = uints(&[("width", width), ("height", height), ("depth", 1)]);
+            let copy = [
+                Value::Object(4),
+                Value::Uint(0),
+                Value::Uint(level),
+                origin.clone(),
+                size,
+                Value::Object(into),
+                Value::Uint(0),
+                Value::Uint(0),
+                origin.clone(),
+            ];
+            w.call(blit, 8, 0, &copy, &[])?;
+        }
+        w.call("endEncoding", 8, 0, &[], &[])?;
+        w.call("commit", 7, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 7, 0, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Object(5)], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Object(6)], &[])
+    });
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+    let player = Player::new(&mut backend).checking_presents([0, 1]);
+    let (rt, ended) = player.play(&mut reader);
+    let lines = rt.lines();
+    ended.unwrap_or_else(|error| panic!("the play ended: {error}: {lines:?}"));
+    let mut old = None;
+    on_device_with(at_plan, |device| {
+        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let player = Player::new(&mut backend).checking_presents([0, 1]);
+        let (report, ended) = player.play(&mut reader);
+        let lines = report.lines();
+        ended.unwrap_or_else(|error| panic!("the old play ended: {error}: {lines:?}"));
+        old = Some(report);
+    });
+    let old = old.expect("an old runtime's device");
+    let checked = |report: &Report| -> Vec<(u64, u64, [u8; 32])> {
+        (report.checks.iter())
+            .map(|check| (check.object, check.frame, check.sha256))
+            .collect()
+    };
+    let digest = |bytes: &[u8]| -> [u8; 32] { Sha256::digest(bytes).into() };
+    let shown = [(5, 0, digest(&first)), (6, 1, digest(&second))];
+    assert_eq!(checked(&rt), shown, "{lines:?}");
+    assert_eq!(checked(&old), shown, "the old runtime's play");
+    let executed = &rt.total.executed;
+    let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
+    let counts = [
+        "tiled_textures",
+        "tiled_takes",
+        "tiled_take_bytes",
+        "tiled_mipmap_generations",
+        "tiled_levels_kept",
+        "substitutes_read",
+    ]
+    .map(counted);
+    assert_eq!(counts, [1, 1, 1024, 1, 0, 0], "{executed:?}");
 }
 
 /// A two-copy stream's Managed buffer #3 of 4 bytes, its header's flags `flags`: the program

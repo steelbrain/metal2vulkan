@@ -174,6 +174,7 @@ impl NewRuntime {
                 self.surface_fill_owed(call)?;
                 self.copy_named(call)?;
                 self.guest_ram_fill(call)?;
+                self.tiled_take(call)?;
                 let queue = self.queue_for(call)?;
                 self.commit(&queue, command_buffer, call.receiver)
                     .map_err(failed(call))?;

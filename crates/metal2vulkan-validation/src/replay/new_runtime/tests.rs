@@ -1,6 +1,6 @@
 //! The backend's report lines by kind, without a device.
 
-use super::{Skips, Substituted, Substitutes};
+use super::{Skips, Substitutes};
 use crate::replay::stream::Call;
 use crate::replay::value::{Name, Value};
 use metal2vulkan::error::{Error, Feature, Limit, LowerFamily, Unsupported};
@@ -57,23 +57,26 @@ fn translator_refusals_are_counted_by_kind() {
     );
 }
 
-/// Each substitute is counted by what it stands in for, a tiled texture or the runtime's gap, with
-/// the first one's object, in one line per kind.
+/// Each substitute is counted by the runtime's gap it stands in for, with the first one's object,
+/// in one line per gap.
 #[test]
 fn substitutes_are_counted_by_kind() {
     let view = rt::Gap::TextureView {
         kind: rt::TextureViewKind::TextureType,
     };
+    let format = rt::Gap::TextureView {
+        kind: rt::TextureViewKind::PixelFormat,
+    };
     let mut substitutes = Substitutes::default();
-    substitutes.made(Substituted::Tiled, 5);
-    substitutes.made(Substituted::Gap(view), 9);
-    substitutes.made(Substituted::Gap(view), 11);
-    assert_eq!((substitutes.tiled, substitutes.gaps), (1, 2));
+    substitutes.made(format, 5);
+    substitutes.made(view, 9);
+    substitutes.made(view, 11);
+    assert_eq!(substitutes.gaps, 3);
     assert_eq!(
         substitutes.lines().collect::<Vec<_>>(),
         [
+            "substituted textures TextureView { kind: PixelFormat } 1, the first #5",
             "substituted textures TextureView { kind: TextureType } 2, the first #9",
-            "substituted textures Tiled 1, the first #5",
         ]
     );
 }

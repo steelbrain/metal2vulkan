@@ -793,14 +793,29 @@ records as text, and
   frame's `gpu_busy`. A command buffer released uncommitted makes none of its copies.
 
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
-  views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,
-  the backend makes an ordinary texture of the same descriptor in its place, so that the IDs and
-  addresses the program wrote name a live texture, and counts it: a tiled texture over a buffer
-  (`substituted_tiled_textures`), and a texture over a buffer or a view the runtime answers with
-  a typed gap (`substituted_gap_textures`), and the report's
-  `substituted textures KIND N, the first #ID` line counts each kind (`KIND` `Tiled`, or the
-  runtime's gap as Rust prints it for debugging, such as `TextureView { kind: TextureType }`; `ID`
-  the first one's object). A substitute is the recording's artefact, never the
+  views (`Texture::new_texture_view`). A tiled texture over a buffer of one level plays as the
+  first form's texture over the buffer, and one of more than one level, which the runtime takes no
+  form of, plays as the old runtime plays the call (`Buffer::new_tiled_texture`): an ordinary
+  texture of the descriptor that takes, at its first use, a copy of the buffer's bytes from the
+  offset, rows `bytesPerRow` apart, into its first level and makes its later levels from the first
+  as `generateMipmapsForTexture:` makes them (a format whose mipmaps the runtime refuses or cannot
+  filter keeps them). The take is a blit encoder of a command buffer of the backend's own,
+  committed on the queue of the command buffer whose encoder (a command, or a render pass's
+  attachment) named the texture or a view of it first since its making, just before it and after
+  its copies from the guest's RAM; the old runtime records it inside that command buffer, ahead of
+  the command, so what an earlier encoder of it writes into the bytes or the texture lands after
+  the new runtime's take alone. A `replaceRegion` of such a texture's first level, which writes
+  the bytes and asks for another take, is refused. The stand-in is counted apart from the stream's
+  work: `tiled_textures`, `tiled_takes`, `tiled_take_bytes` (the first level's bytes),
+  `tiled_mipmap_generations`, `tiled_levels_kept`, and its GPU time `tiled_gpu_nanos`, in no
+  frame's `gpu_busy`, as the guest RAM's is; the report's `tiled textures over a buffer` line
+  gives them. Where the runtime cannot make a texture the program made, the backend makes an
+  ordinary texture of the same descriptor in its place, so that the IDs and addresses the program
+  wrote name a live texture, and counts it: a texture over a buffer or a view the runtime answers
+  with a typed gap (`substituted_gap_textures`), and the report's
+  `substituted textures KIND N, the first #ID` line counts each kind (`KIND` the runtime's gap as
+  Rust prints it for debugging, such as `TextureView { kind: TextureType }`; `ID` the first one's
+  object). A substitute is the recording's artefact, never the
   runtime's, and its texels are not the program's: `substitutes_read` counts the substitutes, and
   the views of one, that a call other than the making of a view named (a binding, an attachment,
   a blit, a descriptor's field, a call on it), and the report's `substitutes read` line gives the

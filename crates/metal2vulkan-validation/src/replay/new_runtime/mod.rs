@@ -21,6 +21,7 @@ pub(super) mod second;
 mod surfaces;
 #[cfg(test)]
 mod tests;
+mod tiled;
 pub(super) mod unwritten;
 mod videos;
 
@@ -183,27 +184,16 @@ fn translation_kind(refused: &metal2vulkan::error::Error) -> String {
     format!("Translation({kind})")
 }
 
-/// What a substitute stands in for.
-#[derive(Clone, Copy)]
-enum Substituted {
-    /// A tiled texture over a buffer.
-    Tiled,
-    /// A texture over a buffer or a view the runtime answers with this gap.
-    Gap(rt::Gap),
-}
-
 /// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
 /// same descriptor, so that the IDs and addresses the program wrote name a live texture. The
 /// recording's artefact, never the runtime's. Its texels are not the program's: a command that
 /// names one reads them (`read`).
 #[derive(Default)]
 struct Substitutes {
-    /// Tiled textures over a buffer (`newTiledTextureWithDescriptor:offset:bytesPerRow:`).
-    tiled: u64,
     /// Textures over a buffer and views the runtime answers with a typed gap.
     gaps: u64,
-    /// The substitutes by kind, `Tiled` or the runtime's gap as Rust prints it for debugging: how
-    /// many, and the first one's object.
+    /// The substitutes by the runtime's gap as Rust prints it for debugging: how many, and the
+    /// first one's object.
     kinds: BTreeMap<String, (u64, u64)>,
     /// Each live substitute, and the views of one, and whether a command named it yet.
     live: HashMap<u64, bool>,
@@ -213,18 +203,10 @@ struct Substitutes {
 }
 
 impl Substitutes {
-    /// Notes substitute `object`, made in place of `kind`.
-    fn made(&mut self, kind: Substituted, object: u64) {
-        let kind = match kind {
-            Substituted::Tiled => {
-                self.tiled += 1;
-                "Tiled".to_owned()
-            }
-            Substituted::Gap(gap) => {
-                self.gaps += 1;
-                format!("{gap:?}")
-            }
-        };
+    /// Notes substitute `object`, made in place of what the runtime answers with `gap`.
+    fn made(&mut self, gap: rt::Gap, object: u64) {
+        self.gaps += 1;
+        let kind = format!("{gap:?}");
         self.kinds.entry(kind).or_insert((0, object)).0 += 1;
         self.live.insert(object, false);
     }
@@ -411,6 +393,9 @@ pub struct NewRuntime {
     /// The host's copies between buffers and the guest's RAM, in the host's one-copy form
     /// (`guest_ram`).
     guest_ram: guest_ram::GuestRam,
+    /// The tiled textures over a buffer of more than one level, and the copies they take at use
+    /// (`tiled`).
+    tiled: tiled::Tiled,
     /// The buffers in a place of the play's own that an encoder of each command buffer not yet
     /// committed named: a release of a buffer waits for those command buffers (`Places::give`).
     /// The textures and sampler states they name go to `Indices::named`.
@@ -815,6 +800,7 @@ impl NewRuntime {
             identity: false,
             unwritten: unwritten::Unwritten::default(),
             guest_ram: guest_ram::GuestRam::default(),
+            tiled: tiled::Tiled::default(),
             users: HashMap::new(),
             seconds: second::Seconds::default(),
             asides: aside::Asides::default(),
@@ -1845,16 +1831,16 @@ impl NewRuntime {
         }
     }
 
-    /// An ordinary texture of `descriptor` in place of one the runtime cannot make, counted by
-    /// `kind` (`Substitutes`).
+    /// An ordinary texture of `descriptor` in place of one the runtime answers with `gap`,
+    /// counted (`Substitutes`).
     fn substitute(
         &mut self,
         call: &Call,
         descriptor: &rt::TextureDescriptor,
-        kind: Substituted,
+        gap: rt::Gap,
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let texture = self.new_texture(call, descriptor, None, false)?;
-        self.substitutes.made(kind, call.result);
+        self.substitutes.made(gap, call.result);
         unaddressed(Object::Texture(texture))
     }
 
@@ -1882,9 +1868,7 @@ impl NewRuntime {
         };
         match (made, gap.get()) {
             (Ok(texture), _) => unaddressed(Object::Texture(texture)),
-            (Err(_), Some(answered)) => {
-                self.substitute(call, descriptor, Substituted::Gap(answered))
-            }
+            (Err(_), Some(answered)) => self.substitute(call, descriptor, answered),
             (Err(error), None) => Err(error),
         }
     }
@@ -2072,8 +2056,15 @@ impl NewRuntime {
                 Ok(None)
             }
             "newTextureWithDescriptor:offset:bytesPerRow:"
-            | "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:" => {
+            | "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:"
+            | "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
+                // A tiled texture of more than one level takes the buffer's bytes at use
+                // (`tiled`); one of one level is the texture over the buffer the first form
+                // makes, as the old runtime makes it.
+                if call.selector.starts_with("newTiled") && descriptor.mipmap_level_count > 1 {
+                    return self.tiled_texture(call, buffer, &descriptor);
+                }
                 // The linear form of a 2D texture is the public one; Metal lays out the slices
                 // of the array it also makes itself, which the runtime takes no form of.
                 let linear = call.selector.starts_with("newLinear");
@@ -2093,10 +2084,6 @@ impl NewRuntime {
                     }
                 }
                 Ok(made)
-            }
-            "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
-                let descriptor = self.texture_descriptor(call, 0)?;
-                self.substitute(call, &descriptor, Substituted::Tiled)
             }
             "newTextureWithDescriptor:iosurface:plane:" => self.surface_texture(call, buffer),
             "m2v.externalWriteDone" if self.videos.is_video(call.receiver) => {
@@ -2236,6 +2223,7 @@ impl Backend for NewRuntime {
             self.surfaces.released(call.receiver);
             self.videos.released(call.receiver);
             self.substitutes.live.remove(&call.receiver);
+            self.tiled.released(call.receiver);
             self.unrecorded_tessellation.released(call.receiver);
             match self.objects.remove(&call.receiver) {
                 // Its place and its device copy's, where it has them: a no-copy buffer's memory
@@ -2287,6 +2275,10 @@ impl Backend for NewRuntime {
             if view && self.substitutes.live.contains_key(&call.receiver) {
                 self.substitutes.live.insert(call.result, false);
             }
+        }
+        if !self.tiled.is_empty() {
+            // Skipped encoders too: the old runtime takes the copy at their use.
+            self.tiled_named(call)?;
         }
         if let Some(&command_buffer) = self.owners.get(&call.receiver) {
             // Skipped encoders too: what the program's GPU passes reach is the stream's.
@@ -2726,7 +2718,6 @@ impl Backend for NewRuntime {
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
             ("skipped_clamped_samplers", self.skips.clamped_samplers),
-            ("substituted_tiled_textures", self.substitutes.tiled),
             ("substituted_gap_textures", self.substitutes.gaps),
             ("substitutes_read", self.substitutes.read),
             (
@@ -2741,6 +2732,7 @@ impl Backend for NewRuntime {
         counters.extend(self.surfaces.counted());
         counters.extend(self.videos.counted());
         counters.extend(self.guest_ram.counted());
+        counters.extend(self.tiled.counted());
         counters
     }
 
@@ -2846,6 +2838,7 @@ impl Backend for NewRuntime {
         }
         lines.extend(self.no_copies.lines());
         lines.push(self.guest_ram.line());
+        lines.push(self.tiled.line());
         let [in_place, copied] = self.textures_over;
         lines.push(format!(
             "textures over buffers {}: {in_place} in place, {copied} in an image of their own, \
@@ -2870,10 +2863,8 @@ impl Backend for NewRuntime {
             .map(|object| format!(" #{object}"))
             .collect();
         lines.push(format!(
-            "substitutes read {}: of {} tiled textures and {} gap textures made, and their views; \
-             the first:{}",
+            "substitutes read {}: of {} gap textures made, and their views; the first:{}",
             self.substitutes.read,
-            self.substitutes.tiled,
             self.substitutes.gaps,
             if first.is_empty() { " -" } else { &first },
         ));
