@@ -109,7 +109,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::strategy::FamilyStrategy;
 use crate::pipeline::artifact::{EntryMath, PrecisionNote};
-use crate::spirv::builder::{FunctionBuilder, MaskForm, ModuleBuilder, ProductForm, QuantizeForm};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder, ProductForm, QuantizeForm};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{DemoteTy, FuncId, TypeId, Value as SValue};
 use crate::spirv::ir::{Contraction, ExecMode, UnOp};
@@ -725,11 +725,6 @@ pub struct ArithPlan {
     /// `-0.0` addend for it to answer. In either form a constant factor's `-0.0` components are
     /// multiplied as `+0.0` and negated (`FunctionBuilder::binary`).
     pub product: ProductForm,
-    /// How the module clears the bits above a narrow integer's width in a 32-bit container
-    /// ([`ops::mask`]), decided by [`finish`] from the profile's driver workarounds:
-    /// `OpBitFieldUExtract` on a driver whose compiler drops the mask after a signed clamp
-    /// (`DriverWorkaround::NarrowMaskAfterSignedClamp`), else the mask.
-    pub mask: MaskForm,
     /// Whether a function converts the texels of a slot or attachment bound in an extended-range,
     /// padded or bfloat form ([`ArithPlan::converts`]) by the device's arithmetic
     /// ([`extended_range`]): [`finish`] then records `PrecisionNote::DevicePackConversion`.
@@ -836,8 +831,7 @@ pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
 /// entry Metal compiles with precise functions, [`libm::module_mode`]), record the notes of the
 /// operations that are Metal's own in a fast-math entry only where it is not
 /// ([`ArithPlan::unless_metal_fast`]), and choose the form of a multiply the device must round on
-/// its own by the same fact ([`ArithPlan::product`]), and the form of
-/// a narrow integer's mask by the driver's workarounds ([`ArithPlan::mask`]).
+/// its own by the same fact ([`ArithPlan::product`]).
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.wide = legal::holds_wide(cx.profile);
     cx.families.arith.quantize = narrow::quantize_form(cx.profile);
@@ -849,16 +843,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.families.arith.extended_range {
         cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
-    cx.families.arith.mask = if cx
-        .profile
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::NarrowMaskAfterSignedClamp)
-    {
-        MaskForm::Extract
-    } else {
-        MaskForm::And
-    };
     let fc = cx.profile.fields().float_controls;
     let widths: Vec<u8> = cx.families.arith.preserve.iter().copied().collect();
     for w in widths {

@@ -1,19 +1,22 @@
 //! A narrow integer's mask over a signed clamp, under a device cfg on every device of the cfg's
 //! kind: a kernel the translator compiles adds and subtracts two values sign-extended from 16 and
 //! from 8 bits, clamps each result signed to exactly its width's range, truncates it and
-//! zero-extends it. The runtime's profile keeps the plain mask on every device, so a driver whose
-//! compiler drops that mask after the clamp (NVIDIA 615.71.09 on Ampere GA10x did; 620.70.06 does
-//! not) answers sign-extended words and fails here.
+//! zero-extends it. On every device the module clears the bits above each width with
+//! `OpBitFieldUExtract(x, 0, N)`, never `OpBitwiseAnd` by the width's mask, which a driver's
+//! compiler dropped after the clamp (NVIDIA 615.71.09 on Ampere GA10x answered sign-extended words;
+//! 620.70.06 does not), and every word is zero-extended.
 //!
 //! `llvm-as` assembles the kernel; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::spirv_instructions;
     use crate::{
         ComputePipelineDescriptor, DispatchType, FunctionDescriptor, Library, MemoryClass,
         StageSource,
     };
+    use metal2vulkan::Budget;
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
 
     /// The edge values, as words: each lane reads its low 16 or 8 bits.
@@ -132,7 +135,29 @@ entry:
         ]
     }
 
-    /// The kernel, translated, answers every word zero-extended on every device.
+    /// The extracts of `words` (`OpBitFieldUExtract`), and its `OpBitwiseAnd`s by a constant
+    /// 16-bit or 8-bit mask.
+    fn masks(words: &[u32]) -> (usize, usize) {
+        const CONSTANT: u32 = 43;
+        const BITWISE_AND: u32 = 199;
+        const BIT_FIELD_U_EXTRACT: u32 = 203;
+        let mut narrow = std::collections::BTreeSet::new();
+        let (mut extracts, mut ands) = (0, 0);
+        for inst in spirv_instructions(words) {
+            match inst[0] & 0xffff {
+                CONSTANT if inst.len() == 4 && [0xffff, 0xff].contains(&inst[3]) => {
+                    narrow.insert(inst[2]);
+                }
+                BIT_FIELD_U_EXTRACT => extracts += 1,
+                BITWISE_AND if inst[3..5].iter().any(|v| narrow.contains(v)) => ands += 1,
+                _ => {}
+            }
+        }
+        (extracts, ands)
+    }
+
+    /// The kernel, translated, clears its narrow results' high bits by extracts and answers every
+    /// word zero-extended on every device.
     #[test]
     fn every_device_zero_extends_a_narrow_clamped_sum() {
         let bitcode = match llvm_assemble_text(KERNEL) {
@@ -150,6 +175,12 @@ entry:
         ));
         let out_len = u64::from(THREADS * WORDS * 4);
         each_device("narrow_clamps", |name, _, device| {
+            let pipeline = (device.core().translator)
+                .compile_compute_pipeline(&descriptor, &Budget::standard())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (extracts, ands) = masks(&pipeline.stage.spirv);
+            assert!(extracts >= 4, "{name}: {extracts} extracts");
+            assert_eq!(ands, 0, "{name}: masks by a narrow width's bits");
             let state = device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

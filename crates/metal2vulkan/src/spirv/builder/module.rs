@@ -172,9 +172,6 @@ pub struct ModuleBuilder {
     /// How a float multiply the device must round on its own is emitted
     /// ([`ModuleBuilder::product_form`]).
     pub(super) product_form: ProductForm,
-    /// How the lowering clears the bits above a narrow integer's width
-    /// ([`ModuleBuilder::mask_form`]).
-    mask_form: MaskForm,
     /// How the lowering rounds an `f32` to `half` ([`ModuleBuilder::quantize_form`]).
     quantize_form: QuantizeForm,
     /// Whether that rounding is the device's own rather than one measured to be Metal's
@@ -207,19 +204,6 @@ pub enum ProductForm {
     /// as Metal treats its own multiply. `a · b + (-0.0)` is `a · b` exactly whether the device
     /// fuses it or not.
     NegativeZeroFma,
-}
-
-/// How the lowering clears the bits above a narrow integer's width `N` in a 32-bit container
-/// (`lower::arith::ops::mask`). Lowering takes it from the profile's driver workarounds
-/// (`ArithPlan::mask`). Both forms are the same bits on every device.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum MaskForm {
-    /// `OpBitwiseAnd` with `2^N - 1`.
-    #[default]
-    And,
-    /// `OpBitFieldUExtract(x, 0, N)`, for a driver whose compiler drops the mask after a signed
-    /// clamp to exactly the narrow range (`DriverWorkaround::NarrowMaskAfterSignedClamp`).
-    Extract,
 }
 
 /// How the lowering rounds an `f32` to `half` (`lower::arith::narrow`): the device's own
@@ -294,19 +278,6 @@ impl ModuleBuilder {
     /// sets it emits [`ProductForm::Multiply`].
     pub fn product_form(&mut self, form: ProductForm) {
         self.product_form = form;
-    }
-
-    /// Clear the bits above a narrow integer's width in `form`. Emission sets it before any
-    /// instruction, from the profile's driver workarounds; a builder that never sets it emits
-    /// [`MaskForm::And`].
-    pub fn set_mask_form(&mut self, form: MaskForm) {
-        self.mask_form = form;
-    }
-
-    /// How the lowering clears the bits above a narrow integer's width
-    /// ([`ModuleBuilder::set_mask_form`]).
-    pub fn mask_form(&self) -> MaskForm {
-        self.mask_form
     }
 
     /// Round an `f32` to `half` in `form`. Emission sets it before any instruction, from the

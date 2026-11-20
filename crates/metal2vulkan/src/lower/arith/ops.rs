@@ -7,7 +7,7 @@
 use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntFlags, IntPredicate};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow;
-use crate::spirv::builder::{FunctionBuilder, MaskForm};
+use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{BinOp, ConstBits, Constant, Contraction, ConvOp, GlslOp, Type, UnOp};
@@ -127,14 +127,15 @@ pub fn fsplat(fb: &mut FunctionBuilder<'_>, f: Form, x: f64) -> BResult<Value> {
     splat(fb, f, f.const_bits(x))
 }
 
-/// `x` with the bits above its AIR width cleared (a no-op for a full-width integer): `x & (2^N -
-/// 1)`, or in a 32-bit container under [`MaskForm::Extract`] `OpBitFieldUExtract(x, 0, N)`, the
-/// same bits, for a driver whose compiler drops the mask after a signed clamp.
+/// `x` with the bits above its AIR width cleared (a no-op for a full-width integer): in a 32-bit
+/// container `OpBitFieldUExtract(x, 0, N)`, on every device, else `x & (2^N - 1)`, the same bits.
+/// No driver can drop the extract as one did the mask after a signed clamp to exactly the narrow
+/// range (NVIDIA 615.71.09 on Ampere GA10x answered the clamp's sign-extended words).
 pub fn mask(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     if !f.legalized() {
         return Ok(x);
     }
-    if f.container() == 32 && fb.module().mask_form() == MaskForm::Extract {
+    if f.container() == 32 {
         let u32_ = Form {
             held: Held::Int {
                 bits: 32,

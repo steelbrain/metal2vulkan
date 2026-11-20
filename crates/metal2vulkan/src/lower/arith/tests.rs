@@ -22,7 +22,7 @@ use super::ops::{self, BitcastPlan, CastKind};
 use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntFlags, IntPredicate};
 use crate::device::DeviceProfile;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
-use crate::spirv::builder::{FunctionBuilder, MaskForm, ModuleBuilder, ProductForm, QuantizeForm};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder, ProductForm, QuantizeForm};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{FuncId, GlobalId, TypeId, Value};
 use crate::spirv::interp::{run, Buffer, Config, Resources};
@@ -1946,31 +1946,25 @@ fn signed_narrow_saturation_clamps_without_signed_min_or_max() {
     }
 }
 
-/// Under [`MaskForm::Extract`], the form a driver with
-/// `DriverWorkaround::NarrowMaskAfterSignedClamp` takes (the RTX 3090), a narrow integer's mask
-/// in a 32-bit container is `OpBitFieldUExtract(x, 0, N)` and never `OpBitwiseAnd`, and the
-/// source-arithmetic shape whose mask that driver drops answers its definition at every edge:
-/// two values sign-extended from `N` bits, added or subtracted, clamped signed to exactly `N`
-/// bits' range (`SClamp`, and `SMin` then `SMax`), truncated to `N` bits. At 8 and 16 bits, scalar
-/// and three lanes. Under [`MaskForm::And`] the same body keeps the mask and emits no extract.
+/// A narrow integer's mask in a 32-bit container is `OpBitFieldUExtract(x, 0, N)` and never
+/// `OpBitwiseAnd`, and the source-arithmetic shape whose mask a driver dropped (NVIDIA 615.71.09
+/// on Ampere GA10x) answers its definition at every edge: two values sign-extended from `N` bits,
+/// added or subtracted, clamped signed to exactly `N` bits' range (`SClamp`, and `SMin` then
+/// `SMax`), truncated to `N` bits. At 8 and 16 bits, scalar and three lanes.
 #[test]
-fn a_narrow_mask_after_a_signed_clamp_is_an_extract_under_the_workaround() {
+fn a_narrow_mask_after_a_signed_clamp_is_an_extract() {
     let mut rng = Rng(0x0D0D_0D0E);
     for bits in [8u8, 16] {
         let vals = int_values(bits, &mut rng, 3);
         for lanes in [1u8, 3] {
             let f = vec(int(bits), lanes);
             let wide = vec(int(32), lanes);
-            for (sub, chained, form) in [false, true]
+            for (sub, chained) in [false, true]
                 .into_iter()
                 .flat_map(|sub| [false, true].map(|chained| (sub, chained)))
-                .flat_map(|(sub, chained)| {
-                    [MaskForm::And, MaskForm::Extract].map(|form| (sub, chained, form))
-                })
             {
-                let what = format!("i{bits} x{lanes} sub {sub} chained {chained} {form:?}");
+                let what = format!("i{bits} x{lanes} sub {sub} chained {chained}");
                 let body = |fb: &mut FunctionBuilder<'_>, xs: &[Value]| -> BResult<Value> {
-                    fb.module().set_mask_form(form);
                     let a = ops::cast(fb, CastKind::SExt, f, wide, xs[0])?;
                     let b = ops::cast(fb, CastKind::SExt, f, wide, xs[1])?;
                     let op = if sub { BinOp::ISub } else { BinOp::IAdd };
@@ -2002,16 +1996,8 @@ fn a_narrow_mask_after_a_signed_clamp_is_an_extract_under_the_workaround() {
                         )
                     })
                     .count();
-                match form {
-                    MaskForm::Extract => {
-                        assert!(extracts > 0, "{what}: no extract");
-                        assert_eq!(ands, 0, "{what}: a mask");
-                    }
-                    MaskForm::And => {
-                        assert!(ands > 0, "{what}: no mask");
-                        assert_eq!(extracts, 0, "{what}: an extract");
-                    }
-                }
+                assert!(extracts > 0, "{what}: no extract");
+                assert_eq!(ands, 0, "{what}: a mask");
                 let usize_lanes = usize::from(lanes);
                 let mut cases: Vec<Case> = Vec::new();
                 for (i, x) in vals.iter().enumerate() {
