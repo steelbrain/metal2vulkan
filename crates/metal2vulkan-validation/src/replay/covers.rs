@@ -13,7 +13,7 @@
 //! destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage, and the
 //! CPU's `replaceRegion:…`. A write of a texture over a buffer is the buffer's. An object is
 //! written again by the player's writes into it (`m2v.write`, its contents at creation, a copy
-//! from the guest's RAM, a snapshot's bytes before), a blit into it, a write of a texture over it,
+//! from the guest's RAM), a blit into it, a write of a texture over it,
 //! and, as the stream carries no buffer access, any binding of it to an encoder, a
 //! `useResource:usage:` with write usage, or a `useHeap:` of its heap. A binding may be a read, so
 //! the times one took a cover off are counted apart: a difference in such an object's later
@@ -116,12 +116,6 @@ impl Covers {
     pub(super) fn ranges(&self, object: u64) -> Vec<(u64, u64)> {
         let object = self.base_of(object);
         self.covered.get(&object).cloned().unwrap_or_default()
-    }
-
-    /// Whether any of the `length` bytes at `offset` of `object` is covered.
-    pub(super) fn meets(&self, object: u64, offset: u64, length: u64) -> bool {
-        let end = offset.saturating_add(length);
-        (self.covered.get(&object).into_iter().flatten()).any(|&(s, e)| s < end && offset < e)
     }
 
     /// `object` written: the `length` bytes at `offset`, or, where none, all of it.

@@ -26,7 +26,7 @@ pub use pixels::Shape;
 pub use player::WAIT_COMPLETED;
 pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, ManagedReads, PlayError, Player,
-    PrivateBytes, ReadClass, ReadCopy, Relaid, Report, Shown, TextureWrites,
+    ReadClass, ReadCopy, Relaid, Report, Shown, TextureWrites,
 };
 pub use prepass::{Ahead, AheadGrid};
 pub use range::{

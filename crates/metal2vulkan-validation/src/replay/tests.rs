@@ -12,8 +12,8 @@ use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{judged_records, Ended};
 use super::pixels::{difference, Shape};
 use super::player::{
-    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, ReadCopy, Relaid,
-    Report, Shown, TextureWrites, WAIT_COMPLETED,
+    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, ReadCopy, Relaid, Report, Shown,
+    TextureWrites, WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
@@ -482,8 +482,6 @@ struct Kept {
     /// Each heap size it was asked: the placing selector and how many calls made and set the
     /// texture descriptor.
     heap_asked: Vec<(String, usize)>,
-    /// Whether it declines the player's snapshots.
-    declines_snapshots: bool,
     /// The GPU start and end it gives each command buffer; one not here has none.
     gpu: HashMap<u64, (u64, u64)>,
     /// The recording device's `hasUnifiedMemory` the player told it.
@@ -624,10 +622,6 @@ impl Backend for Kept {
 
     fn live(&mut self) -> Counters {
         Counters::from([("calls", self.calls.len() as u64)])
-    }
-
-    fn snapshots(&self) -> bool {
-        !self.declines_snapshots
     }
 
     fn recorded_unified_memory(&mut self, unified: bool) {
@@ -1795,153 +1789,6 @@ fn an_equal_sampler_state_takes_an_owed_index_and_leaves_it_owed() {
     );
 }
 
-/// The first object of the player's own.
-const OWN: u64 = (1 << 63) + 1;
-
-/// A dispatch with two `m2v.privateBytes` records, which come after its command buffer's commit
-/// and its buffer's release: the player puts both ranges' bytes before in a Shared buffer of its
-/// own, ends the encoder, copies them in a blit encoder into the ranges, makes the encoder afresh
-/// with every call that set its state, dispatches, and the same with a blit that copies the ranges
-/// out, each encoder after a fence the one before updated. At the completion it reads the bytes
-/// after back and counts the words that differ from the recording's (here, the dispatch changed
-/// nothing). The stream's counts hold none of the player's calls; the report counts the two
-/// splits, and the executed counts of the group that held them (its copies among them) are
-/// reported apart, in no group, frame or total; a later dispatch plays as it is.
-#[test]
-fn a_dispatch_plays_between_its_private_bytes() {
-    let before: Vec<u8> = (0..24).collect();
-    let mut after = before.clone();
-    after[0] = 99;
-    after[13] = 99;
-    let mut kept = Kept::default();
-    let (report, ended) = played(&mut kept, |w| {
-        let (head, two) = (w.blob(&before)?, w.blob(&after)?);
-        let word = w.blob(&before[..4])?;
-        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-        w.call("newCommandQueue", 1, 2, &[], &[])?;
-        let private = [Value::Uint(32), Value::Uint(0x20)];
-        w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
-        w.call("commandBuffer", 2, 4, &[], &[])?;
-        w.call("computeCommandEncoder", 4, 5, &[], &[])?;
-        let bound = [Value::Object(3), Value::Uint(0), Value::Uint(0)];
-        w.call("setBuffer:offset:atIndex:", 5, 0, &bound, &[])?;
-        let used = [map(&[("Buffer", Value::Object(3))]), Value::Uint(3)];
-        w.call("useResource:usage:", 5, 0, &used, &[])?;
-        let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
-        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
-        w.call(dispatch, 5, 0, &[threads.clone(), threads.clone()], &[])?;
-        w.call("memoryBarrierWithScope:", 5, 0, &[Value::Uint(1)], &[])?;
-        w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
-        w.call("endEncoding", 5, 0, &[], &[])?;
-        w.call("commit", 4, 0, &[], &[])?;
-        w.call("release", 3, 0, &[], &[])?;
-        for (location, length, before, after) in [(8, 24, head, two), (0, 4, word, word)] {
-            let range = map(&[
-                ("location", Value::Uint(location)),
-                ("length", Value::Uint(length)),
-            ]);
-            let args = [
-                Value::Uint(7),
-                range,
-                Value::Blob(before),
-                Value::Blob(after),
-            ];
-            w.call("m2v.privateBytes", 3, 0, &args, &[])?;
-        }
-        Ok(())
-    });
-    ended.unwrap();
-    let (staging, fence) = (OWN, OWN + 1);
-    let (blit_in, blit_out) = (OWN + 2, OWN + 3);
-    let copy = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
-    let state = [
-        "#5 setBuffer:offset:atIndex: #3 0 0".to_string(),
-        "#5 useResource:usage: {Buffer: #3} 3".to_string(),
-    ];
-    let mut expected = vec![
-        format!("#{staging} = #1 newBufferWithLength:options: 96 0"),
-        format!("#{fence} = #1 newFence"),
-        format!("#5 updateFence: #{fence}"),
-        "#5 endEncoding".to_string(),
-        format!("#{blit_in} = #4 blitCommandEncoder"),
-        format!("#{blit_in} waitForFence: #{fence}"),
-        format!("#{blit_in} {copy} #{staging} 0 #3 8 24"),
-        format!("#{blit_in} {copy} #{staging} 32 #3 0 4"),
-        format!("#{blit_in} updateFence: #{fence}"),
-        format!("#{blit_in} endEncoding"),
-        format!("#{blit_in} release"),
-        "#5 = #4 computeCommandEncoder".to_string(),
-        format!("#5 waitForFence: #{fence}"),
-    ];
-    expected.extend(state.clone());
-    expected.extend([
-        "#5 dispatchThreadgroups:threadsPerThreadgroup: {width: 1, height: 1} {width: 1, height: 1}"
-            .to_string(),
-        format!("#5 updateFence: #{fence}"),
-        "#5 endEncoding".to_string(),
-        format!("#{blit_out} = #4 blitCommandEncoder"),
-        format!("#{blit_out} waitForFence: #{fence}"),
-        format!("#{blit_out} {copy} #3 8 #{staging} 48 24"),
-        format!("#{blit_out} {copy} #3 0 #{staging} 80 4"),
-        format!("#{blit_out} updateFence: #{fence}"),
-        format!("#{blit_out} endEncoding"),
-        format!("#{blit_out} release"),
-        "#5 = #4 computeCommandEncoder".to_string(),
-        format!("#5 waitForFence: #{fence}"),
-    ]);
-    expected.extend(state);
-    expected.extend([
-        "#5 memoryBarrierWithScope: 1".to_string(),
-        "#5 dispatchThreadgroups:threadsPerThreadgroup: {width: 1, height: 1} {width: 1, height: 1}"
-            .to_string(),
-        "#5 endEncoding".to_string(),
-        "#4 commit".to_string(),
-        format!("#{staging} release"),
-        format!("#{fence} release"),
-        "#3 release".to_string(),
-    ]);
-    let at = kept
-        .calls
-        .iter()
-        .position(|c| c.starts_with(&format!("#{staging} =")));
-    assert_eq!(&kept.calls[at.unwrap()..], &expected[..]);
-    assert_eq!(
-        kept.writes,
-        [
-            (staging, 0, before.clone()),
-            (staging, 32, before[..4].to_vec())
-        ]
-    );
-    let compared = |location, length, differing| PrivateBytes {
-        buffer: 3,
-        dispatch: 7,
-        location,
-        length,
-        differing,
-        covered: false,
-        receiver: false,
-    };
-    assert_eq!(report.private, [compared(8, 24, 2), compared(0, 4, 0)]);
-    let lines = report.lines();
-    assert!(lines.contains(&"private #3 7 8+24 differs 2/6".to_string()));
-    assert!(lines.contains(&"private #3 7 0+4 match".to_string()));
-    let stream = &report.total.stream;
-    assert_eq!(
-        (stream["calls"], stream["encoders"], stream["dispatches"]),
-        (15, 1, 2)
-    );
-    assert_eq!(stream["written_bytes"], 28);
-    assert_eq!((kept.copies, report.splits), (4, 2));
-    let split = Counters::from([("copies", 4), ("submissions", 1)]);
-    assert_eq!(report.split_executed, split);
-    assert!(lines.contains(&"split 2 executed copies=4 submissions=1".to_string()));
-    assert_eq!(report.completed.len(), 1);
-    assert!(report.completed[0].1.executed.is_empty());
-    assert!(report.frames.is_empty());
-    let total = &report.total.executed;
-    assert!(total.values().all(|&value| value == 0), "{total:?}");
-}
-
 /// A message to nil (receiver 0, no result, no class named) plays nothing and does not stop the
 /// play; the stream still counts it as a call.
 #[test]
@@ -2285,56 +2132,50 @@ fn a_frame_end_names_its_longest_command_buffer() {
     );
 }
 
-/// On a backend that takes no snapshots, or with a player that takes none, a dispatch an
-/// `m2v.privateBytes` record names plays as it is, with none of the player's own calls, and the
-/// report counts it.
+/// A dispatch an `m2v.privateBytes` record names plays as the program made it, and the report
+/// counts it.
 #[test]
-fn a_backend_without_snapshots_plays_the_dispatch_as_it_is() {
-    for player_declines in [false, true] {
-        let bytes: Vec<u8> = (0..4).collect();
-        let mut kept = Kept {
-            declines_snapshots: !player_declines,
-            ..Kept::default()
-        };
-        let dir = ScratchDir::new("replay-player").unwrap();
-        let path = written(&dir, "s.m2vr", |w| {
-            let word = w.blob(&bytes)?;
-            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-            w.call("newCommandQueue", 1, 2, &[], &[])?;
-            let private = [Value::Uint(4), Value::Uint(0x20)];
-            w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
-            w.call("commandBuffer", 2, 4, &[], &[])?;
-            w.call("computeCommandEncoder", 4, 5, &[], &[])?;
-            let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
-            let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
-            w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
-            w.call("endEncoding", 5, 0, &[], &[])?;
-            w.call("commit", 4, 0, &[], &[])?;
-            let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
-            let args = [Value::Uint(5), range, Value::Blob(word), Value::Blob(word)];
-            w.call("m2v.privateBytes", 3, 0, &args, &[])?;
-            Ok(())
-        });
-        let mut reader = StreamReader::open(&[path], None).unwrap();
-        let player = Player::new(&mut kept);
-        let player = match player_declines {
-            true => player.without_snapshots(),
-            false => player,
-        };
-        let (report, ended) = player.play(&mut reader);
-        ended.unwrap();
-        assert!(kept.calls.iter().all(|c| !c.contains(&format!("#{OWN}"))));
-        assert_eq!((report.unsnapshotted, report.splits), (1, 0));
-        assert!(report.private.is_empty());
-        assert!(report.lines().contains(&"unsnapshotted 1".to_string()));
-    }
+fn a_dispatch_a_private_bytes_record_names_plays_as_it_is() {
+    let bytes: Vec<u8> = (0..4).collect();
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        let word = w.blob(&bytes)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let private = [Value::Uint(4), Value::Uint(0x20)];
+        w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call("computeCommandEncoder", 4, 5, &[], &[])?;
+        let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 4, 0, &[], &[])?;
+        let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
+        let args = [Value::Uint(5), range, Value::Blob(word), Value::Blob(word)];
+        w.call("m2v.privateBytes", 3, 0, &args, &[])
+    });
+    ended.unwrap();
+    let at = kept
+        .calls
+        .iter()
+        .position(|c| c == "#5 = #4 computeCommandEncoder")
+        .expect("the encoder's making");
+    let expected = [
+        "#5 = #4 computeCommandEncoder",
+        "#5 dispatchThreadgroups:threadsPerThreadgroup: {width: 1, height: 1} {width: 1, height: 1}",
+        "#5 endEncoding",
+        "#4 commit",
+    ];
+    assert_eq!(&kept.calls[at..at + 4], expected);
+    assert_eq!(report.unsnapshotted, 1);
+    assert!(report.lines().contains(&"unsnapshotted 1".to_string()));
 }
 
-/// A record must name an earlier call, and that call a compute encoder's dispatch; a blob must hold
-/// its range's bytes. Each else stops the play.
+/// A record must name an earlier call: else the play stops.
 #[test]
-fn a_private_bytes_record_names_an_earlier_dispatch() {
-    let stream = |dispatch: u64, length: u64| {
+fn a_private_bytes_record_names_an_earlier_call() {
+    let stream = |dispatch: u64| {
         move |w: &mut StreamWriter<File>| {
             let bytes = w.blob(&[0; 8])?;
             w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
@@ -2353,10 +2194,7 @@ fn a_private_bytes_record_names_an_earlier_dispatch() {
             w.call("dispatchThreads:threadsPerThreadgroup:", 5, 0, &args, &[])?;
             w.call("endEncoding", 5, 0, &[], &[])?;
             w.call("commit", 4, 0, &[], &[])?;
-            let range = map(&[
-                ("location", Value::Uint(0)),
-                ("length", Value::Uint(length)),
-            ]);
+            let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(8))]);
             let args = [
                 Value::Uint(dispatch),
                 range,
@@ -2366,14 +2204,11 @@ fn a_private_bytes_record_names_an_earlier_dispatch() {
             w.call("m2v.privateBytes", 3, 0, &args, &[])
         }
     };
-    let (report, ended) = played(&mut Kept::default(), stream(5, 8));
+    let (report, ended) = played(&mut Kept::default(), stream(5));
     ended.unwrap();
-    assert_eq!(report.private.len(), 1);
-    for (dispatch, length) in [(8, 8), (4, 8), (5, 4)] {
-        let mut kept = Kept::default();
-        let (_, ended) = played(&mut kept, stream(dispatch, length));
-        assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
-    }
+    assert_eq!(report.unsnapshotted, 1);
+    let (_, ended) = played(&mut Kept::default(), stream(8));
+    assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
 }
 
 /// The arguments the backend was given for the call that made `object`.
@@ -2588,9 +2423,8 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
     );
     assert_eq!(report.binding_uncovers, 1);
     let lines = report.lines();
-    let line = "covered 4: texture writes over other objects of a placement heap; 3 checks and 0 \
-                snapshot ranges they covered not compared; 1 covers taken off by a binding, which \
-                may be a read";
+    let line = "covered 4: texture writes over other objects of a placement heap; 3 checks they \
+                covered not compared; 1 covers taken off by a binding, which may be a read";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
     assert_eq!(
         lines
@@ -2686,8 +2520,8 @@ fn a_surface_s_receiver_buffer_is_not_compared() {
         .collect();
     assert_eq!(receivers, [(2, true), (4, false), (2, false)]);
     let lines = report.lines();
-    let line = "receivers: 1 checks and 0 snapshot ranges of surfaces' receiver buffers not \
-                compared; the textures over the surfaces hold the texels";
+    let line = "receivers: 1 checks of surfaces' receiver buffers not compared; the textures \
+                over the surfaces hold the texels";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
     assert!(lines
         .iter()

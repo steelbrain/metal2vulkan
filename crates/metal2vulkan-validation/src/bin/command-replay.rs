@@ -2,15 +2,14 @@
 //! or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR] [--snapshots yes|no] [--managed one-copy|two-copy]
+//! [--blobs DIR] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays the stream whose
 //! first segment is `FILE` through the new runtime, with
 //! `--video-handle dma-buf|opaque-fd` telling the runtime the consumer's decoder route, the
 //! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
-//! work can take longer than a GPU's), with `--snapshots no` taking no
-//! `m2v.privateBytes` snapshot (so a timed play does no snapshot work), `--managed`
+//! work can take longer than a GPU's), `--managed`
 //! telling the runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
 //! Managed buffer stops the play), `--until-frame` stopping the play after frame `F`'s present
@@ -24,7 +23,7 @@
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
 //! completion fix: the stream may differ from what the program did` by itself, then `range ...`
 //! (the recording range, where it came from, and whether the play ends there), then `device NAME
-//! runtime rt snapshots yes|no`, each frame's `frame` and `end` lines as the frame ends
+//! runtime rt`, each frame's `frame` and `end` lines as the frame ends
 //! (flushed, so a play that never ends leaves the frames it finished), `addresses ...` (the
 //! written words that look like addresses, which play as recorded but those a noted buffer's range
 //! holds, which move, the address arguments and those moved, and the objects whose ID differs from
@@ -91,7 +90,7 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR] [--snapshots yes|no] \
+                     --shader-cache DIR [--blobs DIR] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
@@ -445,14 +444,6 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     }
-    let snapshots = match options.get("snapshots").map(String::as_str) {
-        None | Some("yes") => true,
-        Some("no") => false,
-        Some(other) => {
-            report.line(&format!("error snapshots: {other} is neither yes nor no"));
-            return 2;
-        }
-    };
     let device_copies = match options.get("read-device-copies").map(String::as_str) {
         None | Some("no") => false,
         Some("yes") => true,
@@ -550,16 +541,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
-    // The first line says which mode ran: a timing table never comes from a snapshotting play
-    // unnoticed.
-    let mode = match snapshots {
-        true => "snapshots yes",
-        false => "snapshots no",
-    };
     let cache = PathBuf::from(&options["shader-cache"]);
     let mut backend = match open_rt(device_type, cache) {
         Ok((backend, name)) => {
-            report.line(&format!("device {name} runtime rt {mode}"));
+            report.line(&format!("device {name} runtime rt"));
             let backend = match device_copies {
                 true => backend.reading_device_copies(),
                 false => backend,
@@ -589,7 +574,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         &mut backend,
         &mut reader,
         &mut report,
-        (snapshots, until, dump, presents, Some(&first)),
+        (until, dump, presents, Some(&first)),
     );
     // The device ends here, not in `exit()`, where the driver's own exit teardown would
     // run beside the runtime's threads. Its gauges read after it dropped go out as the
@@ -663,9 +648,8 @@ type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 /// The frames whose present a play checks (`--check-presents`), and where it keeps their bytes.
 type Presents = (Vec<u64>, PathBuf);
 
-/// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
-/// one is given, dumping the command buffers where asked, checking the shown texture at the
-/// listed frames' presents and keeping its bytes in the directory given, and on the new runtime,
+/// Play `reader` through `backend` into `report`, to the last frame where one is given, dumping
+/// the command buffers where asked, checking the shown texture at the listed frames' presents and keeping its bytes in the directory given, and on the new runtime,
 /// where `judged`
 /// names the stream's first segment, writing the matrix's judged metrics of a play that finished
 /// its range (`judged_records`): the exit status.
@@ -673,19 +657,9 @@ fn run<B: Backend>(
     backend: &mut B,
     reader: &mut StreamReader,
     report: &mut ReportFile,
-    (snapshots, until, dump, presents, judged): (
-        bool,
-        Option<usize>,
-        Dumped,
-        Presents,
-        Option<&Path>,
-    ),
+    (until, dump, presents, judged): (Option<usize>, Dumped, Presents, Option<&Path>),
 ) -> i32 {
     let player = Player::new(backend).with_frame_lines(&mut *report);
-    let player = match snapshots {
-        true => player,
-        false => player.without_snapshots(),
-    };
     let player = match until {
         Some(last) => player.until_frame(last),
         None => player,

@@ -186,7 +186,7 @@ and the (name id, value) answer pairs.
   (`relocated_words`).
 - **Written words play as recorded, but noted ones.** A word's value alone is no reason to move
   it: the bytes the player puts into an object (`m2v.write`, a copied buffer's `contents`, the
-  copies from the guest's RAM, a Private range's bytes before a dispatch) and the data of every
+  copies from the guest's RAM) and the data of every
   `set*Bytes:length:atIndex:` play as the stream holds them, except the words that lie in the
   range of a buffer the stream noted escaped (below). A word there that is an address of a buffer
   with no note, which a stream recorded before the escape note cannot tell from data, keeps its
@@ -362,8 +362,8 @@ and the (name id, value) answer pairs.
   the dispatch's position in the stream (how many call records come before it, from 0), and
   `before` and `after` are blobs that lie in the blob directory alone. It is recorded at the
   command buffer's completion, so later in the stream than the dispatch. The player reads these
-  records ahead and plays the dispatch they name between the bytes before and a comparison with
-  the bytes after (section 10).
+  records ahead and counts the dispatches they name; it takes no snapshot and compares no range
+  (section 10).
 - `m2v.present` (arguments: the texture over the guest surface shown) is recorded where the
   device's display shows a guest present, with or without a window. It ends a frame: the player
   waits for what can complete and closes the frame's counters; it reads nothing.
@@ -476,7 +476,7 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR] [--snapshots yes|no] [--managed one-copy|two-copy]
+[--blobs DIR] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 [--video-handle dma-buf|opaque-fd] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
 runtime, and writes `DIR/report.txt`. `--video-handle`
@@ -486,9 +486,8 @@ by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device
 writes each frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends
 leaves every frame it finished. Every line it writes to `report.txt`, the frame lines among them, it writes to
 its standard error too, so a caller that loses the directory keeps the report.
-It takes no `m2v.privateBytes` snapshot, with `--snapshots no` or without (the backend has no
-blits between buffers yet): each such dispatch plays as it is, counted on the `unsnapshotted`
-line, so two plays do the same work and their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
+It takes no `m2v.privateBytes` snapshot: each such dispatch plays as it is, counted on the
+`unsnapshotted` line, so two plays do the same work and their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
 counted from 0), completes the work committed so far, reports as at the stream's end and says
 `until-frame F`. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
 0), the texture the present shows, as an `m2v.check` of it with no recorded checksum would: a
@@ -637,9 +636,9 @@ records as text, and
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
   held behind an event wait. Each wait is bounded under the validation crate's hang protocol.
-- It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream. Its
-  backend takes no snapshot (it has no blits between buffers yet), so each dispatch they name
-  plays as it is and is counted on the report's `unsnapshotted` line.
+- It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream. It
+  takes no snapshot, so each dispatch they name plays as it is and is counted on the report's
+  `unsnapshotted` line.
 - It lays each placement heap out again for the runtime's sizes and alignments, as a program that
   lays out its heap by `heapTextureSizeAndAlignWithDescriptor:` and
   `heapBufferSizeAndAlignWithLength:options:` does: the stream's offsets and heap sizes are the
@@ -665,8 +664,7 @@ records as text, and
     the first in a noted buffer's range, moved (`noted_words`), the address
     arguments (`address_arguments`) and those it moved (`relocated_words`), and the bytes it
     wrote or copied in, `m2v.write`, the copied
-    buffers' `contents`, the copies from the guest's RAM and the `m2v.privateBytes` bytes before
-    (`written_bytes`). A group's calls are those played before it completed:
+    buffers' `contents` and the copies from the guest's RAM (`written_bytes`). A group's calls are those played before it completed:
     the call that waited for it counts in the next.
   - **As executed** (`executed`): the runtime's metrics (`Device::counters`): its submissions,
     passes, barriers, bytes copied, copies of textures over buffers, pipelines made, allocations
@@ -890,7 +888,7 @@ stream may differ from what the program did` first where the stream's header lac
 6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
-`device NAME runtime rt snapshots yes|no`, then on a device that keeps a
+`device NAME runtime rt`, then on a device that keeps a
 device copy of each Managed buffer, `managed digests: ...` (above), then
 `addresses address_looking_words=N misaligned_address_words=N noted_words=N address_arguments=N
 relocated_words=N differing_ids=N: written words play as recorded, the noted ones moved; NOTES`
@@ -933,14 +931,13 @@ runtime's getter raises), `id ID RECORDED PLAYED word WORD`, as the runtime lays
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
 the recording's, and its high word with `WORD`, the document's own function of the descriptor the
 object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
-recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS|covered|receiver` for each
-`m2v.privateBytes` range compared, `covered N: texture writes over other objects of a placement
-heap; C checks and R snapshot ranges they covered not compared; B covers taken off by a binding,
+recording's high word, which is the recording runtime's own; `covered N: texture writes over other objects of a placement
+heap; C checks they covered not compared; B covers taken off by a binding,
 which may be a read` where a texture write covered
 bytes of another object the stream placed in its placement heap (`N` the times one did): Metal
 leaves an aliased resource's contents undefined once another resource is written over its
-memory, so from that write until the object is written again its check (`covered`) and the
-snapshot ranges that meet those bytes (`covered`) are not compared. The ranges are the stream's
+memory, so from that write until the object is written again its check (`covered`) is not
+compared. The ranges are the stream's
 offsets in the heap with a buffer's length and a texture's size as the runtime answers it, and
 the writes are found by structure: a draw's or a dispatch's to the texture slots the pipeline
 state's interface marks written, a render pass's to the textures its descriptor names, a blit's
@@ -950,11 +947,12 @@ again by the player's writes into it, a blit into it, and, as the stream carries
 access, any binding of it to an encoder, a `useResource:usage:` with write usage or a `useHeap:`
 of its heap; a binding may be a read, so `B` counts the covers a binding or a `useHeap:` took off,
 and a difference in that object's later compares may be the covering texture's bytes. `receivers:
-C checks and R snapshot ranges of surfaces' receiver buffers not compared; the textures over the
+C checks of surfaces' receiver buffers not compared; the textures over the
 surfaces hold the texels` where the stream checks a buffer a texture over a surface's plane was made
 on (section 7), while that buffer lives: a runtime may keep the texels apart from the buffer, as the
-product does, so such a check (`receiver`) and the snapshot ranges in such a buffer (`receiver`) are
-not compared, and the textures' own checks carry the bytes. `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
+product does, so such a check (`receiver`) is
+not compared, and the textures' own checks carry the bytes. `unsnapshotted N` where
+`m2v.privateBytes` records name dispatches (`N` of them, each played as it is),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the

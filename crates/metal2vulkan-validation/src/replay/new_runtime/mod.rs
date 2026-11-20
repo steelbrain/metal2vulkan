@@ -3018,11 +3018,6 @@ impl Backend for NewRuntime {
         });
     }
 
-    /// The runtime makes no blits between buffers yet.
-    fn snapshots(&self) -> bool {
-        false
-    }
-
     fn recorded_id(&mut self, object: u64, id: u64) {
         self.recorded = Some((object, id));
     }
