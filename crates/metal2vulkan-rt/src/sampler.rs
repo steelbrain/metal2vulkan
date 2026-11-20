@@ -124,10 +124,10 @@ pub(crate) fn canonical(mut desc: SamplerDesc) -> SamplerDesc {
 /// where an address mode reads the border and the border colour is opaque black, the note a
 /// sampler state of the same descriptor carries ([`SamplerState::precision_note`]). A use whose
 /// sampler the translator cannot state has none: every state that numbers it is refused.
-pub(crate) fn constexpr_notes(
-    profile: &DeviceProfile,
-    uses: &[(usize, CombinedSampler)],
-) -> impl Iterator<Item = PrecisionNote> + '_ {
+pub(crate) fn constexpr_notes<'a>(
+    profile: &'a DeviceProfile,
+    uses: &'a [(usize, CombinedSampler)],
+) -> impl Iterator<Item = PrecisionNote> + 'a {
     uses.iter().filter_map(move |(_, sampler)| {
         let desc = sampler.constexpr_sampler(profile).ok().flatten()?;
         let modes = [

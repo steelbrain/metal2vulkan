@@ -1103,6 +1103,7 @@ const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(windows)] pub const HOST_DOMAIN: vk::Ti
 const	metal2vulkan-rt::MAX_BUFFER_LENGTH	pub const MAX_BUFFER_LENGTH: u64
 const	metal2vulkan-rt::MAX_COLOR_ATTACHMENTS	pub const MAX_COLOR_ATTACHMENTS: usize
 const	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr]
+const	metal2vulkan-rt::floor::BORDER_SWIZZLE_EXTENSIONS	pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::BUFFER_USAGE	pub const BUFFER_USAGE: vk::BufferUsageFlags
 const	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	pub const DEVICE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	pub const INSTANCE_EXTENSIONS: &[&CStr]
@@ -1210,6 +1211,7 @@ const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::QUERY_PERFORMANCE_CO
 const-value	metal2vulkan-rt::MAX_BUFFER_LENGTH	1 <<31
 const-value	metal2vulkan-rt::MAX_COLOR_ATTACHMENTS	8
 const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attachment_feedback_loop_layout::NAME, ash::ext::attachment_feedback_loop_dynamic_state::NAME]
+const-value	metal2vulkan-rt::floor::BORDER_SWIZZLE_EXTENSIONS	&[ash::ext::border_color_swizzle::NAME]
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
@@ -2643,6 +2645,7 @@ field	metal2vulkan-rt::floor::Capabilities.queue_family	pub queue_family: u32
 field	metal2vulkan-rt::floor::Capabilities.shared_int64_atomics	pub shared_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
+field	metal2vulkan-rt::floor::Features.border_swizzle	pub border_swizzle: vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-rt::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
@@ -7251,6 +7254,7 @@ macro-member	metal2vulkan-runtime::Degradation::StagedTextureCopy	StagedTextureC
 macro-member	metal2vulkan-runtime::Degradation::StaleDetachedReach	StaleDetachedReach = "stale-detached-reach", Precision,
 macro-member	metal2vulkan-runtime::Degradation::SurfaceTexelsApart	SurfaceTexelsApart = "surface-texels-apart", Precision,
 macro-member	metal2vulkan-runtime::Degradation::SurfaceTexelsTail	SurfaceTexelsTail = "surface-texels-tail", Precision,
+macro-member	metal2vulkan-runtime::Degradation::SwizzledOpaqueBlackBorder	SwizzledOpaqueBlackBorder = "swizzled-opaque-black-border";
 macro-member	metal2vulkan-runtime::Degradation::SyncFileAfterHostCopies	SyncFileAfterHostCopies = "sync-file-after-host-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::SynthesizedGeometryStage	SynthesizedGeometryStage = "synthesized-geometry-stage", Performance,
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorEdgeCases	TessellationFactorEdgeCases = "tessellation-factor-edge-cases";
@@ -9841,6 +9845,7 @@ method	metal2vulkan-rt::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
 method	metal2vulkan-rt::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
 method	metal2vulkan-rt::SamplerState::descriptor	pub fn descriptor(&self) -> &SamplerDescriptor
 method	metal2vulkan-rt::SamplerState::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
+method	metal2vulkan-rt::SamplerState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
 method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
@@ -14026,6 +14031,7 @@ variant	metal2vulkan-rt::PrecisionNote::SharedExponentKept	SharedExponentKept
 variant	metal2vulkan-rt::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan-rt::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan-rt::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
+variant	metal2vulkan-rt::PrecisionNote::SwizzledOpaqueBlackBorder	SwizzledOpaqueBlackBorder
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorScale	TessellationFactorScale
@@ -17004,6 +17010,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::SharedExponentKept	SharedExponent
 variant	metal2vulkan::pipeline::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan::pipeline::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan::pipeline::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
+variant	metal2vulkan::pipeline::PrecisionNote::SwizzledOpaqueBlackBorder	SwizzledOpaqueBlackBorder
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorScale	TessellationFactorScale
