@@ -236,6 +236,17 @@ mod platform {
         ))
     }
 
+    pub fn execute_runtime(
+        _device: DeviceType,
+        _case_id: &str,
+        _case: &super::engine::ComputeCase,
+        _kernel: super::engine::RuntimeKernel<'_>,
+    ) -> super::engine::RunAttempt {
+        super::engine::RunAttempt::of(Err(
+            "candidate execution is supported only on Linux and macOS".into(),
+        ))
+    }
+
     pub fn echo_validation_messages() {}
 
     pub fn requested_restriction() -> Option<String> {

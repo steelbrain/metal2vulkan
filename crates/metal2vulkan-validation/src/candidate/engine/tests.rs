@@ -2540,3 +2540,84 @@ fn addressed_allocations_take_metal_addresses() {
     assert!(BufferAddress::addressed(records_address(0) - BufferAddress::GUEST_OFFSET).is_err());
     assert!(BufferAddress::addressed(records_address(1)).is_err());
 }
+
+/// A kernel case of buffers and threadgroup memory, dispatched by threads and observing a buffer.
+fn plain_kernel() -> ComputeCase {
+    ComputeCase {
+        out_of_bounds: Vec::new(),
+        creation_bound: crate::budgets::PIPELINE_CREATION_CEILING,
+        entry: "main".into(),
+        constants: FunctionConstantValues::defaults(),
+        buffers: BTreeMap::from([(0, vec![0; 4]), (1, vec![0; 16])]),
+        rate_maps: BTreeMap::new(),
+        argument_buffer_buffers: BTreeMap::new(),
+        argument_buffer_rate_maps: BTreeMap::new(),
+        argument_buffer_textures: BTreeMap::new(),
+        argument_buffer_samplers: BTreeMap::new(),
+        objects: BTreeMap::new(),
+        command_buffers: BTreeMap::new(),
+        textures: BTreeMap::new(),
+        samplers: BTreeMap::new(),
+        function_tables: BTreeMap::new(),
+        acceleration_structures: BTreeMap::new(),
+        threadgroup_lengths: BTreeMap::from([(0, 64)]),
+        imageblock: None,
+        tile: None,
+        stage_input: None,
+        stage_in_region: None,
+        attribute_strides: Default::default(),
+        dispatch: Dispatch::Threads {
+            threads: [5, 1, 1],
+            threads_per_group: [2, 1, 1],
+        },
+        output: ComputeOutput::Buffer {
+            binding: 0,
+            offset: 0,
+            length: 4,
+        },
+    }
+}
+
+/// The runtime runs a kernel case of buffers, threadgroup memory and constants, dispatched by
+/// threads or threadgroups and observing a buffer or nothing; a case with anything else (a
+/// pipeline state in an argument buffer, an explicit imageblock, an indirect dispatch, a texture
+/// output) stays on the executor's own context.
+#[test]
+fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
+    let authored = kernel_case();
+    let plain = plain_kernel();
+    assert!(runs_through_runtime(&authored, &plain));
+    let groups = ComputeCase {
+        dispatch: Dispatch::Threadgroups {
+            groups: [2, 1, 1],
+            threads_per_group: [2, 1, 1],
+        },
+        output: ComputeOutput::None,
+        ..plain.clone()
+    };
+    assert!(runs_through_runtime(&authored, &groups));
+    let mut object = plain.clone();
+    object.objects.insert((1, 0), 7);
+    let others = [
+        object,
+        ComputeCase {
+            imageblock: Some([8, 8]),
+            ..plain.clone()
+        },
+        ComputeCase {
+            dispatch: replay_dispatch([2, 1, 1]),
+            ..plain.clone()
+        },
+        ComputeCase {
+            output: ComputeOutput::Texture {
+                binding: 0,
+                origin: [0; 3],
+                dimensions: [1; 3],
+            },
+            ..plain.clone()
+        },
+    ];
+    for other in &others {
+        assert!(!runs_through_runtime(&authored, other), "{other:?}");
+    }
+}

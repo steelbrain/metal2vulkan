@@ -1030,7 +1030,7 @@ fn compile_counted(
 /// the values of the constants its library declares and ignores the others, as Metal does. With
 /// them come their table handles ([`LinkedHandles`]): each function's
 /// `LinkedFunctions::function_handle` over the whole list.
-fn linked_functions(
+pub(crate) fn linked_functions(
     libraries: &[&[u8]],
     linked: &[LinkedLibrary],
     constants: &FunctionConstantValues,

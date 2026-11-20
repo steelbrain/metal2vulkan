@@ -119,7 +119,7 @@ fn row(
         air_sha256: case.air_sha256.clone(),
         input_sha256: case.computed_input_sha256().unwrap(),
         golden_output_sha256: sha256_bytes(golden),
-        spv_sha256: "33".repeat(32),
+        spv_sha256: Some("33".repeat(32)),
         translator_fingerprint: "44".repeat(32),
         candidate_output_sha256: sha256_bytes(output),
         output_b64: b64(output),

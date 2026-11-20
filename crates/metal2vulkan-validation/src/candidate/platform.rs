@@ -15,6 +15,7 @@ mod pipeline;
 mod plan_resources;
 mod profiles;
 mod render;
+mod runtime;
 mod runtime_probe;
 mod sparse_images;
 pub use acceptance::create_acceptance_pipeline;
@@ -25,6 +26,7 @@ pub use device::{capture_formats, echo_validation_messages, venue_check};
 pub use device::{requested_leg, run_robustness_off};
 pub use profiles::{requested_restriction, restrict_devices_to};
 pub use render::execute_engine_render;
+pub use runtime::execute_runtime;
 pub use runtime_probe::probe_runtime;
 
 /// Whether the profiles layer can present committed profile `stem` ([`profiles::presentable`]).

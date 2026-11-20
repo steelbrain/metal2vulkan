@@ -250,10 +250,10 @@ fn run(
     command_replay(&mut environment, &replayed);
     Ok(ComputeRun {
         output,
-        spv_sha256,
+        spv_sha256: Some(spv_sha256),
         translator_fingerprint: engine_fingerprint(device.profile()),
         environment,
-        status,
+        status: Some(status),
         comparison: census.comparison_class(),
         census,
     })

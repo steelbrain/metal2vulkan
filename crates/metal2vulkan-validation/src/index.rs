@@ -1761,7 +1761,7 @@ fn insert_compact_rows(
             transaction
                 .execute(
                     "INSERT INTO candidate_observations (case_id, backend, environment_id, input_sha256, golden_output_sha256, spv_sha256, translator_fingerprint, executor_abi, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![observation.case_id, backend.directory(), observation.environment_id, observation.input_sha256, observation.golden_output_sha256, observation.spv_sha256, observation.translator_fingerprint, observation.executor_abi, format!("{:?}", observation.status).to_ascii_lowercase()],
+                    params![observation.case_id, backend.directory(), observation.environment_id, observation.input_sha256, observation.golden_output_sha256, observation.spv_sha256.as_deref().unwrap_or_default(), observation.translator_fingerprint, observation.executor_abi, format!("{:?}", observation.status).to_ascii_lowercase()],
                 )
                 .map_err(|error| format!("index {} observation: {error}", backend.directory()))?;
         }
@@ -2144,6 +2144,15 @@ fn engine_translator_fingerprint(environment: &serde_json::Value) -> Option<Stri
     Some(engine_fingerprint_of(&decode_hash256(hex)?))
 }
 
+/// Whether a row's or refusal's `translator_fingerprint`, with the `environment` it records, is
+/// this product's: the engine's fingerprint of the profile it records
+/// ([`engine_translator_fingerprint`]), or, for a run through the runtime, which records no
+/// profile, the runtime's ([`runtime_fingerprint`](crate::candidate::engine::runtime_fingerprint)).
+fn this_build(environment: &serde_json::Value, translator_fingerprint: &str) -> bool {
+    engine_translator_fingerprint(environment).as_deref() == Some(translator_fingerprint)
+        || translator_fingerprint == crate::candidate::engine::runtime_fingerprint()
+}
+
 /// The digest a lowercase 64-digit hexadecimal SHA-256 spells, or `None` for anything else.
 fn decode_hash256(hex: &str) -> Option<[u8; 32]> {
     let digits = hex.as_bytes();
@@ -2277,9 +2286,8 @@ pub(crate) fn candidate_staleness(
         .census
         .as_ref()
         .is_none_or(|census| census.product == crate::observation::TRANSLATOR_FINGERPRINT);
-    let same_build = census_product
-        && engine_translator_fingerprint(&candidate.environment).as_deref()
-            == Some(candidate.translator_fingerprint.as_str());
+    let same_build =
+        census_product && this_build(&candidate.environment, &candidate.translator_fingerprint);
     let executed = candidate
         .census
         .as_ref()
@@ -2310,7 +2318,7 @@ pub(crate) fn candidate_staleness(
                 candidate.dependency_matches(&CandidateDependencies {
                     case,
                     metal,
-                    spv_sha256: &candidate.spv_sha256,
+                    spv_sha256: candidate.spv_sha256.as_deref(),
                     translator_fingerprint: &candidate.translator_fingerprint,
                     backend,
                     environment_id: &candidate.environment_id,
@@ -2359,8 +2367,7 @@ pub(crate) fn refusal_staleness(
         ),
         (
             Dependency::Product,
-            engine_translator_fingerprint(&refusal.environment).as_deref()
-                == Some(refusal.translator_fingerprint.as_str())
+            this_build(&refusal.environment, &refusal.translator_fingerprint)
                 || venues.artifact_is_current(
                     backend,
                     &refusal.environment_id,
@@ -2501,7 +2508,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256,
             golden_output_sha256: output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: engine_fingerprint_of(&[7; 32]),
             candidate_output_sha256: output_sha256,
             output_b64: output_b64.into(),

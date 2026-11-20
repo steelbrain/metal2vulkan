@@ -280,10 +280,10 @@ pub fn compile_module(
     Ok(CompiledModule {
         census: ModuleCensus {
             stage,
-            subgroup: SubgroupShape {
+            subgroup: Some(SubgroupShape {
                 required_size: function.required_subgroup_size(),
                 full_subgroups: function.requires_full_subgroups(),
-            },
+            }),
             strategies: function.strategies().entries.keys().cloned().collect(),
             precision: function.precision_notes().iter().copied().collect(),
             containment: Some(Containment::of_compile(profile, &linked.words)),

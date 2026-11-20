@@ -488,3 +488,40 @@ fn object_roles_bind_their_slots() {
     );
     assert_eq!(interface.params[0].slots(), Some((3, 1)));
 }
+
+/// An entry's float reductions are the simdgroup float sums and products it calls, by the names
+/// the translator's strategy census gives them: a product's and a prefix product's of `float`
+/// and of `half` (their vector forms among them), a sum's and a prefix sum's. An integer one,
+/// and a quad's, is none.
+#[test]
+fn an_entrys_float_reductions_are_its_simdgroup_float_sums_and_products() {
+    let reductions = |ll: &str, entry: &str| {
+        of_text(ll, entry, &BTreeMap::new())
+            .unwrap()
+            .float_reductions
+    };
+    let products = fixture("engine/gsm2_simd_products.ll");
+    assert_eq!(
+        reductions(&products, "simd_float_products"),
+        BTreeSet::from(["simd.reduce.fmul.float", "simd.scan.fmul.float"])
+    );
+    assert_eq!(
+        reductions(&products, "simd_half_products"),
+        BTreeSet::from(["simd.reduce.fmul.half", "simd.scan.fmul.half"])
+    );
+    assert!(reductions(&products, "simd_int_products").is_empty());
+    let ops = fixture("engine/simd_ops.ll");
+    assert_eq!(
+        reductions(&ops, "simd_sum_k"),
+        BTreeSet::from(["simd.reduce.fadd.float"])
+    );
+    assert_eq!(
+        reductions(&ops, "simd_half_sum_k"),
+        BTreeSet::from(["simd.reduce.fadd.half"])
+    );
+    assert_eq!(
+        reductions(&ops, "simd_float_prefix_k"),
+        BTreeSet::from(["simd.scan.fadd.float"])
+    );
+    assert!(reductions(&ops, "quad_ops_k").is_empty());
+}

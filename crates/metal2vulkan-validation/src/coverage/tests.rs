@@ -31,7 +31,7 @@ const ROBUST: Containment = Containment {
 fn module(stage: Stage, subgroup: SubgroupShape, strategies: &[&str]) -> ModuleCensus {
     ModuleCensus {
         stage,
-        subgroup,
+        subgroup: Some(subgroup),
         strategies: strategies.iter().map(|name| name.to_string()).collect(),
         precision: BTreeSet::new(),
         containment: Some(ROBUST),

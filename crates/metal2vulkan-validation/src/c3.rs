@@ -218,8 +218,10 @@ pub struct ReviewedObservation {
     /// The engine store slot (`ENV@engine`, with `+robustness-off` for that leg): host,
     /// engine, profile restriction, and leg.
     pub environment_id: String,
-    /// The candidate: the SHA-256 of the pipeline's SPIR-V the row executed.
-    pub spv_sha256: String,
+    /// The candidate: the SHA-256 of the pipeline's SPIR-V the row executed, where its row records
+    /// one (`None` for a row the runtime ran).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spv_sha256: Option<String>,
     /// The reading reviewed: the candidate's output.
     pub candidate_output_sha256: String,
     /// Metal's reading it was compared with.
@@ -505,14 +507,18 @@ impl List for ReviewedList {
                 if !slots.insert(observation.environment_id.as_str()) {
                     return Err(at("listed twice".into()));
                 }
-                for (field, value) in [
-                    ("spv_sha256", &observation.spv_sha256),
-                    (
-                        "candidate_output_sha256",
-                        &observation.candidate_output_sha256,
-                    ),
-                    ("golden_output_sha256", &observation.golden_output_sha256),
-                ] {
+                for (field, value) in observation
+                    .spv_sha256
+                    .iter()
+                    .map(|spv| ("spv_sha256", spv))
+                    .chain([
+                        (
+                            "candidate_output_sha256",
+                            &observation.candidate_output_sha256,
+                        ),
+                        ("golden_output_sha256", &observation.golden_output_sha256),
+                    ])
+                {
                     validate_hash(field, value).map_err(at)?;
                 }
                 if observation.values.trim().is_empty() {

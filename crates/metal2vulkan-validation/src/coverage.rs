@@ -261,8 +261,14 @@ impl Declared {
 #[serde(deny_unknown_fields)]
 pub struct ModuleCensus {
     pub stage: Stage,
-    pub subgroup: SubgroupShape,
-    /// `StrategyCensus` names.
+    /// The module's subgroup shape, where the executor compiled it itself: `None` for a run
+    /// through the runtime, which keeps its modules to itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgroup: Option<SubgroupShape>,
+    /// `StrategyCensus` names. A run through the runtime, which keeps the translator's census of
+    /// its modules to itself, records only the float sums and products the case's AIR calls,
+    /// under the names the translator's census gives them
+    /// (`check::interface::float_reductions`): what its comparison class is derived from.
     pub strategies: BTreeSet<String>,
     /// The module's precision notes: with `strategies`, what its observations' comparison class
     /// is derived from. An executed module's are its notes under the specialization it ran with and
@@ -300,7 +306,7 @@ impl ModuleCensus {
         .map(|(_, stage)| stage)?;
         Some(ModuleCensus {
             stage,
-            subgroup: SubgroupShape::of_stage_module(module),
+            subgroup: Some(SubgroupShape::of_stage_module(module)),
             strategies: module.strategies.entries.keys().cloned().collect(),
             precision: match plan {
                 Some(plan) => module

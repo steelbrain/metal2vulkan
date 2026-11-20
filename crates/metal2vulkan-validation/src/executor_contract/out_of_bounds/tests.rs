@@ -622,7 +622,7 @@ fn candidate_row(
         air_sha256: metal.air_sha256.clone(),
         input_sha256: metal.input_sha256.clone(),
         golden_output_sha256: metal.metal_output_sha256.clone(),
-        spv_sha256: SPV_SHA256.into(),
+        spv_sha256: Some(SPV_SHA256.into()),
         translator_fingerprint: TRANSLATOR.into(),
         candidate_output_sha256: crate::hash::sha256_bytes(output),
         output_b64: b64(output),
@@ -652,7 +652,7 @@ fn dependencies<'a>(
     crate::observation::CandidateDependencies {
         case,
         metal,
-        spv_sha256: SPV_SHA256,
+        spv_sha256: Some(SPV_SHA256),
         translator_fingerprint: TRANSLATOR,
         backend: crate::observation::Backend::Vulkan,
         environment_id: "vk-env",

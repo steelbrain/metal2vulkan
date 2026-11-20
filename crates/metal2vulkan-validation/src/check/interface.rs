@@ -321,6 +321,9 @@ pub struct AirInterface {
     /// How far a kernel entry's every thread accesses each buffer at the element its grid
     /// position names ([`GridReach`](super::grid_reach::GridReach)); empty for other stages.
     pub grid_reaches: Vec<super::grid_reach::GridReach>,
+    /// The simdgroup float sums and products the entry and the functions it calls in its module
+    /// call ([`float_reductions`]).
+    pub float_reductions: BTreeSet<&'static str>,
 }
 
 /// How an entry reads its `[[vertex_id]]` argument. An indexed draw's index read past its buffer is
@@ -443,6 +446,7 @@ impl AirInterface {
             thread_objects: Vec::new(),
             vertex_id: VertexIdUse::Unused,
             grid_reaches,
+            float_reductions: float_reductions(module, [ep.func]),
         };
         interface.vertex_id = vertex_id_use(module, ep.func, &interface.params);
         Uses::scan(module, ep.func)?.record(&mut interface);
@@ -1586,6 +1590,88 @@ impl<'m> Uses<'m> {
     }
 }
 
+/// The simdgroup float sums and products (`air.simd_sum`, `air.simd_product`, and their prefix
+/// forms, of a `half` or `float` type) that `roots` and every function they call directly in
+/// `module`, transitively, call: each by the name the translator's strategy census gives the
+/// operation (`simd.reduce.fadd.float`, `simd.scan.fmul.half`, ...), the names
+/// [`REDUCTIONS`](crate::observation_contract::REDUCTIONS) bounds. A float sum's or
+/// product's association order is the device's (`PrecisionNote::ReductionOrder`), so these are
+/// the operations that note is recorded for: a comparison of a run whose modules the executor
+/// cannot read (a run through the runtime) bounds each by its own operation, read from the AIR.
+/// A quad's operations, which run in Metal's order, are not among them.
+pub fn float_reductions(
+    module: &Module,
+    roots: impl IntoIterator<Item = FuncId>,
+) -> BTreeSet<&'static str> {
+    use metal2vulkan_air::intrinsics::{Elem, GroupOp as G, GroupScope};
+    let mut found = BTreeSet::new();
+    let mut pending: Vec<FuncId> = roots.into_iter().collect();
+    let mut seen: BTreeSet<FuncId> = pending.iter().copied().collect();
+    while let Some(func) = pending.pop() {
+        let Some(body) = module.func(func).and_then(|f| f.body.as_ref()) else {
+            continue;
+        };
+        for (block, _) in body.blocks.iter() {
+            for (_, inst) in body.block_insts(block) {
+                let InstKind::Call(call) = &inst.kind else {
+                    continue;
+                };
+                let group = match &call.callee {
+                    &Callee::Direct(callee) => {
+                        if seen.insert(callee) {
+                            pending.push(callee);
+                        }
+                        continue;
+                    }
+                    &Callee::Air {
+                        op: AirIntrinsic::Group(group),
+                        ..
+                    } => group,
+                    _ => continue,
+                };
+                if group.scope != GroupScope::Simdgroup {
+                    continue;
+                }
+                let format = match group.ty.map(|ty| ty.elem) {
+                    Some(Elem::F16) => "half",
+                    Some(Elem::F32) => "float",
+                    _ => continue,
+                };
+                let operation = match group.op {
+                    G::Sum => "reduce.fadd",
+                    G::Product => "reduce.fmul",
+                    G::PrefixInclusiveSum | G::PrefixExclusiveSum => "scan.fadd",
+                    G::PrefixInclusiveProduct | G::PrefixExclusiveProduct => "scan.fmul",
+                    _ => continue,
+                };
+                if let Some(&(name, ..)) = crate::observation_contract::REDUCTIONS
+                    .iter()
+                    .find(|(name, ..)| *name == format!("simd.{operation}.{format}"))
+                {
+                    found.insert(name);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The functions of `module` whose names are `names`, in `module`'s order: the roots of
+/// [`float_reductions`] in a module a case links functions from.
+pub fn functions_named<'m>(
+    module: &'m Module,
+    names: &'m [String],
+) -> impl Iterator<Item = FuncId> + 'm {
+    module
+        .parts()
+        .funcs
+        .iter()
+        .filter_map(move |(id, function)| {
+            let name = module.symbols().as_str(function.name)?;
+            names.iter().any(|wanted| wanted == name).then_some(id)
+        })
+}
+
 /// How `entry` reads the arguments of `params` whose role is `[[vertex_id]]` ([`VertexIdUse`]).
 fn vertex_id_use(module: &Module, entry: FuncId, params: &[Param]) -> VertexIdUse {
     use metal2vulkan_air::abi::Builtin;
@@ -1693,6 +1779,7 @@ impl AirInterface {
             thread_objects: Vec::new(),
             vertex_id: VertexIdUse::Unused,
             grid_reaches: Vec::new(),
+            float_reductions: BTreeSet::new(),
         }
     }
 }

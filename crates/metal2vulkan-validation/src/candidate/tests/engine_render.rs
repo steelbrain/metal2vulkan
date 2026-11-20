@@ -142,7 +142,10 @@ fn a_constant_fragment_colors_the_quadrant_metal_draws() {
     )
     .unwrap();
     assert_eq!(run.output, top_right([0.25, 0.5, 0.75, 1.0]));
-    assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+    assert_eq!(
+        run.status,
+        Some(metal2vulkan::bind::StatusReport::default())
+    );
     assert_eq!(run.environment["executor"], "engine-render");
 }
 
@@ -226,7 +229,10 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
         .flat_map(|&v| centers.iter().flat_map(move |&u| [u, v, 0.5, 1.0]))
         .collect();
     assert_eq!(run.output, floats(&expected));
-    assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+    assert_eq!(
+        run.status,
+        Some(metal2vulkan::bind::StatusReport::default())
+    );
 }
 
 /// A fragment case with a depth/stencil attachment: `fragment_depth_stencil` writes depth 0.5 under
@@ -276,7 +282,10 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
         )
         .unwrap();
         assert_eq!(run.output, expected, "{:?}", authored.output);
-        assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+        assert_eq!(
+            run.status,
+            Some(metal2vulkan::bind::StatusReport::default())
+        );
     }
 }
 
@@ -500,7 +509,10 @@ fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
                 eprintln!(
                     "ENGINE-FETCH {instances} instance(s): unordered within the draw: {unordered}"
                 );
-                assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+                assert_eq!(
+                    run.status,
+                    Some(metal2vulkan::bind::StatusReport::default())
+                );
             }
             Err(other) => panic!("{instances} instance(s): {other}"),
         }
@@ -574,7 +586,10 @@ fn an_imageblock_member_gains_one_per_overlapping_instance() {
         ) {
             Ok(run) => {
                 assert_eq!(run.output, expected, "{instances} instance(s)");
-                assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+                assert_eq!(
+                    run.status,
+                    Some(metal2vulkan::bind::StatusReport::default())
+                );
             }
             Err(ExecutorError::NotSupported(NotSupported::Product {
                 outcome: Outcome::DeviceCapabilityMissing { feature, .. },

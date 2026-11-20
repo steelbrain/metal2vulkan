@@ -69,7 +69,7 @@ use crate::literal::{LiteralResources, LiteralTexture};
 use crate::metal::ORACLE_ABI;
 use crate::observation::{
     Backend, CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming,
-    MetalObservation, TRANSLATOR_FINGERPRINT,
+    MetalObservation, RUNTIME_CRATE_FINGERPRINT, TRANSLATOR_FINGERPRINT,
 };
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::{Refusal, RefusalObservation};
@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v184";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v185";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -355,12 +355,17 @@ pub enum ComputeOutput {
 #[derive(Clone, Debug)]
 pub struct ComputeRun {
     pub output: Vec<u8>,
-    /// SHA-256 of the pipeline's SPIR-V bytes (before specialization).
-    pub spv_sha256: String,
-    /// [`engine_fingerprint`] of the profile the case compiled for.
+    /// SHA-256 of the pipeline's SPIR-V bytes (before specialization), where the executor
+    /// compiled it itself; `None` for a run through the runtime ([`runs_through_runtime`]), which
+    /// keeps its modules to itself.
+    pub spv_sha256: Option<String>,
+    /// [`engine_fingerprint`] of the profile the case compiled for, or [`runtime_fingerprint`]
+    /// for a run through the runtime.
     pub translator_fingerprint: String,
     pub environment: serde_json::Value,
-    pub status: StatusReport,
+    /// The binder's execution status, read before the output; `None` for a run through the
+    /// runtime, whose shaders keep no status.
+    pub status: Option<StatusReport>,
     /// Derived from the executed modules' precision notes and strategy census.
     pub comparison: ComparisonClass,
     /// The executed modules' census and the class of the device that ran them.
@@ -1152,6 +1157,172 @@ pub fn engine_fingerprint_of(profile: &Hash256) -> String {
     bytes.extend_from_slice(&metal2vulkan::cache::SEMANTICS_VERSION.to_le_bytes());
     bytes.extend_from_slice(profile);
     sha256_bytes(&bytes)
+}
+
+/// The translator fingerprint of a run through the runtime ([`runs_through_runtime`]): the
+/// product, its semantics version and the runtime crate's sources
+/// ([`RUNTIME_CRATE_FINGERPRINT`]). The runtime derives what it compiles for from the device it
+/// opened and answers none of it, so no profile is part of it; the row's slot and its recorded
+/// device are.
+pub fn runtime_fingerprint() -> String {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"metal2vulkan-engine-runtime\0");
+    bytes.extend_from_slice(TRANSLATOR_FINGERPRINT.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&metal2vulkan::cache::SEMANTICS_VERSION.to_le_bytes());
+    bytes.extend_from_slice(RUNTIME_CRATE_FINGERPRINT.as_bytes());
+    sha256_bytes(&bytes)
+}
+
+/// Whether `case`, mapped from `authored`, runs through the runtime (`metal2vulkan-runtime`'s
+/// public API, `platform::execute_runtime`) in place of the executor's own context: a kernel
+/// case of buffers (each device buffer array's elements among them), threadgroup memory
+/// lengths, function constants and linked functions, dispatched by `dispatchThreads` or
+/// `dispatchThreadgroups`, and observing a buffer or nothing. Decided by the case's structure
+/// alone: every field the mapping fills is named here, so a new one is decided when it is added.
+pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool {
+    let ComputeCase {
+        entry: _,
+        constants: _,
+        buffers: _,
+        rate_maps,
+        argument_buffer_buffers,
+        argument_buffer_rate_maps,
+        argument_buffer_textures,
+        argument_buffer_samplers,
+        objects,
+        command_buffers,
+        textures,
+        samplers,
+        function_tables,
+        acceleration_structures,
+        threadgroup_lengths: _,
+        imageblock,
+        tile,
+        stage_input,
+        stage_in_region,
+        attribute_strides,
+        dispatch,
+        output,
+        out_of_bounds,
+        creation_bound: _,
+    } = case;
+    rate_maps.is_empty()
+        && argument_buffer_buffers.is_empty()
+        && argument_buffer_rate_maps.is_empty()
+        && argument_buffer_textures.is_empty()
+        && argument_buffer_samplers.is_empty()
+        && objects.is_empty()
+        && command_buffers.is_empty()
+        && textures.is_empty()
+        && samplers.is_empty()
+        && function_tables.is_empty()
+        && acceleration_structures.is_empty()
+        && imageblock.is_none()
+        && tile.is_none()
+        && stage_input.is_none()
+        && stage_in_region.is_none()
+        && attribute_strides.is_empty()
+        && out_of_bounds.is_empty()
+        && matches!(
+            dispatch,
+            Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
+        )
+        && matches!(output, ComputeOutput::None | ComputeOutput::Buffer { .. })
+        && authored.intersection_function_tables.is_empty()
+}
+
+/// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
+/// creates them (`metal::platform::buffers`): a bound buffer's authored bytes padded to the size
+/// its argument declares ([`buffer_bytes_padded_to_declared_size`]), and a device buffer array's
+/// element's as authored.
+///
+/// [`buffer_bytes_padded_to_declared_size`]: crate::executor_contract::buffer_bytes_padded_to_declared_size
+fn runtime_buffers(
+    authored: &AuthoredCase,
+    reflection: &crate::air::reflect::ShaderInterface,
+    case: &ComputeCase,
+) -> BTreeMap<u32, Vec<u8>> {
+    case.buffers
+        .iter()
+        .map(|(&index, bytes)| {
+            let bound = authored
+                .buffers
+                .iter()
+                .any(|buffer| buffer.binding == index);
+            let bytes = match bound {
+                true => crate::executor_contract::buffer_bytes_padded_to_declared_size(
+                    bytes,
+                    crate::executor_contract::reflected_buffer_declared_size(reflection, index),
+                )
+                .into_owned(),
+                false => bytes.clone(),
+            };
+            (index, bytes)
+        })
+        .collect()
+}
+
+/// The simdgroup float sums and products a run through the runtime executes
+/// (`check::interface::float_reductions`): the case's entry's, which its check read, and those of
+/// each function it links from `linked`, read from its module.
+fn runtime_reductions(
+    interface: &AirInterface,
+    linked: &[LinkedModule],
+) -> Result<std::collections::BTreeSet<&'static str>, ExecutorError> {
+    let mut reductions = interface.float_reductions.clone();
+    for module in linked {
+        let decoded = crate::check::loop_free::DecodedModule::from_bitcode(
+            &module.module_sha256,
+            &module.bitcode,
+        )
+        .map_err(|error| ExecutorError::Failed(format!("a linked module: {error}")))?;
+        let roots =
+            crate::check::interface::functions_named(decoded.module(), &module.library.functions);
+        reductions.extend(crate::check::interface::float_reductions(
+            decoded.module(),
+            roots,
+        ));
+    }
+    Ok(reductions)
+}
+
+/// A run through the runtime ([`runs_through_runtime`]) of `prepared`'s kernel case `compute`:
+/// the row's AIR and each module it links, its buffers as the oracle makes them
+/// ([`runtime_buffers`]), and the float reductions it executes ([`runtime_reductions`]), run by
+/// `platform::execute_runtime`.
+fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt {
+    let primary = &prepared.checked.primary;
+    let kernel = match RowSource::of_row(&primary.source).bitcode() {
+        Ok(kernel) => kernel,
+        Err(error) => return RunAttempt::of(Err(ExecutorError::Failed(error.to_string()))),
+    };
+    let reductions = match runtime_reductions(&primary.interface, &prepared.linked) {
+        Ok(reductions) => reductions,
+        Err(error) => return RunAttempt::of(Err(error)),
+    };
+    let buffers = runtime_buffers(&primary.case, &primary.reflection, compute);
+    super::platform::execute_runtime(
+        prepared.device,
+        &primary.case.case_id,
+        compute,
+        RuntimeKernel {
+            bitcode: &kernel,
+            linked: &prepared.linked,
+            buffers: &buffers,
+            reductions: &reductions,
+        },
+    )
+}
+
+/// What a run through the runtime makes its kernel and binds from, beside its mapped case: the
+/// row's AIR, the modules it links, its buffers' bytes by Metal index ([`runtime_buffers`]), and
+/// the float reductions it executes ([`runtime_reductions`]).
+pub struct RuntimeKernel<'a> {
+    pub bitcode: &'a [u8],
+    pub linked: &'a [LinkedModule],
+    pub buffers: &'a BTreeMap<u32, Vec<u8>>,
+    pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 
 /// The suffix of an engine store slot.
@@ -2826,6 +2997,18 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
+    // A case the runtime runs, run so in this process's default run: the native backend, no
+    // profiles-layer restriction, the stated leg. It records no artifact: the runtime keeps
+    // what it compiled to itself.
+    if let Mapped::Compute(compute) = &prepared.mapped {
+        if backend == Backend::Vulkan
+            && runs_through_runtime(case, compute)
+            && super::requested_restriction().is_none()
+            && super::requested_leg() == Leg::Stated
+        {
+            return run_on_runtime(prepared, compute);
+        }
+    }
     let artifact = RefCell::new(artifact::CaseArtifact::default());
     // Each executed command's template, compiled for the command's bind shape and dispatch or
     // draw.
@@ -3208,7 +3391,7 @@ pub fn execute_prepared(
     let dependencies = CandidateDependencies {
         case,
         metal: &metal,
-        spv_sha256: &run.spv_sha256,
+        spv_sha256: run.spv_sha256.as_deref(),
         translator_fingerprint: &run.translator_fingerprint,
         backend,
         environment_id: &slot,

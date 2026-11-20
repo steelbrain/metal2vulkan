@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 /// (`candidate::engine::engine_fingerprint`), so a row is current only for this product.
 pub const TRANSLATOR_FINGERPRINT: &str = env!("METAL2VULKAN_PRODUCT_FINGERPRINT");
 
+/// The runtime crate's source fingerprint (`metal2vulkan-runtime`'s manifest and the files its
+/// module tree compiles, `build.rs`): with [`TRANSLATOR_FINGERPRINT`], what a row the runtime ran
+/// is current for (`candidate::engine::runtime_fingerprint`).
+pub const RUNTIME_CRATE_FINGERPRINT: &str = env!("METAL2VULKAN_RUNTIME_CRATE_FINGERPRINT");
+
 /// `VK_LAYER_KHRONOS_profiles`, as an active tool's `layer` names it in a candidate environment's
 /// `tools`.
 pub const PROFILES_LAYER: &std::ffi::CStr = c"VK_LAYER_KHRONOS_profiles";
@@ -183,7 +188,10 @@ pub struct CandidateObservation {
     pub air_sha256: String,
     pub input_sha256: String,
     pub golden_output_sha256: String,
-    pub spv_sha256: String,
+    /// SHA-256 of the executed SPIR-V, where the executor compiled it itself: `None` for a row
+    /// the runtime ran, which keeps its modules to itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spv_sha256: Option<String>,
     pub translator_fingerprint: String,
     pub candidate_output_sha256: String,
     pub output_b64: String,
@@ -340,7 +348,7 @@ impl MetalObservation {
 pub struct CandidateDependencies<'a> {
     pub case: &'a AuthoredCase,
     pub metal: &'a MetalObservation,
-    pub spv_sha256: &'a str,
+    pub spv_sha256: Option<&'a str>,
     pub translator_fingerprint: &'a str,
     pub backend: Backend,
     pub environment_id: &'a str,
@@ -354,13 +362,15 @@ impl CandidateObservation {
             ("air_sha256", self.air_sha256.as_str()),
             ("input_sha256", self.input_sha256.as_str()),
             ("golden_output_sha256", self.golden_output_sha256.as_str()),
-            ("spv_sha256", self.spv_sha256.as_str()),
             (
                 "candidate_output_sha256",
                 self.candidate_output_sha256.as_str(),
             ),
         ] {
             validate_hash(field, value)?;
+        }
+        if let Some(spv_sha256) = &self.spv_sha256 {
+            validate_hash("spv_sha256", spv_sha256)?;
         }
         validate_hash("translator_fingerprint", &self.translator_fingerprint)?;
         validate_slot_fields(&self.environment_id, &self.executor_abi)?;
@@ -548,7 +558,7 @@ impl CandidateObservation {
             && self.air_sha256 == dependencies.case.air_sha256
             && self.input_sha256 == dependencies.metal.input_sha256
             && self.golden_output_sha256 == dependencies.metal.metal_output_sha256
-            && self.spv_sha256 == dependencies.spv_sha256
+            && self.spv_sha256.as_deref() == dependencies.spv_sha256
             && self.translator_fingerprint == dependencies.translator_fingerprint
             && self.backend == dependencies.backend
             && self.environment_id == dependencies.environment_id
@@ -828,7 +838,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256,
             golden_output_sha256: metal.metal_output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: metal.output_b64.clone(),
@@ -856,7 +866,7 @@ mod tests {
         let dependencies = CandidateDependencies {
             case: &case,
             metal: &metal,
-            spv_sha256: &spv_sha256,
+            spv_sha256: Some(&spv_sha256),
             translator_fingerprint: &candidate.translator_fingerprint,
             backend: Backend::Vulkan,
             environment_id: "vk-env",
@@ -866,7 +876,7 @@ mod tests {
 
         let changed_spv = "44".repeat(32);
         let changed = CandidateDependencies {
-            spv_sha256: &changed_spv,
+            spv_sha256: Some(&changed_spv),
             ..dependencies
         };
         assert!(!candidate.dependency_matches(&changed));
@@ -921,7 +931,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             golden_output_sha256: output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: "AQAAAA==".into(),
@@ -955,7 +965,7 @@ mod tests {
                 air_sha256: case.air_sha256.clone(),
                 input_sha256: case.computed_input_sha256().unwrap(),
                 golden_output_sha256: output_sha256.clone(),
-                spv_sha256: "33".repeat(32),
+                spv_sha256: Some("33".repeat(32)),
                 translator_fingerprint: "55".repeat(32),
                 candidate_output_sha256: output_sha256.clone(),
                 output_b64: "AQAAAA==".into(),
@@ -1038,7 +1048,7 @@ mod tests {
                 air_sha256: case.air_sha256.clone(),
                 input_sha256: case.computed_input_sha256().unwrap(),
                 golden_output_sha256: output_sha256.clone(),
-                spv_sha256: "33".repeat(32),
+                spv_sha256: Some("33".repeat(32)),
                 translator_fingerprint: "55".repeat(32),
                 candidate_output_sha256: output_sha256.clone(),
                 output_b64: "AQAAAA==".into(),
@@ -1153,7 +1163,7 @@ mod tests {
             air_sha256: case.air_sha256,
             input_sha256,
             golden_output_sha256: empty_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: empty_sha256,
             output_b64: String::new(),
@@ -1239,7 +1249,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: metal.input_sha256.clone(),
             golden_output_sha256: metal.metal_output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: sha256_bytes(output),
             output_b64: b64(output),
@@ -1256,7 +1266,7 @@ mod tests {
         let dependencies = CandidateDependencies {
             case: &case,
             metal: &metal,
-            spv_sha256: &spv_sha256,
+            spv_sha256: Some(&spv_sha256),
             translator_fingerprint: &translator_fingerprint,
             backend: Backend::Vulkan,
             environment_id: "vk-env",
@@ -1400,7 +1410,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: input_sha256.clone(),
             golden_output_sha256: output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256.clone(),
             output_b64: "AQAAAA==".into(),
@@ -1417,7 +1427,7 @@ mod tests {
         let dependencies = CandidateDependencies {
             case: &case,
             metal: &golden,
-            spv_sha256: &"33".repeat(32),
+            spv_sha256: Some(&"33".repeat(32)),
             translator_fingerprint: &"55".repeat(32),
             backend: Backend::Vulkan,
             environment_id: "vk-env",

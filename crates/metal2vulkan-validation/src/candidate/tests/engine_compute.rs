@@ -103,7 +103,10 @@ fn a_store_runs_through_the_binder_under_the_validation_layer() {
     let mut expected = vec![0xab; 8];
     expected[..4].copy_from_slice(&42u32.to_le_bytes());
     assert_eq!(run.output, expected);
-    assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
+    assert_eq!(
+        run.status,
+        Some(metal2vulkan::bind::StatusReport::default())
+    );
     assert_eq!(run.environment["executor"], "engine-compute");
     assert_eq!(run.translator_fingerprint.len(), 64);
 }
@@ -497,4 +500,108 @@ fn an_oracle_instance_mask_is_refused_typed() {
         ),
         other => panic!("{other:?}"),
     }
+}
+
+/// [`run_linked`] through the runtime (`platform::execute_runtime`): the kernel and the modules it
+/// links as the engine hands them over, its buffers as the case holds them, and no float
+/// reduction.
+#[cfg(target_os = "linux")]
+fn run_on_runtime(
+    case: &ComputeCase,
+    bitcode: &[u8],
+    linked: &[LinkedModule],
+) -> Result<ComputeRun, ExecutorError> {
+    platform::execute_runtime(
+        crate::gpu::TEST_DEVICE,
+        "engine-test",
+        case,
+        crate::candidate::engine::RuntimeKernel {
+            bitcode,
+            linked,
+            buffers: &case.buffers,
+            reductions: &std::collections::BTreeSet::new(),
+        },
+    )
+    .result
+}
+
+/// A store runs through the runtime under the validation layer, and its row records what the
+/// runtime answers: the state's precision notes and the runtime's fingerprint, and no SPIR-V,
+/// status, subgroup shape, containment or artifact.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_store_runs_through_the_runtime_under_the_validation_layer() {
+    let bitcode = llvm_assemble(&engine_dir().join("store_const.ll")).unwrap();
+    let run = run_on_runtime(
+        &case("store_const", vec![0xab; 8], one_thread()),
+        &bitcode,
+        &[],
+    )
+    .unwrap();
+    let mut expected = vec![0xab; 8];
+    expected[..4].copy_from_slice(&42u32.to_le_bytes());
+    assert_eq!(run.output, expected);
+    assert_eq!(run.environment["executor"], "runtime-compute");
+    assert_eq!(
+        run.translator_fingerprint,
+        crate::candidate::engine::runtime_fingerprint()
+    );
+    assert_eq!((run.spv_sha256, run.status), (None, None));
+    let [module] = &run.census.modules[..] else {
+        panic!("one module: {:?}", run.census.modules);
+    };
+    assert_eq!((module.subgroup, module.containment), (None, None));
+    assert_eq!(run.census.artifact, None);
+    assert_eq!(run.census.leg, Some(crate::coverage::Leg::Stated));
+}
+
+/// A kernel that calls visible functions it does not define runs through the runtime with the
+/// functions its case links, as [`a_kernel_runs_with_its_linked_visible_functions`] runs it on the
+/// executor's own context.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_kernel_runs_through_the_runtime_with_its_linked_visible_functions() {
+    let caller = llvm_assemble(&engine_dir().join("linked_visible_caller.ll")).unwrap();
+    let functions = llvm_assemble(&engine_dir().join("linked_visible_functions.ll")).unwrap();
+    let names = |names: &[&str]| LinkedLibrary {
+        functions: names.iter().map(|name| (*name).to_owned()).collect(),
+    };
+    let linked = [
+        LinkedModule {
+            module_sha256: "functions".into(),
+            bitcode: functions,
+            library: names(&["linked_blend", "linked_scale"]),
+        },
+        LinkedModule {
+            module_sha256: "caller".into(),
+            bitcode: caller.clone(),
+            library: names(&["linked_offset"]),
+        },
+    ];
+    const THREADS: u32 = 16;
+    let bytes = vec![0; 4 * THREADS as usize];
+    let mut kernel = case(
+        "linked_visible_caller",
+        bytes.clone(),
+        Dispatch::Threads {
+            threads: [THREADS, 1, 1],
+            threads_per_group: [THREADS, 1, 1],
+        },
+    );
+    kernel.buffers.insert(1, bytes.clone());
+    let words = run_on_runtime(&kernel, &caller, &linked).unwrap().output;
+    let expected = (0..THREADS)
+        .flat_map(|tid| (3 * tid + (tid & 7)).to_le_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(words, expected);
+    kernel.output = ComputeOutput::Buffer {
+        binding: 1,
+        offset: 0,
+        length: bytes.len() as u64,
+    };
+    let floats = run_on_runtime(&kernel, &caller, &linked).unwrap().output;
+    let expected = (0..THREADS)
+        .flat_map(|tid| (tid as f32 * 0.5 + 1.0).to_le_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(floats, expected);
 }

@@ -1478,7 +1478,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             golden_output_sha256: output_sha256.clone(),
-            spv_sha256: "33".repeat(32),
+            spv_sha256: Some("33".repeat(32)),
             translator_fingerprint: "44".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: "KgAAAA==".into(),
@@ -1887,7 +1887,7 @@ mod tests {
 
         let mut candidate = candidate(&case, Backend::Vulkan, "env");
         store.upsert_candidate(candidate.clone()).unwrap();
-        candidate.spv_sha256 = "44".repeat(32);
+        candidate.spv_sha256 = Some("44".repeat(32));
         store.upsert_candidate(candidate.clone()).unwrap();
         assert_eq!(
             store.read_candidates(Backend::Vulkan).unwrap(),

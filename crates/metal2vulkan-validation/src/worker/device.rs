@@ -124,8 +124,9 @@ pub struct DeviceRun {
     /// The selected output bytes.
     #[serde(with = "base64_bytes")]
     pub output: Vec<u8>,
-    /// SHA-256 of the pipeline's SPIR-V bytes (before specialization).
-    pub spv_sha256: String,
+    /// SHA-256 of the pipeline's SPIR-V bytes (before specialization), where the executor compiled
+    /// it itself: `None` for a run through the runtime, which keeps its modules to itself.
+    pub spv_sha256: Option<String>,
     pub translator_fingerprint: String,
     pub environment: serde_json::Value,
     pub comparison: ComparisonClass,

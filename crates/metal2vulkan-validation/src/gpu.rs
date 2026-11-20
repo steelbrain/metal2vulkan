@@ -77,6 +77,8 @@ mod tests {
             // The runtime's device: the player's and the replay tests'.
             ("src/bin/command-replay.rs", opens[5], 1),
             ("src/replay/rt_replay.rs", opens[5], 1),
+            // The runtime's device: the engine executor's run through it.
+            ("src/candidate/platform/runtime.rs", opens[5], 1),
         ];
         let checked = concat!("refuse_if", "_tripped(");
         for (file, open, _) in allowed.iter().filter(|(_, open, _)| *open == opens[5]) {

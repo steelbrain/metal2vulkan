@@ -454,6 +454,16 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   and compares the observations with Metal's. Every context runs under the validation layer, in a
   robustness leg: the stated leg enables every robustness feature the device states, and the
   `robustness-off` leg none, so both containment encodings run.
+- **Through the runtime.** On Linux, in the stated leg and without a profile restriction, a kernel
+  case of buffers (device buffer arrays included), threadgroup memory, function constants and
+  linked functions, dispatched by threads or threadgroups and observing a buffer, runs through
+  `metal2vulkan-runtime`'s public API instead, as a consumer runs it (`engine::runs_through_runtime`
+  decides it from the case's structure). Its device worker enables the validation layer through the
+  loader's and the layer's variables, and any message the layer logs fails the row. The pipeline
+  state's make is held to 500 MiB of peak live allocations and 20 s. Its row records the state's
+  precision notes and the runtime's fingerprint, and no SPIR-V, status, subgroup shape,
+  containment or artifact. The comparison bounds `ReductionOrder` by the simdgroup float sums and
+  products the case's AIR calls, the operations the translator's census names for that note.
 - **Batches.** `--batch --out OUT` runs every selected case, one process per case, each killed
   whole after `--run-timeout`, resuming from `OUT/done.tsv`; `--batch-report` and
   `--batch-install STORE` read and install the results. A batch starts no GPU run while the

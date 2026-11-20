@@ -246,7 +246,7 @@ fn row(
         air_sha256: case.air_sha256.clone(),
         input_sha256: case.computed_input_sha256().unwrap(),
         golden_output_sha256: sha256_bytes(golden),
-        spv_sha256: "33".repeat(32),
+        spv_sha256: Some("33".repeat(32)),
         translator_fingerprint: String::new(),
         candidate_output_sha256: sha256_bytes(output),
         output_b64: b64(output),
@@ -327,7 +327,7 @@ fn noting(mut row: CandidateObservation, notes: &[PrecisionNote]) -> CandidateOb
         leg: None,
         modules: vec![crate::coverage::ModuleCensus {
             stage: Stage::Kernel,
-            subgroup: crate::coverage::SubgroupShape::default(),
+            subgroup: Some(crate::coverage::SubgroupShape::default()),
             strategies: BTreeSet::new(),
             precision: notes.iter().copied().collect(),
             containment: None,
@@ -506,7 +506,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
     // A changed candidate leaves the list: the row is a mismatch again and the entry is stale,
     // whether the SPIR-V or the reading changed.
     let changes: [fn(&mut CandidateObservation); 2] = [
-        |row| row.spv_sha256 = "55".repeat(32),
+        |row| row.spv_sha256 = Some("55".repeat(32)),
         |row| {
             let output = [2, 0, 0x80, 0x3f];
             row.output_b64 = b64(&output);
@@ -1399,10 +1399,10 @@ fn a_device_interpolation_row_stays_a_mismatch() {
             leg: None,
             modules: vec![ModuleCensus {
                 stage: crate::case::Stage::Fragment,
-                subgroup: crate::coverage::SubgroupShape {
+                subgroup: Some(crate::coverage::SubgroupShape {
                     full_subgroups: false,
                     required_size: None,
-                },
+                }),
                 strategies: Default::default(),
                 precision: [note].into(),
                 containment: None,
@@ -1497,10 +1497,10 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
             leg: None,
             modules: vec![ModuleCensus {
                 stage: crate::case::Stage::Kernel,
-                subgroup: crate::coverage::SubgroupShape {
+                subgroup: Some(crate::coverage::SubgroupShape {
                     full_subgroups: false,
                     required_size: None,
-                },
+                }),
                 strategies: Default::default(),
                 precision: [note].into(),
                 containment: None,
@@ -2410,7 +2410,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     ]
     .map(|row| unbounded_by(row, &regroup));
     for (at, row) in rows.iter_mut().enumerate() {
-        row.spv_sha256 = format!("{:02x}", 0x60 + at).repeat(32);
+        row.spv_sha256 = Some(format!("{:02x}", 0x60 + at).repeat(32));
     }
     let input_of = |rows: &[CandidateObservation]| C3Input {
         cases: vec![fft.clone()],
@@ -2446,7 +2446,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     // The reading's one observation is the lavapipe slot's row at an earlier candidate and output:
     // keyed by its cause, it reviews every slot's row that records the cause, and it holds.
     let mut earlier = reviewed(&rows[1], &METAL);
-    earlier.spv_sha256 = "99".repeat(32);
+    earlier.spv_sha256 = Some("99".repeat(32));
     earlier.candidate_output_sha256 = sha256_bytes(&OTHER);
     let mut regrouping = reading(&fft, vec![earlier]);
     regrouping.cause = Cause::FastMathRegrouping;
@@ -3470,10 +3470,10 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
         leg: None,
         modules: vec![ModuleCensus {
             stage: crate::case::Stage::Kernel,
-            subgroup: crate::coverage::SubgroupShape {
+            subgroup: Some(crate::coverage::SubgroupShape {
                 full_subgroups: false,
                 required_size: None,
-            },
+            }),
             strategies: Default::default(),
             precision: [PrecisionNote::RasterizationRateMap].into(),
             containment: None,

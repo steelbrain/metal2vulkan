@@ -27,6 +27,29 @@ fn main() {
         hex(&validation_hash.finalize())
     );
 
+    // The runtime crate's sources (`metal2vulkan-runtime`: its manifest and the files its module
+    // tree compiles, `build_support::product_files`), through which the engine candidate runs a
+    // case: a row it ran is current only for this build of them
+    // (`candidate::engine::runtime_fingerprint`).
+    let runtime_crate = Path::new("../metal2vulkan-runtime");
+    println!(
+        "cargo:rerun-if-changed={}",
+        runtime_crate.join("src").display()
+    );
+    let mut runtime_crate_files = vec![runtime_crate.join("Cargo.toml")];
+    runtime_crate_files.extend(build_support::product_files(runtime_crate));
+    runtime_crate_files.sort();
+    let mut runtime_crate_hash = Sha256::new();
+    hash_files(
+        &mut runtime_crate_hash,
+        Path::new(".."),
+        &runtime_crate_files,
+    );
+    println!(
+        "cargo:rustc-env=METAL2VULKAN_RUNTIME_CRATE_FINGERPRINT={}",
+        hex(&runtime_crate_hash.finalize())
+    );
+
     // Authoring-capability classification (`triage::ANALYZER_ABI`) reads exactly these files of
     // this crate beside the product: its manifest (which selects the product's features) and the
     // modules its non-test code reaches. An edit to one invalidates the cached facts; an edit

@@ -19,7 +19,7 @@
 //! refused, uncounted, and aborts the worker.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -31,8 +31,14 @@ static HIGH_WATER_BYTES: AtomicUsize = AtomicUsize::new(0);
 /// the baseline [`peak_bytes`] is reported above (0 before any budget).
 static BUDGET_BASELINE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static LIMIT_BYTES: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// One [`measure`] at a time: each resets the shared peak.
+/// One [`measure`] or [`bounded`] at a time: each resets the shared peak.
 static MEASURING: Mutex<()> = Mutex::new(());
+/// Whether a [`bounded`] body runs: an allocation its limit refuses ends the process.
+static BOUNDED: AtomicBool = AtomicBool::new(false);
+
+/// The exit status of a process an allocation took past a [`bounded`] budget: it ends at once
+/// (`_exit`), every thread with it, after one line on stderr naming the breach.
+pub const BOUNDED_EXIT_CODE: i32 = 87;
 
 /// A [`System`]-backed allocator that counts live bytes, tracks their peak, and enforces the
 /// limit set by [`enable_budget`].
@@ -99,8 +105,24 @@ fn reserve(bytes: usize) -> bool {
             HIGH_WATER_BYTES.fetch_max(previous + bytes, Ordering::Relaxed);
             true
         }
+        Err(_) if BOUNDED.load(Ordering::Relaxed) => breach(),
         Err(_) => false,
     }
+}
+
+/// End the process for an allocation past a [`bounded`] budget: one line on stderr, then
+/// `_exit(BOUNDED_EXIT_CODE)`, which allocates nothing and runs nothing more of any thread.
+fn breach() -> ! {
+    const LINE: &[u8] = b"an allocation passed a bounded call's memory budget: the process ends\n";
+    #[cfg(unix)]
+    // SAFETY: `write` of a static buffer to stderr and `_exit` are async-signal-safe and allocate
+    // nothing, so they are sound inside the allocator.
+    unsafe {
+        libc::write(2, LINE.as_ptr().cast(), LINE.len());
+        libc::_exit(BOUNDED_EXIT_CODE)
+    }
+    #[cfg(not(unix))]
+    std::process::abort()
 }
 
 /// Live heap bytes counted so far (0 when the allocator is not installed).
@@ -150,6 +172,48 @@ pub fn measure<R>(body: impl FnOnce() -> R) -> (R, Option<u64>) {
     let baseline = live_bytes();
     PEAK_BYTES.store(baseline, Ordering::Relaxed);
     let result = body();
+    let peak = PEAK_BYTES.load(Ordering::Relaxed);
+    (
+        result,
+        installed.then(|| peak.saturating_sub(baseline) as u64),
+    )
+}
+
+/// Run `body` with at most `bytes` live above what is live at its start, and return its result
+/// with the peak live bytes attributable to it, as [`measure`] does (`None` when the allocator is
+/// not installed, and then nothing is bounded). An allocation past the budget while `body` runs,
+/// on any thread, ends the process ([`BOUNDED_EXIT_CODE`]): the device worker's pipeline makes run
+/// under it, so a make past the 500-MiB ceiling ends the worker before the run submits its work.
+/// The limit before the call, the process budget's, holds again once `body` returns, and holds
+/// inside it where it is the lower.
+pub fn bounded<R>(bytes: u64, body: impl FnOnce() -> R) -> (R, Option<u64>) {
+    // A panic inside an earlier measurement poisons nothing this lock protects.
+    let _measuring = MEASURING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    /// Puts the limit back however `body` ends.
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BOUNDED.store(false, Ordering::Relaxed);
+            LIMIT_BYTES.store(self.0, Ordering::Relaxed);
+        }
+    }
+    let installed = installed();
+    let baseline = live_bytes();
+    let before = LIMIT_BYTES.load(Ordering::Relaxed);
+    let bytes = usize::try_from(bytes).unwrap_or(usize::MAX);
+    let restore = Restore(before);
+    PEAK_BYTES.store(baseline, Ordering::Relaxed);
+    if installed {
+        LIMIT_BYTES.store(
+            before.min(baseline.saturating_add(bytes)),
+            Ordering::Relaxed,
+        );
+        BOUNDED.store(true, Ordering::Relaxed);
+    }
+    let result = body();
+    drop(restore);
     let peak = PEAK_BYTES.load(Ordering::Relaxed);
     (
         result,
@@ -267,6 +331,64 @@ mod tests {
         assert!(peak >= (HELD / 2) as u64, "{peak}");
         assert!(peak < (HELD / 2 + HELD / 4) as u64, "{peak}");
         drop((held, fixed));
+    }
+
+    /// A bounded body measures what it holds, as `measure` does, and the limit it ran under goes
+    /// with it: an allocation larger than its budget succeeds once it has returned.
+    #[test]
+    fn a_bounded_body_measures_and_its_limit_goes_with_it() {
+        let (len, peak) = bounded(2 * HELD as u64, || {
+            let held = vec![0u8; HELD];
+            std::hint::black_box(&held);
+            held.len()
+        });
+        assert_eq!(len, HELD);
+        assert!(peak.unwrap() >= (HELD / 2) as u64, "{peak:?}");
+        let after = vec![0u8; 4 * HELD];
+        assert_eq!(std::hint::black_box(&after).len(), 4 * HELD);
+    }
+
+    /// An allocation past a bounded body's budget ends the process with [`BOUNDED_EXIT_CODE`]
+    /// and the breach's line, in a fresh process: the fixture allocates twice its budget.
+    mod bounded_breach {
+        use super::*;
+        use std::process::Command;
+
+        const FIXTURE: &str = "worker::alloc::tests::bounded_breach::breach_fixture";
+        const MODE: &str = "M2V_TEST_BOUNDED_BREACH";
+
+        /// The fixture: no-op unless [`MODE`] is set.
+        #[test]
+        fn breach_fixture() {
+            if std::env::var_os(MODE).is_none() {
+                return;
+            }
+            let _ = bounded(HELD as u64, || {
+                std::hint::black_box(vec![1u8; 2 * HELD]).len()
+            });
+            println!("the bounded body returned");
+        }
+
+        #[test]
+        fn an_allocation_past_the_budget_ends_the_process() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", FIXTURE, "--nocapture"])
+                .env(MODE, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.code(),
+                Some(BOUNDED_EXIT_CODE),
+                "{stdout}{stderr}"
+            );
+            assert!(!stdout.contains("the bounded body returned"), "{stdout}");
+            assert!(
+                stderr.contains("an allocation passed a bounded call's memory budget"),
+                "{stderr}"
+            );
+        }
     }
 
     /// A supervisor's freed transient buffers go back to the system once it has supervised a
