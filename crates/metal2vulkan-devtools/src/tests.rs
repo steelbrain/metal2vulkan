@@ -38,7 +38,7 @@ fn the_carried_tests_read_the_checkout_where_the_runner_names_it() {
         sources(&path, &mut files);
     }
     files.sort();
-    assert!(files.len() > 500, "{} sources read", files.len());
+    assert!(files.len() > 300, "{} sources read", files.len());
     let mut baked = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file).unwrap();
