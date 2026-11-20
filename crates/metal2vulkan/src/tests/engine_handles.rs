@@ -840,9 +840,9 @@ fn a_heap_class_read_and_written_through_two_members_is_volatile() {
 /// through its storage choice's alias (`bind::heap::storage_conversions`): on lavapipe, which
 /// stores no 8-bit sRGB format and no `A2R10G10B10`, the search carries each handle's red-blue
 /// order beside its class; on the M3 Max's MoltenVK, which stores `A2R10G10B10` itself, it
-/// carries none. On both, which have no sRGB storage view, the read's decode of an sRGB member's
-/// codes through its UNORM alias notes `SrgbTexelDecode` and the write's encode
-/// `DevicePackConversion`. Each validates.
+/// carries none. On both the read's decode of an sRGB member's codes notes `SrgbTexelDecode`; the
+/// write's encode notes `DevicePackConversion` where the heap views an sRGB member through its
+/// UNORM alias (`bind::heap::storage_conversions`, which lavapipe's heap does). Each validates.
 #[test]
 fn a_heap_storage_access_converts_the_members_its_heap_views_through_an_alias() {
     let Some(bc) = assemble("heap_rw", HEAP_RW) else {
@@ -853,12 +853,23 @@ fn a_heap_storage_access_converts_the_members_its_heap_views_through_an_alias() 
         let (plan, _) = typed_module(&bc, "heap_rw", &p).expect("heap_rw");
         assert_eq!(plan.families.access.heap_red_blue, red_blue, "{stem}");
         let a = ok(&bc, "heap_rw", &p);
-        for note in [
-            PrecisionNote::SrgbTexelDecode,
-            PrecisionNote::DevicePackConversion,
-        ] {
-            assert!(a.precision.contains(&note), "{stem} {note:?}");
-        }
+        assert!(
+            a.precision.contains(&PrecisionNote::SrgbTexelDecode),
+            "{stem}"
+        );
+        let encodes = crate::bind::heap::storage_conversions(&p).iter().any(|c| {
+            matches!(
+                c.class,
+                crate::pipeline::lower_inputs::StorageImageClass::SrgbEncode
+                    | crate::pipeline::lower_inputs::StorageImageClass::SrgbEncodeBgra
+            )
+        });
+        assert!(encodes || stem != "lavapipe", "{stem}");
+        assert_eq!(
+            a.precision.contains(&PrecisionNote::DevicePackConversion),
+            encodes,
+            "{stem}"
+        );
     }
 }
 

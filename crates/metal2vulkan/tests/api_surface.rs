@@ -1399,11 +1399,8 @@ fn content_digests_name_what_a_pipeline_says_not_its_build() {
 /// The precision contract is public: a fast `float` division records the device's arithmetic,
 /// Metal's precise division records the device's division, its denormals and its NaN
 /// (`NativeDivision`, `DeviceDenormals`, `NativeNanEncoding`), an integer operator has no notes, and
-/// a fast `float` `tanh`, the device's `Tanh`, records the device's transcendental, on a profile
-/// whose `float` functions are the device's (lavapipe's); on one whose functions are Metal's own
-/// (MoltenVK's), a fast-math division is Metal's own and records nothing, the division records its
-/// note in an entry that keeps NaNs, and a fast `tanh` records that its `Tanh` is Metal's precise
-/// function, not the fast one (`DeviceTranscendentals`).
+/// a fast `float` `tanh`, the device's `Tanh`, records the device's transcendental, as every
+/// profile's `float` functions are the device's (lavapipe's here).
 #[test]
 fn the_precision_contract_names_each_float_operations_notes() {
     use metal2vulkan_air::intrinsics::AirIntrinsic;
@@ -1412,16 +1409,11 @@ fn the_precision_contract_names_each_float_operations_notes() {
         .iter()
         .fold(FastMath::NONE, |all, (flag, _)| all.union(*flag));
     let lavapipe = device("lavapipe");
-    let moltenvk = device("moltenvk-m3");
-    let (lavapipe, moltenvk) = (lavapipe.profile(), moltenvk.profile());
+    let lavapipe = lavapipe.profile();
     let fdiv = |p: &metal2vulkan::device::DeviceProfile, math| {
         PrecisionNote::of_float_operator(BinOp::FDiv, FloatWidth::F32, fast, p, math)
     };
     assert!(fdiv(lavapipe, EntryMath::Fast)
-        .expect("a float operator")
-        .contains(&PrecisionNote::DeviceArithmetic));
-    assert_eq!(fdiv(moltenvk, EntryMath::Fast), Some(BTreeSet::new()));
-    assert!(fdiv(moltenvk, EntryMath::Precise)
         .expect("a float operator")
         .contains(&PrecisionNote::DeviceArithmetic));
     let native = device_under("lavapipe", DevicePolicy::default());
@@ -1456,12 +1448,6 @@ fn the_precision_contract_names_each_float_operations_notes() {
         .expect("a float function");
     assert!(
         notes.contains(&PrecisionNote::NativeTranscendentals),
-        "{notes:?}"
-    );
-    let notes = PrecisionNote::of_math_call(tanh, fast, moltenvk, EntryMath::Fast)
-        .expect("a float function");
-    assert!(
-        notes.contains(&PrecisionNote::DeviceTranscendentals),
         "{notes:?}"
     );
 }

@@ -2246,6 +2246,7 @@ fn accesses_through_a_loaded_pointer_read_no_root_entry_in_a_loop() {
     let Some(bc) = assemble("loop_access", LOOP_ACCESS) else {
         return;
     };
+    let mut reloaded = Vec::new();
     for (what, p) in profiles() {
         let (plan, m) = checked(&bc, "loop_access", &p, &LowerInputs::new(), &what);
         assert_eq!(uses(&plan, "access.dynamic.load"), 1, "{what}");
@@ -2318,11 +2319,11 @@ fn accesses_through_a_loaded_pointer_read_no_root_entry_in_a_loop() {
                     format!("{n:?} <- {formed:?}")
                 })
                 .collect();
-            assert!(
-                loads.is_empty(),
-                "{what}: root-entry loads in the loop: {loads:#?}"
-            );
+            if !loads.is_empty() {
+                reloaded.push(format!("{what}: root-entry loads in the loop: {loads:#?}"));
+            }
         }
         assert_eq!(kernel_loops, 1, "{what}: the kernel's loop");
     }
+    assert!(reloaded.is_empty(), "{reloaded:#?}");
 }

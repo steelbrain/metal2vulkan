@@ -1364,20 +1364,27 @@ fn object_records_draws(dev: &crate::device::Device, draws: &crate::library::Lib
     let d = cmds.mesh_dispatch.as_ref().expect("the draw's dispatch");
     assert_eq!(d.object_groups, Some([2, 1, 1]), "{stem}");
     assert_eq!(d.work[work::OBJECT_GROUPS as usize], 2, "{stem}");
+    let regions: Vec<_> = (pipeline.interface.push.iter())
+        .flat_map(|s| &s.fields)
+        .filter(|f| f.field == PushField::DispatchRegion)
+        .map(|f| f.loc)
+        .collect();
     assert!(
         flags_region(&cmds, [6, 1, 1], [4, 1, 1]),
-        "{stem}: {:?}",
-        cmds.push_constants
+        "{stem}: regions at {regions:?}, pushed {:?}, tables {:?}",
+        cmds.push_constants,
+        cmds.descriptor_bytes
     );
 }
 
 /// Whether a draw's push constants hold the flagged region of a partial object threadgroup's draw
-/// of `threads` in threadgroups of `l` (`lower::dispatch::partial_region_bytes`).
+/// of `threads` in threadgroups of `l` (`lower::dispatch::partial_region_bytes`), or its argument
+/// tables do, where the region is placed there.
 fn flags_region(cmds: &crate::bind::DrawCommands, threads: [u32; 3], l: [u32; 3]) -> bool {
     let flagged = crate::lower::dispatch::partial_region_bytes(threads, l).expect("a region");
-    cmds.push_constants
-        .iter()
-        .any(|w| w.bytes.windows(flagged.len()).any(|b| b == flagged))
+    let holds = |bytes: &[u8]| bytes.windows(flagged.len()).any(|b| b == flagged);
+    cmds.push_constants.iter().any(|w| holds(&w.bytes))
+        || cmds.descriptor_bytes.iter().any(|t| holds(&t.bytes))
 }
 
 /// The binder's draws of mesh pipeline `p` with an object function: each stage's threadgroup size

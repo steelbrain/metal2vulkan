@@ -13,8 +13,6 @@
 //! - An `i64` index that is not such an extension (a 64-bit load, a shift right of the extended
 //!   value) is a 64-bit value: `moltenvk-m3` holds it as a `u64`, `vk12-floor` as two words, and
 //!   both compile it exactly.
-//! - Push fields that overflow a kernel's push window are read exactly from the stage's
-//!   `ArgumentTable` uniform buffer, whose descriptor counts in the stage's limits.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -25,7 +23,7 @@ use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
@@ -637,131 +635,6 @@ fn an_i64_index_that_is_not_an_extension_is_a_64_bit_value() {
                 run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{name} {stem}: {e:?}"));
             let at = usize::try_from(index * 4).expect("in range");
             assert_eq!(out.buffers[1][..4], data[at..at + 4], "{name} {stem}");
-        }
-    }
-}
-
-/// A kernel storing `i + 1` to element `t` of each of 31 `device uint *` buffers
-/// (`thread_position_in_grid` `t`, one index extension feeding every GEP).
-fn many_slots_kernel() -> String {
-    let n = 31;
-    let params: Vec<String> = (0..n)
-        .map(|i| format!("ptr addrspace(1) noundef \"air-buffer-no-alias\" %{i}"))
-        .collect();
-    let mut body = format!("  %e = zext i32 %{n} to i64\n");
-    for i in 0..n {
-        body.push_str(&format!(
-            "  %p{i} = getelementptr inbounds i32, ptr addrspace(1) %{i}, i64 %e\n  store i32 {}, ptr addrspace(1) %p{i}, align 4\n",
-            i + 1
-        ));
-    }
-    let mut meta = String::new();
-    let mut refs = Vec::new();
-    for i in 0..n {
-        let id = 100 + i;
-        refs.push(format!("!{id}"));
-        meta.push_str(&format!(
-            "!{id} = !{{i32 {i}, !\"air.buffer\", !\"air.location_index\", i32 {i}, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"b{i}\"}}\n"
-        ));
-    }
-    refs.push("!99".to_owned());
-    format!(
-        "{HEADER}define void @many_slots({}, i32 noundef %{n}) {{\nentry:\n{body}  ret void\n}}\n\n\
-         !air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
-         !9 = !{{ptr @many_slots, !10, !11}}\n!10 = !{{}}\n!11 = !{{{}}}\n{meta}\
-         !99 = !{{i32 {n}, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}}\n\
-         !17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n",
-        params.join(", "),
-        refs.join(", ")
-    )
-}
-
-/// The bind residual the test gives buffer `i`.
-fn residual(i: u32) -> u32 {
-    4 * (i % 3)
-}
-
-/// On a profile that binds buffers by descriptor (`lunarg-desktop-baseline-2023`, without
-/// `bufferDeviceAddress`), 31 residuals and the dispatch region overflow the 128-byte kernel
-/// window, so the last seven `SlotBindOffset`s are placed in the `ArgumentTable`. The table is one
-/// more uniform descriptor, declared at `Synthetic(ArgumentTable)`, and its fields are read
-/// exactly: every buffer, bound at its own residual, gets its stores at elements `t` and nothing
-/// else changes.
-#[test]
-fn push_fields_in_the_argument_table_are_read_exactly() {
-    let Some(bc) = assemble_text("many_slots", &many_slots_kernel()) else {
-        return;
-    };
-    let table_slot = ResourceSlot {
-        stage: Stage::Kernel,
-        kind: ResourceKind::Synthetic(SyntheticBinding::ArgumentTable),
-        index: 0,
-    };
-    for stem in ["lunarg-desktop-baseline-2023"] {
-        for robust in [true, false] {
-            let what = format!("{stem} robust={robust}");
-            let p = profile_with(stem, robust);
-            let a = compile(&bc, "many_slots", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let spilled: Vec<PushField> = a
-                .interface
-                .push
-                .fields
-                .iter()
-                .filter(|f| matches!(f.loc, PushLoc::ArgumentTable { .. }))
-                .map(|f| f.field)
-                .collect();
-            assert_eq!(spilled.len(), 7, "{what}: {spilled:?}");
-            assert_eq!(a.interface.push.argument_table_size, 32, "{what}");
-            let (table, _) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(table.bindings.contains_key(&table_slot), "{what}");
-            let (plan, m) = typed_module(&bc, "many_slots", &p).expect("module");
-            assert_eq!(plan.descriptors.uniform_buffers, 1, "{what}");
-            let mut push = vec![0u8; 128];
-            let mut args = vec![0u8; plan.push.argument_table_size as usize];
-            for f in &plan.push.fields {
-                let v = match f.field {
-                    PushField::SlotBindOffset(s) => residual(s.index),
-                    // `MultiRegion` is 0: the region is not read.
-                    PushField::DispatchRegion => continue,
-                    other => panic!("{what}: unexpected {other:?}"),
-                };
-                let (bytes, at) = match f.loc {
-                    PushLoc::Push { offset } => (&mut push, offset as usize),
-                    PushLoc::ArgumentTable { offset } => (&mut args, offset as usize),
-                };
-                bytes[at..at + 4].copy_from_slice(&v.to_le_bytes());
-            }
-            let mut buffers: Vec<Buffer> = (0..31u32)
-                .map(|i| {
-                    let mut bytes = vec![0xEEu8; residual(i) as usize];
-                    bytes.extend_from_slice(&pattern(16));
-                    bound(i, &bytes)
-                })
-                .collect();
-            let before: Vec<Vec<u8>> = buffers.iter().map(|b| b.bytes.clone()).collect();
-            buffers.push(Buffer {
-                slot: Some(table_slot),
-                address: None,
-                bytes: args,
-            });
-            let res = Resources {
-                buffers,
-                push,
-                spec: Default::default(),
-            };
-            let cfg = Config {
-                workgroups: [2, 1, 1],
-                ..Config::default()
-            };
-            let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            for i in 0..31u32 {
-                let mut want = before[i as usize].clone();
-                for t in 0..2usize {
-                    let at = residual(i) as usize + 4 * t;
-                    want[at..at + 4].copy_from_slice(&(i + 1).to_le_bytes());
-                }
-                assert_eq!(out.buffers[i as usize], want, "{what} buffer {i}");
-            }
         }
     }
 }

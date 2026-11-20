@@ -198,8 +198,8 @@ fn half_rounding_is_the_devices_on_every_profile() {
 /// On lavapipe and MoltenVK (`shaderFloat16`, no `DenormPreserve` for 16 bits) each kernel rounds
 /// its `half` through the conversion, records `NativeHalfConversion` and requires no
 /// `VkProperty::MetalHalfConversion`; on a profile without `shaderFloat16` it quantizes and
-/// records `NativeHalfQuantize`; RADV takes the controlled conversion, with no note. Each passes
-/// L3. On the interpreter,
+/// records `NativeHalfQuantize`; RADV takes the controlled conversion, whose narrowing is the
+/// device's too and records `NativeHalfConversion`. Each passes L3. On the interpreter,
 /// whose conversion and quantize round to nearest even, the native modules answer Metal's
 /// `half(float)`, but for the quantize's zero below the smallest normal half.
 #[test]
@@ -216,7 +216,7 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         ("lavapipe", Some(natives[0])),
         ("swiftshader", Some(natives[1])),
         ("moltenvk-m3", Some(natives[0])),
-        ("amd-780m-radv", None),
+        ("amd-780m-radv", Some(natives[0])),
     ];
     for (stem, note) in cases {
         let p = profile(stem, DevicePolicy::default()).expect("profile");

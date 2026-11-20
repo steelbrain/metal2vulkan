@@ -287,7 +287,8 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
                 [Output(3); 4],
             ),
         ),
-        // Straight alpha, Metal's alpha accumulated: the image's red (Metal's alpha) takes one.
+        // Straight alpha, Metal's alpha accumulated: the image's red (Metal's alpha) takes one,
+        // and its alpha (Metal's blue) the source's alpha.
         (
             attachment(
                 add(F::SourceAlpha, F::OneMinusSourceAlpha),
@@ -297,8 +298,8 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
                 state(
                     B::SRC1_COLOR,
                     B::ONE_MINUS_SRC1_ALPHA,
-                    B::ONE,
-                    B::ONE_MINUS_SRC1_ALPHA,
+                    B::SRC1_COLOR,
+                    B::ONE_MINUS_SRC1_COLOR,
                 ),
                 [One, Output(3), Output(3), Output(3)],
             ),
