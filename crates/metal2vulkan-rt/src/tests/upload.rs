@@ -1,6 +1,6 @@
 //! The upload that goes ahead of later commits: under a device cfg, on every device of the cfg's
 //! kind, with no command buffer committed and nothing waiting on the host but the calls
-//! themselves:
+//! themselves, but in the last:
 //!
 //! - textures made and released are freed at once: their moves to a home layout wait for a
 //!   submission, and hold nothing until one;
@@ -18,6 +18,8 @@
 //!   once, with no spin, waking at the read's end, and a quiesce ends the sleep;
 //! - a quiesce past its deadline, a `get_bytes`'s copy in flight behind busy work, leaves the
 //!   completion thread to end alone once the copy completes, and the device then frees itself;
+//! - a `replace_region` and a new texture made after a commit held at an event wait go in the
+//!   submission of the next commit, so the held one copies out the bytes from before the call;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -25,12 +27,14 @@
 mod on_device {
     use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
-    use crate::tests::command::on_device::{Busy, PATIENCE};
+    use crate::tests::command::on_device::{each_device, finished, Busy, PATIENCE};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Error, Gauges, IndexClass, MemoryClass, PixelFormat, Region,
-        StorageMode, TextureDescriptor, TextureType,
+        Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, Error,
+        Gauges, IndexClass, MemoryClass, PixelFormat, Region, StorageMode, TextureDescriptor,
+        TexturePlace, TextureType,
     };
+    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -540,5 +544,127 @@ mod on_device {
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
+    }
+
+    /// The uploads are cut at commits: a `replace_region` and a new texture made after a commit
+    /// go in the submission that carries the next commit, not in that of the one before, though
+    /// the submit thread holds that one at an event wait until after the calls. The first command
+    /// buffer copies out the texture's bytes from before the later call, the next its bytes after
+    /// it, and the new texture's move home completes with the next one's submission.
+    #[test]
+    fn every_device_puts_a_call_after_a_commit_in_the_next_commit_s_submission() {
+        each_device("upload cut", |name, _, device| {
+            let core = device.core();
+            device
+                .grant_indices(IndexClass::Texture, 4096, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let side = 16;
+            let len = u64::from(side * side * 4);
+            let block = (device.take_block(MemoryClass::Shared, 4 * len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let out = |offset| {
+                (device.new_buffer(block.id, offset, len, Some(0)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let (first_out, next_out) = (out(0), out(2 * len));
+            let texture = (device.new_texture(&square(side), Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let replace = |byte: u8| {
+                let bytes = vec![byte; len as usize];
+                texture
+                    .replace_region(
+                        whole(side),
+                        0,
+                        0,
+                        crate::HostBytes::from(&bytes[..]),
+                        u64::from(side * 4),
+                        len,
+                    )
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let copy_out = |command_buffer: &CommandBuffer, to: &Buffer| {
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                let layout = BufferLayout {
+                    offset: 0,
+                    bytes_per_row: u64::from(side * 4),
+                    bytes_per_image: 0,
+                };
+                (encoder.copy_from_texture_to_buffer(
+                    &texture,
+                    TexturePlace::default(),
+                    [side, side, 1],
+                    to,
+                    layout,
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder.end_encoding();
+            };
+            let event = device.new_shared_event().expect("an event");
+
+            replace(0xA1);
+            let before = core.work.ready_point();
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            copy_out(&first, &first_out);
+            first.commit().expect("a commit");
+            // After the commit, the first command buffer held at its wait.
+            replace(0xB2);
+            let made = (device.new_texture(&square(side), Some(4097)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let after = core.work.ready_point();
+            let next = queue.command_buffer().expect("a command buffer");
+            copy_out(&next, &next_out);
+            next.commit().expect("a commit");
+            assert_eq!(
+                first.status(),
+                CommandBufferStatus::Committed,
+                "{name}: the first command buffer is held at its wait"
+            );
+            event.set_signaled_value(1);
+            finished(name, &next);
+            finished(name, &first);
+            assert_eq!(first.error(), None, "{name}");
+            assert_eq!(next.error(), None, "{name}");
+
+            let (carried_first, carried_next) = (
+                before.load(Ordering::Relaxed),
+                after.load(Ordering::Relaxed),
+            );
+            println!(
+                "upload cut: {name}: the first commit's upload went in submission {carried_first}, \
+                 the next commit's in {carried_next}, of {}",
+                core.work.progress()
+            );
+            assert!(
+                carried_first > 0 && carried_first < carried_next,
+                "{name}: the calls after the first commit went in its submission \
+                 ({carried_first}, {carried_next})"
+            );
+            assert_eq!(
+                carried_next,
+                core.work.progress(),
+                "{name}: the calls after the first commit go with the next one"
+            );
+            assert!(
+                read(&first_out) == vec![0xA1; len as usize],
+                "{name}: the first command buffer reads the bytes from before the later call"
+            );
+            assert!(
+                read(&next_out) == vec![0xB2; len as usize],
+                "{name}: the next command buffer reads the bytes of the later call"
+            );
+            drop((
+                first, next, event, queue, made, texture, first_out, next_out,
+            ));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// A Shared buffer's bytes, as the host reads them.
+    fn read(buffer: &Buffer) -> Vec<u8> {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: the buffer is alive, `length` bytes long, and no GPU work uses it.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) }.to_vec()
     }
 }
