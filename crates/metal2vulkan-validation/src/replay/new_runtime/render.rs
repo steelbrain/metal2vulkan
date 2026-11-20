@@ -254,6 +254,7 @@ impl NewRuntime {
         });
         match made {
             Ok(state) => {
+                self.skips.states_made[0] += 1;
                 if !records_tessellation(&call.args) {
                     self.unrecorded_tessellation.states.insert(call.result);
                 }

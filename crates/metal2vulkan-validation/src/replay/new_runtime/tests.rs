@@ -1,6 +1,6 @@
 //! The backend's report lines by kind, without a device.
 
-use super::{Skips, Substitutes};
+use super::{Skips, Substitutes, Via};
 use crate::replay::stream::Call;
 use crate::replay::value::{Name, Value};
 use metal2vulkan::error::{Error, Feature, Limit, LowerFamily, Unsupported};
@@ -53,6 +53,45 @@ fn translator_refusals_are_counted_by_kind() {
             ("TextureView { kind: TextureType }", 1, 10),
             ("Translation(LimitExceeded(SpirvWords))", 1, 9),
             ("Translation(Unsupported(Lowering(Tessellation)))", 2, 7),
+        ]
+    );
+}
+
+/// A creation the play does not attempt is counted by its selector and why, at its root: from a
+/// library from source the play skipped, the function made of it (its receiver is skipped), and
+/// two render pipeline states of that function (an argument names it). The states' line adds up
+/// the made, the refused and the not attempted.
+#[test]
+fn creations_not_attempted_are_counted_by_kind_and_root() {
+    let mut skips = Skips::default();
+    skips.rooted(2, &Name::from("newLibraryWithSource:options:error:"));
+    let function = Call {
+        selector: "newFunctionWithName:".into(),
+        receiver: 2,
+        result: 3,
+        args: vec![Value::Str("vertex_main".into())],
+        answers: Vec::new(),
+    };
+    skips.not_attempted(&function, Via::Receiver, 2);
+    skips.not_attempted(&made(4), Via::Argument, 3);
+    skips.not_attempted(&made(5), Via::Argument, 3);
+    let refused = rt::Error::Translation(Error::LimitExceeded(Limit::SpirvWords));
+    assert!(Skips::skipped_state(
+        &mut skips.render_states,
+        &made(6),
+        &refused
+    ));
+    skips.states_made = [7, 1];
+    assert_eq!(skips.not_attempted_count(), 3);
+    assert_eq!(
+        skips.not_attempted_lines().collect::<Vec<_>>(),
+        [
+            "not attempted newFunctionWithName: 1: its receiver is skipped, of \
+             newLibraryWithSource:options:error:, the first #3 (its root #2)",
+            "not attempted newRenderPipelineStateWithDescriptor:error: 2: it names a skipped \
+             object, of newLibraryWithSource:options:error:, the first #4 (its root #2)",
+            "render states made 7, refused 1, not attempted 2; compute states made 1, refused 0, \
+             not attempted 0",
         ]
     );
 }

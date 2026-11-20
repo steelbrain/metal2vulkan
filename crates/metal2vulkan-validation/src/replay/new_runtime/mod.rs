@@ -35,7 +35,7 @@ use super::player::{Backend, Counters, Made, PlayError, ReadCopy};
 use super::prepass::{Ahead, AheadGrid};
 use super::stream::Call;
 use super::translator;
-use super::value::Value;
+use super::value::{Name, Value};
 use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
 use crate::gpu::wait::SubmissionBackend;
 use crate::gpu::DeviceType;
@@ -49,7 +49,8 @@ use std::ops::Range;
 use std::sync::Arc;
 pub use videos::VideoHandle;
 
-/// What the play skipped because the runtime does not build it yet.
+/// What the play skipped because the runtime does not build it yet, and beside it the pipeline
+/// states it made, so that a play's states add up: made, refused and not attempted.
 #[derive(Default)]
 struct Skips {
     /// Encoders the runtime does not build: parallel render encoders, and render encoders of a
@@ -90,6 +91,24 @@ struct Skips {
     /// The skipped objects whose `gpuResourceID` the player asked: nothing in the play reads
     /// their IDs, so none is compared.
     resource_ids: u64,
+    /// Each live skipped object's root: the skipped object it was made of, at any depth (itself
+    /// where a call made it skipped), and the selector of the call that made that one.
+    roots: HashMap<u64, (u64, Name)>,
+    /// The creations the play does not attempt (`Skips::not_attempted`), by the selector and the
+    /// reason: how many, and the first one's object and its root. They count in `objects` and
+    /// `calls` too.
+    not_attempted: BTreeMap<(Name, String), (u64, u64, u64)>,
+    /// The render pipeline states made, and the compute ones.
+    states_made: [u64; 2],
+}
+
+/// How a creation the play does not attempt names a skipped object.
+#[derive(Clone, Copy)]
+enum Via {
+    /// The call's receiver is skipped.
+    Receiver,
+    /// An argument names a skipped object, in a list or map too.
+    Argument,
 }
 
 impl Skips {
@@ -129,6 +148,60 @@ impl Skips {
         true
     }
 
+    /// Notes `object`, which `selector`'s call made skipped: its own root.
+    fn rooted(&mut self, object: u64, selector: &Name) {
+        self.roots.insert(object, (object, selector.clone()));
+    }
+
+    /// Notes a creation the play does not attempt: `call` makes its result of skipped object
+    /// `of`, its receiver or an object an argument names (`via`), so that the result is skipped
+    /// too, at `of`'s root. Counted by the call's selector and the reason, which names the root's
+    /// selector.
+    fn not_attempted(&mut self, call: &Call, via: Via, of: u64) {
+        let unrooted = || (of, Name::from("an unrooted object"));
+        let (root, made_by) = self.roots.get(&of).cloned().unwrap_or_else(unrooted);
+        let via = match via {
+            Via::Receiver => "its receiver is skipped",
+            Via::Argument => "it names a skipped object",
+        };
+        let why = format!("{via}, of {made_by}");
+        let kind = self.not_attempted.entry((call.selector.clone(), why));
+        kind.or_insert((0, call.result, root)).0 += 1;
+        self.roots.insert(call.result, (root, made_by));
+    }
+
+    /// The creations not attempted, of every selector and reason.
+    fn not_attempted_count(&self) -> u64 {
+        self.not_attempted.values().map(|&(count, ..)| count).sum()
+    }
+
+    /// A `not attempted SELECTOR N: WHY, the first #ID (its root #ROOT)` line for each selector
+    /// and reason, and the pipeline states' line: `render states made M, refused R, not attempted
+    /// N` and the compute states' the same.
+    fn not_attempted_lines(&self) -> impl Iterator<Item = String> + '_ {
+        let kinds = self.not_attempted.iter();
+        let kinds = kinds.map(|((selector, why), (count, first, root))| {
+            format!(
+                "not attempted {selector} {count}: {why}, the first #{first} (its root #{root})"
+            )
+        });
+        let unmade = |kind: StateKind| -> u64 {
+            let of_kind = (self.not_attempted.iter())
+                .filter(|((selector, _), _)| state_kind(selector) == Some(kind));
+            of_kind.map(|(_, &(count, ..))| count).sum()
+        };
+        let [render, compute] = self.states_made;
+        let states = format!(
+            "render states made {render}, refused {}, not attempted {}; compute states made \
+             {compute}, refused {}, not attempted {}",
+            self.render_state_count(),
+            unmade(StateKind::Render),
+            self.compute_state_count(),
+            unmade(StateKind::Compute),
+        );
+        kinds.chain([states])
+    }
+
     /// Everything skipped, in one count (`Backend::skips`).
     fn total(&self) -> u64 {
         let Skips {
@@ -146,6 +219,9 @@ impl Skips {
             clamped_samplers,
             calls,
             resource_ids,
+            roots: _,
+            not_attempted: _,
+            states_made: _,
         } = self;
         let counted = [
             encoders,
@@ -163,6 +239,25 @@ impl Skips {
             + self.render_state_count()
             + self.compute_state_count()
             + self.render_command_count()
+    }
+}
+
+/// What a pipeline state's making makes.
+#[derive(Clone, Copy, PartialEq)]
+enum StateKind {
+    Render,
+    Compute,
+}
+
+/// What `selector`'s call makes, where it makes a pipeline state.
+fn state_kind(selector: &str) -> Option<StateKind> {
+    match selector {
+        "newRenderPipelineStateWithDescriptor:error:" => Some(StateKind::Render),
+        "newComputePipelineStateWithFunction:error:"
+        | "newComputePipelineStateWithDescriptor:options:reflection:error:" => {
+            Some(StateKind::Compute)
+        }
+        _ => None,
     }
 }
 
@@ -945,19 +1040,19 @@ impl NewRuntime {
         matches!(self.objects.get(&id), Some(Object::Skipped))
     }
 
-    /// Whether any argument of `call` names an object the play skipped, in its lists and maps
+    /// The first object the play skipped that an argument of `call` names, in its lists and maps
     /// too.
-    fn names_skipped(&self, call: &Call) -> bool {
-        call.args.iter().any(|value| self.holds_skipped(value))
+    fn skipped_named(&self, call: &Call) -> Option<u64> {
+        call.args.iter().find_map(|value| self.skipped_in(value))
     }
 
-    /// Whether `value` names an object the play skipped, at any depth.
-    fn holds_skipped(&self, value: &Value) -> bool {
+    /// The first object the play skipped that `value` names, at any depth.
+    fn skipped_in(&self, value: &Value) -> Option<u64> {
         match value {
-            Value::Object(id) => self.skipped(*id),
-            Value::List(items) => items.iter().any(|item| self.holds_skipped(item)),
-            Value::Map(entries) => entries.iter().any(|(_, item)| self.holds_skipped(item)),
-            _ => false,
+            Value::Object(id) => self.skipped(*id).then_some(*id),
+            Value::List(items) => items.iter().find_map(|item| self.skipped_in(item)),
+            Value::Map(entries) => entries.iter().find_map(|(_, item)| self.skipped_in(item)),
+            _ => None,
         }
     }
 
@@ -1584,7 +1679,10 @@ impl NewRuntime {
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let began = std::time::Instant::now();
         let state = match self.compute_pipeline_state(descriptor) {
-            Ok(state) => state,
+            Ok(state) => {
+                self.skips.states_made[1] += 1;
+                state
+            }
             Err(error) if Skips::skipped_state(&mut self.skips.compute_states, call, &error) => {
                 return unaddressed(Object::Skipped);
             }
@@ -2307,6 +2405,7 @@ impl Backend for NewRuntime {
             self.substitutes.live.remove(&call.receiver);
             self.tiled.released(call.receiver);
             self.unrecorded_tessellation.released(call.receiver);
+            self.skips.roots.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 // Its place and its device copy's, where it has them: a no-copy buffer's memory
                 // is an import, and one in a block or heap the stream's.
@@ -2379,9 +2478,10 @@ impl Backend for NewRuntime {
             }
         }
         if call.receiver != 0 && self.skipped(call.receiver) {
-            // A call on a skipped object; what it makes is skipped too.
+            // A call on a skipped object; what it makes is skipped too, not attempted.
             self.skips.calls += 1;
             if call.result != 0 {
+                self.skips.not_attempted(call, Via::Receiver, call.receiver);
                 self.objects.insert(call.result, Object::Skipped);
             }
             return Ok(Made::default());
@@ -2395,9 +2495,14 @@ impl Backend for NewRuntime {
                 Object::CommandBuffer(_) | Object::Compute(_) | Object::Blit(_) | Object::Render(_)
             )
         );
-        if call.result != 0 && !encodes && self.names_skipped(call) {
-            // What a call makes of a skipped object is skipped too.
+        let named = match call.result != 0 && !encodes {
+            true => self.skipped_named(call),
+            false => None,
+        };
+        if let Some(skipped) = named {
+            // What a call makes of a skipped object is skipped too, not attempted.
             self.skips.objects += 1;
+            self.skips.not_attempted(call, Via::Argument, skipped);
             self.objects.insert(call.result, Object::Skipped);
             return Ok(Made::default());
         }
@@ -2491,6 +2596,9 @@ impl Backend for NewRuntime {
             )));
         }
         self.surface_made(call, &object);
+        if matches!(object, Object::Skipped) {
+            self.skips.rooted(call.result, &call.selector);
+        }
         self.objects.insert(call.result, object);
         Ok(made)
     }
@@ -2847,6 +2955,7 @@ impl Backend for NewRuntime {
             ),
             ("skipped_calls", self.skips.calls),
             ("skipped_resource_ids", self.skips.resource_ids),
+            ("not_attempted", self.skips.not_attempted_count()),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ]);
         self.surfaces.timed();
@@ -2954,6 +3063,7 @@ impl Backend for NewRuntime {
                 "skipped compute states {gap} {count}, the first #{at}: {why}"
             ));
         }
+        lines.extend(self.skips.not_attempted_lines());
         for (gap, (count, frame, at)) in &self.skips.render_commands {
             lines.push(format!(
                 "skipped render commands {gap} {count}, the first at frame {frame}, call {at}"

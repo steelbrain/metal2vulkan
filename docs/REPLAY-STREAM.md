@@ -679,7 +679,12 @@ records as text, and
 - The backend plays compute, render, blits, `synchronizeResource:`, fences, events and queues.
   What the runtime does not build yet it skips and counts, and never fakes:
   - objects: libraries from source, and whatever a call makes of a skipped object
-    (`skipped_objects`);
+    (`skipped_objects`). A call that makes an object on a skipped receiver or naming a skipped
+    object is a creation not attempted (`not_attempted`, counted in `skipped_objects` or
+    `skipped_calls` too): a `not attempted SELECTOR N: WHY` line for each selector and reason,
+    the reason naming the selector that made the first object of the chain skipped, with the
+    first creation's object and that root object. A `render states made M, refused R, not
+    attempted N` line, with the compute states' the same, adds up the stream's pipeline states;
   - render pipeline states the runtime answers with a typed gap or the translator refuses
     (`skipped_render_states`), and compute pipeline states the same way
     (`skipped_compute_states`), whose dispatches are skipped (`skipped_dispatches`);

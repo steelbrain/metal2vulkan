@@ -427,7 +427,7 @@ impl NewRuntime {
 
     pub(super) fn blit_call(&mut self, call: &Call) -> Result<(), PlayError> {
         let id = call.receiver;
-        if &*call.selector != "endEncoding" && self.names_skipped(call) {
+        if &*call.selector != "endEncoding" && self.skipped_named(call).is_some() {
             self.skips.blits += 1;
             return Ok(());
         }
