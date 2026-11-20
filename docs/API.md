@@ -2933,6 +2933,13 @@ each item named states the rule in full.
   2^20 or from 2^21 on, and between them is erratic (17 by 61,681 and 65,535 by 24 drew, 1025 by
   1025 and 33 by 32,768 did not); the runtime answers there as at 2^20
   (`bind::METAL_MESH_GRID_TOTAL`).
+- **A point near the viewport's edge or the clip volume is clipped or culled by the device's own
+  rule**: its `pointClippingBehavior` and the driver's handling of the viewport. Metal states no
+  clipping rule for a point (`MTLPrimitiveType.point`; the MSL specification's `[[point_size]]`).
+  Measured, Metal on an Apple M3 Max keeps a point whose centre lies within 1.5 w of the
+  viewport's centre and covers its square whole, past the viewport's edge, where lavapipe covers
+  no pixel whose centre lies on or past that edge and culls no point at the clip volume (the
+  conformance case `point-viewport-coverage`).
 - **A draw's `VkPipeline` is made while the draw goes on.** A draw whose pipeline is not made yet
   returns once encoded; the pipeline is made on the device's pool of at most four threads, and the
   command buffer's work waits for it in queue order.

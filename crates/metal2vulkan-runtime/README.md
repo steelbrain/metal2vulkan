@@ -2717,6 +2717,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   descriptor names the point class, 1 pixel wide; under any other class it rasterizes nothing and
   runs the vertex function all the same (Metal probes, an M4), so such a draw records its points
   behind an empty scissor: the vertex function runs, its stores land, and no fragment runs.
+  A point near the viewport's edge or the clip volume is clipped or culled by the device's own
+  rule (its `pointClippingBehavior` and the driver's handling of the viewport), as Metal states no
+  rule for it (docs/API.md, section 10).
 - A post-tessellation vertex function's state draws its patches through the device's tessellator
   (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
   the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
