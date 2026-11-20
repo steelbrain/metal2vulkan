@@ -48,6 +48,7 @@ pub mod argument_encoders;
 pub mod astc_textures;
 pub mod attribute_formats;
 pub mod attribute_strides;
+pub mod bicubic_texel_classes;
 pub mod binary_archives;
 pub mod blend_interactions;
 pub mod blend_sweeps;
@@ -635,6 +636,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(threadgroup_start::ThreadgroupStart));
     cases.push(Box::new(nan_integer_conversions::NanIntegerConversions));
     cases.push(Box::new(function_constants_half3::FunctionConstantsHalf3));
+    cases.push(Box::new(bicubic_texel_classes::BicubicTexelClasses));
     cases
 }
 
