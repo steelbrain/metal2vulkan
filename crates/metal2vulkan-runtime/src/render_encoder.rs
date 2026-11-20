@@ -436,7 +436,7 @@ fn slots<'a>(
     };
     (buffers.iter().filter(kept))
         .filter_map(move |&(table, slot, access)| {
-            Some((Reached::Buffer(tables[table].buffer(slot)?.id()), access))
+            Some((Reached::Buffer(tables[table].buffer(slot)?.span()), access))
         })
         .chain(
             (draws.textures.iter().filter(kept)).filter_map(move |&(table, slot, access)| {
@@ -2220,7 +2220,7 @@ impl RenderCommandEncoder {
                 let buffers = unbound || building.overs_ahead();
                 let vertex = (vertex_reads.clone())
                     .filter(|_| buffers)
-                    .map(|buffer| (Reached::Buffer(buffer.id()), Access::Read));
+                    .map(|buffer| (Reached::Buffer(buffer.span()), Access::Read));
                 building.overs_owed(slots(draws, tables, buffers, false).chain(vertex), unbound)
             }
         };

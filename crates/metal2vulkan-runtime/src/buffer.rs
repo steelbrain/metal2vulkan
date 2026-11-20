@@ -7,7 +7,7 @@ use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::hazard::HeapId;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
-use crate::over::ManagedOvers;
+use crate::over::{ManagedOvers, Span};
 use crate::submit::Held;
 use crate::texture::{HeapRange, SizeAndAlign};
 use ash::vk;
@@ -624,6 +624,17 @@ pub(crate) trait BufferObject {
     /// Its own resource id, whatever heap it is in.
     fn id(&self) -> u32 {
         self.object().id
+    }
+
+    /// The memory it lies in, as the copies over buffers track it (`crate::over`): its bytes of
+    /// the block the consumer placed it in (of a Managed buffer, the block of its bytes).
+    fn span(&self) -> Span {
+        let inner = self.object();
+        Span {
+            block: inner.block.memory.id,
+            start: inner.offset,
+            end: inner.offset + inner.length,
+        }
     }
 
     /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a

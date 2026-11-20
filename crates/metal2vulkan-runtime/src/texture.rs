@@ -47,6 +47,7 @@ use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
 use crate::host_bytes::HostBytes;
 use crate::memory::{self, Block, BlockId, MemoryClass, Own};
+use crate::over::Span;
 use crate::places::Place;
 use crate::reaper::{Free, Job};
 use crate::shadow::{self, Area};
@@ -4475,6 +4476,14 @@ pub(crate) trait TextureObject {
         }
     }
 
+    /// Of a texture in place over a buffer, the memory a command reaches through it, as the
+    /// copies over buffers track it (`crate::over`): its buffer's, whole, as for
+    /// [`hazard_id`](Self::hazard_id); `None` for any other texture.
+    fn in_place_span(&self) -> Option<Span> {
+        let named = self.object().named.as_ref()?;
+        (named.form == Form::InPlace).then(|| named.buffer.span())
+    }
+
     /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
     /// heap ([`Device::new_heap_texture`]), its surface's for an exported surface's plane in place
     /// and its views ([`crate::Surface::buffer`]), its buffer's there for one in place over a
@@ -4586,6 +4595,7 @@ pub(crate) trait TextureObject {
         let end = place.offset
             + u64::from(d.height - 1) * place.bytes_per_row
             + u64::from(d.width) * u64::from(unit.bytes);
+        let whole = named.buffer.span();
         let copy = OverCopy {
             image: inner.image.image,
             home: inner.image.home,
@@ -4594,6 +4604,11 @@ pub(crate) trait TextureObject {
             region,
             unit,
             range: (place.offset, end),
+            memory: Span {
+                block: whole.block,
+                start: whole.start + place.offset,
+                end: whole.start + end,
+            },
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.imported(),
@@ -4756,6 +4771,9 @@ pub(crate) struct OverCopy {
     pub(crate) unit: CopyUnit,
     /// The texels' bytes in the buffer, from its start: `start..end`.
     pub(crate) range: (u64, u64),
+    /// The memory the texels lie in: those bytes of the buffer, in its block, which the Shared
+    /// rules track (`crate::over`).
+    pub(crate) memory: Span,
     /// The texels' bytes.
     pub(crate) bytes: u64,
     /// The buffer is Shared: the host reads what a copy back writes.

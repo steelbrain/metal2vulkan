@@ -311,8 +311,8 @@ impl BlitCommandEncoder {
         building.managed_backs(over::backs(destination, None, true))?;
         building.wrote_managed(destination);
         let overs = [
-            (Reached::Buffer(source.id()), Access::Read),
-            (Reached::Buffer(destination.id()), Access::Write),
+            (Reached::Buffer(source.span()), Access::Read),
+            (Reached::Buffer(destination.span()), Access::Write),
         ];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
@@ -393,11 +393,11 @@ impl BlitCommandEncoder {
         let overs = match into_image {
             true => [
                 (Reached::Texture(texture.object()), Access::ReadWrite),
-                (Reached::Buffer(buffer.id()), Access::Read),
+                (Reached::Buffer(buffer.span()), Access::Read),
             ],
             false => [
                 (Reached::Texture(texture.object()), Access::Read),
-                (Reached::Buffer(buffer.id()), Access::ReadWrite),
+                (Reached::Buffer(buffer.span()), Access::ReadWrite),
             ],
         };
         building.overs_before(overs, false)?;
@@ -506,7 +506,7 @@ impl BlitCommandEncoder {
         building.keep(buffer);
         building.managed_backs(over::backs(buffer, None, true))?;
         building.wrote_managed(buffer);
-        let overs = [(Reached::Buffer(buffer.id()), Access::Write)];
+        let overs = [(Reached::Buffer(buffer.span()), Access::Write)];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
         building.overs_after(overs, false);
@@ -867,7 +867,7 @@ impl BlitCommandEncoder {
         let (whole, _) = block.memory.range(0);
         building.keep(buffer);
         // The textures over a buffer in the block go back to it first, as before a write of it.
-        let overs = [(Reached::Buffer(buffer.id()), Access::Write)];
+        let overs = [(Reached::Buffer(buffer.span()), Access::Write)];
         building.overs_before(overs, false)?;
         let command = building.release_command()?;
         building.overs_after(overs, false);
@@ -924,7 +924,8 @@ impl BlitCommandEncoder {
             building.keep_texture(texture);
         }
         let buffer = surface.made_buffer();
-        let overs = || (buffer.iter()).map(|buffer| (Reached::Buffer(buffer.id()), Access::Write));
+        let overs =
+            || (buffer.iter()).map(|buffer| (Reached::Buffer(buffer.span()), Access::Write));
         if let Some(buffer) = &buffer {
             building.keep(buffer);
             // The textures over the buffer go back to it first, as before a write of it.

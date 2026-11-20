@@ -10,7 +10,7 @@ use crate::floor;
 use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
-use crate::over::{self, Reached};
+use crate::over::{self, Reached, Span};
 use crate::pipeline::{
     address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
     Which, PUSH_BYTES, PUSH_STAGES, SQUARE,
@@ -729,7 +729,7 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, shared, unstored, texture) = match resource {
+        let (id, shared, unstored, texture, span) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -740,6 +740,7 @@ impl ComputeCommandEncoder {
                     buffer.is_shared(),
                     None,
                     None,
+                    Some(buffer.span()),
                 )
             }
             Resource::Texture(texture) => {
@@ -756,6 +757,7 @@ impl ComputeCommandEncoder {
                     texture.host_reads(),
                     texture.unstored(),
                     Some(lent),
+                    None,
                 )
             }
         };
@@ -772,10 +774,10 @@ impl ComputeCommandEncoder {
             .iter_mut()
             .find(|(declared, ..)| *declared == id)
         {
-            Some((_, declared, _)) => *declared = merge(*declared, access),
+            Some((_, declared, ..)) => *declared = merge(*declared, access),
             None => {
                 self.copied += over::copied(texture.as_deref());
-                self.declared.push((id, access, texture));
+                self.declared.push((id, access, texture, span));
             }
         }
         Ok(())
@@ -1054,7 +1056,9 @@ impl ComputeCommandEncoder {
                 textures: &self.textures,
                 declared: &self.declared,
                 indirect: match grid {
-                    Grid::Indirect(buffer, _) => Some([buffer.id(), buffer.tracked_id()]),
+                    Grid::Indirect(buffer, _) => {
+                        Some(([buffer.id(), buffer.tracked_id()], buffer.span()))
+                    }
                     Grid::Direct(_) => None,
                 },
             };
@@ -1480,15 +1484,17 @@ fn merge(a: Access, b: Access) -> Access {
 }
 
 /// A `use_resource` declaration, by resource id: its own and its id in the hazard sets; its
-/// access; the texture, where the resource is one.
-type Declared = ([u32; 2], Access, Option<Lent<Texture>>);
+/// access; the texture, where the resource is one; and the memory of the buffer, where it is one,
+/// as the copies over buffers track it (`crate::over`).
+type Declared = ([u32; 2], Access, Option<Lent<Texture>>, Option<Span>);
 
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
     textures: &'a [Option<Lent<Texture>>],
     declared: &'a [Declared],
-    indirect: Option<[u32; 2]>,
+    /// An indirect dispatch's buffer: its ids in the hazard sets and its memory.
+    indirect: Option<([u32; 2], Span)>,
 }
 
 impl Accesses<'_> {
@@ -1517,9 +1523,9 @@ impl Accesses<'_> {
             .chain(
                 self.declared
                     .iter()
-                    .map(move |&(ids, access, _)| (ids[1], access)),
+                    .map(move |&(ids, access, ..)| (ids[1], access)),
             )
-            .chain(self.indirect.map(|ids| (ids[1], Access::Read)))
+            .chain(self.indirect.map(|(ids, _)| (ids[1], Access::Read)))
     }
 
     /// Each resource the dispatch of a kernel of `interface` reaches, as the copies over buffers
@@ -1535,7 +1541,7 @@ impl Accesses<'_> {
         let slots = (interface.buffers.iter())
             .filter(move |&&(_, access)| buffers && kept(access))
             .filter_map(move |&(slot, access)| match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, .. }) => Some((Reached::Buffer(buffer.id()), access)),
+                Some(Slot::Buffer { buffer, .. }) => Some((Reached::Buffer(buffer.span()), access)),
                 _ => None,
             });
         let textures = (interface.textures.iter())
@@ -1545,14 +1551,14 @@ impl Accesses<'_> {
                 Some((Reached::Texture(texture), access))
             });
         let declared = (self.declared.iter())
-            .filter(move |(_, access, texture)| (buffers || texture.is_some()) && kept(*access))
-            .map(|(ids, access, texture)| match texture {
-                Some(texture) => (Reached::Texture(texture), *access),
-                None => (Reached::Buffer(ids[0]), *access),
+            .filter(move |(_, access, texture, _)| (buffers || texture.is_some()) && kept(*access))
+            .filter_map(|(_, access, texture, span)| match (texture, span) {
+                (Some(texture), _) => Some((Reached::Texture(texture), *access)),
+                (None, span) => span.map(|span| (Reached::Buffer(span), *access)),
             });
         let indirect = (self.indirect)
             .filter(|_| buffers && !written)
-            .map(|ids| (Reached::Buffer(ids[0]), Access::Read));
+            .map(|(_, span)| (Reached::Buffer(span), Access::Read));
         slots.chain(textures).chain(declared).chain(indirect)
     }
 }
