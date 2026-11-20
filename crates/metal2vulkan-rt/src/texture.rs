@@ -3392,6 +3392,12 @@ impl TextureInner {
         self.image.storage.is_some()
     }
 
+    /// For the device tests: its image's usage.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn image_usage(&self) -> vk::ImageUsageFlags {
+        self.image.usage
+    }
+
     /// Where the texture starts in its image: a view's first level and array layer, else the
     /// image's first.
     fn base(&self) -> [u32; 2] {

@@ -15,6 +15,11 @@
 //!   covered keeps sample 0's depth, the least or the greatest. A stencil resolve by
 //!   `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing walks no resolve
 //!   as its encoder begins and ends; one that resolves walks its resolves.
+//! - Under a device cfg, on every device of the cfg's kind, whether it has
+//!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
+//!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
+//!   no storage view (Metal's shaders only read a multisampled texture), lacks no storage element,
+//!   and draws and resolves as the target above.
 
 use crate::error::{Error, Refusal};
 use crate::pass::resolving;
@@ -68,6 +73,7 @@ mod on_device {
         Region, RenderPassKind, StorageMode, StoreAction, Texture, TextureDescriptor, TextureType,
         TextureUsage,
     };
+    use ash::vk;
 
     const WHITE: [f32; 4] = [1.0; 4];
 
@@ -102,6 +108,35 @@ mod on_device {
     /// 2 and 3 alone (`every_device_draws_four_samples_where_metal_places_them`).
     fn coverage(x: u32, y: u32) -> std::cmp::Ordering {
         x.cmp(&y)
+    }
+
+    /// `got`, the `RGBA8Unorm` resolve of the white triangle over black, `SIDE` texels a side:
+    /// white where the triangle covers a pixel, black where it does not, and on the diagonal
+    /// within one code of half white, opaque.
+    fn resolved(name: &str, got: &[u8]) {
+        for y in 0..SIDE {
+            for x in 0..SIDE {
+                let at = ((y * SIDE + x) * 4) as usize;
+                let texel = &got[at..at + 4];
+                match coverage(x, y) {
+                    std::cmp::Ordering::Less => {
+                        assert_eq!(texel, [255; 4], "{name}: ({x}, {y}) covered")
+                    }
+                    std::cmp::Ordering::Greater => {
+                        assert_eq!(texel, [0, 0, 0, 255], "{name}: ({x}, {y}) uncovered")
+                    }
+                    std::cmp::Ordering::Equal => {
+                        for channel in &texel[..3] {
+                            assert!(
+                                (127..=128).contains(channel),
+                                "{name}: ({x}, {y}) half covered: {texel:?}"
+                            );
+                        }
+                        assert_eq!(texel[3], 255, "{name}: ({x}, {y})'s alpha");
+                    }
+                }
+            }
+        }
     }
 
     /// Records the white triangle through `state` in a pass of `d`, and runs it.
@@ -233,30 +268,7 @@ mod on_device {
             drawn(name, &device, &p, &four_state, None);
             let resolves = device.counters().metrics().resolves - before;
             assert_eq!(resolves, 1, "{name}: the pass's one resolve");
-            let got = read_at(&into, SIDE, 4, 1, 1);
-            for y in 0..SIDE {
-                for x in 0..SIDE {
-                    let at = ((y * SIDE + x) * 4) as usize;
-                    let texel = &got[at..at + 4];
-                    match coverage(x, y) {
-                        std::cmp::Ordering::Less => {
-                            assert_eq!(texel, [255; 4], "{name}: ({x}, {y}) covered")
-                        }
-                        std::cmp::Ordering::Greater => {
-                            assert_eq!(texel, [0, 0, 0, 255], "{name}: ({x}, {y}) uncovered")
-                        }
-                        std::cmp::Ordering::Equal => {
-                            for channel in &texel[..3] {
-                                assert!(
-                                    (127..=128).contains(channel),
-                                    "{name}: ({x}, {y}) half covered: {texel:?}"
-                                );
-                            }
-                            assert_eq!(texel[3], 255, "{name}: ({x}, {y})'s alpha");
-                        }
-                    }
-                }
-            }
+            resolved(name, &read_at(&into, SIDE, 4, 1, 1));
             assert!(
                 read_at(&into, SIDE, 4, 1, 0).iter().all(|&b| b == 0),
                 "{name}: level 1 of slice 0 untouched"
@@ -359,6 +371,59 @@ mod on_device {
             );
             drop((samples, into, other, single, flat, late));
             println!("{name}: four samples resolved into level 1 of slice 1");
+        });
+    }
+
+    /// The module's multisampled texture made for shader writes.
+    #[test]
+    fn every_device_makes_a_written_multisample_target_with_no_storage_usage() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.raster_sample_count = 4;
+        each_device("resolve_written", |name, _, device| {
+            let four_state = state(name, &device, &d);
+            let mut td = TextureDescriptor::new(
+                TextureType::Type2DMultisample,
+                PixelFormat::RGBA8Unorm,
+                SIDE,
+                SIDE,
+            );
+            td.sample_count = 4;
+            td.usage = TextureUsage::SHADER_READ
+                | TextureUsage::SHADER_WRITE
+                | TextureUsage::RENDER_TARGET;
+            td.storage_mode = StorageMode::Private;
+            let samples = (device.new_texture_for_views(&td))
+                .unwrap_or_else(|error| panic!("{name}: Vulkan samples 4 RGBA8 samples: {error}"));
+            let usage = samples.object().image_usage();
+            assert!(
+                !usage.contains(vk::ImageUsageFlags::STORAGE),
+                "{name}: the image's usage {:#x}",
+                usage.as_raw()
+            );
+            assert!(
+                !samples.object().has_storage_view(),
+                "{name}: a storage view"
+            );
+            assert_eq!(
+                samples.unstored(),
+                None,
+                "{name}: a missing storage element"
+            );
+            let into = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut p = pass(&samples, None);
+            p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+            p.color_attachments[0].resolve_texture = Some(into.clone());
+            drawn(name, &device, &p, &four_state, None);
+            resolved(name, &read_at(&into, SIDE, 4, 0, 0));
+            drop((samples, into));
+            println!("{name}: a written 4-sample target, no storage usage, resolved");
         });
     }
 
