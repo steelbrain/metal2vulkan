@@ -219,11 +219,6 @@ assoc-const	metal2vulkan::bind::YCbCrWriteModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::WRITTEN_BINDING	pub const WRITTEN_BINDING: u32
-assoc-const	metal2vulkan::bind::fan_out::RouteCountsModule::FLAGS_BINDING	pub const FLAGS_BINDING: u32
-assoc-const	metal2vulkan::bind::fan_out::RouteCountsModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::fan_out::RouteCountsModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::fan_out::RouteCountsModule::ROUTES_BINDING	pub const ROUTES_BINDING: u32
-assoc-const	metal2vulkan::bind::fan_out::RouteCountsModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	pub const MIN_BUFFER_ADDRESS: u64
 assoc-const	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	pub const PRIMITIVES: RenderDraws
 assoc-const	metal2vulkan::device::ApiVersion::V1_2	pub const V1_2: ApiVersion
@@ -518,11 +513,6 @@ assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SET	0
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SHAPE_BINDING	1
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SHAPE_WORDS	word::ROWS + 3 * word::ROW_WORDS
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::WRITTEN_BINDING	0
-assoc-const-value	metal2vulkan::bind::fan_out::RouteCountsModule::FLAGS_BINDING	0
-assoc-const-value	metal2vulkan::bind::fan_out::RouteCountsModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::fan_out::RouteCountsModule::PUSH_BYTES	4
-assoc-const-value	metal2vulkan::bind::fan_out::RouteCountsModule::ROUTES_BINDING	1
-assoc-const-value	metal2vulkan::bind::fan_out::RouteCountsModule::SET	0
 assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	1 <<32
 assoc-const-value	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	RenderDraws
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_2	ApiVersion
@@ -678,9 +668,6 @@ const	metal2vulkan::bind::fan_out::PROBE_BOUNDS_AT	pub const PROBE_BOUNDS_AT: u3
 const	metal2vulkan::bind::fan_out::PROBE_COUNT_WORDS	pub const PROBE_COUNT_WORDS: u32
 const	metal2vulkan::bind::fan_out::PROBE_DRAW_WORDS	pub const PROBE_DRAW_WORDS: u32
 const	metal2vulkan::bind::fan_out::PROBE_SETS	pub const PROBE_SETS: u32
-const	metal2vulkan::bind::fan_out::ROUTE_DECIDED	pub const ROUTE_DECIDED: u32
-const	metal2vulkan::bind::fan_out::ROUTE_ROUTED	pub const ROUTE_ROUTED: u32
-const	metal2vulkan::bind::fan_out::ROUTE_WORDS	pub const ROUTE_WORDS: u32
 const	metal2vulkan::bind::fan_out::STRADDLE_SET	pub const STRADDLE_SET: u32
 const	metal2vulkan::bind::fan_out::TABLE_BYTES	pub const TABLE_BYTES: u64
 const	metal2vulkan::bind::fan_out::WIDEN_PIXELS	pub const WIDEN_PIXELS: f64
@@ -775,9 +762,6 @@ const-value	metal2vulkan::bind::fan_out::PROBE_BOUNDS_AT	1 + PROBE_SETS * PROBE_
 const-value	metal2vulkan::bind::fan_out::PROBE_COUNT_WORDS	32
 const-value	metal2vulkan::bind::fan_out::PROBE_DRAW_WORDS	PROBE_BOUNDS_AT + PROBE_BLOCKS
 const-value	metal2vulkan::bind::fan_out::PROBE_SETS	7
-const-value	metal2vulkan::bind::fan_out::ROUTE_DECIDED	2
-const-value	metal2vulkan::bind::fan_out::ROUTE_ROUTED	1
-const-value	metal2vulkan::bind::fan_out::ROUTE_WORDS	3
 const-value	metal2vulkan::bind::fan_out::STRADDLE_SET	6
 const-value	metal2vulkan::bind::fan_out::TABLE_BYTES	(HEADER_ENTRIES as u64 + 4 * MAX_SEGMENTS as u64) * 16
 const-value	metal2vulkan::bind::fan_out::WIDEN_PIXELS	0.125
@@ -2631,8 +2615,6 @@ field	metal2vulkan::bind::YCbCrPlanes.range	pub range: YCbCrRange
 field	metal2vulkan::bind::YCbCrPlanes.size	pub size: [u32; 2]
 field	metal2vulkan::bind::YCbCrWriteModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::YCbCrWriteModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::fan_out::RouteCountsModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::fan_out::RouteCountsModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::indirect_commands::Bindings.pipeline	pub pipeline: Option<NonZeroU64>
 field	metal2vulkan::bind::indirect_commands::BufferBinding.address	pub address: u64
 field	metal2vulkan::bind::indirect_commands::BufferBinding.attribute_stride	pub attribute_stride: Option<u64>
@@ -3682,7 +3664,6 @@ fn	metal2vulkan::bind::draw_replay_vertex_layouts	pub fn draw_replay_vertex_layo
 fn	metal2vulkan::bind::fan_out::bucket	pub const fn bucket(segment: u32, segments: u32) -> u32
 fn	metal2vulkan::bind::fan_out::clip_entry	pub const fn clip_entry(axis: u32, k: u32) -> u32
 fn	metal2vulkan::bind::fan_out::line_entry	pub const fn line_entry(axis: u32, k: u32) -> u32
-fn	metal2vulkan::bind::fan_out::route_counts_module	pub fn route_counts_module(device: &Device) -> Result<RouteCountsModule, Error>
 fn	metal2vulkan::bind::fan_out::scissors	pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>>
 fn	metal2vulkan::bind::fan_out::table	pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>>
 fn	metal2vulkan::bind::flat_dispatch_module	pub fn flat_dispatch_module(device: &Device) -> Result<FlatDispatchModule, Error>
@@ -7311,7 +7292,6 @@ method	metal2vulkan::bind::YCbCrPlanesSampler::matrix	pub fn matrix(self) -> YCb
 method	metal2vulkan::bind::YCbCrPlanesSampler::range	pub fn range(self) -> YCbCrRange
 method	metal2vulkan::bind::YCbCrWriteModule::groups	pub fn groups(planes: &YCbCrPlanes) -> [u32; 2]
 method	metal2vulkan::bind::YCbCrWriteModule::shape	pub fn shape(planes: &YCbCrPlanes, all: bool) -> [u8; Self::SHAPE_WORDS as usize * 4]
-method	metal2vulkan::bind::fan_out::RouteCountsModule::groups	pub fn groups(draws: u32) -> u32
 method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
@@ -8140,7 +8120,6 @@ struct	metal2vulkan::bind::YCbCrInPlace	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::YCbCrPlanes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrPlanes
 struct	metal2vulkan::bind::YCbCrPlanesSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrPlanesSampler
 struct	metal2vulkan::bind::YCbCrWriteModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrWriteModule
-struct	metal2vulkan::bind::fan_out::RouteCountsModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct RouteCountsModule
 struct	metal2vulkan::bind::indirect_commands::Bindings	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Bindings
 struct	metal2vulkan::bind::indirect_commands::BufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BufferBinding
 struct	metal2vulkan::bind::indirect_commands::CommandBuffer	pub struct CommandBuffer<'a>

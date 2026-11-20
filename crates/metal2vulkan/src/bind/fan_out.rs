@@ -56,12 +56,6 @@
 //! Vulkan's invariance appendix does not promise across pipelines (its Rule 4), and which is
 //! checked by running it.
 //!
-//! **Routes the GPU picks.** A consumer that records a draw's probe before the draw's pass
-//! instance and both its routes in its place, the fan-out variant's and the region-copy
-//! variant's, each an indirect-count draw, has [`route_counts_module`] write their draw counts
-//! from the probe's flag between the two, exactly one of them nonzero (its module's docs): both
-//! routes are the pair above, so the draw meets an `Equal` test whichever the GPU picked.
-//!
 //! The table holds, for each axis, the segments of the plan's regions that hold a pixel, in the
 //! order of their normalized device coordinates: a region is a segment of each axis. The stage
 //! reads a triangle's bounds in normalized device coordinates (`x / w`, every `w` positive),
@@ -293,12 +287,6 @@ pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>> {
             .collect(),
     )
 }
-
-mod route_counts;
-
-pub use route_counts::{
-    route_counts_module, RouteCountsModule, ROUTE_DECIDED, ROUTE_ROUTED, ROUTE_WORDS,
-};
 
 #[cfg(test)]
 mod tests;

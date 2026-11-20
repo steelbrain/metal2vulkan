@@ -715,7 +715,6 @@ surface! {
         mod indirect_commands;
     }
     "bind::fan_out" => metal2vulkan::bind::fan_out {
-        struct RouteCountsModule N;
         const BLOCK_SET;
         const BLOCK_TRIANGLES;
         const BOUND_BUCKETS;
@@ -727,16 +726,12 @@ surface! {
         const PROBE_COUNT_WORDS;
         const PROBE_DRAW_WORDS;
         const PROBE_SETS;
-        const ROUTE_DECIDED;
-        const ROUTE_ROUTED;
-        const ROUTE_WORDS;
         const STRADDLE_SET;
         const TABLE_BYTES;
         const WIDEN_PIXELS;
         fn bucket;
         fn clip_entry;
         fn line_entry;
-        fn route_counts_module;
         fn scissors;
         fn table;
     }
