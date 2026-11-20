@@ -2,7 +2,6 @@
 //! states from creation to retirement.
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::capture::CopyIn;
 use crate::counters::{Metric, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
@@ -268,10 +267,6 @@ pub(crate) struct Segment {
     /// The textures over a Managed buffer's device copy in an image of their own that its
     /// commands wrote: its submission settles their copies back (`crate::over::ManagedOvers`).
     pub(crate) managed_wrote: Vec<Arc<TextureInner>>,
-    /// Of the first segment: what the command buffer's commit captured of Managed buffers'
-    /// changed ranges (`crate::capture`). Each copy-in goes ahead of the segment's commands, after
-    /// its waits, and is kept until the command buffer retires.
-    pub(crate) copy_ins: Vec<CopyIn>,
 }
 
 pub(crate) struct Handlers {
@@ -586,37 +581,33 @@ impl CommandBuffer {
         if work.closed() {
             return Err(Error::Quiesced);
         }
-        // With commands, it takes the Managed buffers' ranges named since the last capture
-        // (`crate::capture`); one with none leaves them for the next.
+        // With commands, it captures the Managed buffers' ranges named since the last capture,
+        // at its number in the commit order (`crate::capture`); one with none leaves them for the
+        // next. A commit that fails after its capture leaves the copy-in at that number.
         let empty = self.state().open()?.nothing_for_gpu();
-        let (mut work, copy_ins) = match empty || work.lost() {
-            true => (work, Vec::new()),
+        let mut work = match empty || work.lost() {
+            true => work,
             false => core.work.capture(&core, work)?,
         };
         let mut state = self.state();
-        if let Err(error) = state.open() {
-            work.carry(copy_ins);
-            return Err(error);
-        }
+        state.open()?;
         let mut building = state
             .building
             .take()
             .expect("an open command buffer is recording");
         if let Err(error) = building.finish() {
             state.building = Some(building);
-            work.carry(copy_ins);
             return Err(error);
         }
         (building.device.core().counters).add(&mut building.tally);
         let Building {
             device,
-            mut gpu,
+            gpu,
             handlers,
             stamps,
             presents,
             ..
         } = building;
-        gpu.segments[0].copy_ins = copy_ins;
         state.times.kernel_start = times::host_time();
         state.stamps = stamps;
         // Its drawables are presented: the presentation engine's once it has run.
@@ -1514,11 +1505,8 @@ pub(crate) fn retire(
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
-    for copy_in in segments.into_iter().flat_map(|segment| segment.copy_ins) {
-        copy_in.retire(core);
-    }
     ring.give_back(core);
-    drop((blocks, images, fences));
+    drop((segments, blocks, images, fences));
     kept.clear();
     if let Some(pair) = stamps {
         times::reset(&core.device, pair.pool, pair.first, written);

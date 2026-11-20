@@ -3,19 +3,27 @@
 //! names a range ([`Changes::add`]), and the next commit on any queue of a command buffer with
 //! commands takes every range named since the last such commit, once each
 //! ([`Work::capture`](crate::submit::Work::capture)). Its copy-in ([`copy_in`]) is a command
-//! buffer of its own, [`CopyIn`], that goes ahead of the command buffer's own commands in queue
-//! order: GPU copies of each range from the consumer's block into the device copy, after the
-//! copies back owed to the textures over the ranges in images of their own and before the copies
-//! in those textures take (`crate::over::ManagedOvers`). It holds each consumer's block and device
-//! copy until what takes it retires. A copy-in records no barrier before its copies: the one that
-//! ends every earlier segment, upload, fill and copy-in on the queue puts every earlier command
-//! first, as it does for a segment (`record::end`), and the submission that carries it makes the
-//! host's writes before it visible to the copies (Vulkan's host write ordering guarantee).
+//! buffer of its own, [`CopyIn`]: GPU copies of each range from the consumer's block into the
+//! device copy, after the copies back owed to the textures over the ranges in images of their own
+//! and before the copies in those textures take (`crate::over::ManagedOvers`). It waits in
+//! [`Captured`] at the capturing commit's number, a point in the commit order, and the first
+//! command buffer submitted whose commit number is at or after it takes it ([`taker`]): it goes in
+//! that command buffer's submission, as a part of its own ahead of its commands and outside its
+//! waits. A command buffer committed before the capture leaves it pending, so it never goes ahead
+//! of older work of the queue that may write the range. The submission keeps each consumer's
+//! block and device copy until it retires. A copy-in records no barrier before its copies: the one
+//! that ends every earlier segment, upload, fill and copy-in on the queue puts every earlier
+//! command first, as it does for a segment (`record::end`), and the submission that carries it
+//! makes the host's writes before it visible to the copies (Vulkan's host write ordering
+//! guarantee).
 //!
-//! So a command buffer committed after a range is named reads the bytes the consumer wrote there
-//! before the commit, which is what Metal owes (`MTLBuffer.h`, `didModifyRange:`): a write makes
-//! the range undefined for the GPU until a `didModifyRange:` and a commit of the command buffer
-//! that reads it, and does not reach a command buffer committed before. The copy reads the
+//! So every command buffer committed after a range is named reads the bytes the consumer wrote
+//! there before the commit, on any queue and wherever the capturing command buffer waits, which is
+//! what Metal owes (`MTLBuffer.h`, `didModifyRange:`): a write makes the range "undefined for any
+//! accesses by the GPU" until a `didModifyRange:` "followed by a commit of the MTLCommandBuffer
+//! that will access the buffer", which "does not make the contents coherent for any previously
+//! committed command buffers". One committed before that runs after a later one, held at an event
+//! wait, may read them too, where the header leaves the contents undefined. The copy reads the
 //! consumer's bytes as it runs, so a write after the commit may reach it, where Metal leaves the
 //! range undefined.
 //!
@@ -35,7 +43,7 @@ use crate::over::{self, Back, ManagedOvers};
 use crate::record::{self, Reach, Recorder};
 use crate::texture::{Image, OverCopy};
 use ash::vk;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
 
 /// A Managed buffer's ranges a capture took ([`Changes::take`]), and what its copy-in holds.
@@ -68,8 +76,8 @@ pub(crate) struct Changes {
     named: Vec<Named>,
     /// Each buffer's place in `named`, by its address, which a weak hold keeps from reuse.
     at: HashMap<usize, usize>,
-    /// What a commit captured before it failed: the next commit's command buffer takes it first.
-    pub(crate) carried: Vec<CopyIn>,
+    /// The copy-ins captured and not yet taken.
+    pub(crate) captured: Captured,
 }
 
 impl Changes {
@@ -113,13 +121,54 @@ impl Changes {
         }
     }
 
-    /// At the device's end: the ranges named are forgotten, and the copy-ins carried come back,
+    /// At the device's end: the ranges named are forgotten, and the copy-ins not taken come back,
     /// for their recorders to be given back.
     pub(crate) fn clear(&mut self) -> Vec<CopyIn> {
         self.at.clear();
         self.named.clear();
-        std::mem::take(&mut self.carried)
+        let captured = self.captured.0.drain(..).map(|(_, copy_in)| copy_in);
+        captured.collect()
     }
+}
+
+/// The copy-ins captured and not yet taken (a [`CopyIn`] each but in the tests), each with the
+/// commit number of the command buffer whose commit captured it, in commit order.
+pub(crate) struct Captured<C = CopyIn>(VecDeque<(u64, C)>);
+
+impl<C> Default for Captured<C> {
+    fn default() -> Captured<C> {
+        Captured(VecDeque::new())
+    }
+}
+
+impl<C> Captured<C> {
+    /// `copy_in`, captured by the commit numbered `number`.
+    pub(crate) fn push(&mut self, number: u64, copy_in: C) {
+        self.0.push_back((number, copy_in));
+    }
+
+    /// The copy-ins a submission takes, in which command buffers numbered `leads` (in the order
+    /// they go in it) go first: each with the index in `leads` of the one that takes it
+    /// ([`taker`]). The rest stay.
+    pub(crate) fn take(&mut self, leads: &[u64]) -> Vec<(usize, C)> {
+        let mut taken = Vec::new();
+        while let Some(&(number, _)) = self.0.front() {
+            let Some(index) = taker(number, leads) else {
+                break;
+            };
+            if let Some((_, copy_in)) = self.0.pop_front() {
+                taken.push((index, copy_in));
+            }
+        }
+        taken
+    }
+}
+
+/// Which command buffer of a submission takes a copy-in captured by the commit numbered `captured`,
+/// of those that go first in it numbered `leads`, in the order they go: the first numbered at or
+/// after the capture. None where each was committed before it: the copy-in stays for a later one.
+pub(crate) fn taker(captured: u64, leads: &[u64]) -> Option<usize> {
+    leads.iter().position(|&lead| lead >= captured)
 }
 
 impl Modified {
@@ -131,8 +180,8 @@ impl Modified {
 
 /// What one capture's command buffer copies: from the consumers' blocks into the device copies
 /// and the images over them, recorded into `command` of its own recorder, and the images it
-/// copies. What takes it keeps it, with each consumer's block and device copy, until it retires:
-/// the committing command buffer.
+/// copies. The submission that takes it keeps it, with each consumer's block and device copy, until
+/// it retires.
 pub(crate) struct CopyIn {
     pub(crate) recorder: Recorder,
     pub(crate) command: vk::CommandBuffer,

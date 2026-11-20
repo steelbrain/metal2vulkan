@@ -349,12 +349,16 @@ in its memory.
   the buffer), merged with the buffer's others where they overlap or touch, and submits and
   allocates nothing. The next commit of a command buffer with commands, on any queue, takes every
   range named since, once each: GPU copies from the consumer's block into the device copy,
-  recorded at the commit into a command buffer of their own that goes ahead of that command
-  buffer's commands in its submission, after every earlier command on the device, which the
+  recorded at the commit into a command buffer of their own. It goes in the submission of the
+  first command buffer committed at or after that commit that the device submits, whichever queue
+  and whichever waits held the committing one, as a part of its own ahead of that command
+  buffer's commands and outside its waits, after every earlier command on the device, which the
   barrier ending each earlier command buffer orders; the copies record one barrier, after them.
-  The copy runs when that submission reaches the GPU, so a command buffer reads the bytes the
-  consumer wrote before its commit, as Metal's `didModifyRange:` asks, and a write made after the
-  commit may reach it, where Metal leaves the range undefined for the GPU.
+  A command buffer committed before it never takes it. The copy runs when that submission
+  reaches the GPU, so every command buffer committed after a range is named reads the bytes the
+  consumer wrote before the naming, as Metal's `didModifyRange:` asks; a write made after the
+  commit may reach it, and so may a command buffer committed before that runs after a later one,
+  where Metal leaves the range undefined for the GPU.
   `Metrics::managed_bytes_captured` counts the bytes the copies take. A command buffer keeps each
   device copy it uses, and the consumer's blocks its copies read, until it retires. A range named
   and not yet taken keeps neither block: once the buffer's last handle is gone (a command buffer,

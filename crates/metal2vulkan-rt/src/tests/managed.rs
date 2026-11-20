@@ -24,7 +24,7 @@
 //! named buffer's block it reads until it retires, though the texture, the buffer and the block's
 //! handle go right after the call.
 
-use crate::capture::merge;
+use crate::capture::{merge, taker, Captured};
 
 #[test]
 fn changed_ranges_merge_where_they_overlap_or_touch() {
@@ -53,6 +53,57 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
     merge(&mut ranges, 500, 600);
     merge(&mut ranges, 0, 1000);
     assert_eq!(ranges, [(0, 1000)], "over all");
+}
+
+/// A copy-in waits at its capture's number in the commit order: a command buffer committed before
+/// it never takes it, and the first submitted at or after it does, ahead of its own commands,
+/// whichever queue it is of and wherever the capturing one waits (`crate::capture`).
+#[test]
+fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_capture() {
+    assert_eq!(
+        taker(5, &[3, 4]),
+        None,
+        "only older command buffers go first"
+    );
+    assert_eq!(taker(5, &[]), None, "nothing goes first");
+    assert_eq!(
+        taker(5, &[3, 5, 7]),
+        Some(1),
+        "the capturing one, after an older one"
+    );
+    assert_eq!(taker(5, &[6, 8]), Some(0), "a later one, its capturer held");
+
+    let mut captured = Captured::default();
+    captured.push(5, "five");
+    captured.push(9, "nine");
+    // A submission of older command buffers, of the capturer's queue or another, takes nothing.
+    assert!(captured.take(&[2, 4]).is_empty(), "older ones leave both");
+    // One that holds an older command buffer and a later one: the first copy-in goes ahead of the
+    // later one, after the older; the second stays.
+    assert_eq!(
+        captured.take(&[4, 6]),
+        [(1, "five")],
+        "ahead of the later one"
+    );
+    // The second's capturer held: a later command buffer of another queue takes it.
+    assert!(
+        captured.take(&[8]).is_empty(),
+        "committed before the second"
+    );
+    assert_eq!(
+        captured.take(&[10, 11]),
+        [(0, "nine")],
+        "the first at or after it"
+    );
+    assert!(captured.take(&[12]).is_empty(), "each goes once");
+    // Two pending go ahead of the same command buffer, in their order.
+    captured.push(13, "thirteen");
+    captured.push(14, "fourteen");
+    assert_eq!(
+        captured.take(&[12, 15]),
+        [(1, "thirteen"), (1, "fourteen")],
+        "both ahead of the later one, in commit order"
+    );
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

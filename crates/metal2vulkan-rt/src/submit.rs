@@ -34,8 +34,8 @@
 //!
 //! A command buffer's commit takes the Managed buffers' ranges named since the last capture
 //! ([`crate::capture`]): its copy-in, GPU copies from the consumers' blocks into the device
-//! copies, goes ahead of its first segment's commands, after that segment's waits, in the same
-//! submission.
+//! copies, waits at that commit's number, and the first submission of a command buffer numbered
+//! at or after it takes it, ahead of that command buffer's first segment and outside its waits.
 
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
@@ -365,8 +365,12 @@ struct Batch {
     /// The expected GPU runs of its command buffers, summed, in nanoseconds ([`GROUP_RUN`]);
     /// `u64::MAX` where one's was not known.
     run: u64,
-    /// Where each command buffer that leads in it begins among `segments`, its copy-ins first.
+    /// Where each command buffer that leads in it begins among `segments`, the copy-ins it takes
+    /// first, and its commit number, in the same order.
     starts: Vec<usize>,
+    leads: Vec<u64>,
+    /// The copy-ins it took, which it keeps until it retires (`crate::capture`).
+    copy_ins: Vec<CopyIn>,
     /// Its queue's completed command buffers when the last of its joins was counted, and the
     /// command buffers that joined since one of them completed ([`UNSEEN_JOINS`]).
     seen: u64,
@@ -621,8 +625,10 @@ impl Work {
     /// lock `state`, which it keeps: takes every Managed buffer's range named since the last
     /// capture (`crate::capture`) into one copy-in, GPU copies from the consumers' blocks into the
     /// device copies, recorded into a command buffer of its own ([`capture::copy_in`]); none
-    /// where every buffer named is gone. Returns the copy-ins the committing command buffer
-    /// takes: a commit that failed after its capture left its own first.
+    /// where every buffer named is gone. It waits at the committing command buffer's number, the
+    /// next in the commit order ([`WorkState::seq`]), for the first command buffer submitted that
+    /// is numbered at or after it ([`capture::Captured`]). A commit that fails after its capture
+    /// leaves it there, for the next.
     ///
     /// Err: [`Error::Quiesced`]; what making the copy-in's command buffer returns. The ranges are
     /// then named again for the next commit.
@@ -630,25 +636,23 @@ impl Work {
         &'a self,
         core: &Core,
         mut state: MutexGuard<'a, WorkState>,
-    ) -> Result<(MutexGuard<'a, WorkState>, Vec<CopyIn>), Error> {
+    ) -> Result<MutexGuard<'a, WorkState>, Error> {
         let named = state.changes.take();
         if named.is_empty() {
-            let carried = std::mem::take(&mut state.changes.carried);
-            return Ok((state, carried));
+            return Ok(state);
         }
         if state.closed {
             return Err(self.unwind(state, &named, Error::Quiesced));
         }
-        let last = match capture::copy_in(core, &named) {
-            Ok(last) => last,
+        let copy_in = match capture::copy_in(core, &named) {
+            Ok(copy_in) => copy_in,
             Err(error) => return Err(self.unwind(state, &named, error)),
         };
         core.counters
             .captured(named.iter().map(Modified::bytes).sum());
-        // Taken last, so a capture that failed before left them carried.
-        let mut copy_ins = std::mem::take(&mut state.changes.carried);
-        copy_ins.push(last);
-        Ok((state, copy_ins))
+        let number = state.next_seq + 1;
+        state.changes.captured.push(number, copy_in);
+        Ok(state)
     }
 
     /// A capture that cannot finish: its ranges `named` are named again for the next commit (none
@@ -1035,18 +1039,6 @@ impl Work {
                     let entries: Vec<Entry> = fifo.entries.drain(..).collect();
                     let mut ended = Vec::new();
                     for entry in entries {
-                        // Copy-ins not yet staged never run: their ranges are named again.
-                        let unstaged = (entry.pending.iter())
-                            .flat_map(|pending| &pending.gpu.segments[pending.next..])
-                            .flat_map(|segment| &segment.copy_ins);
-                        for copy_in in unstaged {
-                            let again = if state.closed {
-                                &[]
-                            } else {
-                                &copy_in.modified[..]
-                            };
-                            state.changes.give_up(again);
-                        }
                         fifo.end(entry, CommandBufferError::NotRun, &mut ended);
                     }
                     (ended, fifo.group.is_some())
@@ -1101,12 +1093,6 @@ impl WorkState {
     pub(crate) fn seq(&mut self) -> u64 {
         self.next_seq += 1;
         self.next_seq
-    }
-
-    /// A commit that failed after its capture: the next commit's command buffer takes what it
-    /// captured first.
-    pub(crate) fn carry(&mut self, copy_ins: Vec<CopyIn>) {
-        self.changes.carried.extend(copy_ins);
     }
 
     /// Has the upload submitted at once, alone where no group goes: the progress value at which
@@ -1294,13 +1280,6 @@ impl WorkState {
         };
         if let Some(error) = entry.error {
             if let Some(entry) = fifo.entries.pop_front() {
-                // Its copy-ins never run: their ranges are named again for the next commit.
-                let copy_ins = (entry.pending.iter())
-                    .flat_map(|pending| &pending.gpu.segments)
-                    .flat_map(|segment| &segment.copy_ins);
-                for copy_in in copy_ins {
-                    self.changes.give_up(&copy_in.modified);
-                }
                 fifo.end(entry, error, ended);
             }
             return Step::Staged;
@@ -1381,6 +1360,8 @@ impl WorkState {
             partial: false,
             run: 0,
             starts: Vec::new(),
+            leads: Vec::new(),
+            copy_ins: Vec::new(),
             seen: 0,
             unseen: 0,
             apart: false,
@@ -1394,6 +1375,7 @@ impl WorkState {
         if leads {
             group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
             group.starts.push(group.segments.len());
+            group.leads.push(pending.seq);
             if group.seen != retired {
                 group.seen = retired;
                 group.unseen = 0;
@@ -1427,27 +1409,7 @@ impl WorkState {
                 }
             }
         }
-        let Staged {
-            waits,
-            command,
-            signals,
-        } = stage(segment, &mut group.watch);
-        // The segment's copy-ins go ahead of its commands, after its waits.
-        let mut waits = Some(waits);
-        for copy_in in &segment.copy_ins {
-            group.segments.push(Staged {
-                waits: waits.take().unwrap_or_default(),
-                command: Some(
-                    vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command),
-                ),
-                signals: Vec::new(),
-            });
-        }
-        let staged = Staged {
-            waits: waits.unwrap_or_default(),
-            command,
-            signals,
-        };
+        let staged = stage(segment, &mut group.watch);
         // An event's signal goes at once: nothing waits on it behind a held group. So does a
         // presenting command buffer's signal of the consumer's semaphore, which its present waits on
         // once the command buffer is scheduled.
@@ -1505,6 +1467,9 @@ impl WorkState {
         // The bound again, with the expected run as it now stands: a completion since a join may
         // have raised it.
         batch.apart = apart(batch.starts.len() as u64, fifo.queue.expected_run());
+        // The copy-ins captured at or before the number of a command buffer that goes first in
+        // it, each ahead of the first such one (`crate::capture`).
+        batch.take(self.changes.captured.take(&batch.leads));
         self.progress += 1;
         let value = self.progress;
         fifo.in_flight.push_back(value);
@@ -1737,13 +1702,13 @@ pub(crate) fn run(core: Arc<Core>) {
                 .flat_map(|fifo| end(fifo.entries, |_| CommandBufferError::NotRun))
                 .collect();
             let upload = state.drop_upload();
-            // The copy-ins carried hold device copies, which hold the core.
-            let carried = state.changes.clear();
+            // The copy-ins not taken hold device copies, which hold the core.
+            let captured = state.changes.clear();
             drop(state);
             if let Some(upload) = upload {
                 upload.retire(&core);
             }
-            for copy_in in carried {
+            for copy_in in captured {
                 copy_in.retire(&core);
             }
             core.done.end_all(&core, ended);
@@ -1816,6 +1781,28 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
 }
 
 impl Batch {
+    /// Puts each copy-in of `taken` ahead of the command buffer that takes it (its index in
+    /// `leads`): a part of its own, with no waits, where that command buffer begins, which then
+    /// begins with it, after the copy-ins taken before it. The batch keeps them until it retires.
+    fn take(&mut self, taken: Vec<(usize, CopyIn)>) {
+        for (lead, copy_in) in taken.into_iter().rev() {
+            let at = self.starts[lead];
+            self.segments.insert(
+                at,
+                Staged {
+                    command: Some(
+                        vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command),
+                    ),
+                    ..Staged::default()
+                },
+            );
+            for start in &mut self.starts[lead + 1..] {
+                *start += 1;
+            }
+            self.copy_ins.push(copy_in);
+        }
+    }
+
     /// A submission of no command buffer's: an upload alone.
     fn empty() -> Batch {
         Batch {
@@ -1826,6 +1813,8 @@ impl Batch {
             partial: false,
             run: 0,
             starts: Vec::new(),
+            leads: Vec::new(),
+            copy_ins: Vec::new(),
             seen: 0,
             unseen: 0,
             apart: false,
@@ -1861,6 +1850,7 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         wrote,
         starts,
         apart,
+        copy_ins,
         ..
     } = batch;
     let device = &core.device;
@@ -2008,7 +1998,8 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
     } else {
         complete::lose(core);
     }
-    core.done.submitted(core, value, upload, finished, watch);
+    core.done
+        .submitted(core, value, upload, copy_ins, finished, watch);
     // Device work of the submission wrote these Managed buffers: their textures over their device
     // copies owe their copies in from the next submission (`crate::over::ManagedOvers`).
     for buffer in written {

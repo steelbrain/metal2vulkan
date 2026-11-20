@@ -3,6 +3,7 @@
 //! the command buffers held at `Committed` for a shared event's value once it is reached, and ends
 //! the work in flight at a loss.
 
+use crate::capture::CopyIn;
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, Pending};
 use crate::counters::Metric;
 use crate::device::{lock, Core};
@@ -141,6 +142,8 @@ enum Item {
         written: u32,
     },
     Upload(Upload),
+    /// A Managed buffer's copy-in the submission took (`crate::capture`).
+    CopyIn(CopyIn),
 }
 
 impl Done {
@@ -253,12 +256,14 @@ impl Done {
     }
 
     /// From the submit thread: a submission passed to `vkQueueSubmit2` with progress `value`.
-    /// Its command buffers retire in order once it completes, each ended one with its error.
+    /// Its command buffers retire in order once it completes, each ended one with its error, and
+    /// its upload and the copy-ins it took with them.
     pub(crate) fn submitted(
         &self,
         core: &Core,
         value: u64,
         upload: Option<Upload>,
+        copy_ins: Vec<CopyIn>,
         finished: Vec<Finished>,
         watch: Vec<Arc<EventInner>>,
     ) {
@@ -268,6 +273,12 @@ impl Done {
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Upload(upload),
+            });
+        }
+        for copy_in in copy_ins {
+            state.flight.push_back(Retiree {
+                value,
+                item: Item::CopyIn(copy_in),
             });
         }
         for (cb, pending, error) in finished {
@@ -379,6 +390,7 @@ impl Retiree {
                 written,
             } => command::retire(core, cb, gpu, handlers, error, times, written),
             Item::Upload(upload) => upload.retire(core),
+            Item::CopyIn(copy_in) => copy_in.retire(core),
         }
     }
 
