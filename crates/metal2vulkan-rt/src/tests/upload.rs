@@ -638,8 +638,9 @@ mod on_device {
     /// Two copies into one texture in two uploads of one submission: the first made before the
     /// commit of a command buffer its queue holds in a group behind busy work, the second after
     /// it, before the commit of the next, which joins that group and copies the texture out. The
-    /// two calls record into two uploads, the submission of the group, sent before the busy work
-    /// ends (`behind_busy`), carries both, and the later
+    /// two calls record into two uploads, the submission of the group, sent once both command
+    /// buffers are staged into it and before the busy work ends (`behind_busy`), carries both,
+    /// and the later
     /// copy's bytes are the texture's: each copy orders itself after every earlier write of the
     /// image with a barrier of its own, as command buffer boundaries add no order.
     #[test]
@@ -691,6 +692,15 @@ mod on_device {
                 copy_out(name, &next, &texture, side, &out);
                 next.commit().expect("a commit");
                 step("next commit");
+                // Both staged into the group the queue holds before it is sent: a send while the
+                // submit thread, woken late on a loaded host, has staged neither sends the first
+                // as it joins a group of its own, before the next joins it.
+                for command_buffer in [&first, &next] {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                step("both staged");
                 // The group goes before the busy work ends, at the run `behind_busy` set: sent
                 // once a busy one retires, it would go at the run their own runs leave, member by
                 // member where a loaded host measured them long.
