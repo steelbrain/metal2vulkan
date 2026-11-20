@@ -959,24 +959,20 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A command buffer whose wait for a shared event's value is met only by a submitted signal
-    /// not yet run (one the test makes as if submitted, then gives from the host) is submitted and
-    /// stays `Committed`, no scheduled handler run, until the value is reached, and is scheduled
-    /// before it completes: by the host's set of the value, while its GPU wait still holds it, and
-    /// where the value arrives only as it completes (the completion thread held meanwhile), in
-    /// the round that retires it. The queue's next command buffer, which waits for nothing, stays
-    /// `Committed` with it and is scheduled after it. A wait for a plain event's value submitted
-    /// so is scheduled as it is submitted, and so is the next command buffer. Metal answers so
-    /// (`event-wait-behind-a-running-signal`, recorded on the M3 Max, and the next command buffer
-    /// read by probe 0f13fbc709, job m3-max-50646): `Committed` with no handler, the next one too,
-    /// for an `MTLSharedEvent`; `Scheduled` with its scheduled handler run, the next one too, for
-    /// an `MTLEvent`.
+    /// A command buffer whose wait for an event's value is met only by a submitted signal not yet
+    /// run (one the test makes as if submitted, then gives from the host) is `Scheduled` as it is
+    /// submitted, its scheduled handler run, while the GPU still waits for the value, and so is the
+    /// queue's next command buffer, which waits for nothing: for a plain event's value and for a
+    /// shared event's alike. MTLCommandBuffer.h describes `Scheduled` as "All dependencies have
+    /// been resolved and the command buffer has been scheduled for execution", and
+    /// `encodeWaitForEvent:value:` as a command that "pauses execution of this command buffer until
+    /// the specified event reaches a given value": execution pauses after scheduling. The M3 Max
+    /// holds the shared event's waiter at `Committed` instead, an accepted difference (docs/API.md).
     #[test]
-    fn every_device_schedules_a_wait_for_a_shared_event_once_its_value_is_reached() {
-        each_device("shared_wait_scheduled", |name, _, device| {
+    fn every_device_schedules_a_wait_for_an_event_s_value_as_it_is_submitted() {
+        each_device("event_wait_scheduled", |name, _, device| {
             let mut arena = Arena::new(&device);
-            let (a, b, c, d, e) = (
-                arena.buffer(),
+            let (a, b, c, d) = (
                 arena.buffer(),
                 arena.buffer(),
                 arena.buffer(),
@@ -1005,116 +1001,148 @@ pub(crate) mod on_device {
                 within(name, || device.counters().metrics().submissions > before);
                 command_buffer
             };
-
-            // A plain event's wait: scheduled as it is submitted.
             let plain = device.new_event().expect("an event");
-            plain.pretend_submitted_for_test(1);
-            let on_plain = waiting("plain", Some(&plain), &a, 1);
-            let next = waiting("plain next", None, &d, 4);
-            assert_eq!(
-                (on_plain.status(), next.status()),
-                (
-                    CommandBufferStatus::Scheduled,
-                    CommandBufferStatus::Scheduled
-                ),
-                "{name}"
-            );
-            // A scheduled handler runs after its command buffer's status reads `Scheduled`.
-            within(name, || log.lines().len() == 2);
-            assert_eq!(
-                log.lines(),
-                [
-                    "plain scheduled Scheduled",
-                    "plain next scheduled Scheduled"
-                ],
-                "{name}"
-            );
-            signal(plain.inner().semaphore);
-            finished(name, &on_plain);
-            finished(name, &next);
-
-            // A shared event's: held at `Committed` until the host sets the value, then scheduled
-            // while its GPU wait, on the semaphore, still holds it.
             let shared = shared_event(&device);
-            shared.pretend_submitted_for_test(1);
-            let on_set = waiting("set", Some(shared.as_event()), &b, 2);
-            let next = waiting("set next", None, &e, 5);
-            assert_eq!(
-                (on_set.status(), next.status()),
-                (
-                    CommandBufferStatus::Committed,
-                    CommandBufferStatus::Committed
-                ),
-                "{name}: held, and the next one behind it"
-            );
-            assert_eq!(log.lines().len(), 4, "{name}: no scheduled handler");
-            shared.set_signaled_value(1);
-            (next.wait_until_scheduled()).expect("a wait outside a scheduled handler");
-            assert_eq!(
-                (on_set.status(), next.status()),
-                (
-                    CommandBufferStatus::Scheduled,
-                    CommandBufferStatus::Scheduled
-                ),
-                "{name}: their GPU waits, on the semaphore, still hold them"
-            );
-            within(name, || log.lines().len() == 6);
-            assert_eq!(
-                log.lines()[4..],
-                ["set scheduled Scheduled", "set next scheduled Scheduled"],
-                "{name}"
-            );
-            signal(shared.as_event().inner().semaphore);
-            finished(name, &on_set);
-            finished(name, &next);
-
-            // A shared event's value that arrives only as the command buffer completes: the
-            // completion thread, held meanwhile, schedules it in the round that retires it.
-            let late = shared_event(&device);
-            late.pretend_submitted_for_test(1);
-            let core = device.core();
-            let hold = core.hold_completions.write().expect("the hold");
-            let on_late = waiting("late", Some(late.as_event()), &c, 3);
-            assert_eq!(
-                on_late.status(),
-                CommandBufferStatus::Committed,
-                "{name}: held"
-            );
-            signal(late.as_event().inner().semaphore);
-            {
-                let queue = lock(&core.queues.runtime);
-                // SAFETY: the queue is held for the call.
-                unsafe { core.device.queue_wait_idle(*queue) }.expect("an idle queue");
+            for (label, event, (buffer, next_buffer), word) in [
+                ("plain", &plain, (&a, &b), 1),
+                ("shared", shared.as_event(), (&c, &d), 3),
+            ] {
+                event.pretend_submitted_for_test(1);
+                let waiter = waiting(label, Some(event), buffer, word);
+                let next_label = format!("{label} next");
+                let next = waiting(&next_label, None, next_buffer, word + 1);
+                assert_eq!(
+                    (waiter.status(), next.status()),
+                    (
+                        CommandBufferStatus::Scheduled,
+                        CommandBufferStatus::Scheduled
+                    ),
+                    "{name}: {label}: scheduled as submitted, the GPU wait still holding them"
+                );
+                // A scheduled handler runs after its command buffer's status reads `Scheduled`.
+                within(name, || log.lines().len() == 2);
+                assert_eq!(
+                    log.lines(),
+                    [
+                        format!("{label} scheduled Scheduled"),
+                        format!("{next_label} scheduled Scheduled")
+                    ],
+                    "{name}: {label}"
+                );
+                signal(event.inner().semaphore);
+                finished(name, &waiter);
+                finished(name, &next);
+                within(name, || log.lines().len() == 4);
+                lock(&log.0).clear();
             }
             assert_eq!(
-                on_late.status(),
-                CommandBufferStatus::Committed,
-                "{name}: ran, held"
-            );
-            drop(hold);
-            finished(name, &on_late);
-            assert_eq!(
-                log.lines(),
-                [
-                    "plain scheduled Scheduled",
-                    "plain next scheduled Scheduled",
-                    "plain completed Completed None",
-                    "plain next completed Completed None",
-                    "set scheduled Scheduled",
-                    "set next scheduled Scheduled",
-                    "set completed Completed None",
-                    "set next completed Completed None",
-                    "late scheduled Scheduled",
-                    "late completed Completed None",
-                ],
-                "{name}"
-            );
-            assert_eq!(
-                [&a, &b, &c, &d, &e].map(word),
-                [1, 2, 3, 4, 5],
+                [&a, &b, &c, &d].map(word),
+                [1, 2, 3, 4],
                 "{name}: every fill ran"
             );
-            drop((a, b, c, d, e, arena, plain, shared, late, queue, device));
+            drop((a, b, c, d, arena, plain, shared, queue, device));
+        });
+    }
+
+    /// Links of a chain on two queues, each waiting for the shared event's value the link before
+    /// it signals and signalling the next, the first behind a value the test gives from the host
+    /// last: every link goes to the driver and reads `Scheduled`, its scheduled handler run, while
+    /// the first has not run, so the queues' later work is submitted before the earlier completes,
+    /// and the submit thread holds none of them for a value. Once the first is let go, the links
+    /// complete in order. A link waiting for a value no submitted signal promises is held, at
+    /// `Committed`, until the host sets it, and counted in `Metrics::event_holds` as it goes.
+    #[test]
+    fn every_device_submits_a_shared_event_chain_across_two_queues_before_its_first_link_runs() {
+        const LINKS: u32 = 5;
+        each_device("event_chain", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffers: Vec<Buffer> = (0..=LINKS).map(|_| arena.buffer()).collect();
+            let queues = [queue(&device), queue(&device)];
+            let log = Log::default();
+            let gate = device.new_event().expect("an event");
+            gate.pretend_submitted_for_test(1);
+            let chain = shared_event(&device);
+            let holds = || device.counters().metrics().event_holds;
+            let before = holds();
+            let links: Vec<CommandBuffer> = (0..LINKS)
+                .map(|link| {
+                    let queue = &queues[link as usize % 2];
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let (event, value) = match link {
+                        0 => (&gate, 1),
+                        _ => (chain.as_event(), u64::from(link)),
+                    };
+                    (command_buffer.encode_wait_for_event(event, value)).expect("a wait");
+                    fill(&command_buffer, &buffers[link as usize], link + 1);
+                    (command_buffer.encode_signal_event(chain.as_event(), u64::from(link) + 1))
+                        .expect("a signal");
+                    log.handlers(&format!("link {link}"), &command_buffer);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+                .collect();
+            for (link, command_buffer) in links.iter().enumerate() {
+                within(
+                    &format!("{name}: link {link} scheduled while the first has not run"),
+                    || command_buffer.status() == CommandBufferStatus::Scheduled,
+                );
+            }
+            within(name, || log.lines().len() == LINKS as usize);
+            assert_eq!(
+                chain.signaled_value(),
+                0,
+                "{name}: no link has run, the first waiting on the GPU"
+            );
+            assert_eq!(holds(), before, "{name}: no link held for a value");
+            // A link waiting for a value no submitted signal promises: held until the host sets
+            // it.
+            let last = queues[0].command_buffer().expect("a command buffer");
+            let value = u64::from(LINKS) + 2;
+            (last.encode_wait_for_event(chain.as_event(), value)).expect("a wait");
+            fill(&last, &buffers[LINKS as usize], LINKS + 1);
+            last.commit().expect("a commit");
+            // The first link, then the rest in order.
+            let signal = vk::SemaphoreSignalInfo::default()
+                .semaphore(gate.inner().semaphore)
+                .value(1);
+            // SAFETY: the semaphore is the device's, and 1 is above its value.
+            unsafe { device.raw().device.signal_semaphore(&signal) }.expect("a host signal");
+            for command_buffer in &links {
+                finished(name, command_buffer);
+            }
+            assert_eq!(
+                chain.signaled_value(),
+                u64::from(LINKS),
+                "{name}: every link's signal"
+            );
+            assert_eq!(
+                last.status(),
+                CommandBufferStatus::Committed,
+                "{name}: the link held for a value nothing promises"
+            );
+            chain.set_signaled_value(value);
+            finished(name, &last);
+            let held: Vec<u64> = (holds().iter().zip(&before))
+                .map(|(now, was)| now - was)
+                .collect();
+            assert_eq!(
+                held.iter().sum::<u64>(),
+                1,
+                "{name}: one segment held for a value, by length {held:?}"
+            );
+            let completed: Vec<String> = (log.lines().into_iter())
+                .filter(|line| line.contains("completed"))
+                .collect();
+            let expected: Vec<String> = (0..LINKS)
+                .map(|link| format!("link {link} completed Completed None"))
+                .collect();
+            assert_eq!(completed, expected, "{name}: the links completed in order");
+            assert_eq!(
+                buffers.iter().map(word).collect::<Vec<u32>>(),
+                (1..=LINKS + 1).collect::<Vec<u32>>(),
+                "{name}: every fill ran"
+            );
+            drop((last, links, buffers, arena, gate, chain, queues, device));
         });
     }
 
