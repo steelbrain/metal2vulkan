@@ -44,33 +44,6 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
     .result
 }
 
-/// [`run`] of a mapped authored case whose own function is in `bitcode`: its generated companion
-/// from the companion's own bitcode, each library at its stage (the runtime lane's fresh candidate,
-/// `runtime_lane::renders`).
-pub(crate) fn run_mapped(case: &RenderCase, bitcode: &[u8]) -> Result<ComputeRun, ExecutorError> {
-    let companion = case
-        .companion
-        .as_ref()
-        .map(crate::companion::Companion::opaque_bitcode)
-        .transpose()
-        .map_err(ExecutorError::Failed)?;
-    let libraries = match (case.companion_stage(), companion.as_deref()) {
-        (Some(metal2vulkan::pipeline::Stage::Vertex), Some(generated)) => RenderLibraries {
-            vertex: generated,
-            fragment: Some(bitcode),
-        },
-        (Some(metal2vulkan::pipeline::Stage::Fragment), Some(generated)) => RenderLibraries {
-            vertex: bitcode,
-            fragment: Some(generated),
-        },
-        _ => RenderLibraries {
-            vertex: bitcode,
-            fragment: None,
-        },
-    };
-    run(case, libraries)
-}
-
 fn public(name: &str) -> Vec<u8> {
     llvm_assemble(&fixtures_dir().join(name)).expect("llvm-as on the device lane")
 }

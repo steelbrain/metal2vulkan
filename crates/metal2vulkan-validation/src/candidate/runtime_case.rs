@@ -100,10 +100,6 @@ pub use layer_claim::{
     layer_reported_nothing, layer_reported_nothing_at_all, nothing_reported_without_the_layer,
     EnabledLayers, LayerClaim, LAYERS_DROPPED,
 };
-/// The lane's own check of the creation messages a device heard reads them too
-/// (`runtime_lane::creation_heard_checked`).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) use layer_claim::{loader_duplicate_layer_message, loader_layer_message};
 pub use render::{
     commit_render, encoded_mesh, encoded_render, mesh_pipeline_state, render_pipeline_descriptor,
     render_pipeline_state, CommittedRender, EncodedRender, MeshInputs, RenderInputs,
@@ -185,17 +181,8 @@ pub(crate) fn echo_messages() {
 }
 
 /// Whether every [`Messages`] sink also writes each failing message to stderr as one
-/// `LANE-VALIDATION` line naming its test ([`report_each_message`]).
+/// `LANE-VALIDATION` line naming its test.
 static REPORT: AtomicBool = AtomicBool::new(false);
-
-/// Write every failing message a [`Messages`] sink receives to stderr as one line, `LANE-VALIDATION
-/// <test>: <id name> (<id>): <text>`, past the list's bound and whether or not its test reads the
-/// list: the runtime lane's setting when its operational switch enables more of the layer's checks
-/// (`runtime_lane::LaneChecks`), so a run's every report can be counted and triaged. A message the
-/// sink lets pass (the layer's host-wait gap) prints its own `LAYER-GAP` line instead.
-pub(crate) fn report_each_message() {
-    REPORT.store(true, Ordering::Relaxed);
-}
 
 /// What the validation layer reported that fails a run: every error, and every warning of the
 /// validation type (the rule the executor's own context applies); and, apart, the runtime's

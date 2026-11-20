@@ -146,10 +146,6 @@ impl<'c> Fields<'c> {
         Ok(set.map(|id| Some(id).filter(|&id| id != 0)))
     }
 
-    pub(super) fn str(&self, key: &str) -> Result<Option<&'c str>, PlayError> {
-        self.typed(key, "a string", Value::as_str)
-    }
-
     pub(super) fn list(&self, key: &str) -> Result<Option<&'c [Value]>, PlayError> {
         self.typed(key, "a list", Value::as_list)
     }

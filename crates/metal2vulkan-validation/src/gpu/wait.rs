@@ -299,68 +299,6 @@ pub(crate) mod vulkan {
         settle(&mut Fence { device, fence }, backend, operation)
     }
 
-    /// A timeline semaphore's value, for the device lanes (`runtime_lane::commit_costs`).
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    struct Timeline<'a> {
-        device: &'a Device,
-        semaphore: vk::Semaphore,
-        value: u64,
-    }
-
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    impl CompletionSource for Timeline<'_> {
-        fn wait(&mut self, timeout: Duration) -> WaitOutcome {
-            let nanos = u64::try_from(timeout.min(super::MAX_WAIT_TIMEOUT).as_nanos())
-                .expect("the wait bound fits in u64 nanoseconds");
-            let semaphores = [self.semaphore];
-            let values = [self.value];
-            let info = vk::SemaphoreWaitInfo::default()
-                .semaphores(&semaphores)
-                .values(&values);
-            match unsafe { self.device.wait_semaphores(&info, nanos) } {
-                Ok(()) => WaitOutcome::Completed,
-                Err(vk::Result::TIMEOUT) => WaitOutcome::TimedOut,
-                Err(vk::Result::ERROR_DEVICE_LOST) => {
-                    WaitOutcome::SuspectedFault("VK_ERROR_DEVICE_LOST".into())
-                }
-                // As a fence's: the submission is over only if its value is observably reached.
-                Err(error) => {
-                    match unsafe { self.device.get_semaphore_counter_value(self.semaphore) } {
-                        Ok(reached) if reached >= self.value => {
-                            WaitOutcome::Failed(format!("timeline wait: {error}"))
-                        }
-                        Ok(reached) => WaitOutcome::Unresolved(format!(
-                            "timeline wait failed ({error}) at {reached}, below {}",
-                            self.value
-                        )),
-                        Err(status) => WaitOutcome::Unresolved(format!(
-                            "timeline wait failed ({error}) and its value is unknown ({status})"
-                        )),
-                    }
-                }
-            }
-        }
-    }
-
-    /// Wait for timeline `semaphore` to reach `value`, signaled by a submission `operation` just
-    /// made, under the hang protocol, as [`wait_for_fence`] does a fence. Returns only once that
-    /// signal is no longer in flight.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn wait_for_timeline(
-        device: &Device,
-        semaphore: vk::Semaphore,
-        value: u64,
-        backend: SubmissionBackend,
-        operation: &str,
-    ) -> Result<(), String> {
-        let mut timeline = Timeline {
-            device,
-            semaphore,
-            value,
-        };
-        settle(&mut timeline, backend, operation)
-    }
-
     /// Wait, bounded, until everything submitted to `queue` has finished, so the device may be
     /// destroyed. Replaces `vkDeviceWaitIdle`, which cannot time out: an empty submission with a
     /// fence signals once all earlier work on the queue has completed.

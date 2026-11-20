@@ -178,14 +178,6 @@ pub(crate) struct RestrictedDevice {
     pub(crate) kept: Vec<String>,
     pub(crate) record: serde_json::Value,
 }
-/// The loader-word guard, for the runtime lane's tests that make their own devices
-/// (`runtime_lane/presenting.rs`).
-#[cfg(all(
-    test,
-    any(m2v_gpu, m2v_cpu_icd),
-    any(target_os = "linux", target_os = "macos")
-))]
-pub(crate) use platform::LoaderWord;
 
 #[cfg(test)]
 pub(crate) mod tests;
