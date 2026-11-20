@@ -54,7 +54,7 @@
 
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
-use crate::command::{self, CbInner, CommandBufferError, Handler, Pending, Segment};
+use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
@@ -217,7 +217,8 @@ pub(crate) struct WorkState {
     stop: bool,
     /// Quiesced or torn down: commits and uploads are refused.
     closed: bool,
-    lost: bool,
+    /// The device's first loss, from which it is lost ([`Work::lose`]).
+    loss: Option<DeviceLoss>,
     /// The staging calls asleep for a span of the region another call holds ([`Work::stage`]): a
     /// release signals [`Work::spans`] only while there are any, so with none it makes no call.
     span_sleepers: u32,
@@ -527,7 +528,7 @@ impl Work {
                 dirty: false,
                 stop: false,
                 closed: false,
-                lost: false,
+                loss: None,
                 span_sleepers: 0,
             }),
             changed: Condvar::new(),
@@ -841,7 +842,7 @@ impl Work {
                 Oldest::Pending => state.flush(),
                 // Another call finishes writing or reading its span: its release wakes this one.
                 Oldest::Busy => {
-                    if state.lost {
+                    if state.lost() {
                         return Err(Error::Vulkan {
                             call: "vkWaitSemaphores",
                             result: vk::Result::ERROR_DEVICE_LOST,
@@ -1148,10 +1149,11 @@ impl Work {
         self.release_spans(&state);
     }
 
-    /// At a loss: the submit thread ends everything it holds.
-    pub(crate) fn lose(&self) {
+    /// At a loss: the submit thread ends everything it holds. The first loss's cause is kept, and
+    /// a later one's dropped.
+    pub(crate) fn lose(&self, loss: DeviceLoss) {
         let mut state = self.lock();
-        state.lost = true;
+        state.loss.get_or_insert(loss);
         state.dirty = true;
         self.wake();
         self.release_spans(&state);
@@ -1169,7 +1171,12 @@ impl WorkState {
     }
 
     pub(crate) fn lost(&self) -> bool {
-        self.lost
+        self.loss.is_some()
+    }
+
+    /// The device's first loss, None while it is not lost.
+    pub(crate) fn loss(&self) -> Option<DeviceLoss> {
+        self.loss
     }
 
     /// The next place in the commit order.
@@ -1837,7 +1844,7 @@ pub(crate) fn run(core: Arc<Core>) {
     let work = &core.work;
     let mut state = work.lock();
     loop {
-        if state.lost {
+        if state.lost() {
             let submitted = state.progress;
             let error = |pending: Option<&Pending>| CommandBufferError::DeviceLost {
                 in_flight: pending.is_some_and(|pending| (1..=submitted).contains(&pending.value)),
@@ -2074,7 +2081,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     // An upload begun for textures gone before their move records nothing; one is kept, or begun,
     // for the copies into textures over a buffer in an image of their own.
     let sides = !overs.is_empty() || !backs.is_empty();
-    let mut ok = true;
+    // The first failed call, which loses the device.
+    let mut ok: Result<(), DeviceLoss> = Ok(());
     let mut empty = None;
     let mut kept = Vec::with_capacity(uploads.len());
     for upload in uploads {
@@ -2091,7 +2099,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         (true, Some(upload)) => kept.push(upload),
         (true, None) => match Upload::begin(core, 0) {
             Ok(upload) => kept.push(upload),
-            Err(_) => ok = false,
+            Err(Error::Vulkan { call, result }) => ok = Err(DeviceLoss { call, result }),
+            Err(error) => unreachable!("an upload's begin fails only in a Vulkan call: {error}"),
         },
         (false, Some(upload)) => upload.retire(core, times::OwnEnd::Unsent),
         (false, None) => {}
@@ -2105,7 +2114,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             times::end_own(device, upload.command, upload.stamps);
             // SAFETY: the upload's command buffer was recording under the work lock, which
             // `close` took it out under.
-            ok &= unsafe { device.end_command_buffer(upload.command) }.is_ok();
+            let ended = unsafe { device.end_command_buffer(upload.command) };
+            ok = ok.and(ended.map_err(DeviceLoss::of("vkEndCommandBuffer")));
         }
         // Each texture over a buffer in an image of its own that a segment leans on takes the
         // bytes shaders reach (`crate::over`).
@@ -2122,7 +2132,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         core.counters.count(Metric::Barriers);
         times::end_own(device, last.command, last.stamps);
         // SAFETY: as above.
-        ok &= unsafe { device.end_command_buffer(last.command) }.is_ok();
+        let ended = unsafe { device.end_command_buffer(last.command) };
+        ok = ok.and(ended.map_err(DeviceLoss::of("vkEndCommandBuffer")));
     }
     let ahead = uploads.len();
     segments.splice(
@@ -2162,7 +2173,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             ..Staged::default()
         }]),
     }
-    if ok {
+    if ok.is_ok() {
         let asked = times::host_time();
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         (core.work.asking).store(true, Ordering::SeqCst);
@@ -2213,7 +2224,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             // the one wait, a sparse bind's, is on a signal submitted earlier, and every signal
             // raises its semaphore;
             // the queue is held.
-            ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
+            ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }
+                .map_err(DeviceLoss::of("vkQueueSubmit2"));
             let nanos = times::host_time().saturating_sub(began);
             core.counters.submit_call(nanos);
             if call.met_free() {
@@ -2223,30 +2235,32 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
                 core.counters.submit_call_during_free(nanos);
             }
             drop(call);
-            if !ok {
+            if ok.is_err() {
                 break;
             }
         }
         drop(queue);
     }
-    if ok {
-        // A command buffer that presents a drawable is scheduled now that the submission that
-        // signals the consumer's semaphores has passed `vkQueueSubmit2`: a present made from here,
-        // its own scheduled handlers' included, waits on a submitted signal. They run before the
-        // completion thread learns of it below, so before its completed handlers. One whose
-        // submission failed is not scheduled; its scheduled handlers run as it retires.
-        let now = times::host_time();
-        for (cb, pending, error) in &mut finished {
-            if error.is_none() && pending.gpu.presents() {
-                let scheduled = std::mem::take(&mut pending.handlers.scheduled);
-                cb.scheduled(now, !scheduled.is_empty());
-                if !scheduled.is_empty() {
-                    command::run_scheduled(Arc::clone(cb), scheduled);
+    match ok {
+        Ok(()) => {
+            // A command buffer that presents a drawable is scheduled now that the submission that
+            // signals the consumer's semaphores has passed `vkQueueSubmit2`: a present made from
+            // here, its own scheduled handlers' included, waits on a submitted signal. They run
+            // before the completion thread learns of it below, so before its completed handlers.
+            // One whose submission failed is not scheduled; its scheduled handlers run as it
+            // retires.
+            let now = times::host_time();
+            for (cb, pending, error) in &mut finished {
+                if error.is_none() && pending.gpu.presents() {
+                    let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+                    cb.scheduled(now, !scheduled.is_empty());
+                    if !scheduled.is_empty() {
+                        command::run_scheduled(Arc::clone(cb), scheduled);
+                    }
                 }
             }
         }
-    } else {
-        complete::lose(core);
+        Err(loss) => complete::lose(core, loss),
     }
     core.done.submitted(
         core,

@@ -2071,6 +2071,8 @@ field	metal2vulkan-runtime::DepthStencilDescriptor.back_face_stencil	pub back_fa
 field	metal2vulkan-runtime::DepthStencilDescriptor.depth_compare_function	pub depth_compare_function: CompareFunction
 field	metal2vulkan-runtime::DepthStencilDescriptor.depth_write_enabled	pub depth_write_enabled: bool
 field	metal2vulkan-runtime::DepthStencilDescriptor.front_face_stencil	pub front_face_stencil: StencilDescriptor
+field	metal2vulkan-runtime::DeviceLoss.call	pub call: &'static str
+field	metal2vulkan-runtime::DeviceLoss.result	pub result: vk::Result
 field	metal2vulkan-runtime::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-runtime::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
 field	metal2vulkan-runtime::DeviceOptions.features	pub features: Vec<ConsumerFeature>
@@ -7457,6 +7459,7 @@ method	metal2vulkan-runtime::Device::import_d3d11_surface	pub fn import_d3d11_su
 method	metal2vulkan-runtime::Device::import_dma_buf	#[cfg(unix)] pub fn import_dma_buf(&self, fd: std::os::fd::OwnedFd, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-runtime::Device::import_dma_bufs	#[cfg(unix)] pub fn import_dma_bufs(&self, chunks: Vec<(std::os::fd::OwnedFd, u64)>, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-runtime::Device::import_host_memory	pub unsafe fn import_host_memory(&self, pointer: NonNull<u8>, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
+method	metal2vulkan-runtime::Device::loss	pub fn loss(&self) -> Option<DeviceLoss>
 method	metal2vulkan-runtime::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
@@ -8620,6 +8623,7 @@ struct	metal2vulkan-runtime::DepthStencilDescriptor	#[cfg_attr(feature = "serde"
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState
 struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-runtime::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
+struct	metal2vulkan-runtime::DeviceLoss	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct DeviceLoss
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DispatchVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct DispatchVariant
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event

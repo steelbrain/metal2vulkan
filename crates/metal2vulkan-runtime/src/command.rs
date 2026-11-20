@@ -86,7 +86,8 @@ pub enum CommandBufferError {
     /// The `VkDevice` was lost, or a submission failed, which the runtime takes as a loss. With
     /// one device, a fault anywhere ends every queue's work. `in_flight`: some of the command
     /// buffer had passed `vkQueueSubmit2` (Metal's hang or victim); false for one held or not yet
-    /// submitted, and for every commit after the loss.
+    /// submitted, and for every commit after the loss. [`Device::loss`] names the Vulkan call and
+    /// result that lost it.
     DeviceLost {
         /// Whether part of the command buffer had been submitted.
         in_flight: bool,
@@ -94,6 +95,32 @@ pub enum CommandBufferError {
     /// Ended without its held part running: by [`CommandQueue::abandon`](crate::CommandQueue::abandon),
     /// by [`Device::quiesce`], or at teardown. Segments before the held one may have run.
     NotRun,
+}
+
+/// The cause of a device's first loss ([`Device::loss`]): the Vulkan call that failed and what it
+/// returned.
+///
+/// Metal's counterpart is the code and description of `MTLCommandBuffer.error`, whose
+/// `MTLCommandBufferError` codes name a cause, such as `OutOfMemory`, `PageFault` or `Timeout`.
+/// The runtime reports every loss as [`CommandBufferError::DeviceLost`]; this names the call and
+/// result behind it. `call` is `vkQueueSubmit2` for a failed submission, `vkEndCommandBuffer`,
+/// `vkCreateCommandPool`, `vkAllocateCommandBuffers` or `vkBeginCommandBuffer` for a command buffer
+/// of the runtime's own that a submission could not record, and `vkGetSemaphoreCounterValue` or
+/// `vkWaitSemaphores` for the completion thread's read of the GPU's progress. Each takes any
+/// failed result as a loss, an out-of-memory one included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceLoss {
+    /// The Vulkan command, such as `vkQueueSubmit2`.
+    pub call: &'static str,
+    /// What it returned.
+    pub result: vk::Result,
+}
+
+impl DeviceLoss {
+    /// The loss a failed Vulkan `call` names, for `map_err`.
+    pub(crate) fn of(call: &'static str) -> impl FnOnce(vk::Result) -> DeviceLoss {
+        move |result| DeviceLoss { call, result }
+    }
 }
 
 /// A scheduled or completed handler.

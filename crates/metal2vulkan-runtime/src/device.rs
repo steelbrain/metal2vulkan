@@ -4,6 +4,7 @@
 use crate::arrays::Arrays;
 use crate::block::{Block, Claim};
 use crate::cache::{self, Caches};
+use crate::command::DeviceLoss;
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge, Site};
 use crate::error::{Error, Refusal};
@@ -866,6 +867,17 @@ impl Device {
         self.shared.core.counters.clone()
     }
 
+    /// What lost the device: the Vulkan call and result of its first loss, None while it is not
+    /// lost. Metal's counterpart is the code and description of `MTLCommandBuffer.error`
+    /// (`MTLCommandBufferError`'s `OutOfMemory`, `PageFault`, `Timeout`, ...). The runtime ends
+    /// every command buffer a loss reaches with
+    /// [`CommandBufferError::DeviceLost`](crate::CommandBufferError::DeviceLost), whatever the
+    /// cause; this names the call and result behind it ([`DeviceLoss`]). It is set before any
+    /// command buffer ends `DeviceLost`, and a later loss never changes it.
+    pub fn loss(&self) -> Option<DeviceLoss> {
+        self.shared.core.work.lock().loss()
+    }
+
     /// No Metal counterpart: takes a block of `class` memory of `len` bytes rounded up to 64 KiB
     /// (to the device's `bufferImageGranularity` where that is larger), for the consumer to place
     /// buffers in: a handle ([`Block`]) whose last drop gives it back. A block is a range of one
@@ -1009,10 +1021,10 @@ impl Device {
         f(*lock(&self.shared.core.queues.runtime))
     }
 
-    /// For the device tests: the runtime acts as at a loss of the device.
+    /// For the device tests: the runtime acts as at a loss of the device, from `loss`.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn lose_for_test(&self) {
-        complete::lose(&self.shared.core);
+    pub(crate) fn lose_for_test(&self, loss: DeviceLoss) {
+        complete::lose(&self.shared.core, loss);
     }
 }
 

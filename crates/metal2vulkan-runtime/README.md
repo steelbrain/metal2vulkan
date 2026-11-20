@@ -1746,8 +1746,10 @@ made, with no lock, and never rewritten for layouts.
   thread ends what it holds, the completion thread ends what is in flight once the device is idle
   (at once on a lost device), host waits for pending signals end false, and every later commit
   ends at once. `CommandBufferError::DeviceLost { in_flight }` tells the command buffers that had
-  passed `vkQueueSubmit2` from the rest. Teardown then completes, and a new device can be made on
-  the same instance.
+  passed `vkQueueSubmit2` from the rest. `Device::loss()` names the first loss's cause, a
+  `DeviceLoss` of the Vulkan call that failed and its `VkResult`, from before any command buffer
+  ends `DeviceLost`; a later loss does not change it. Teardown then completes, and a new device can
+  be made on the same instance.
 
 ### Quiesce and exit
 
@@ -1788,7 +1790,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   on the same instance and make its resources again there; nothing carries over, and an address or
   resource ID from the lost device names nothing on the new one. Vulkan gives an imported allocation
   no way to take a chosen device address (`VUID-VkMemoryAllocateInfo-opaqueCaptureAddress-03333`),
-  so a guest's addresses cannot be kept across a new device.
+  so a guest's addresses cannot be kept across a new device. A failed `vkQueueSubmit2` of any
+  result, out-of-memory included, ends the device; `Device::loss()` names the call and result.
 - Command buffers committed while an earlier one of their queue runs are reported complete
   together, at the last one's end, where Metal reports each at its own. Measured with the harness
   row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,

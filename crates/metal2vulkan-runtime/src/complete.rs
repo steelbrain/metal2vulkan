@@ -3,7 +3,7 @@
 //! the work in flight at a loss.
 
 use crate::capture::CopyIn;
-use crate::command::{self, CbInner, CommandBufferError, Gpu, Handlers, Pending};
+use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Gpu, Handlers, Pending};
 use crate::counters::Metric;
 use crate::device::{lock, Core};
 use crate::error::Error;
@@ -317,11 +317,11 @@ impl Done {
     }
 }
 
-/// The device is lost, or a submission failed: the submit thread ends what it holds and every
-/// later commit, and the completion thread ends what is in flight once the device is idle,
-/// without waiting on the GPU again.
-pub(crate) fn lose(core: &Core) {
-    core.work.lose();
+/// The device is lost, or a submission failed, from `loss`: the submit thread ends what it holds
+/// and every later commit, and the completion thread ends what is in flight once the device is
+/// idle, without waiting on the GPU again.
+pub(crate) fn lose(core: &Core, loss: DeviceLoss) {
+    core.work.lose(loss);
     let mut state = core.done.lock();
     state.lost = true;
     core.done.wake(&mut state, &core.device, false);
@@ -381,11 +381,13 @@ enum Seen {
 }
 
 /// Whether a host wait on `semaphore` for `value`, with a timeout of 0, reports it reached.
+///
+/// Err: the loss a failed wait names.
 pub(crate) fn reached_by_wait(
     device: &ash::Device,
     semaphore: vk::Semaphore,
     value: u64,
-) -> Result<bool, vk::Result> {
+) -> Result<bool, DeviceLoss> {
     let semaphores = [semaphore];
     let values = [value];
     let wait = vk::SemaphoreWaitInfo::default()
@@ -395,7 +397,10 @@ pub(crate) fn reached_by_wait(
     match unsafe { device.wait_semaphores(&wait, 0) } {
         Ok(()) => Ok(true),
         Err(vk::Result::TIMEOUT) => Ok(false),
-        Err(error) => Err(error),
+        Err(result) => Err(DeviceLoss {
+            call: "vkWaitSemaphores",
+            result,
+        }),
     }
 }
 
@@ -418,7 +423,7 @@ pub(crate) fn run(core: Arc<Core>) {
         let mut retire = std::mem::take(&mut state.ended);
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
-        let mut newly_lost = false;
+        let mut newly_lost = None;
         // The host time the thread saw this round's completions, which no GPU time of theirs
         // passes (`Calibration::place`).
         let mut seen_at = None;
@@ -449,8 +454,9 @@ pub(crate) fn run(core: Arc<Core>) {
                     true => reached_by_wait(device, done.progress, front)
                         .map(|by| Seen::Reached(if by { front } else { 0 })),
                     // SAFETY: the progress semaphore is the device's.
-                    false => unsafe { device.get_semaphore_counter_value(done.progress) }.and_then(
-                        |read| match read >= front {
+                    false => unsafe { device.get_semaphore_counter_value(done.progress) }
+                        .map_err(DeviceLoss::of("vkGetSemaphoreCounterValue"))
+                        .and_then(|read| match read >= front {
                             true => reached_by_wait(device, done.progress, read).map(|by| {
                                 if by {
                                     Seen::Reached(read)
@@ -459,8 +465,7 @@ pub(crate) fn run(core: Arc<Core>) {
                                 }
                             }),
                             false => Ok(Seen::Reached(read)),
-                        },
-                    ),
+                        }),
                 };
                 match seen {
                     Ok(Seen::Reached(reached)) => {
@@ -481,9 +486,9 @@ pub(crate) fn run(core: Arc<Core>) {
                         behind = Some(read);
                         core.counters.count(Metric::WaitsBehindCounter);
                     }
-                    Err(_) => {
+                    Err(loss) => {
                         state.lost = true;
-                        newly_lost = true;
+                        newly_lost = Some(loss);
                     }
                 }
             }
@@ -500,11 +505,11 @@ pub(crate) fn run(core: Arc<Core>) {
         for event in &fired {
             event.observe(None, &mut fire);
         }
-        if newly_lost || !retire.is_empty() || !fire.is_empty() {
+        if newly_lost.is_some() || !retire.is_empty() || !fire.is_empty() {
             state.waiting = Waiting::Not;
             drop(state);
-            if newly_lost {
-                core.work.lose();
+            if let Some(loss) = newly_lost {
+                core.work.lose(loss);
             }
             // Set before the submit thread's mark is read (`Work::completed`): a group it keeps
             // while submissions were in flight goes, a completion having left fewer of them, or
@@ -598,11 +603,17 @@ pub(crate) fn run(core: Arc<Core>) {
         let result = unsafe { device.wait_semaphores(&wait, u64::MAX) };
         state = done.lock();
         state.waiting = Waiting::Not;
-        if result.is_err_and(|result| result != vk::Result::TIMEOUT) {
-            state.lost = true;
-            drop(state);
-            core.work.lose();
-            state = done.lock();
+        match result {
+            Err(vk::Result::TIMEOUT) | Ok(()) => {}
+            Err(result) => {
+                state.lost = true;
+                drop(state);
+                core.work.lose(DeviceLoss {
+                    call: "vkWaitSemaphores",
+                    result,
+                });
+                state = done.lock();
+            }
         }
     }
     let watched = std::mem::take(&mut state.watched);

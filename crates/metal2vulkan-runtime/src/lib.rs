@@ -64,7 +64,7 @@ pub use arrays::{IndexClass, IndexGrant, ResourceId};
 pub use blit::{BlitCommandEncoder, BufferLayout, TexturePlace};
 pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
-pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
+pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus, DeviceLoss};
 pub use counters::{Counters, Gauges, Metrics, SiteAllocations, Timed};
 #[cfg(windows)]
 pub use d3d11::D3d11Plane;

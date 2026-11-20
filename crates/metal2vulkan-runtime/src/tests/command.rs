@@ -99,8 +99,8 @@ pub(crate) mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
-        CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType,
-        Error, Fence, Gauges, Instance, MemoryClass, Refusal, SharedEvent,
+        CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceLoss, DeviceOptions,
+        DispatchType, Error, Fence, Gauges, Instance, MemoryClass, Refusal, SharedEvent,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3568,10 +3568,20 @@ pub(crate) mod on_device {
 
     /// At a loss: a host wait for a pending signal ends false; the command buffer in flight ends
     /// DeviceLost in flight, the held one and every later commit DeviceLost not in flight; the
-    /// device tears down, and a new device opens and runs work.
+    /// device names the first loss's call and result, none before it, and keeps them through a
+    /// second loss; the device tears down, and a new device opens, names no loss, and runs work.
     #[test]
     fn every_device_ends_its_work_at_a_loss_and_a_new_device_opens() {
+        let first = DeviceLoss {
+            call: "vkQueueSubmit2",
+            result: vk::Result::ERROR_DEVICE_LOST,
+        };
+        let second = DeviceLoss {
+            call: "vkWaitSemaphores",
+            result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+        };
         each_device("device_loss", |name, instance, device| {
+            assert_eq!(device.loss(), None, "{name}: no loss before the loss");
             let (f, g) = (shared_event(&device), shared_event(&device));
             let queue = queue(&device);
             let other = self::queue(&device);
@@ -3596,12 +3606,19 @@ pub(crate) mod on_device {
                         .expect("a wait outside a scheduled handler")
                 });
                 thread::sleep(Duration::from_millis(20));
-                device.lose_for_test();
+                device.lose_for_test(first);
                 waiter.join().expect("the waiter")
             });
             assert!(
                 !waiting,
                 "{name}: a wait for a pending signal ends at the loss"
+            );
+            assert_eq!(device.loss(), Some(first), "{name}: the loss's cause");
+            device.lose_for_test(second);
+            assert_eq!(
+                device.loss(),
+                Some(first),
+                "{name}: a second loss keeps the first's cause"
             );
 
             busy.open();
@@ -3622,6 +3639,7 @@ pub(crate) mod on_device {
             drop((busy, f, g, queue, other, device));
 
             let device = Device::new(&physical, DeviceOptions::default()).expect("a new device");
+            assert_eq!(device.loss(), None, "{name}: the new device's loss");
             let counters = device.counters();
             let mut arena = Arena::new(&device);
             let a = arena.buffer();
