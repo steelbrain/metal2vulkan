@@ -196,7 +196,7 @@ pub struct CompressedDecode {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<CompressedDecode> {
     (0..FORMATS.len())
         .map(|at| CompressedDecode { at })

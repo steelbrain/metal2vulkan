@@ -518,7 +518,7 @@ pub struct PvrtcRows {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<PvrtcRows> {
     (0..FORMATS.len()).map(|at| PvrtcRows { at }).collect()
 }

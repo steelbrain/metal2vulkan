@@ -188,7 +188,7 @@ pub struct EtcTextures {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<EtcTextures> {
     (0..FORMATS.len()).map(|at| EtcTextures { at }).collect()
 }

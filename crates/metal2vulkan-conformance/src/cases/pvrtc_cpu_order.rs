@@ -253,7 +253,7 @@ pub struct PvrtcCpuOrder {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<PvrtcCpuOrder> {
     (0..FORMATS.len()).map(|at| PvrtcCpuOrder { at }).collect()
 }

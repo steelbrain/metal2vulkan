@@ -352,7 +352,7 @@ pub struct AstcTextures {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<AstcTextures> {
     (0..FORMATS.len()).map(|at| AstcTextures { at }).collect()
 }

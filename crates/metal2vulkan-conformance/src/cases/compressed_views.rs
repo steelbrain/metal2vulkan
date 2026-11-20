@@ -366,7 +366,7 @@ pub struct CompressedViews {
     at: usize,
 }
 
-/// Every format's case, in [`FORMATS`] order.
+/// Every format's case, in `FORMATS` order.
 pub fn all() -> Vec<CompressedViews> {
     (0..FORMATS.len())
         .map(|at| CompressedViews { at })
