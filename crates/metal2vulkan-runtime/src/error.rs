@@ -1485,12 +1485,28 @@ pub enum RenderPassKind {
     /// pass (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
     SampleCounts,
     /// A resolve the runtime does not build: into a resolve texture of another pixel format than
-    /// its attachment's (the format's sRGB twin among them), of more than one sample, made without
-    /// `RenderTarget` usage, or whose level is not the attachment level's width and height; of an
-    /// attachment of one sample; of an extended-range, bfloat or YCbCr color attachment, whose
-    /// image Vulkan's average would read in its own encoding; or of a depth and a stencil
-    /// attachment into two views (VUID-VkRenderingInfo-pDepthAttachment-06086).
+    /// its attachment's (the format's sRGB twin among them), of more than one sample, or whose
+    /// level is not the attachment level's width and height; of an attachment of one sample; of
+    /// an extended-range, bfloat or YCbCr color attachment, whose image Vulkan's average would
+    /// read in its own encoding; or of a depth and a stencil attachment into two views
+    /// (VUID-VkRenderingInfo-pDepthAttachment-06086).
     Resolve,
+    /// A resolve into a texture made without `RenderTarget` usage (and not of Metal's unknown
+    /// usage), on every device. Metal resolves into a texture of any usage: probe
+    /// `resolve_texture_usage.m` in the conformance crate (an Apple M3 Max, macOS 27.0.1, job
+    /// m3-max-59768) resolved a 4-sample `BGRA8Unorm_sRGB` attachment into a texture of
+    /// `ShaderRead` usage and of `ShaderRead | ShaderWrite` usage, plain and under Metal's
+    /// validation layer, each reading the texels of a `RenderTarget` one. Vulkan resolves only
+    /// into a view with the attachment usage (VUID-VkRenderingInfo-colorAttachmentCount-09476),
+    /// and that usage on every texture a pass might resolve into grows memory on RADV. Of optimal
+    /// `RGBA8Unorm`, `BGRA8Unorm_sRGB`, `RGBA16Float`, `R32Float` and `RG11B10Float` images of
+    /// 256 x 256 and 1920 x 1080, one level and a full chain, with `ShaderRead` and
+    /// `ShaderRead | ShaderWrite` usage, adding the attachment usage grows the size of 18 of 36 on
+    /// the Radeon 780M (every 1920 x 1080 one; `RGBA8Unorm` of one level from 8,847,360 to
+    /// 8,896,512 bytes) and 14 of 36 on the RX 550 (8,847,360 to 8,882,200), alignments equal,
+    /// and none on the Iris Xe, the RTX 3090, llvmpipe or KosmicKrisp (jobs m3-max-59774,
+    /// m3-max-59775 and m3-max-59776).
+    ResolveUsage,
     /// A depth or stencil resolve the device's resolve modes do not offer
     /// (`VkPhysicalDeviceDepthStencilResolveProperties`): a depth attachment's `Min` or `Max`
     /// filter where `supportedDepthResolveModes` lacks its mode; the stencil filter

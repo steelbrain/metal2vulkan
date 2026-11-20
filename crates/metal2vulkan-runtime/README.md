@@ -2850,9 +2850,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   and a stencil attachment that both resolve resolve into one view, paired as the device's
   `independentResolve` and `independentResolveNone` allow. The resolve texture takes the
   attachment's pixel format and one sample, and its level the attachment level's width and
-  height. Refused as Metal refuses it: a resolving action with no resolve texture
-  (`Refusal::ResolveTexture`, also where an encoder sets it later) and an integer format's resolve
-  (`Refusal::ResolveFormat`). `Metrics::resolves` counts the attachments passes resolved.
+  height. Metal resolves into a texture of any usage; one made without `RenderTarget` usage is a
+  known gap (`RenderPassKind::ResolveUsage`). Refused as Metal refuses it: a resolving action with
+  no resolve texture (`Refusal::ResolveTexture`, also where an encoder sets it later) and an
+  integer format's resolve (`Refusal::ResolveFormat`). `Metrics::resolves` counts the attachments
+  passes resolved.
 - A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
   `float`: an optimal image in its real layout, of the Vulkan format the translator's format table
   chooses by the device's format query (`Depth32Float` is `D32_SFLOAT`, `Depth32Float_Stencil8`
@@ -3122,10 +3124,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), attachments of
   two sample counts (`SampleCounts`: Vulkan renders one count into every attachment of a pass,
   `VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857`), a resolve the runtime does not
-  build (`Resolve`: into a resolve texture of another pixel format, of more than one sample, made
-  without `RenderTarget` usage or whose level is not the attachment level's size; out of an
-  attachment of one sample; of an extended-range, bfloat or YCbCr format, whose image Vulkan's
-  average would read in its own encoding; or of a depth and a stencil attachment into two views),
+  build (`Resolve`: into a resolve texture of another pixel format, of more than one sample, or
+  whose level is not the attachment level's size; out of an attachment of one sample; of an
+  extended-range, bfloat or YCbCr format, whose image Vulkan's average would read in its own
+  encoding; or of a depth and a stencil attachment into two views), a resolve into a texture made
+  without `RenderTarget` usage (`ResolveUsage`: Metal resolves into a texture of any usage;
+  Vulkan only into a view with the attachment usage,
+  `VUID-VkRenderingInfo-colorAttachmentCount-09476`, and that usage on every texture a shader
+  reads grows its memory on RADV),
   a depth or stencil resolve the device's resolve modes do not offer (`ResolveFilter`: `Min` or
   `Max` where `supportedDepthResolveModes` lacks it, the stencil filter `DepthResolvedSample`,
   which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or

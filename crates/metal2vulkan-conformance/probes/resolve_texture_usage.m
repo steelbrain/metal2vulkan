@@ -32,7 +32,7 @@
 //     env -u MTL_DEBUG_LAYER ./resolve_texture_usage $c
 //   done
 //
-// WHAT IT MEASURED: see the runtime's `RenderPassKind::Resolve`, with the run it came from.
+// WHAT IT MEASURED: see the runtime's `RenderPassKind::ResolveUsage`, with the run it came from.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

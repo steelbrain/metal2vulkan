@@ -202,9 +202,10 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub clear_color: ClearColor,
     /// `resolveTexture`: the texture a store action that resolves resolves into; `None` by
     /// default, and read only where the store action resolves, as Metal reads it. It takes the
-    /// attachment's pixel format, one sample and `RenderTarget` usage, and its level the
-    /// attachment level's width and height; another is [`Gap::RenderPass`] of
-    /// [`RenderPassKind::Resolve`].
+    /// attachment's pixel format and one sample, and its level the attachment level's width and
+    /// height; another is [`Gap::RenderPass`] of [`RenderPassKind::Resolve`]. Metal resolves into
+    /// a texture of any usage; one made without `RenderTarget` usage is [`Gap::RenderPass`] of
+    /// [`RenderPassKind::ResolveUsage`].
     pub resolve_texture: Option<Texture>,
     /// `resolveLevel`: the resolve texture's mipmap level resolved into.
     pub resolve_level: u32,
@@ -992,8 +993,9 @@ struct ResolveInto<'a> {
 ///
 /// Err: [`Refusal::OtherDevice`] for another device's resolve texture; [`Gap::RenderPass`] of
 /// [`RenderPassKind::Resolve`] for an attachment of one sample, and for a resolve texture of
-/// another pixel format, of more than one sample, made without `RenderTarget` usage, or whose
-/// level is not the attachment level's width and height; [`Gap::RenderPass`] of
+/// another pixel format, of more than one sample, or whose level is not the attachment level's
+/// width and height; [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a resolve
+/// texture made without `RenderTarget` usage; [`Gap::RenderPass`] of
 /// [`RenderPassKind::TextureType`] for a depth plane but 0; what the resolve texture's
 /// attachment view returns.
 fn resolve(
@@ -1008,13 +1010,14 @@ fn resolve(
         return Err(Error::Refused(Refusal::OtherDevice));
     }
     let d = into.texture.descriptor();
-    let renders = d.usage.is_empty() || d.usage.contains(TextureUsage::RENDER_TARGET);
     if attachment.samples == vk::SampleCountFlags::TYPE_1
         || d.sample_count != 1
         || d.pixel_format != texture.descriptor().pixel_format
-        || !renders
     {
         return gap(RenderPassKind::Resolve);
+    }
+    if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
+        return gap(RenderPassKind::ResolveUsage);
     }
     if into.depth_plane != 0 {
         return gap(RenderPassKind::TextureType);

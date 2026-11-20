@@ -8,13 +8,14 @@
 //!   static note `DeviceRoundedResolve` names), and every other level and slice of the resolve
 //!   texture reads zero; a pass that resolves no color attachment carries no note. A resolving
 //!   action with no resolve texture is refused, and so is an integer format's resolve; a resolve
-//!   into another format or out of one sample is a gap; an `Unknown` store with a resolve texture
-//!   resolves, and its encoder may then set only an action that resolves (`LateStore`). A
-//!   4-sample `Depth32Float` attachment resolves by `Sample0` on every device, and by `Min` and
-//!   `Max` where the device's depth resolve modes have them (else `ResolveFilter`): a pixel half
-//!   covered keeps sample 0's depth, the least or the greatest. A stencil resolve by
-//!   `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing walks no resolve
-//!   as its encoder begins and ends; one that resolves walks its resolves.
+//!   into another format or out of one sample is a gap, and one into a texture of `ShaderRead`
+//!   or `ShaderRead | ShaderWrite` usage is the gap `ResolveUsage`; an `Unknown` store with a
+//!   resolve texture resolves, and its encoder may then set only an action that resolves
+//!   (`LateStore`). A 4-sample `Depth32Float` attachment resolves by `Sample0` on every device,
+//!   and by `Min` and `Max` where the device's depth resolve modes have them (else
+//!   `ResolveFilter`): a pixel half covered keeps sample 0's depth, the least or the greatest. A
+//!   stencil resolve by `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing
+//!   walks no resolve as its encoder begins and ends; one that resolves walks its resolves.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
 //!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
@@ -325,6 +326,30 @@ mod on_device {
                 Some(gap(RenderPassKind::Resolve).to_string()),
                 "{name}: one sample"
             );
+            // Into a texture made without `RenderTarget` usage, which Metal resolves into.
+            for usage in [
+                TextureUsage::SHADER_READ,
+                TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+            ] {
+                let mut td = TextureDescriptor::new(
+                    TextureType::Type2D,
+                    PixelFormat::RGBA8Unorm,
+                    SIDE,
+                    SIDE,
+                );
+                td.usage = usage;
+                td.storage_mode = StorageMode::Private;
+                let into = (device.new_texture_for_views(&td))
+                    .unwrap_or_else(|error| panic!("{name}: {usage:?}: {error}"));
+                let mut p = pass(&samples, None);
+                p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+                p.color_attachments[0].resolve_texture = Some(into);
+                assert_eq!(
+                    refused(&device, &p).map(|e| e.to_string()),
+                    Some(gap(RenderPassKind::ResolveUsage).to_string()),
+                    "{name}: a resolve into {usage:?}"
+                );
+            }
             // An integer format's resolve, where the device makes a 4-sample one.
             if let Ok(ints) = four(name, &device, PixelFormat::RGBA8Uint) {
                 let into = target(&device, PixelFormat::RGBA8Uint, TextureUsage::RENDER_TARGET);

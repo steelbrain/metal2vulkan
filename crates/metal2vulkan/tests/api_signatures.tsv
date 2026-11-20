@@ -10697,6 +10697,7 @@ variant	metal2vulkan-runtime::RenderPassKind::LateStore	LateStore
 variant	metal2vulkan-runtime::RenderPassKind::NoAttachment	NoAttachment
 variant	metal2vulkan-runtime::RenderPassKind::Resolve	Resolve
 variant	metal2vulkan-runtime::RenderPassKind::ResolveFilter	ResolveFilter
+variant	metal2vulkan-runtime::RenderPassKind::ResolveUsage	ResolveUsage
 variant	metal2vulkan-runtime::RenderPassKind::SampleCounts	SampleCounts
 variant	metal2vulkan-runtime::RenderPassKind::StoreAction	StoreAction
 variant	metal2vulkan-runtime::RenderPassKind::TextureType	TextureType
