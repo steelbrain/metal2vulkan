@@ -64,8 +64,12 @@ impl Instance {
     /// instance then enables `VK_LUNARG_direct_driver_loading` and gives the loader the list in
     /// its exclusive mode (`VK_DIRECT_DRIVER_LOADING_MODE_EXCLUSIVE_LUNARG`): no driver the system
     /// installed, or that the loader's variables name, is loaded. An instance extension is offered
-    /// where the loader or one of the drivers lists it, as the loader does not ask such drivers
-    /// for theirs. With no loader and no driver, it is [`Instance::new`].
+    /// where one of the drivers lists it, as the loader does not ask such drivers for theirs, or,
+    /// for one the loader implements itself (`VK_KHR_portability_enumeration`: "This extension is
+    /// implemented in the loader"), where the loader lists it. The loader's own list also holds
+    /// the extensions of the drivers its manifests name, which the exclusive mode does not load,
+    /// so no other extension counts for being on it. With no loader and no driver, it is
+    /// [`Instance::new`].
     ///
     /// Err: as [`Instance::new`], [`Error::Loader`] where the library at `loader` does not load;
     /// [`Error::NoDirectDriverLoading`] where a driver is given and the loader does not offer
@@ -235,10 +239,13 @@ fn names(listed: Result<Vec<vk::ExtensionProperties>, vk::Result>) -> Result<Vec
 }
 
 /// The instance extensions instance creation enables: the floor's, then each of the optional
-/// ones' and of `extensions` that the `loader` or the consumer's drivers (`drivers`) list,
-/// once each, and where the consumer gives drivers (`direct`), direct driver loading, which only
-/// the loader offers. Err: [`Error::NoDirectDriverLoading`] where `direct` and the loader does
-/// not list it.
+/// ones' and of `extensions` that is offered, once each, and where the consumer gives drivers
+/// (`direct`), direct driver loading, which only the loader offers. Without drivers, an extension
+/// is offered where the `loader` lists it. With them (`drivers`, the names they list), the loader
+/// loads no driver its manifests name, though its list holds their extensions too: there an
+/// extension is offered where a given driver lists it, or, for the optional ones, which the loader
+/// implements itself (`VK_KHR_portability_enumeration`), where the loader lists it. Err:
+/// [`Error::NoDirectDriverLoading`] where `direct` and the loader does not list it.
 pub(crate) fn enabled(
     loader: &[CString],
     drivers: &[CString],
@@ -248,14 +255,13 @@ pub(crate) fn enabled(
     let mut names: Vec<CString> = (floor::INSTANCE_EXTENSIONS.iter())
         .map(|&name| name.to_owned())
         .collect();
-    let listed = |name: &CStr| {
-        loader
-            .iter()
-            .chain(drivers)
-            .any(|offered| offered.as_c_str() == name)
-    };
-    for &name in floor::OPTIONAL_INSTANCE_EXTENSIONS.iter().chain(extensions) {
-        if listed(name) && !names.iter().any(|enabled| enabled.as_c_str() == name) {
+    let lists =
+        |list: &[CString], name: &CStr| list.iter().any(|offered| offered.as_c_str() == name);
+    let optional = (floor::OPTIONAL_INSTANCE_EXTENSIONS.iter()).map(|&name| (name, true));
+    let asked = extensions.iter().map(|&name| (name, false));
+    for (name, in_the_loader) in optional.chain(asked) {
+        let offered = lists(drivers, name) || ((!direct || in_the_loader) && lists(loader, name));
+        if offered && !names.iter().any(|enabled| enabled.as_c_str() == name) {
             names.push(name.to_owned());
         }
     }

@@ -195,6 +195,20 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
         enabled(&owned(&[portability]), &drivers, &[], true),
         Err(Error::NoDirectDriverLoading)
     ));
+    // The loader also lists a manifest driver's extension (`headless`). Without drivers it is the
+    // system's driver's, and counts; with drivers that do not list it, the exclusive mode loads no
+    // driver that offers it, so it is left out, while the loader's own portability enumeration
+    // still counts.
+    let headless = ash::ext::headless_surface::NAME;
+    let loader = owned(&[direct, portability, headless]);
+    assert_eq!(
+        names(enabled(&loader, &[], &[headless], false)),
+        owned(&[surface, portability, headless])
+    );
+    assert_eq!(
+        names(enabled(&loader, &drivers, &[headless], true)),
+        owned(&[surface, portability, direct])
+    );
 }
 
 /// The consumer's loader is the library at its path, alone: a path that holds none is refused by
