@@ -58,6 +58,7 @@ pub(crate) mod steps {
 
     /// Starts a make's steps.
     pub(crate) fn begin() {
+        crate::submit::waits::take();
         STEPS.with(|steps| {
             let mut steps = steps.borrow_mut();
             steps.0 = host_time();

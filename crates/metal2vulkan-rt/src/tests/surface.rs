@@ -1279,8 +1279,9 @@ mod on_device {
     /// and RG16 at 1920x1080; NV12: R8 and RG8 alike), on an idle queue and behind a busy one
     /// (fills of a 256 MiB Private buffer committed before each make until about 100 ms of the
     /// GPU's work is ahead, as the busy-queue timing commits them): the first make, then the median
-    /// and the longest of the next ten, each make followed by its ready wait, and behind a busy
-    /// queue by the last fill's completion. It writes no zero: the memory's bytes are undefined.
+    /// and the longest of the next ten, with the make's waits for the work lock in all
+    /// ([`crate::submit::waits`]), each make followed by its ready wait, and behind a busy queue
+    /// by the last fill's completion. It writes no zero: the memory's bytes are undefined.
     /// Printed only.
     #[test]
     fn every_device_splits_a_4k_surface_make_by_step() {
@@ -1370,6 +1371,7 @@ mod on_device {
                         let made = crate::host_time() - began;
                         let mut steps = crate::surface::steps::taken();
                         steps.push(("make", made));
+                        steps.push(("lock waits", crate::submit::waits::take()));
                         let began = crate::host_time();
                         (surface.wait_until_ready())
                             .unwrap_or_else(|error| panic!("{label}: the ready wait: {error}"));

@@ -128,6 +128,26 @@ pub(crate) const UPLOAD_BYTES: u64 = 64 << 20;
 /// The new textures awaiting their home layout at which the dead among them are first dropped.
 pub(crate) const HOMES_PRUNE: usize = 64;
 
+/// For the device tests: the nanoseconds this thread waited for the work lock
+/// ([`Work::lock`]), in all, since it last took them.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod waits {
+    use std::cell::Cell;
+
+    thread_local! {
+        static WAITED: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn add(nanos: u64) {
+        WAITED.with(|waited| waited.set(waited.get().saturating_add(nanos)));
+    }
+
+    /// The nanoseconds waited since the last take, taken.
+    pub(crate) fn take() -> u64 {
+        WAITED.with(|waited| waited.replace(0))
+    }
+}
+
 /// The submit side: the FIFOs and the upload, and the submit thread's wake-up.
 pub(crate) struct Work {
     state: Mutex<WorkState>,
@@ -463,7 +483,12 @@ impl Work {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, WorkState> {
-        lock(&self.state)
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let began = crate::times::host_time();
+        let state = lock(&self.state);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        waits::add(crate::times::host_time().saturating_sub(began));
+        state
     }
 
     /// Wakes the submit thread after a change [`WorkState`] recorded.
