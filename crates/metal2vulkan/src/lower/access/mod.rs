@@ -2040,7 +2040,11 @@ pub fn table_field(
             match offset {
                 Some(offset) => {
                     let block = cx.push_field(fb, PushField::ArgumentTableAddress)?;
-                    Some(table::read_block(fb, block, offset, field)?)
+                    let mut lines = Vec::new();
+                    for line in table::lines(offset, field) {
+                        lines.push((line, cx.block_line(fb, block, line)?));
+                    }
+                    Some(table::field_of_lines(fb, &lines, offset, field)?)
                 }
                 None => None,
             }

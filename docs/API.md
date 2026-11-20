@@ -131,7 +131,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   other slot is reached from the word below each access, its offset sign-extended, so an access
   before the bind offset reaches below the bind address as Metal's does. Fields past a
   function's push window go to a parameter block in memory, read at the device address
-  `PushField::ArgumentTableAddress`, which the window always holds. A kernel's window is 128 bytes
+  `PushField::ArgumentTableAddress`, which the window always holds. The function reads the block
+  16 bytes at a time at multiples of 16 (its size, `argument_table_size`, is a multiple of 16) and
+  never writes it, so the consumer places it at a multiple of 16 and leaves it unchanged while
+  the command reads it. A kernel's window is 128 bytes
   (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
   `maxPushConstantsSize`: a dispatch region and 28 buffer addresses). On such a device a render
   pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,

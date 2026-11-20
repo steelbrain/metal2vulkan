@@ -11,7 +11,9 @@
 //!
 //! Under the identity domains no uniform buffer is declared: the spilled fields are a parameter
 //! block in memory at the device address `PushField::ArgumentTableAddress` holds, which the
-//! window always places, and [`read_block`] loads each at its placed offset.
+//! window always places. [`read_line`] loads it 16 bytes at a time, each line once where it
+//! dominates (`EmitCx::block_line`), and [`field_of_lines`] puts each field together from its
+//! lines' words.
 
 use std::collections::BTreeSet;
 
@@ -20,11 +22,11 @@ use crate::lower::push::{self, FieldShape};
 use crate::pipeline::interface::{PushLoc, PushPlacement};
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::BResult;
+use crate::spirv::error::{BResult, BuildError, Dangling};
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, LayoutRule, MemAccess, MemberLayout, StorageClass, StructLayout,
-    Type,
+    BinOp, ConstBits, Constant, ConvOp, LayoutRule, MemAccess, MemberLayout, StorageClass,
+    StructLayout, Type,
 };
 
 /// A declared `ArgumentTable`.
@@ -118,34 +120,90 @@ pub fn declare(mb: &mut ModuleBuilder, placement: &PushPlacement) -> BResult<Opt
     }))
 }
 
-/// Load `field` from the parameter block at device address `block` (a `u64`), where it is placed
-/// at byte `offset`: the identity domains' `ArgumentTable`, which no descriptor binds.
-pub fn read_block(
-    fb: &mut FunctionBuilder<'_>,
-    block: Value,
-    offset: u32,
-    field: PushField,
-) -> BResult<Value> {
-    let sh = push::shape(field);
-    let ty = shape_type(fb.module(), sh)?;
+/// The bytes of the parameter block one load reads: a line of 16 bytes at a multiple of 16. The
+/// block's address is a multiple of 16 (the new runtime's ring places every block so) and its size
+/// is one (`PushPlacement::argument_table_size`), so every line a field touches lies in the block.
+pub const LINE: u32 = 16;
+
+/// The lines of the parameter block that field `field`, placed at byte `offset`, lies in: one for
+/// a scalar or a 2-vector (each aligned to its size), `n` for an array of `n` 4-vectors.
+pub fn lines(offset: u32, field: PushField) -> std::ops::RangeInclusive<u32> {
+    let size = push::shape(field).size().max(1);
+    offset / LINE..=(offset + size - 1) / LINE
+}
+
+/// Load line `line` of the parameter block at device address `block` (a `u64`): the identity
+/// domains' `ArgumentTable`, which no descriptor binds. One `uvec4`, 16-aligned, through a place
+/// whose member is `NonWritable`: nothing writes the block while the module runs (its consumer
+/// writes it before the command that reads it), so a device may read it as read-only memory.
+pub fn read_line(fb: &mut FunctionBuilder<'_>, block: Value, line: u32) -> BResult<Value> {
+    let u32_ = fb.module().ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let uvec4 = fb.module().ty(Type::Vector { elem: u32_, len: 4 })?;
     let u64_ = fb.module().ty(Type::Int {
         width: 64,
         signed: false,
     })?;
     let offset = fb.module().constant(Constant::Scalar {
         ty: u64_,
-        bits: ConstBits(u64::from(offset)),
+        bits: ConstBits(u64::from(line * LINE)),
     })?;
     let offset = fb.module().const_value(offset)?;
     let at = fb.binary(BinOp::IAdd, block, offset)?;
-    let place = fb.device_place(at, ty)?;
+    let place = fb.device_place_read_only(at, uvec4)?;
     fb.load(
         place,
         MemAccess {
-            aligned: Some(sh.align()),
+            aligned: Some(LINE),
             ..MemAccess::default()
         },
     )
+}
+
+/// Field `field`, placed at byte `offset` of the parameter block, from `lines`: each line of the
+/// block it lies in ([`lines`]) with that line's words ([`read_line`]).
+pub fn field_of_lines(
+    fb: &mut FunctionBuilder<'_>,
+    lines: &[(u32, Value)],
+    offset: u32,
+    field: PushField,
+) -> BResult<Value> {
+    /// The line holding byte `at`.
+    fn line_of(lines: &[(u32, Value)], at: u32) -> BResult<Value> {
+        lines
+            .iter()
+            .find(|(line, _)| *line == at / LINE)
+            .map(|(_, v)| *v)
+            .ok_or(BuildError::Dangling(Dangling::Value(Value::new(u32::MAX))))
+    }
+    /// The word at byte `at`.
+    fn word(fb: &mut FunctionBuilder<'_>, lines: &[(u32, Value)], at: u32) -> BResult<Value> {
+        let v = line_of(lines, at)?;
+        fb.composite_extract(v, &[(at % LINE) / 4])
+    }
+    let sh = push::shape(field);
+    let ty = shape_type(fb.module(), sh)?;
+    match sh {
+        FieldShape::U32 => word(fb, lines, offset),
+        // 8-aligned: both words in one line.
+        FieldShape::UVec2 | FieldShape::U64 => {
+            let v = line_of(lines, offset)?;
+            let w = (offset % LINE) / 4;
+            let pair = fb.vector_shuffle(v, v, &[w, w + 1])?;
+            match sh {
+                FieldShape::U64 => fb.convert(ConvOp::Bitcast, pair, ty),
+                _ => Ok(pair),
+            }
+        }
+        FieldShape::UVec4Array(n) => {
+            let parts = (0..n)
+                .map(|k| line_of(lines, offset + k * LINE))
+                .collect::<BResult<Vec<Value>>>()?;
+            fb.composite_construct(ty, &parts)
+        }
+    }
 }
 
 /// Load `field` from `table` in the open block, or `None` when the table does not hold it.

@@ -254,6 +254,8 @@ enum Invariant {
     Bounds(SlotRef, bool),
     /// A checked slot's limit for accesses of a size in bytes ([`EmitCx::slot_limit`]).
     Limit(SlotRef, u32),
+    /// A 16-byte line of the function's parameter block ([`EmitCx::block_line`]).
+    BlockLine(u32),
 }
 
 impl<'a> EmitCx<'a> {
@@ -515,6 +517,25 @@ impl<'a> EmitCx<'a> {
             }
         };
         Ok((before, limit))
+    }
+
+    /// Line `line` of the function's parameter block at device address `block`
+    /// (`access::table::read_line`), read once where it dominates the open block:
+    /// [`EmitCx::load_push_fields`] reads every spilled field in the function's first block, so
+    /// the fields that share a line share one 16-byte load.
+    pub(crate) fn block_line(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        block: SValue,
+        line: u32,
+    ) -> BResult<SValue> {
+        let key = Invariant::BlockLine(line);
+        if let Some(v) = self.recall(fb, key) {
+            return Ok(v);
+        }
+        let v = access::table::read_line(fb, block, line)?;
+        self.remember(fb, key, v);
+        Ok(v)
     }
 
     /// Load push field `field` in the open block.

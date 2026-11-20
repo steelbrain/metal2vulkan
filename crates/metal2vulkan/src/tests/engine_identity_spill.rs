@@ -217,28 +217,29 @@ fn a_vertex_function_past_its_share_spills_the_checks_fields_into_its_block() {
             eprintln!("SKIPPED: {text}");
             continue;
         }
-        let spilled = (plan.push.fields.iter())
-            .filter(|f| matches!(f.loc, PushLoc::ArgumentTable { .. }))
-            .count();
+        let lines = spilled_lines(&plan.push);
         assert_eq!(
             block_loads(&text),
-            (spilled, spilled),
-            "{stem}: each spilled field loaded once, in the function's first block:\n{}",
+            (lines, lines, lines),
+            "{stem}: each 16-byte line of the spilled fields loaded once, in the function's \
+             first block, as a uvec4 aligned 16 through a NonWritable block:\n{}",
             pointer_lines(&text)
         );
     }
 }
 
 /// The loads through a parameter block's address in disassembly `text`: a `ulong` loaded from the
-/// push block, plus a constant (none for the block's first field, where the sum may fold), made a
-/// pointer to a one-member block (`OpConvertUToPtr`), whose member is loaded. Their number, and how
-/// many of them lie in a function's first block.
-fn block_loads(text: &str) -> (usize, usize) {
-    use std::collections::BTreeSet;
+/// push block, plus a constant (none for the block's first line, where the sum may fold), made a
+/// pointer to a one-member block (`OpConvertUToPtr`), whose member is loaded. Their number, how
+/// many of them lie in a function's first block, and how many read a 16-byte line: a `uvec4`,
+/// `Aligned 16`, through a block whose member is `NonWritable`.
+fn block_loads(text: &str) -> (usize, usize, usize) {
+    use std::collections::{BTreeMap, BTreeSet};
     let (mut push, mut chains, mut bases) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    let (mut constants, mut blocks, mut members) =
-        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    let (mut loads, mut first) = (0, 0);
+    let (mut constants, mut blocks) = (BTreeSet::new(), BTreeSet::new());
+    let (mut pointees, mut read_only, mut members) =
+        (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+    let (mut loads, mut first, mut lines) = (0, 0, 0);
     let (mut opened, mut entry) = (false, false);
     for line in text.lines() {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -247,6 +248,12 @@ fn block_loads(text: &str) -> (usize, usize) {
             [_, "=", "OpLabel"] => {
                 entry = opened;
                 opened = false;
+            }
+            [id, "=", "OpTypePointer", "PhysicalStorageBuffer", pointee] => {
+                pointees.insert(id, pointee);
+            }
+            ["OpMemberDecorate", block, "0", "NonWritable"] => {
+                read_only.insert(block);
             }
             [id, "=", "OpVariable", _, "PushConstant"] => {
                 push.insert(id);
@@ -268,22 +275,36 @@ fn block_loads(text: &str) -> (usize, usize) {
             {
                 blocks.insert(id);
             }
-            [id, "=", "OpConvertUToPtr", _, at] if bases.contains(at) || blocks.contains(at) => {
-                members.insert(id);
+            [id, "=", "OpConvertUToPtr", ty, at] if bases.contains(at) || blocks.contains(at) => {
+                members.insert(id, pointees.get(ty).copied());
             }
             [id, "=", "OpAccessChain" | "OpInBoundsAccessChain", _, block, _]
-                if members.contains(block) =>
+                if members.contains_key(block) =>
             {
-                members.insert(id);
+                let pointee = members[block];
+                members.insert(id, pointee);
             }
-            [_, "=", "OpLoad", _, pointer, ..] if members.contains(pointer) => {
+            [_, "=", "OpLoad", ty, pointer, ref rest @ ..] if members.contains_key(pointer) => {
                 loads += 1;
                 first += usize::from(entry);
+                let non_writable = members[pointer].is_some_and(|b| read_only.contains(b));
+                lines += usize::from(ty == "%v4uint" && rest == ["Aligned", "16"] && non_writable);
             }
             _ => {}
         }
     }
-    (loads, first)
+    (loads, first, lines)
+}
+
+/// The 16-byte lines of the parameter block that placement `p`'s spilled fields lie in.
+fn spilled_lines(p: &PushPlacement) -> usize {
+    let mut lines = std::collections::BTreeSet::new();
+    for f in &p.fields {
+        if let PushLoc::ArgumentTable { offset } = f.loc {
+            lines.extend(offset / 16..=(offset + f.size.max(1) - 1) / 16);
+        }
+    }
+    lines.len()
 }
 
 /// The lines of disassembly `text` that read the push block or make a device pointer, for a
