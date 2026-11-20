@@ -643,6 +643,9 @@ struct State {
     /// For the device tests: the blocks given back.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     returned: HashSet<BlockId>,
+    /// For the device tests: the calls in [`Pool::await_made`] waiting for an internal.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    waiting: usize,
 }
 
 thread_local! {
@@ -710,6 +713,8 @@ impl Pool {
                 idle_bytes: [0, 0],
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 returned: HashSet::new(),
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                waiting: 0,
             }),
             changed: Condvar::new(),
             mappings,
@@ -1069,11 +1074,26 @@ impl Pool {
             return;
         }
         let since = crate::host_time();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            state.waiting += 1;
+        }
         while state.asked[internal.index()] {
             state = self.wait(state);
         }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            state.waiting -= 1;
+        }
         drop(state);
         (self.counters).maker_wait(crate::host_time().saturating_sub(since));
+    }
+
+    /// For the device tests: the calls waiting in [`Pool::await_made`], each counted from the
+    /// moment its wait's time starts until it ends.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn waiting(&self) -> usize {
+        self.lock().waiting
     }
 
     /// For the device tests: whether the block-maker thread is told to stop.

@@ -166,7 +166,8 @@ mod on_device {
     /// With the block-maker thread parked before its first work, each of the device's first calls
     /// that needs an internal waits for it: none returns while the thread is parked, and none
     /// allocates on its own thread. Released, the thread makes them, every call returns, and each
-    /// counts one wait of at least the time parked.
+    /// counts one wait; the longest is at least the time the thread stayed parked once a call was
+    /// waiting, as a wait's time starts when its call begins to wait.
     #[test]
     fn every_device_s_call_before_the_make_waits_for_the_block_maker_thread() {
         let instance = crate::tests::validation::instance(&[]);
@@ -195,6 +196,11 @@ mod on_device {
             let running: Vec<thread::JoinHandle<()>> = (calls.into_iter())
                 .map(|(_, call)| thread::spawn(call))
                 .collect();
+            // The time parked counts from the moment a call first waits: its internal stays asked
+            // while the thread is parked, so that call waits past the release. Not every call
+            // need be waiting then, as one may wait behind another's.
+            within("a call's wait", || core.pool.waiting() > 0);
+            let waiting_from = crate::host_time();
             thread::sleep(HOLD);
             for (what, call) in what.iter().zip(&running) {
                 assert!(
@@ -209,6 +215,8 @@ mod on_device {
                 "{name}: allocated on a caller's thread while parked: {on_caller:?}"
             );
             assert_eq!(parked.maker_waits, 0, "{name}: a wait ended while parked");
+            let waiting = core.pool.waiting();
+            let parked_nanos = crate::host_time().saturating_sub(waiting_from);
             release.now();
             for call in running {
                 call.join().expect("a call");
@@ -225,13 +233,15 @@ mod on_device {
                 "{name}: one wait for each call"
             );
             assert!(
-                after.maker_wait_max_nanos >= HOLD.as_nanos() as u64,
-                "{name}: the longest wait, {} ns, under the time parked",
+                after.maker_wait_max_nanos >= parked_nanos,
+                "{name}: the longest wait, {} ns, under the {parked_nanos} ns the thread stayed \
+                 parked once a call waited",
                 after.maker_wait_max_nanos
             );
             println!(
-                "ahead: {name}: {what:?} waited: maker waits {}, longest {} ns, consumer-thread \
-                 sites {:?}",
+                "ahead: {name}: {what:?} waited: maker waits {}, {waiting} waiting at once while \
+                 parked, longest {} ns of {parked_nanos} ns parked once a call waited, \
+                 consumer-thread sites {:?}",
                 after.maker_waits,
                 after.maker_wait_max_nanos,
                 sites(&after)
