@@ -34,7 +34,7 @@
 use crate::coverage::{Leg, ROBUSTNESS_FEATURES};
 use ash::{vk, Instance};
 use metal2vulkan::device::{ApiVersion, VkExtension, VkFeature};
-use metal2vulkan::device::{DeviceDescription, DevicePolicy, EnableSet};
+use metal2vulkan::device::{DeviceDescription, EnableSet};
 use std::collections::BTreeSet;
 use std::ffi::{c_char, CStr, CString};
 

@@ -361,14 +361,8 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
     };
     assert!(!stated("vk12-floor").profile.images().robust_image_access);
     assert!(stated("lavapipe").profile.images().robust_image_access);
-    assert_eq!(
-        stated("moltenvk-m3").profile.robustness(),
-        ProfileRobustness::Rba
-    );
-    assert_eq!(
-        stated("lavapipe").profile.robustness(),
-        ProfileRobustness::Rba2
-    );
+    assert_eq!(stated("moltenvk-m3").profile.robustness(), Robustness::Rba);
+    assert_eq!(stated("lavapipe").profile.robustness(), Robustness::Rba2);
     // A description that states no robustness feature has no second leg.
     let mut none = crate::engine::load_description("vk12-floor").unwrap();
     none.features

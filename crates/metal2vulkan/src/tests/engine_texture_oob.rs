@@ -47,8 +47,8 @@ use crate::pipeline::sym::{
     SyntheticBinding,
 };
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
-    typed_module_with, AssembleError,
+    compile, engine_dir, link_and_validate, llvm_assemble, typed_module, typed_module_with,
+    AssembleError,
 };
 use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};

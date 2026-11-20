@@ -839,18 +839,16 @@ fn seeded_views(
         .collect()
 }
 
-/// A thread's `p[i]`, the texel its read takes (level, layer, `xyz`; `None`: Metal's read is out
-/// of bounds), and whether every coordinate is inside each element the read can reach (only
-/// those rows run without containment, where nothing contains a coordinate).
+/// A thread's `p[i]` and the texel its read takes (level, layer, `xyz`; `None`: Metal's read is out
+/// of bounds).
 #[derive(Clone, Copy, Debug)]
 struct Row {
     p: [u32; 4],
     at: Option<(u32, u32, [u32; 3])>,
-    inside: bool,
 }
 
-fn row(p: [u32; 4], at: Option<(u32, u32, [u32; 3])>, inside: bool) -> Row {
-    Row { p, at, inside }
+fn row(p: [u32; 4], at: Option<(u32, u32, [u32; 3])>) -> Row {
+    Row { p, at }
 }
 
 /// A level-read kernel: its entry, texel class, whether it observes its alpha, its texture, and
@@ -869,22 +867,19 @@ fn cases_2d(n: u32) -> Vec<(u32, Vec<Row>)> {
         (
             3,
             vec![
-                row([1, 2, 0, 0], Some((0, 0, [1, 2, 0])), true),
-                row([1, 1, 1, 0], Some((1, 0, [1, 1, 0])), true),
-                row([0, 0, 2, 0], Some((2, 0, [0, 0, 0])), true),
-                row([0, 0, 3, 0], None, true),
-                row([1, 0, 5, 0], None, false),
-                row([0, 0, n - 1, 0], None, true),
-                row([0, 0, u32::MAX, 0], None, true),
-                row([3, 3, 7, 0], None, false),
-                row([4, 0, 0, 0], None, false),
-                row([1, 1, 2, 0], None, false),
+                row([1, 2, 0, 0], Some((0, 0, [1, 2, 0]))),
+                row([1, 1, 1, 0], Some((1, 0, [1, 1, 0]))),
+                row([0, 0, 2, 0], Some((2, 0, [0, 0, 0]))),
+                row([0, 0, 3, 0], None),
+                row([1, 0, 5, 0], None),
+                row([0, 0, n - 1, 0], None),
+                row([0, 0, u32::MAX, 0], None),
+                row([3, 3, 7, 0], None),
+                row([4, 0, 0, 0], None),
+                row([1, 1, 2, 0], None),
             ],
         ),
-        (
-            0,
-            vec![row([0, 0, 0, 0], None, true), row([0, 0, 1, 0], None, true)],
-        ),
+        (0, vec![row([0, 0, 0, 0], None), row([0, 0, 1, 0], None)]),
     ]
 }
 
@@ -894,17 +889,11 @@ fn cases_level_two(_: u32) -> Vec<(u32, Vec<Row>)> {
         (
             3,
             vec![
-                row([0, 0, 0, 0], Some((2, 0, [0, 0, 0])), true),
-                row([1, 0, 0, 0], None, false),
+                row([0, 0, 0, 0], Some((2, 0, [0, 0, 0]))),
+                row([1, 0, 0, 0], None),
             ],
         ),
-        (
-            2,
-            vec![
-                row([0, 0, 0, 0], None, true),
-                row([1, 1, 0, 0], None, false),
-            ],
-        ),
+        (2, vec![row([0, 0, 0, 0], None), row([1, 1, 0, 0], None)]),
     ]
 }
 
@@ -914,23 +903,17 @@ fn cases_array(n: u32) -> Vec<(u32, Vec<Row>)> {
         (
             3,
             vec![
-                row([1, 2, 1, 0], Some((0, 1, [1, 2, 0])), true),
-                row([1, 1, 0, 1], Some((1, 0, [1, 1, 0])), true),
-                row([0, 0, 1, 2], Some((2, 1, [0, 0, 0])), true),
-                row([0, 0, 1, 3], None, true),
-                row([0, 0, 0, n - 1], None, true),
-                row([0, 0, 1, u32::MAX], None, true),
-                row([0, 0, 2, 0], None, false),
-                row([2, 1, 5, 4], None, false),
+                row([1, 2, 1, 0], Some((0, 1, [1, 2, 0]))),
+                row([1, 1, 0, 1], Some((1, 0, [1, 1, 0]))),
+                row([0, 0, 1, 2], Some((2, 1, [0, 0, 0]))),
+                row([0, 0, 1, 3], None),
+                row([0, 0, 0, n - 1], None),
+                row([0, 0, 1, u32::MAX], None),
+                row([0, 0, 2, 0], None),
+                row([2, 1, 5, 4], None),
             ],
         ),
-        (
-            0,
-            vec![
-                row([0, 0, 0, 0], None, true),
-                row([0, 0, 1, 1], None, false),
-            ],
-        ),
+        (0, vec![row([0, 0, 0, 0], None), row([0, 0, 1, 1], None)]),
     ]
 }
 
@@ -940,19 +923,16 @@ fn cases_3d(n: u32) -> Vec<(u32, Vec<Row>)> {
         (
             3,
             vec![
-                row([1, 2, 3, 0], Some((0, 0, [1, 2, 3])), true),
-                row([1, 1, 1, 1], Some((1, 0, [1, 1, 1])), true),
-                row([0, 0, 0, 2], Some((2, 0, [0, 0, 0])), true),
-                row([0, 0, 0, 3], None, true),
-                row([0, 0, 0, n - 1], None, true),
-                row([0, 0, 1, 2], None, false),
-                row([3, 3, 3, 9], None, false),
+                row([1, 2, 3, 0], Some((0, 0, [1, 2, 3]))),
+                row([1, 1, 1, 1], Some((1, 0, [1, 1, 1]))),
+                row([0, 0, 0, 2], Some((2, 0, [0, 0, 0]))),
+                row([0, 0, 0, 3], None),
+                row([0, 0, 0, n - 1], None),
+                row([0, 0, 1, 2], None),
+                row([3, 3, 3, 9], None),
             ],
         ),
-        (
-            0,
-            vec![row([0, 0, 0, 0], None, true), row([0, 0, 0, 2], None, true)],
-        ),
+        (0, vec![row([0, 0, 0, 0], None), row([0, 0, 0, 2], None)]),
     ]
 }
 
@@ -962,19 +942,16 @@ fn cases_cube(n: u32) -> Vec<(u32, Vec<Row>)> {
         (
             3,
             vec![
-                row([1, 2, 5, 0], Some((0, 5, [1, 2, 0])), true),
-                row([1, 1, 3, 1], Some((1, 3, [1, 1, 0])), true),
-                row([0, 0, 0, 2], Some((2, 0, [0, 0, 0])), true),
-                row([0, 0, 4, 3], None, true),
-                row([0, 0, 2, n - 1], None, true),
-                row([0, 0, 2, u32::MAX], None, true),
-                row([1, 0, 1, 2], None, false),
+                row([1, 2, 5, 0], Some((0, 5, [1, 2, 0]))),
+                row([1, 1, 3, 1], Some((1, 3, [1, 1, 0]))),
+                row([0, 0, 0, 2], Some((2, 0, [0, 0, 0]))),
+                row([0, 0, 4, 3], None),
+                row([0, 0, 2, n - 1], None),
+                row([0, 0, 2, u32::MAX], None),
+                row([1, 0, 1, 2], None),
             ],
         ),
-        (
-            0,
-            vec![row([0, 0, 3, 0], None, true), row([0, 0, 0, 1], None, true)],
-        ),
+        (0, vec![row([0, 0, 3, 0], None), row([0, 0, 0, 1], None)]),
     ]
 }
 
@@ -1038,8 +1015,7 @@ const LEVEL_READ_KERNELS: [LevelRead; 7] = [
 /// observed and on none where it is not. 2D, 2D-array, 3D, and cube textures are read at a dynamic
 /// level (at the count, past it, at the views' last element, at `u32::MAX`, and with nothing
 /// bound), and a 2D texture at the constant level 2 (a 2-level texture's neutral). Coordinates past
-/// an existing level stay as before; without containment only rows whose coordinates are inside
-/// every element they can reach run.
+/// an existing level stay as before.
 #[test]
 fn a_read_at_a_missing_level_is_metals_out_of_bounds_texel() {
     let Some(bc) = assemble("level_reads", LEVEL_READS) else {
@@ -1067,7 +1043,6 @@ fn a_read_at_a_missing_level_is_metals_out_of_bounds_texel() {
             assert_eq!(plan.facts.contains(&fact), k.observed, "{stem}: {entry}");
             let n = max_levels(&p, k.tex.dim);
             for (levels, rows) in (k.cases)(n) {
-                let rows: Vec<Row> = rows.into_iter().collect();
                 for alpha in [0, k.lanes.one()] {
                     let robust = match class {
                         Class::Device => Some([0, 0, 0, alpha]),
