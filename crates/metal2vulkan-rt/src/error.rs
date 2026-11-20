@@ -577,9 +577,8 @@ pub enum Refusal {
     /// Basis: metal-documented (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`
     /// page: "The length value of the sliceRange parameter needs to be 6 if the new texture type
     /// value is MTLTextureType.typeCube, or a multiple of 6 if the new texture type value is
-    /// MTLTextureType.typeCubeArray"; and measured on an Apple M3 Max, macOS 27.0.1, for
-    /// `metal2vulkan-runtime`'s view plan: plain Metal asserts "newSliceRange.length(2) must equal
-    /// (1) for textureType (MTLTextureType2D)").
+    /// MTLTextureType.typeCubeArray"; and measured on an Apple M3 Max, macOS 27.0.1: plain Metal
+    /// asserts "newSliceRange.length(2) must equal (1) for textureType (MTLTextureType2D)").
     TextureViewSlices {
         /// The view's texture type.
         texture_type: TextureType,
@@ -610,8 +609,7 @@ pub enum Refusal {
     ///
     /// Basis: metal-measured (Apple's `generateMipmaps(for:)` page: mipmap generation works only
     /// for textures with colour-renderable and colour-filterable pixel formats; Metal's API
-    /// validation stops the others, measured on an Apple M3 Max and an M4 for
-    /// `metal2vulkan-runtime`'s mipmap plan).
+    /// validation stops the others, measured on an Apple M3 Max and an M4).
     MipmapFormat {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
@@ -799,8 +797,7 @@ pub enum Refusal {
     /// A resolve of a render pass color attachment of an integer pixel format.
     ///
     /// Basis: metal-documented (Metal's validation asserts that an integer color format "cannot
-    /// be a MSAA resolve target", and plain Metal writes values no sample holds, as
-    /// `metal2vulkan-runtime`'s `RenderPassProblem::ResolveFormat` records).
+    /// be a MSAA resolve target", and plain Metal writes values no sample holds).
     ResolveFormat {
         /// The attachment's pixel format.
         pixel_format: PixelFormat,

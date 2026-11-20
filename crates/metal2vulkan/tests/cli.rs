@@ -482,7 +482,7 @@ fn replay(scratch: &Scratch, dir: &Path) -> (Option<i32>, String) {
     (replay.status.code(), text(&replay.stderr))
 }
 
-/// A bundle of a refused creation as metal2vulkan-runtime writes it (`metal2vulkan::repro`):
+/// A bundle of a refused creation as a runtime writes it through `metal2vulkan::repro`:
 /// the library's bytes, `device.json` (a description and policy, which `--device` reads) and the
 /// request as the binary's options and descriptor files. Its `repro.sh` replays the refusal the
 /// library answered on that device from the bundle alone, a compute pipeline's and a render

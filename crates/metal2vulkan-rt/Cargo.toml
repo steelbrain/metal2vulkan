@@ -8,7 +8,7 @@ authors.workspace = true
 description = "The Metal API on Vulkan, with one path for every device"
 readme = "README.md"
 repository.workspace = true
-# Published under the runtime's name once it replaces metal2vulkan-runtime.
+# Published as metal2vulkan-runtime once it takes that name.
 publish = false
 autobins = false
 autoexamples = false

@@ -1,7 +1,7 @@
 //! FALLBACK repro bundles (feature `serde`): a directory that replays one refusal with the
 //! `metal2vulkan` command line. The command line writes one for a failure after it read its
-//! inputs; metal2vulkan-runtime writes one for a library or pipeline creation it refuses, where
-//! `METAL2VULKAN_REPRO_DIR` names a directory (`env_vars`). Not consumer API: the binary's and the
+//! inputs; a runtime may write one for a library or pipeline creation it refuses, where
+//! `METAL2VULKAN_REPRO_DIR` names a directory (`env_vars`). Not consumer API: the binary's and a
 //! runtime's, hidden as `env_vars` is.
 //!
 //! A bundle holds the input (`input.metallib`, `input.air`, `input.ll` or `input.bin`), the device

@@ -2,7 +2,7 @@ mod build_support;
 
 fn main() {
     // The product's source fingerprint, `cache::SOURCE_DIGEST`: what a cache of translations across
-    // builds keys on beside the versions, as `metal2vulkan-runtime`'s shader cache does, so a build
+    // builds keys on beside the versions, as a runtime's shader cache does, so a build
     // of other sources never reads another build's translations, even when no version moved. It
     // asks Cargo to rerun this script when one of its inputs changes
     // (`build_support::product_inputs`).

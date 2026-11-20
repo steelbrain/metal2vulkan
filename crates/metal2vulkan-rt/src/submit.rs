@@ -79,7 +79,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 pub(crate) const GROUP: usize = 16;
 
 /// The most expected GPU run, in nanoseconds, of the command buffers one group holds, summed: 16
-/// ms, the old runtime's bound and the owner's line for an intolerable wait. Each command buffer's
+/// ms, the owner's line for an intolerable wait. Each command buffer's
 /// expected run is its queue's (`QueueInner::expected_run`), from the GPU times of the queue's
 /// command buffers as they retire. Command buffers each within the driver's job timeout may pass
 /// it summed in one job.
@@ -88,7 +88,7 @@ pub(crate) const GROUP_RUN: u64 = 16_000_000;
 /// The most command buffers that join one group while none of their queue's retires with its GPU
 /// times: they join on an expected run no completion has updated, so a program whose command
 /// buffers turn long all at once puts at most this many of them in one job before the estimate
-/// rises. Four, the old runtime's bound on a group: the most GPU time summed over consecutive
+/// rises. Four: the most GPU time summed over consecutive
 /// command buffers of one queue in a replay stream on an RTX 3090 was 385.1 ms over four, within
 /// a quarter of amdgpu's default job timeout of 2,000 ms, and 1,536.6 ms over sixteen, past it
 /// (job m3-max-49358).

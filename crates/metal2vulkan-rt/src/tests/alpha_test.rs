@@ -2,7 +2,7 @@
 //! `alpha_test_function`), with the encoder's reference
 //! (`RenderCommandEncoder::set_alpha_test_reference_value`), under a device cfg on every device of
 //! the cfg's kind. The expected texels are Metal's rule as probed on an Apple M3 Max under macOS
-//! 27.0.1 (the old runtime lane's `alpha_tests`, 413 rows): color 0's alpha and the reference are
+//! 27.0.1 (413 probed rows): color 0's alpha and the reference are
 //! each compared as 8-bit unorm codes, and an encoder compares against 1 until it sets the
 //! reference, a reference set in an earlier encoder not kept.
 //!
