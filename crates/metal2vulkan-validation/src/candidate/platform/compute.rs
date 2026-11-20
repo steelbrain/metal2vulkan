@@ -157,8 +157,11 @@ pub(crate) fn native_refused_on(
     executor: &str,
     profiles_layer: serde_json::Value,
 ) -> Result<crate::candidate::engine::RefusedOn, String> {
-    let device = WorkerDevice::new(native.clone(), crate::candidate::requested_policy())
-        .map_err(|error| format!("its own description derives no profile: {error}"))?;
+    let device = WorkerDevice::new(
+        native.clone(),
+        metal2vulkan::device::DevicePolicy::default(),
+    )
+    .map_err(|error| format!("its own description derives no profile: {error}"))?;
     let profile = device.device().profile();
     let fingerprint: String = profile
         .fingerprint()
@@ -222,14 +225,13 @@ pub fn opened_worker_device(device_type: DeviceType) -> Result<WorkerDevice, Exe
 }
 
 /// The `Device` of the opened context: its queried description restricted to what the context
-/// enabled (`DeviceDescription::with_enabled`), under the default policy, or with the unordered
-/// framebuffer fetch when this process opted in (`candidate::requested_policy`).
+/// enabled (`DeviceDescription::with_enabled`), under the default policy.
 pub(super) fn opened_device(context: &VulkanContext) -> Result<WorkerDevice, ExecutorError> {
     let description = context
         .opened_description
         .clone()
         .map_err(ExecutorError::Failed)?;
-    WorkerDevice::new(description, crate::candidate::requested_policy())
+    WorkerDevice::new(description, metal2vulkan::device::DevicePolicy::default())
         .map_err(|e| product_refusal(&e))
 }
 

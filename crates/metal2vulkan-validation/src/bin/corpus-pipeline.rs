@@ -323,18 +323,14 @@ fn run() -> Result<(), String> {
 /// The compile device of an engine sweep of profile `stem` in `leg`. The process's leg is
 /// decided here, before the sweep opens any device: in the robustness-off leg every Vulkan context
 /// of the process enables no robustness feature, and the rows compile for the profile without its
-/// robustness features ([`leg_description`]). The device is created under the process's policy
-/// (`candidate::requested_policy`).
+/// robustness features ([`leg_description`]). The device is created under the default policy.
 fn enter_leg(stem: &str, leg: Leg) -> Result<WorkerDevice, String> {
     let description = leg_description(stem, leg)?;
     if leg == Leg::RobustnessOff {
         metal2vulkan_validation::candidate::run_robustness_off()?;
     }
-    WorkerDevice::new(
-        description,
-        metal2vulkan_validation::candidate::requested_policy(),
-    )
-    .map_err(|error| format!("{stem}: {error}"))
+    WorkerDevice::new(description, metal2vulkan::device::DevicePolicy::default())
+        .map_err(|error| format!("{stem}: {error}"))
 }
 
 /// The description the sweep compiles profile `stem`'s rows for in `leg`: as committed, or without
