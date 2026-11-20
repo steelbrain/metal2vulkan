@@ -1200,8 +1200,8 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
     );
 }
 
-/// A tiled texture over Shared buffer #3 (`newTiledTextureWithDescriptor:offset:bytesPerRow:`),
-/// 128 by 2 RGBA8Unorm texels of two levels, 512 bytes a row: the buffer's texels come in 2 by 2
+/// A tiled texture over Shared buffer #3 (`newTiledTextureWithDescriptor:offset:bytesPerRow:`) of
+/// descriptor object #9, 128 by 2 RGBA8Unorm texels of two levels, 512 bytes a row: the buffer's texels come in 2 by 2
 /// squares of one colour each, so the second level made from the first by a filter of each square
 /// is that square's colour exactly. A blit encoder copies the first level into #5 and the second
 /// into #6, each shown at a present. On the new runtime the use takes the buffer's bytes into the
@@ -1232,7 +1232,8 @@ fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
                 ("storageMode", 0),
             ])
         };
-        let tiled = [texture(128, 2, 2), Value::Uint(0), Value::Uint(512)];
+        w.call("m2v.textureDescriptor", 0, 9, &[texture(128, 2, 2)], &[])?;
+        let tiled = [Value::Object(9), Value::Uint(0), Value::Uint(512)];
         let selector = "newTiledTextureWithDescriptor:offset:bytesPerRow:";
         w.call(selector, 3, 4, &tiled, &[])?;
         w.call(
