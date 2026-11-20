@@ -48,7 +48,7 @@ use crate::case::{AuthoredCase, OutputSelection};
 use crate::coverage::{ExecutionClass, RobustBufferForm};
 use crate::observation_contract::{ComparisonClass, ObservationLanes};
 use base64::Engine as _;
-use metal2vulkan::device::{Containment, DeviceProfile, Robustness};
+use metal2vulkan::device::{DeviceProfile, Robustness};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{AttributeFetch, StrategyCensus};
 use metal2vulkan::pipeline::{BufferForm, DescriptorView, SlotInterface};
@@ -438,8 +438,7 @@ mod census {
 /// module indexes a typed thread-local array at a dynamic index, and an argument buffer's texture
 /// array a `handle_array_index` when the module looks its handles up in the handle table. `Err`
 /// when the module does not access the target, reaches it in a way validation does not know (thread
-/// memory in the private arena, whose check is the arena's bounds, not the array's), or contains
-/// nothing (`Containment::UnsafeOff`, which validation never compiles).
+/// memory in the private arena, whose check is the arena's bounds, not the array's).
 pub fn containment(
     target: &OutOfBoundsTarget,
     module: &ModuleFacts<'_>,
@@ -674,24 +673,19 @@ pub fn containment(
 /// robustness (the two encodings): a descriptor view's loads, stores and atomics and
 /// fixed-function vertex input.
 /// [`Check::Robust2`] under `robustBufferAccess2`, [`Check::Robust`] under `robustBufferAccess`
-/// alone, and [`Check::Shader`] without buffer robustness; `Err` for a containment validation
-/// never compiles (`Containment::UnsafeOff`) or does not know. The only source of
+/// alone, and [`Check::Shader`] without buffer robustness; `Err` for a robustness validation
+/// does not know. The only source of
 /// [`Check::Robust`]: every other medium's check is the shader's, the binder's, or
 /// `robustBufferAccess2`'s.
 pub fn robust_check(profile: &DeviceProfile) -> Result<Check, String> {
-    match profile.containment() {
-        Containment::UnsafeOff => {
-            Err("containment is off: nothing contains an out-of-bounds access".into())
-        }
-        Containment::On {
-            robust: Robustness::Rba2,
-        } => Ok(Check::Robust2),
-        Containment::On { .. } => Ok(if profile.checks_buffers_in_shader() {
+    match profile.robustness() {
+        Robustness::Rba2 => Ok(Check::Robust2),
+        Robustness::Rba | Robustness::None => Ok(if profile.checks_buffers_in_shader() {
             Check::Shader
         } else {
             Check::Robust
         }),
-        _ => Err("a containment validation does not know".into()),
+        _ => Err("a robustness validation does not know".into()),
     }
 }
 

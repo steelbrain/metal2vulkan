@@ -37,7 +37,6 @@ use std::collections::BTreeMap;
 
 use crate::air::ir::{Align, CastOp, Const, Inst, InstId, InstKind, Value, ValueId};
 use crate::budget::{tree_bytes, Meter};
-use crate::device::profile::Containment;
 use crate::error::Error;
 use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
@@ -244,7 +243,7 @@ fn slot(
         ptr: local::local_ptr(cx, ptr, home)?,
         value: None,
         leaf: leaf(enc, align),
-        contained: cx.profile.fields().containment != Containment::UnsafeOff,
+        contained: true,
         volatile: false,
     })
 }

@@ -510,7 +510,7 @@ fn the_new_list_enables_the_recommendation_but_the_excluded() {
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
             assert!(enables.unmet_robustness.is_empty(), "{stem} {leg:?}");
             let set = enabled_set(&enables);
-            let mut expected = description.recommended_enables(&DevicePolicy::default());
+            let mut expected = description.recommended_enables();
             expected.features.retain(|&feature| {
                 !excluded(feature)
                     && (leg == Leg::Stated || !ROBUSTNESS_FEATURES.contains(&feature))
@@ -1263,7 +1263,7 @@ fn a_restricted_context_enables_the_recommendation_at_its_profiles_version() {
             assert_eq!(enables.version, version, "{stem}");
             assert!(enables.unmet_robustness.is_empty(), "{stem} {leg:?}");
             let set = enabled_set(&enables);
-            let mut expected = description.recommended_enables(&DevicePolicy::default());
+            let mut expected = description.recommended_enables();
             expected.features.retain(|&feature| {
                 !excluded(feature)
                     && (leg == Leg::Stated || !ROBUSTNESS_FEATURES.contains(&feature))

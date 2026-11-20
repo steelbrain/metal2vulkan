@@ -27,7 +27,6 @@ use std::collections::BTreeSet;
 
 use crate::device::derive::Device;
 use crate::device::description::DeviceDescription;
-use crate::device::policy::{ContainmentPolicy, DevicePolicy};
 use crate::device::requirements::{
     ApiVersion, Requirements, StageCreateFlag, VkExtension, VkFeature, WITHOUT_FORMAT_CAPABILITIES,
 };
@@ -652,10 +651,6 @@ impl DeviceDescription {
     /// what it wants (normally all of it, merged into its own list) and passes the result to
     /// [`with_enabled`](DeviceDescription::with_enabled).
     ///
-    /// The policy removes what it makes useless: with `ContainmentPolicy::UnsafeOff`,
-    /// `robustBufferAccess` and `robustBufferAccess2` (the profile reads them only to choose a
-    /// containment encoding).
-    ///
     /// The set keeps Vulkan's co-enable rules: where `robustBufferAccess` stays and the description
     /// does not report `robustBufferAccessUpdateAfterBind`, the update-after-bind features of the
     /// storage buffer, uniform texel buffer, and storage texel buffer descriptor types, which the
@@ -664,15 +659,8 @@ impl DeviceDescription {
     /// `multiview`, is left out. A consumer that wants those update-after-bind features itself on
     /// such a device enables them without `robustBufferAccess` (and `robustBufferAccess2`), and the
     /// profile then contains buffer accesses in the shader.
-    pub fn recommended_enables(&self, policy: &DevicePolicy) -> EnableSet {
-        let unsafe_off = policy.containment == ContainmentPolicy::UnsafeOff;
-        let features = self.features.iter().copied().filter(|&f| {
-            !(unsafe_off
-                && matches!(
-                    f,
-                    VkFeature::RobustBufferAccess | VkFeature::RobustBufferAccess2
-                ))
-        });
+    pub fn recommended_enables(&self) -> EnableSet {
+        let features = self.features.iter().copied();
         let features = co_enabled(features, self.robust_buffer_access_update_after_bind);
         closed(self.api_version, features.into_iter(), &self.extensions)
     }

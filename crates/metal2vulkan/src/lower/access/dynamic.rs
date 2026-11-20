@@ -36,12 +36,11 @@
 //!
 //! **Accesses** through a wide pointer compute from the fields it carries (no switch: every
 //! candidate, static or resident, is one code path): the leaf's words at `host + (at & ~3)`, and
-//! the sink's address, read once in the function's first block. Containment
-//! is always on unless the profile has `Containment::UnsafeOff` (robustness does not cover device
-//! addresses): the normative check `size ≥ n ∧ at ≤ size − n` in `u64`, the access at `select(inb,
+//! the sink's address, read once in the function's first block. Every such access is bounded
+//! (robustness does not cover device addresses): the normative check `size ≥ n ∧ at ≤ size − n` in `u64`, the access at `select(inb,
 //! address, sink)`, and a load's value `select(inb, v, 0)`; an out-of-bounds store lands in the
-//! write-only sink. Under `GuestIsolation::On` an access through root 0 (a null pointer or a
-//! resident-set miss) is counted: word 4 of the `ExecutionStatus` buffer
+//! write-only sink. An access through root 0 (a null pointer or a resident-set miss) is
+//! counted: word 4 of the `ExecutionStatus` buffer
 //! (`StatusWord::ResidentMisses`) is incremented and `StatusBits::RESIDENT_MISS` set, both relaxed
 //! `Device` atomics, the buffer reached by `PushField::ExecutionStatusAddress` (a function with
 //! device-address slots carries the status by address). Every static slot a wide access may reach
@@ -98,7 +97,7 @@ use crate::air::ir::{
 };
 use crate::bind::status::{StatusBits, StatusWord};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, GuestIsolation};
+use crate::device::profile::BufferAccess;
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::{Form, Held};
@@ -136,8 +135,7 @@ pub struct DynamicPlan {
     /// The resident-set searches of the function (a loaded pointer or `inttoptr` each): the
     /// module defines the search once when there are several ([`roots::define_resolve`]).
     pub resolves: u32,
-    /// Accesses through root 0 are counted in the `ExecutionStatus` buffer
-    /// (`GuestIsolation::On`).
+    /// Accesses through root 0 are counted in the `ExecutionStatus` buffer.
     pub misses: bool,
 }
 
@@ -431,11 +429,11 @@ pub(super) fn plan_deref(cx: &mut SelectCx<'_>, v: Value) -> Result<ValueId, Err
     operand(cx, v)
 }
 
-/// Under isolation, plan the counting of an access through root 0, which needs the stage's store
+/// Plan the counting of an access through root 0, which needs the stage's store
 /// feature for the counter's atomics. The identity domains have no resident set to miss: every
 /// wide pointer there is root 0, and nothing is counted.
 fn plan_misses(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    if cx.profile.fields().isolation == GuestIsolation::On && !super::identity(cx.profile) {
+    if !super::identity(cx.profile) {
         let enabled = &cx.profile.fields().enabled.features;
         if let Some(f) = stage_stores(cx.stage).find(|f| !enabled.contains(f)) {
             return Err(Unsupported::needs(

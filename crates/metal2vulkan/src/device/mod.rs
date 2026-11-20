@@ -12,8 +12,8 @@
 //! what is enabled. Translation uses only what the description enables.
 //!
 //! [`Device::from_queries`] derives an opaque [`DeviceProfile`] from the description's Vulkan
-//! queries and a [`DevicePolicy`], the consumer's product choices (the default,
-//! [`DevicePolicy::UNTRUSTED`], contains and isolates guest shaders and bounds their loops); no
+//! queries and a [`DevicePolicy`], the consumer's product choices (the pointer and handle
+//! domains; the default is [`DevicePolicy::UNTRUSTED`]); no
 //! driver or GPU identity decides anything, and no `VkDevice` is needed. It refuses a device below Vulkan
 //! 1.2 and an inconsistent description or policy. A [`Device`] is cheap to clone, and every
 //! compile and plan takes one:
@@ -61,19 +61,19 @@ pub use enables::{EnableSet, Exposure};
 // The mechanism derivation: internal; a pipeline states each mechanism in its `dependencies`.
 pub(crate) use mechanism::mechanism;
 pub use metal::{MetalDeviceProperties, SimdSupport, StageSimd};
-pub use policy::{ContainmentPolicy, DevicePolicy};
+pub use policy::DevicePolicy;
 pub(crate) use profile::whole_point_size;
 pub use profile::{DeviceProfile, SpirvValidation};
 // The vocabulary the device surface reaches: description and policy inputs, and the requirement
 // vocabulary of `Requirements`, `Capability`, and `DeviceDescription`.
 pub use profile::{
-    EnabledCaps, FloatControls, FloatWidthControls, FragmentCaps, GuestIsolation, HandleDomain,
-    ImageCaps, Independence, Limits, MeshLimits, PointerDomain,
+    EnabledCaps, FloatControls, FloatWidthControls, FragmentCaps, HandleDomain, ImageCaps,
+    Independence, Limits, MeshLimits, PointerDomain,
 };
 // The profile's facts a consumer or a validation tool reads: its descriptor capabilities, its
-// subgroup model and simdgroup tiers, how it contains an out-of-bounds access, and the Function
-// storage a thread holds.
-pub use profile::{Containment, DescriptorCaps, FunctionStorage, Robustness};
+// subgroup model and simdgroup tiers, the buffer robustness that bounds a buffer-slot access, and
+// the Function storage a thread holds.
+pub use profile::{DescriptorCaps, FunctionStorage, Robustness};
 pub use subgroup::{SimdClass, StageSubgroup, SubgroupModel, SubgroupSizes, Tier};
 // The device answers a profile notes on every device (`DeviceProfile::workarounds`).
 pub use profile::DriverWorkaround;

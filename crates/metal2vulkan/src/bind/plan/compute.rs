@@ -201,10 +201,6 @@ impl TileMemoryPlan {
 /// 2^32. The arena's offsets are `u32` and add with wrapping, so such accesses wrap where Metal's
 /// do.
 ///
-/// With containment off (`Containment::UnsafeOff`, never a default) a base past the arena is
-/// outside its array, as the end of an argument that ends past the tile's memory already is: that
-/// switch gives up Metal's answer for every out-of-range access, not this one alone.
-///
 /// A 4-byte-aligned base is exact here because the threadgroup arena has no 8- or 16-byte unit
 /// (`memory::arena::ArenaMem` declares no `Units`), so an 8- or 16-byte access takes `Path::Vec2`'s
 /// or `Path::Vec4`'s fallback to its words at `off / 4` rather than a `uvec2` index at `off / 8` or

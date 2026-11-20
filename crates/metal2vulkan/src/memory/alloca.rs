@@ -23,7 +23,7 @@
 //! object) and `rem` the offset inside that element; a negative or wrapped index is a huge unsigned
 //! one.
 //!
-//! **Clamps** (`GuestIsolation::On`): an access never leaves its object. By construction, not a
+//! **Clamps**: an access never leaves its object. By construction, not a
 //! pass. An index within its level is used as is, so an in-range access is the access Metal makes.
 //! An index past its level's length (a negative or wrapped one is a huge unsigned one) is
 //! undefined in Metal, whose own answer is whatever its memory holds at the address:

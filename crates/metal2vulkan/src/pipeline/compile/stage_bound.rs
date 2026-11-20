@@ -81,7 +81,7 @@ pub(super) fn emit(
         })?;
         // A load of a uniform view that every trip of its loop reads alike leaves the loop.
         m.weighted(crate::pipeline::compile::weights::HOIST, |m| {
-            crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.containment(), m)
+            crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.robustness(), m)
         })?;
         let weight = crate::spirv::roll::entry_weight(&emitted.module, m)?;
         if weight <= bounds.compiled {

@@ -41,18 +41,16 @@
 //! per lane, at the word index `off / 4` and the words after it: no branch, no select and no
 //! bitcast. Every other kernel's arena keeps its `u32` words.
 //!
-//! **Containment** of an arena access is on unless the profile's containment is `UnsafeOff`, or
-//! the arena is threadgroup memory on a profile whose `ThreadgroupMemory` is `Native`
-//! ([`contained`]): there no threadgroup access is contained, an arena's, its atomics', memory
+//! **Bounds** of an arena access are checked unless the arena is threadgroup memory on a profile
+//! whose `ThreadgroupMemory` is `Native` ([`contained`]): there no threadgroup access is contained, an arena's, its atomics', memory
 //! intrinsics', pointer cells' and imageblock's alike, nor a typed threadgroup object's index, and
 //! one past the memory is undefined, as in Metal (no robustness feature covers arenas). Contained,
 //! with `inb` the normative check against the arena's exact byte
 //! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
 //! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
-//! or writes the kept first word, or an object's bytes at a field's offset: inside the arena
-//! under containment, and unchecked under `UnsafeOff`. A typed access's dynamic indices are
-//! **contained** under
-//! `GuestIsolation::On` (`memory::alloca`), so the access never leaves its object: a thread's own
+//! or writes the kept first word, or an object's bytes at a field's offset: inside the arena. A
+//! typed access's dynamic indices are **bounded** (`memory::alloca`), so the access never leaves
+//! its object: a thread's own
 //! object's (an alloca's) are checked against their levels' lengths, a load past a level reading
 //! zero and a store past one sitting in a builder-closed `if_` that drops it; a threadgroup
 //! object's, where threadgroup memory is contained ([`contained`]), and a constant object's are
@@ -103,7 +101,6 @@ use crate::air::ir::{
     IntPredicate, Type, TypeId, Value, ValueId,
 };
 use crate::budget::{tree_bytes, Meter, PRIVATE_ARENA_BYTES};
-use crate::device::profile::{Containment, GuestIsolation};
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Limit, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
@@ -182,8 +179,8 @@ pub struct TypedAccess {
     /// where its dynamic indices line up one to one with the path's dynamic levels
     /// (`lined_up`); `None` recovers each from the pointer's offset.
     pub indices: Option<Vec<(ValueId, IndexForm)>>,
-    /// Each dynamic index is contained (`GuestIsolation::On`, and for a typed threadgroup object
-    /// where threadgroup memory is, [`contained`]): checked against its level's length where the
+    /// Each dynamic index is bounded (for a typed threadgroup object where threadgroup memory is,
+    /// [`contained`]): checked against its level's length where the
     /// access is [`checked`](Self::checked), clamped to its level's last element otherwise.
     pub clamped: bool,
     /// A volatile access: its load or store carries `Volatile`.
@@ -1188,10 +1185,10 @@ pub(crate) fn access(
     })
 }
 
-/// Whether an access of `arena` is contained (the module docs): unless the profile's containment
-/// is `UnsafeOff`, or the arena is threadgroup memory, which no profile contains.
-pub(crate) fn contained(cx: &SelectCx<'_>, arena: Arena) -> bool {
-    cx.profile.fields().containment != Containment::UnsafeOff && arena != Arena::Threadgroup
+/// Whether an access of `arena` is bounds-checked (the module docs): unless the arena is
+/// threadgroup memory, which no profile checks.
+pub(crate) fn contained(_: &SelectCx<'_>, arena: Arena) -> bool {
+    arena != Arena::Threadgroup
 }
 
 /// A pointer's offset shape while reading its definitions: `Empty` is a join's identity.
@@ -1571,9 +1568,7 @@ fn typed_access(
     };
     // A typed threadgroup object's index is contained as the arena's accesses are ([`contained`]).
     let shared = matches!(home, Home::Shared(_)) && !contained(cx, Arena::Threadgroup);
-    let clamped = path.dynamic().next().is_some()
-        && cx.profile.fields().isolation == GuestIsolation::On
-        && !shared;
+    let clamped = path.dynamic().next().is_some() && !shared;
     let indices = match reader {
         Some(at) => lined_up(cx, at, ptr, &path, (obj, count), m)?,
         None => None,

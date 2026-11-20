@@ -203,9 +203,8 @@ pub enum AttributeFetch {
 ///   under robust buffer access ("Shader Out-of-Bounds Memory Access": the device feature, or
 ///   `VK_EXT_pipeline_robustness`'s `vertexInputs`, which no profile models); without it a draw
 ///   must not fetch past a vertex buffer binding (`VUID-vkCmdDraw-None-02721`), and a Metal draw
-///   may, so containment moves the fetch into the shader, where it reads through the normative
-///   check. Under `Containment::UnsafeOff` the consumer opted out of containment and input stays
-///   fixed function.
+///   may, so its bounds move the fetch into the shader, where it reads through the normative
+///   check.
 /// - `PerPatch`/`PerPatchControlPoint`: tessellation, refused. A `PerInstance` rate of 0 is an
 ///   invalid descriptor.
 ///
@@ -645,40 +644,29 @@ mod tests {
     /// Without buffer robustness Vulkan does not bound fixed-function vertex input
     /// (`VUID-vkCmdDraw-None-02721`), so every attribute is pulled and read through the in-shader
     /// check, whatever its format and step; with `robustBufferAccess` or `robustBufferAccess2` it
-    /// stays fixed function, and so it does under `Containment::UnsafeOff`, where the consumer
-    /// opted out. The descriptor errors and the tessellation refusal come first in every case.
+    /// stays fixed function. The descriptor errors and the tessellation refusal come first in
+    /// every case.
     #[test]
     fn fixed_function_input_needs_buffer_robustness() {
-        use crate::device::policy::ContainmentPolicy;
-        use crate::device::profile::GuestIsolation;
         use VertexStepFunction as S;
         let robust = floor();
         assert!(robust.features.contains(&VkFeature::RobustBufferAccess));
         let mut bare = robust.clone();
         bare.features.remove(&VkFeature::RobustBufferAccess);
         bare.features.remove(&VkFeature::RobustBufferAccess2);
-        let unsafe_off = DevicePolicy {
-            containment: ContainmentPolicy::UnsafeOff,
-            isolation: GuestIsolation::Off,
-            ..DevicePolicy::UNTRUSTED
-        };
-        let checked = Device::from_queries(bare.clone(), DevicePolicy::default()).unwrap();
-        let off = Device::from_queries(bare, unsafe_off).unwrap();
+        let checked = Device::from_queries(bare, DevicePolicy::default()).unwrap();
         let robust = Device::from_queries(robust, DevicePolicy::default()).unwrap();
         assert_eq!(contain::encoding(checked.profile()), Check::InShader);
         assert_eq!(contain::encoding(robust.profile()), Check::None);
-        assert_eq!(contain::encoding(off.profile()), Check::None);
         let float4 = VertexFormat::Float4;
         for (step, rate) in [(S::PerVertex, 1), (S::PerInstance, 1)] {
             let fetch = |dev: &Device| attribute_fetch(float4, step, rate, dev.profile());
             assert_eq!(fetch(&checked), Ok(AttributeFetch::Pulled), "{step:?}");
-            for dev in [&robust, &off] {
-                assert!(
-                    matches!(fetch(dev), Ok(AttributeFetch::FixedFunction { .. })),
-                    "{step:?}: {:?}",
-                    fetch(dev)
-                );
-            }
+            assert!(
+                matches!(fetch(&robust), Ok(AttributeFetch::FixedFunction { .. })),
+                "{step:?}: {:?}",
+                fetch(&robust)
+            );
         }
         assert!(matches!(
             attribute_fetch(float4, S::PerInstance, 0, checked.profile()),

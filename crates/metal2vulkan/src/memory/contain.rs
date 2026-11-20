@@ -1,11 +1,11 @@
-//! Containment encodings and the side-effect guard.
+//! The bounds of a buffer-slot access at a run-time offset, and the side-effect guard.
 //!
-//! Containment keeps every access inside the resources the binder supplied. It is a leaf encoding
-//! chosen from the profile ([`encoding`]):
+//! A descriptor view's access stays inside the range the binder supplied. Its bounds are a leaf
+//! encoding chosen from the profile's buffer robustness ([`encoding`]):
 //!
-//! - **Robust descriptors** (`robustBufferAccess` or `robustBufferAccess2` enabled) and
-//!   `Containment::UnsafeOff`: no check is emitted. The descriptor range is the containment domain
-//!   and the hardware keeps accesses inside it.
+//! - **Robust descriptors** (`robustBufferAccess` or `robustBufferAccess2` enabled): no check is
+//!   emitted. The descriptor range is the containment domain and the hardware keeps accesses
+//!   inside it.
 //! - **In shader**: loads read at `select(inb, off, 0)` and yield `select(inb, v, 0)`; stores and
 //!   atomics sit in a builder-closed `if_(inb)`.
 //!
@@ -19,7 +19,7 @@
 //! relative to the containment domain's base, so a wrapped GEP result is a huge offset and fails
 //! the check.
 
-use crate::device::profile::{Containment, Robustness};
+use crate::device::profile::Robustness;
 use crate::device::DeviceProfile;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
@@ -29,34 +29,31 @@ use crate::spirv::ir::{BinOp, ConstBits, Constant};
 /// How one leaf access is contained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Check {
-    /// No in-shader check (robust descriptors, or containment off).
+    /// No in-shader check (robust descriptors).
     None,
     /// The normative in-shader check.
     InShader,
 }
 
-/// The descriptor-view encoding of `p`: an in-shader check exactly when containment is on and no
-/// buffer robustness is enabled.
+/// The descriptor-view encoding of `p`: an in-shader check exactly when no buffer robustness is
+/// enabled.
 pub fn encoding(p: &DeviceProfile) -> Check {
-    match p.fields().containment {
-        Containment::On {
-            robust: Robustness::None,
-        } => Check::InShader,
-        _ => Check::None,
+    match p.fields().robustness {
+        Robustness::None => Check::InShader,
+        Robustness::Rba | Robustness::Rba2 => Check::None,
     }
 }
 
 /// Whether the device's robustness on `p` returns Metal's out-of-bounds texel for a read of an
 /// image (`buffer`: a texel buffer), so the read is left to it: `robustImageAccess2`
-/// (`robustBufferAccess2` for a texel buffer), under containment. Elsewhere the shader checks the
+/// (`robustBufferAccess2` for a texel buffer). Elsewhere the shader checks the
 /// read: `robustImageAccess` alone reads a missing alpha as 0 or 1 and a fetch past the view's
 /// levels as undefined, and `robustBufferAccess` alone may read any value of the buffer.
 pub fn device_reads_texels(p: &DeviceProfile, buffer: bool) -> bool {
     let f = p.fields();
-    match f.containment {
-        Containment::On { robust } if buffer => robust == Robustness::Rba2,
-        Containment::On { .. } => f.images.robust_image_access2,
-        _ => false,
+    match buffer {
+        true => f.robustness == Robustness::Rba2,
+        false => f.images.robust_image_access2,
     }
 }
 
@@ -67,12 +64,7 @@ pub fn device_reads_texels(p: &DeviceProfile, buffer: bool) -> bool {
 pub fn device_drops_texel_writes(p: &DeviceProfile, buffer: bool) -> bool {
     let f = p.fields();
     if buffer {
-        matches!(
-            f.containment,
-            Containment::On {
-                robust: Robustness::Rba2
-            }
-        )
+        f.robustness == Robustness::Rba2
     } else {
         f.images.robust_image_access
     }

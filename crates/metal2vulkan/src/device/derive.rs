@@ -13,12 +13,12 @@ use crate::device::description::{
 };
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
-use crate::device::policy::{ContainmentPolicy, DevicePolicy};
+use crate::device::policy::DevicePolicy;
 use crate::device::profile::{
-    BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
+    BufferAccess, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, FunctionStorage,
-    GuestIsolation, HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain,
-    ProfileFields, Robustness,
+    HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields,
+    Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -85,15 +85,6 @@ impl Device {
             .into());
         }
         crate::device::enables::check_invariants(&desc)?;
-        if policy.containment == ContainmentPolicy::UnsafeOff
-            && policy.isolation == GuestIsolation::On
-        {
-            return Err(Error::InvalidDescriptor(
-                DescriptorError::DeviceDescription {
-                    detail: "containment UnsafeOff contradicts GuestIsolation::On".into(),
-                },
-            ));
-        }
         identity_domains(&desc, &policy)?;
         let profile = DeviceProfile::of(derive_fields(&desc, &policy));
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
@@ -183,18 +174,13 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
     } else {
         BufferAccess::Floor
     };
-    // The containment encoding is a leaf choice from the enabled robustness.
-    let containment = match policy.containment {
-        ContainmentPolicy::UnsafeOff => Containment::UnsafeOff,
-        ContainmentPolicy::Contained => Containment::On {
-            robust: if has(VkFeature::RobustBufferAccess2) {
-                Robustness::Rba2
-            } else if has(VkFeature::RobustBufferAccess) {
-                Robustness::Rba
-            } else {
-                Robustness::None
-            },
-        },
+    // The bounds of a descriptor view's access are a leaf choice from the enabled robustness.
+    let robustness = if has(VkFeature::RobustBufferAccess2) {
+        Robustness::Rba2
+    } else if has(VkFeature::RobustBufferAccess) {
+        Robustness::Rba
+    } else {
+        Robustness::None
     };
 
     let leaf = LeafCaps {
@@ -314,8 +300,7 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         buffer_access,
         pointer_domain: policy.pointer_domain,
         handle_domain: policy.handle_domain,
-        containment,
-        isolation: policy.isolation,
+        robustness,
         leaf,
         subgroup: subgroup_model(desc),
         images,

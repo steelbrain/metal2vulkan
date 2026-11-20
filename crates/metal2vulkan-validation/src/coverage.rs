@@ -27,7 +27,6 @@ use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::case::Stage;
 use crate::observation_contract::ComparisonClass;
 use metal2vulkan::bind::BindingPlan;
-use metal2vulkan::device::Containment as ProfileContainment;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::device::{DeviceDescription, DeviceProfile};
 use metal2vulkan::pipeline::{PrecisionNote, StageModule};
@@ -96,8 +95,6 @@ pub enum BufferEncoding {
     /// advertise the feature without containing every form
     /// ([`HostClass::robust_buffers_uncontained`], MoltenVK).
     Robust,
-    /// Containment is off (`Containment::UnsafeOff`, never the default policy).
-    Off,
 }
 
 /// How image reads and writes are contained (`DeviceProfile::device_reads_texels` and
@@ -165,9 +162,7 @@ impl Containment {
     pub fn of_compile(profile: &DeviceProfile, words: &[u32]) -> Containment {
         let declared = Declared::of(words);
         Containment {
-            buffers: if profile.containment() == ProfileContainment::UnsafeOff {
-                BufferEncoding::Off
-            } else if !declared.buffers {
+            buffers: if !declared.buffers {
                 BufferEncoding::Unused
             } else if profile.checks_buffers_in_shader() {
                 BufferEncoding::Checked
@@ -194,7 +189,6 @@ impl Containment {
                 BufferEncoding::Unused => "unused",
                 BufferEncoding::Checked => "checked",
                 BufferEncoding::Robust => "robust",
-                BufferEncoding::Off => "off",
             },
             match self.images {
                 ImageEncoding::Unused => "unused",

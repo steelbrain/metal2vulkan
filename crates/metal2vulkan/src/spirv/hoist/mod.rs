@@ -32,8 +32,8 @@
 //! - **Safe to read early.** A load in the loop's header, or in a block the header leads to
 //!   unconditionally and alone ([`entry_run`]), runs whenever the loop is entered, so it moves on
 //!   every profile. A load elsewhere in the loop runs on some trips or paths only; it
-//!   moves only where the profile's containment rests on the device's robust buffer access
-//!   ([`Containment::On`] with [`Robustness::Rba`] or [`Robustness::Rba2`]), under which a read
+//!   moves only where the profile's bounds rest on the device's robust buffer access
+//!   ([`Robustness::Rba`] or [`Robustness::Rba2`]), under which a read
 //!   past the bound range reads defined bytes rather than faulting, and a uniform view carries no
 //!   in-shader check that moving it could pass by.
 //!
@@ -44,7 +44,7 @@
 mod tests;
 
 use crate::budget::Meter;
-use crate::device::profile::{Containment, Robustness};
+use crate::device::profile::Robustness;
 use crate::error::Error;
 use crate::spirv::ids::{BlockId, Value};
 use crate::spirv::ir::{
@@ -60,18 +60,13 @@ const MAX_DEPTH: u32 = 64;
 /// leaves.
 pub fn hoist_uniform_loads(
     m: &mut TypedModule,
-    containment: Containment,
+    robustness: Robustness,
     meter: &mut Meter,
 ) -> Result<u32, Error> {
     if m.loops.is_empty() {
         return Ok(0);
     }
-    let speculate = matches!(
-        containment,
-        Containment::On {
-            robust: Robustness::Rba | Robustness::Rba2
-        }
-    );
+    let speculate = matches!(robustness, Robustness::Rba | Robustness::Rba2);
     let writers = buffer_writers(m, meter)?;
     let any_writer = writers.iter().any(|&w| w);
     let blocks = m.blocks.len();

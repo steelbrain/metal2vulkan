@@ -1703,7 +1703,7 @@ pub(super) fn engine_list(
     available: &Available,
     leg: Leg,
 ) -> Result<Enables, String> {
-    let recommended = description.recommended_enables(&DevicePolicy::default());
+    let recommended = description.recommended_enables();
     for &extension in &recommended.extensions {
         let name = EXTENSIONS
             .iter()

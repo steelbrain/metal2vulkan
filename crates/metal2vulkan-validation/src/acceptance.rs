@@ -1389,7 +1389,7 @@ mod tests {
         // Every requirement is enabled, and every device fact met, on a device that is exactly
         // the profile's description and enabled everything it recommends.
         let description = description("vk12-floor");
-        let enabled = description.recommended_enables(&DevicePolicy::default());
+        let enabled = description.recommended_enables();
         assert_eq!(
             unenabled(
                 &opened_description(description.clone(), &enabled),
@@ -2067,7 +2067,7 @@ mod tests {
             .features
             .retain(|&feature| feature.exposure().exposed(ApiVersion::V1_2, &extensions));
         assert!(at_1_2.has(extended));
-        let with = at_1_2.recommended_enables(&DevicePolicy::default());
+        let with = at_1_2.recommended_enables();
         assert!(with.features.contains(&extended));
         let mut without = with.clone();
         without.features.remove(&extended);
@@ -2093,7 +2093,7 @@ mod tests {
         use metal2vulkan::device::{StageCreateFlag, VkLimit};
         let mut description = description("vk12-floor");
         let push_limit = description.limits.max_push_constants_size;
-        let enabled = description.recommended_enables(&DevicePolicy::default());
+        let enabled = description.recommended_enables();
         let opened = opened_profile(description.clone(), &enabled);
         assert!(opened.is_ok(), "{opened:?}");
 

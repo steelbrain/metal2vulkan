@@ -181,15 +181,15 @@ impl DeviceProfile {
         crate::device::subgroup::tier(class, stage, &self.fields.subgroup)
     }
 
-    /// How this profile contains an out-of-bounds access: on, relying on the buffer robustness it
-    /// enables, or off.
-    pub fn containment(&self) -> Containment {
-        self.fields.containment
+    /// The buffer robustness this profile enables, which bounds a descriptor view's access at a
+    /// run-time offset where it holds ([`checks_buffers_in_shader`](Self::checks_buffers_in_shader)).
+    pub fn robustness(&self) -> Robustness {
+        self.fields.robustness
     }
 
     /// Whether a module compiled for this profile checks a buffer access in the shader: exactly
-    /// when containment is on and no buffer robustness is enabled. Elsewhere the descriptor range
-    /// and the device's robustness contain it, or containment is off.
+    /// when no buffer robustness is enabled. Elsewhere the descriptor range and the device's
+    /// robustness bound it.
     pub fn checks_buffers_in_shader(&self) -> bool {
         crate::memory::contain::encoding(self) == Check::InShader
     }
@@ -480,8 +480,8 @@ pub struct ProfileFields {
     pub buffer_access: BufferAccess,
     pub pointer_domain: PointerDomain,
     pub handle_domain: HandleDomain,
-    pub containment: Containment,
-    pub isolation: GuestIsolation,
+    /// The buffer robustness the profile enables.
+    pub robustness: Robustness,
     pub leaf: LeafCaps,
     pub subgroup: SubgroupModel,
     pub images: ImageCaps,
@@ -712,17 +712,9 @@ pub enum HandleDomain {
     Identity,
 }
 
-/// Out-of-bounds containment encoding.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Containment {
-    /// Containment is on; descriptor views rely on this robustness level when enabled.
-    On { robust: Robustness },
-    /// No containment. In the fingerprint; never a default.
-    UnsafeOff,
-}
-
-/// Which buffer robustness the profile enables.
+/// Which buffer robustness the profile enables: a descriptor view's access at a run-time offset is
+/// bounded by it where it holds, and by the normative in-shader check where none is enabled
+/// (`memory::contain`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Robustness {
@@ -732,15 +724,6 @@ pub enum Robustness {
     Rba,
     /// `robustBufferAccess2`.
     Rba2,
-}
-
-/// Whether guest shaders are isolated to the resources the binder supplied.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum GuestIsolation {
-    On,
-    Off,
 }
 
 /// Leaf arithmetic, storage, and atomic capabilities.

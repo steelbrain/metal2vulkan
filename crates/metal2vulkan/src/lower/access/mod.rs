@@ -124,7 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::ir::{AddrSpace, CastOp, Const, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, Limits};
+use crate::device::profile::{BufferAccess, Limits};
 use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -691,8 +691,9 @@ pub enum SlotLowering {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccessPlan {
     pub slots: Vec<Option<SlotLowering>>,
-    /// Device-address accesses are contained (robust buffer access does not cover them, so only
-    /// `Containment::UnsafeOff` turns this off).
+    /// Device-address accesses are bounds-checked (robust buffer access does not cover them):
+    /// every profile's but the identity domains', whose slots are checked against their pushed
+    /// lengths instead.
     pub psb_contained: bool,
     /// The narrow units device-address accesses load and store directly (`psb::narrow_units` of
     /// the profile): a sub-word store there is one narrow store instead of two word atomics.
@@ -1284,13 +1285,11 @@ pub(crate) fn identity(p: &DeviceProfile) -> bool {
     p.fields().pointer_domain == crate::device::PointerDomain::Identity
 }
 
-/// Whether a function selected in `cx` contains its slots' device-address accesses under the
-/// identity domains: containment is on (`Containment::UnsafeOff` turns it off) and the function
-/// is no device-replay variant, whose slots' addresses are its replayed command's.
+/// Whether a function selected in `cx` bounds its slots' device-address accesses under the
+/// identity domains: the function is no device-replay variant, whose slots' addresses are its
+/// replayed command's.
 pub(crate) fn identity_contained(cx: &SelectCx<'_>) -> bool {
-    identity(cx.profile)
-        && cx.profile.fields().containment != Containment::UnsafeOff
-        && !cx.inputs.replay_bindings
+    identity(cx.profile) && !cx.inputs.replay_bindings
 }
 
 /// An access of buffer slot `slot`, a read where `read`, whose byte offset is a translation-time
@@ -1698,10 +1697,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.pulled = sourced;
     cx.families.access.unwritten = unwritten_slots(cx, &lowering, &sources);
     cx.families.access.slots = lowering;
-    // The root table's containment; under the identity domains a slot's accesses are checked
-    // against its pushed length instead (`variable`).
-    cx.families.access.psb_contained =
-        p.fields().containment != Containment::UnsafeOff && !identity(p);
+    // The root table's bounds; under the identity domains a slot's accesses are checked against
+    // its pushed length instead (`variable`).
+    cx.families.access.psb_contained = !identity(p);
     cx.families.access.psb_units = psb::narrow_units(p);
     cx.families.access.identity = identity(p);
     Ok(slots)

@@ -100,7 +100,6 @@ use crate::air::ir::{
 };
 use crate::budget::Meter;
 use crate::device::profile::BufferAccess;
-use crate::device::profile::Containment;
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::lower::emit::EmitCx;
@@ -185,7 +184,7 @@ pub enum AtomicMem {
     /// The threadgroup arena.
     Threadgroup { ptr: LocalPtr, contained: bool },
     /// A wide (dynamic-root) buffer pointer: the device address its root entry names.
-    Wide { ptr: ValueId, contained: bool },
+    Wide { ptr: ValueId },
     /// A word of the private arena (`air.atomic.private`): its leaf, read and written by its own
     /// thread alone.
     Private(LocalAccess),
@@ -243,7 +242,7 @@ impl AtomicAccess {
             AtomicMem::Threadgroup { contained, .. } => {
                 ("threadgroup", BufferReach::NONE, *contained)
             }
-            AtomicMem::Wide { contained, .. } => ("wide", BufferReach::NONE, *contained),
+            AtomicMem::Wide { .. } => ("wide", BufferReach::NONE, true),
             AtomicMem::Private(a) => ("private", BufferReach::NONE, a.contained),
         };
         let kind = match self.kind {
@@ -693,7 +692,6 @@ pub fn select(
         memory_model::note_device_scope(cx);
         AtomicMem::Wide {
             ptr: super::dynamic::plan_deref(cx, r.ptr)?,
-            contained: cx.profile.fields().containment != Containment::UnsafeOff,
         }
     } else {
         let (mut targets, null) = static_roots(cx, r.ptr, m)?;

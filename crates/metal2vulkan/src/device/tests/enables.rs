@@ -55,7 +55,7 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     let mut left_out = Vec::new();
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let rec = desc.recommended_enables(&DevicePolicy::default());
+        let rec = desc.recommended_enables();
         assert!(rec.features.is_subset(&desc.features), "{stem}");
         assert!(rec.extensions.is_subset(&desc.extensions), "{stem}");
         for &f in &rec.features {
@@ -112,7 +112,7 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
             "{stem}"
         );
     }
-    let m = profile("moltenvk-m3").recommended_enables(&DevicePolicy::default());
+    let m = profile("moltenvk-m3").recommended_enables();
     assert!(m.extensions.contains(&VkExtension::KhrPortabilitySubset));
     let stems: BTreeSet<&str> = left_out.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(
@@ -147,7 +147,7 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
     assert!(d.has(VkFeature::RobustBufferAccess));
     for reported in [false, true] {
         d.robust_buffer_access_update_after_bind = reported;
-        let rec = d.recommended_enables(&DevicePolicy::default());
+        let rec = d.recommended_enables();
         assert!(rec.features.contains(&VkFeature::RobustBufferAccess));
         assert!(rec.features.is_superset(&set(&images)));
         for f in BUFFER_UPDATE_AFTER_BIND {
@@ -166,7 +166,7 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
         isolation: GuestIsolation::Off,
         ..DevicePolicy::default()
     };
-    let rec = d.recommended_enables(&policy);
+    let rec = d.recommended_enables();
     assert!(!rec.features.contains(&VkFeature::RobustBufferAccess));
     assert!(rec.features.is_superset(&set(BUFFER_UPDATE_AFTER_BIND)));
     d.with_enabled(&rec).unwrap();
@@ -185,7 +185,7 @@ fn the_swiftshader_recommendation_keeps_vuid_10247() {
     assert!(!desc.robust_buffer_access_update_after_bind);
     assert!(desc.has(VkFeature::RobustBufferAccess));
     assert!(BUFFER_UPDATE_AFTER_BIND.iter().all(|&f| desc.has(f)));
-    let rec = desc.recommended_enables(&DevicePolicy::default());
+    let rec = desc.recommended_enables();
     assert!(rec.features.contains(&VkFeature::RobustBufferAccess));
     assert!(rec.features.is_disjoint(&set(BUFFER_UPDATE_AFTER_BIND)));
     assert!(rec
@@ -242,7 +242,7 @@ fn recommendations_follow_the_device_version() {
             VkFeature::MeshShader,
         ],
     );
-    let rec = d.recommended_enables(&DevicePolicy::default());
+    let rec = d.recommended_enables();
     assert!(rec.features.contains(&VkFeature::ShaderTerminateInvocation));
     assert!(rec
         .extensions
@@ -262,7 +262,7 @@ fn recommendations_follow_the_device_version() {
     let mut v13 = d.clone();
     v13.api_version = ApiVersion { major: 1, minor: 3 };
     v13.features.insert(VkFeature::ExtendedDynamicState);
-    let rec13 = v13.recommended_enables(&DevicePolicy::default());
+    let rec13 = v13.recommended_enables();
     assert!(rec13
         .features
         .contains(&VkFeature::ShaderTerminateInvocation));
@@ -290,7 +290,7 @@ fn extended_dynamic_state2_is_enabled_below_1_3_and_implied_from_it() {
             VkFeature::ExtendedDynamicState2,
         ],
     );
-    let rec = d.recommended_enables(&DevicePolicy::default());
+    let rec = d.recommended_enables();
     for (extension, feature) in [
         (
             VkExtension::ExtExtendedDynamicState,
@@ -318,7 +318,7 @@ fn extended_dynamic_state2_is_enabled_below_1_3_and_implied_from_it() {
     let mut v13 = d.clone();
     v13.api_version = ApiVersion { major: 1, minor: 3 };
     v13.extensions.clear();
-    let rec13 = v13.recommended_enables(&DevicePolicy::default());
+    let rec13 = v13.recommended_enables();
     assert!(!rec13.features.contains(&VkFeature::ExtendedDynamicState2));
     assert!(!rec13
         .extensions
@@ -338,7 +338,7 @@ fn recommendations_close_extension_requirements() {
         VkFeature::ShaderSharedFloat32AtomicMinMax,
     ];
     let lonely = floor_with(&[VkExtension::ExtShaderAtomicFloat2], &float2);
-    let rec = lonely.recommended_enables(&DevicePolicy::default());
+    let rec = lonely.recommended_enables();
     assert!(!rec.extensions.contains(&VkExtension::ExtShaderAtomicFloat2));
     assert!(rec.features.is_disjoint(&set(&float2)));
 
@@ -349,7 +349,7 @@ fn recommendations_close_extension_requirements() {
         ],
         &float2,
     );
-    let rec = both.recommended_enables(&DevicePolicy::default());
+    let rec = both.recommended_enables();
     assert!(rec.features.is_superset(&set(&float2)));
     assert!(rec.extensions.is_superset(&set(&[
         VkExtension::ExtShaderAtomicFloat2,
@@ -363,7 +363,7 @@ fn recommendations_close_extension_requirements() {
         ],
         &[VkFeature::BorderColorSwizzle],
     );
-    let rec = swizzle.recommended_enables(&DevicePolicy::default());
+    let rec = swizzle.recommended_enables();
     assert!(rec.features.contains(&VkFeature::BorderColorSwizzle));
     // Not consumed on its own, enabled as the swizzle extension's requirement.
     assert!(rec.extensions.contains(&VkExtension::ExtCustomBorderColor));
@@ -379,7 +379,7 @@ fn unsafe_containment_recommends_no_robust_buffer_access() {
         isolation: GuestIsolation::Off,
         ..DevicePolicy::default()
     };
-    let rec = desc.recommended_enables(&policy);
+    let rec = desc.recommended_enables();
     assert!(!rec.features.contains(&VkFeature::RobustBufferAccess));
     assert!(!rec.features.contains(&VkFeature::RobustBufferAccess2));
     let restricted = desc.with_enabled(&rec).unwrap();
@@ -803,7 +803,7 @@ fn a_storage_read_without_a_format_is_enabled_by_the_feature_the_version_or_the_
     ));
     let policy = DevicePolicy::default();
     let open = |desc: &DeviceDescription| {
-        let enabled = desc.recommended_enables(&policy);
+        let enabled = desc.recommended_enables();
         let opened = desc.clone().with_enabled(&enabled).unwrap();
         (
             enabled,

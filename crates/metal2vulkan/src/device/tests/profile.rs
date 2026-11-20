@@ -1,10 +1,7 @@
 //! `Device::from_queries`, profile derivation, the fingerprint, and `requirements ⊆ profile`.
 
 use super::*;
-use crate::device::profile::{
-    BufferAccess, Containment, GuestIsolation, HandleDomain, Independence, PointerDomain,
-    Robustness,
-};
+use crate::device::profile::{BufferAccess, HandleDomain, Independence, PointerDomain, Robustness};
 use crate::device::requirements::{Requirements, StageCreateFlag, VkLimit, VkProperty};
 use crate::error::{Capability, Feature, Needs};
 
@@ -20,12 +17,6 @@ fn every_committed_profile_derives() {
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         let f = dev.profile().fields();
         assert_eq!(f.api_version, desc.api_version, "{stem}");
-        assert_eq!(f.isolation, GuestIsolation::On, "{stem}");
-        assert!(
-            matches!(f.containment, Containment::On { .. }),
-            "{stem}: {:?}",
-            f.containment
-        );
         // Deterministic.
         let again = Device::from_queries(desc, DevicePolicy::default()).unwrap();
         assert_eq!(dev.profile(), again.profile(), "{stem}");
@@ -194,12 +185,7 @@ fn addressed_needs_name_only_the_missing_features() {
 fn vk12_floor_derives_a_floor_profile() {
     let dev = device("vk12-floor");
     let f = dev.profile().fields();
-    assert_eq!(
-        f.containment,
-        Containment::On {
-            robust: Robustness::Rba
-        }
-    );
+    assert_eq!(f.robustness, Robustness::Rba);
     assert!(f.descriptors.uniform_buffer_standard_layout);
     assert!(!f.leaf.vertex_stores_and_atomics);
     assert!(!f.leaf.fragment_stores_and_atomics);
@@ -253,19 +239,12 @@ fn vertex_layer_and_viewport_outputs_follow_the_features_not_the_extension() {
 #[test]
 fn robustness2_selects_the_rba2_encoding() {
     assert_eq!(
-        device("amd-rdna3-radv").profile().fields().containment,
-        Containment::On {
-            robust: Robustness::Rba2
-        }
+        device("amd-rdna3-radv").profile().fields().robustness,
+        Robustness::Rba2
     );
     // MoltenVK exposes VK_EXT_robustness2 but reports robustBufferAccess2 = false.
     let f = device("moltenvk-m3");
-    assert_eq!(
-        f.profile().fields().containment,
-        Containment::On {
-            robust: Robustness::Rba
-        }
-    );
+    assert_eq!(f.profile().fields().robustness, Robustness::Rba);
     let m = f.profile().fields();
     assert!(m.dynamic_vertex_stride);
     assert!(m.descriptors.push_descriptor);
@@ -281,7 +260,7 @@ fn robustness2_selects_the_rba2_encoding() {
 }
 
 #[test]
-fn below_1_2_and_contradictory_policies_are_refused() {
+fn below_1_2_is_refused() {
     let mut desc = profile("vk12-floor");
     desc.api_version = ApiVersion { major: 1, minor: 1 };
     match Device::from_queries(desc, DevicePolicy::default()) {
@@ -306,7 +285,7 @@ fn below_1_2_and_contradictory_policies_are_refused() {
     ));
     unsafe_on.isolation = GuestIsolation::Off;
     let dev = Device::from_queries(profile("vk12-floor"), unsafe_on).unwrap();
-    assert_eq!(dev.profile().fields().containment, Containment::UnsafeOff);
+    assert_eq!(dev.profile().fields().robustness, Containment::UnsafeOff);
 }
 
 /// The identity domains come as a pair (`InvalidDescriptor` for one alone) and need

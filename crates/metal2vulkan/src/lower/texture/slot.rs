@@ -3,7 +3,6 @@
 
 use crate::air::abi::Access as AbiAccess;
 use crate::air::intrinsics::{ImageDim, ImageShape};
-use crate::device::profile::Containment;
 use crate::device::requirements::{FormatUsage, VkExtension, VkFeature};
 use crate::error::{Capability, Error, Feature, LowerFamily, RuntimeInput, Unsupported};
 use crate::lower::select::{DescriptorCounts, SelectCx};
@@ -691,8 +690,6 @@ fn needs(feature: Feature, f: VkFeature) -> Error {
 /// the buffer, so neither is Metal's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReadCheck {
-    /// No containment (`Containment::UnsafeOff`): the access as the function spells it.
-    Off,
     /// The device's robustness returns Metal's texel; the access is left to it.
     Device,
     /// The shader clamps every operand into the bound resource, so the access stays inside it,
@@ -703,9 +700,7 @@ pub enum ReadCheck {
 /// How a read of an image (`buffer`: a texel buffer) returns Metal's out-of-bounds texel on the
 /// profile ([`ReadCheck`]).
 pub(super) fn read_check(cx: &SelectCx<'_>, buffer: bool) -> ReadCheck {
-    if !matches!(cx.profile.fields().containment, Containment::On { .. }) {
-        ReadCheck::Off
-    } else if contain::device_reads_texels(cx.profile, buffer) {
+    if contain::device_reads_texels(cx.profile, buffer) {
         ReadCheck::Device
     } else {
         ReadCheck::Shader
@@ -732,12 +727,8 @@ pub(super) fn write_guard(cx: &SelectCx<'_>, buffer: bool) -> bool {
 /// left to the device where [`write_guard`] does not guard it, a load where [`read_check`] leaves
 /// it to the device, and a texture atomic (which stores and returns the texel) is both where it is
 /// not guarded. A load the shader checks reads a clamped coordinate inside the resource, and a
-/// guarded store never reaches the device, so neither can meet the other out of bounds. Without
-/// containment nothing out of bounds is defined.
+/// guarded store never reaches the device, so neither can meet the other out of bounds.
 fn forwards(cx: &SelectCx<'_>, uses: &Uses, buffer: bool) -> bool {
-    if !matches!(cx.profile.fields().containment, Containment::On { .. }) {
-        return false;
-    }
     let atomic = uses.atomic && !write_guard(cx, buffer);
     let store = (uses.write && !write_guard(cx, buffer)) || atomic;
     let load = (uses.read && read_check(cx, buffer) == ReadCheck::Device) || atomic;

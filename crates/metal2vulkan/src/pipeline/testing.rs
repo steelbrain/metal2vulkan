@@ -406,7 +406,7 @@ fn typed_module_of(
     let crate::lower::emit::Emitted { mut module, .. } =
         crate::lower::emit::emit_module(&spec, &plan, m)?;
     crate::spirv::roll::roll_entry(&mut module, m)?;
-    crate::spirv::hoist::hoist_uniform_loads(&mut module, p.containment(), m)?;
+    crate::spirv::hoist::hoist_uniform_loads(&mut module, p.robustness(), m)?;
     crate::spirv::verify::verify(&module, p, m)?;
     if walked(&plan) {
         let words = crate::spirv::serialize::serialize(module.clone())?.words;

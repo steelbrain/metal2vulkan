@@ -19,7 +19,7 @@
 //! **Containment** is mandatory for PSB (robust buffer access does not apply to device addresses):
 //! the normative check in `u64` against `size`, the access at `select(inb, address, sink)`, and a
 //! load's value `select(inb, v, 0)`. A contained store lands in the sink, which no shader reads
-//! observably. Only `Containment::UnsafeOff` omits it. Under the identity domains no table is
+//! observably. Under the identity domains no table is
 //! read: an access whose offset is not a translation-time constant is checked against the slot's
 //! buffer ([`in_buffer`], `emit::prepare`), a load outside reading the zero range
 //! ([`PsbMem::outside`]).
