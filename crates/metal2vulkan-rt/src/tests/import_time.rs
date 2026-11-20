@@ -725,8 +725,8 @@ mod on_device {
         const STRIDE: u64 = 7919;
         let pages = chunk / PAGE;
         assert!(
-            runs <= pages && pages <= 2 * runs,
-            "runs of one or two pages fill the chunk"
+            runs == 1 || (runs <= pages && pages <= 2 * runs),
+            "one run, or runs of one or two pages, fill the chunk"
         );
         let slots = count * pages;
         assert_ne!(
