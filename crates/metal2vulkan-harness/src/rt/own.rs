@@ -3,12 +3,15 @@
 //!
 //! The idle rows read the runtime's count of each idle free by the allocation's idle time when
 //! the free began (`Metrics::idle_frees_by_age`), whose second bucket, 250 to 275 ms, holds a
-//! free that began within 25 ms of the idle age (250 ms). A small block held to the end keeps its
-//! allocation live, so the class's free bytes stay above what the block-maker makes ahead for and
-//! each allocation given back is weighed, and freed, at its own idle age, none kept as the class's
-//! reserve. Each block is given back with no free running: far enough apart without commits, and
-//! with them once every free before it ended. A free in any other bucket fails the row: one that
-//! began 25 ms or more past its idle age, or one before it.
+//! free that began within 25 ms of the idle age (250 ms). A small block held to the end keeps the
+//! class's first allocation live. The class keeps one wholly free unit, its reserve: the last idle
+//! unit allocation in the order made, which the idle rule never frees. So each block of a unit is
+//! taken once the block-maker thread has made the class's wholly free unit ahead of need
+//! (`Gauges::shared_reserve_bytes`), and the row waits for the one it makes after the last: every
+//! unit given back was made before the reserve, and is weighed, and freed, at its own idle age.
+//! Each block is given back with no free running: far enough apart without commits, and with them
+//! once every free before it ended. A free in any other bucket fails the row: one that began 25 ms
+//! or more past its idle age, or one before it.
 //!
 //! The export row times `vkQueueSubmit2` of one command buffer that records a global memory
 //! barrier, on the presenting queue, waited for by a fence before the next, in rounds that take
@@ -69,18 +72,36 @@ pub(super) fn run(physical: &rt::PhysicalDevice, row: OwnRow) -> Result<OwnRepor
     }
 }
 
-/// The idle row (the module's docs): four Shared blocks given back [`APART`], or with `commits`
-/// two, while a command buffer is committed every [`COMMIT_EVERY`], the first [`FIRST_AFTER`]
-/// in and the second once the first's free ended.
+/// The idle row (the module's docs): four Shared blocks, each taken in a unit made ahead of need,
+/// given back [`APART`], or with `commits` two, while a command buffer is committed every
+/// [`COMMIT_EVERY`], the first [`FIRST_AFTER`] in and the second once the first's free ended.
 fn idle_frees(device: &rt::Device, commits: bool) -> Result<OwnReport> {
     let shared = rt::MemoryClass::Shared;
     let counters = device.counters();
+    // Until the class holds a wholly free unit the block-maker thread made ahead of need.
+    let made_ahead = || {
+        let since = Instant::now();
+        while counters.gauges().shared_reserve_bytes == 0 {
+            if since.elapsed() > WAIT {
+                return Err(format!("no Shared unit made ahead in {WAIT:?}"));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
+    };
     let small = device.take_block(shared, 1).map_err(error)?;
     let count = if commits { 2 } else { 4 };
-    let mut blocks = (0..count)
-        .map(|_| device.take_block(shared, shared.block_len()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(error)?;
+    let mut blocks = Vec::new();
+    for _ in 0..count {
+        made_ahead()?;
+        blocks.push(
+            device
+                .take_block(shared, shared.block_len())
+                .map_err(error)?,
+        );
+    }
+    // The unit made after the last take is the reserve, made after every unit given back.
+    made_ahead()?;
     let queue = device.new_command_queue(1).map_err(error)?;
     let before = counters.metrics();
     let freed = || counters.metrics().allocations_freed - before.allocations_freed;
