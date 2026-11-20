@@ -484,6 +484,36 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SetPastLayoutSupport.code())
 }
 
+/// The declaration a case needs where it samples through a sampler that reads an opaque-black
+/// border ([`reads_opaque_black_border`]): `swizzled-opaque-black-border`
+/// ([`metal2vulkan_runtime::Degradation::SwizzledOpaqueBlackBorder`]), the static note the new
+/// runtime records for such a sampler state, and for a pipeline whose function samples through
+/// such a constexpr sampler, on every device. Through a view whose component mapping is not the
+/// identity, the border texel is the device's answer where the device does not report
+/// `borderColorSwizzleFromImage`. The old runtime makes the sampler for the view's mapping instead
+/// and announces none.
+///
+/// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
+/// value still compares exactly. A border texel the device answers otherwise than Metal is a row
+/// of `known-gaps-rt.tsv`. A case names it from its own samplers, never from the venue.
+pub fn swizzled_border_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::SwizzledOpaqueBlackBorder.code())
+}
+
+/// Whether a sampler of `spec` reads an opaque-black border: an address mode of `ClampToZero` or
+/// `ClampToBorderColor`, both of which read the descriptor's colour, with that colour
+/// ([`swizzled_border_notice`]).
+pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
+    use metal2vulkan::metal::{SamplerAddressMode as A, SamplerBorderColor as B};
+    let modes = [
+        spec.s_address_mode,
+        spec.t_address_mode,
+        spec.r_address_mode,
+    ];
+    spec.border_color == B::OpaqueBlack
+        && (modes.iter()).any(|mode| matches!(mode, A::ClampToZero | A::ClampToBorderColor))
+}
+
 /// The notices that state **the device's own answer** to an arithmetic or value question, which the
 /// suite holds declared at the notices site for every case ([`native_note_declarations`]).
 ///

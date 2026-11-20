@@ -315,10 +315,20 @@ impl Case for BorderSwizzles {
         // which the new runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
         // on lavapipe, the Radeon 780M and the RX 550: it fired for all 8 rows.
-        vec![
+        //
+        // Every row sweeps samplers that read an opaque-black border, which the new runtime's
+        // sampler states note on every device (`crate::replay::swizzled_border_notice`).
+        let mut named = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::pixel_sampler_scaling_notice(),
-        ]
+        ];
+        let black = (SAMPLERS.iter()).any(|&(_, modes, border)| {
+            crate::replay::reads_opaque_black_border(&sampler_spec(modes, border))
+        });
+        if black {
+            named.push(crate::replay::swizzled_border_notice());
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -229,6 +229,18 @@ struct Read {
 }
 
 impl Read {
+    /// Whether the read samples through a sampler that reads an opaque-black border: a runtime
+    /// state of one ([`crate::replay::reads_opaque_black_border`]), or the fixture's constexpr
+    /// sampler of one, which only `rt_border_ob` declares.
+    fn reads_opaque_black_border(&self) -> bool {
+        match self.through {
+            Through::Slot(_, spec)
+            | Through::Table(_, spec)
+            | Through::HeapTextureSlot(_, spec) => crate::replay::reads_opaque_black_border(&spec),
+            Through::Constexpr | Through::HeapTexture => self.entry == "rt_border_ob",
+        }
+    }
+
     /// The read's site.
     fn site(&self) -> String {
         match self.through {
@@ -793,6 +805,12 @@ impl Case for ReadThrough {
         let mut named = vec![crate::replay::shared_memory_notice()];
         if heap {
             named.push(crate::replay::set_past_layout_notice());
+        }
+        // A read through a sampler of an opaque-black border, which the new runtime notes on every
+        // device for the sampler state, or for the pipeline of the constexpr sampler
+        // (`crate::replay::swizzled_border_notice`).
+        if self.reads.iter().any(Read::reads_opaque_black_border) {
+            named.push(crate::replay::swizzled_border_notice());
         }
         named
     }

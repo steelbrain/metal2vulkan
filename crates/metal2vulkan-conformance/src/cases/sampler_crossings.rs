@@ -975,6 +975,14 @@ impl Case for SamplerCrossings {
             crate::replay::shared_memory_notice(),
             crate::replay::pixel_sampler_scaling_notice(),
         ];
+        // The opaque-black axis-border rows read that border, which the new runtime's sampler
+        // states note on every device (`crate::replay::swizzled_border_notice`).
+        if matches!(
+            self.family,
+            Family::AxisBorder(SamplerBorderColor::OpaqueBlack)
+        ) {
+            allowances.push(crate::replay::swizzled_border_notice());
+        }
         if matches!(self.family, Family::CompareFilters) {
             use metal2vulkan_runtime::Degradation as D;
             for kind in [D::RestrictedDepthUpload, D::RestrictedDepthRange] {
