@@ -869,7 +869,8 @@ impl Device {
         self.shared.core.counters.clone()
     }
 
-    /// What lost the device: the Vulkan call and result of its first loss, None while it is not
+    /// What lost the device: the Vulkan call and result of its first loss, a call of the
+    /// runtime's or one the consumer reported ([`Device::report_loss`]), None while it is not
     /// lost. Metal's counterpart is the code and description of `MTLCommandBuffer.error`
     /// (`MTLCommandBufferError`'s `OutOfMemory`, `PageFault`, `Timeout`, ...). The runtime ends
     /// every command buffer a loss reaches with
@@ -878,6 +879,24 @@ impl Device {
     /// command buffer ends `DeviceLost`, and a later loss never changes it.
     pub fn loss(&self) -> Option<DeviceLoss> {
         self.shared.core.work.lock().loss()
+    }
+
+    /// No Metal counterpart: the consumer reports a loss that its own Vulkan call on this device
+    /// returned, as a [`DeviceLoss`] of that call's name and result: an acquire, a present or
+    /// another swapchain call, such as `vkQueuePresentKHR` returning `ERROR_DEVICE_LOST`. Such a
+    /// call can meet the loss before any call of the runtime's, which otherwise learns of it only
+    /// at its own next submission or wait. The runtime ends the device's work by the path of its
+    /// own loss: the submit thread ends what it holds, the completion thread ends what is in
+    /// flight once the device is idle, host waits for pending signals end false, and every
+    /// command buffer the loss reaches, each later commit included, ends
+    /// [`CommandBufferError::DeviceLost`](crate::CommandBufferError::DeviceLost), as at a loss
+    /// the runtime meets itself. [`Device::loss`] then answers `loss`, unless the device was
+    /// already lost: the first loss is kept, and a later report changes nothing. The runtime
+    /// takes `loss` as given and reads nothing of its result, so a report of a result that is no
+    /// error, `SUCCESS` included, ends the device's work all the same. As at any loss, the device
+    /// is not recovered.
+    pub fn report_loss(&self, loss: DeviceLoss) {
+        complete::lose(&self.shared.core, loss);
     }
 
     /// No Metal counterpart: takes a block of `class` memory of `len` bytes rounded up to 64 KiB
@@ -1021,12 +1040,6 @@ impl Device {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn with_runtime_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
         f(*lock(&self.shared.core.queues.runtime))
-    }
-
-    /// For the device tests: the runtime acts as at a loss of the device, from `loss`.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn lose_for_test(&self, loss: DeviceLoss) {
-        complete::lose(&self.shared.core, loss);
     }
 }
 

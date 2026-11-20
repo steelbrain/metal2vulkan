@@ -3566,18 +3566,19 @@ pub(crate) mod on_device {
         });
     }
 
-    /// At a loss: a host wait for a pending signal ends false; the command buffer in flight ends
-    /// DeviceLost in flight, the held one and every later commit DeviceLost not in flight; the
-    /// device names the first loss's call and result, none before it, and keeps them through a
-    /// second loss; the device tears down, and a new device opens, names no loss, and runs work.
+    /// At a loss the consumer reports, its own `vkQueuePresentKHR`'s (`Device::report_loss`): a
+    /// host wait for a pending signal ends false; the command buffer in flight ends DeviceLost in
+    /// flight, the held one and every later commit DeviceLost not in flight; the device names the
+    /// reported call and result, none before it, and keeps them through a second report of
+    /// another call; the device tears down, and a new device opens, names no loss, and runs work.
     #[test]
-    fn every_device_ends_its_work_at_a_loss_and_a_new_device_opens() {
+    fn every_device_ends_its_work_at_a_reported_loss_and_a_new_device_opens() {
         let first = DeviceLoss {
-            call: "vkQueueSubmit2",
+            call: "vkQueuePresentKHR",
             result: vk::Result::ERROR_DEVICE_LOST,
         };
         let second = DeviceLoss {
-            call: "vkWaitSemaphores",
+            call: "vkAcquireNextImageKHR",
             result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
         };
         each_device("device_loss", |name, instance, device| {
@@ -3606,19 +3607,19 @@ pub(crate) mod on_device {
                         .expect("a wait outside a scheduled handler")
                 });
                 thread::sleep(Duration::from_millis(20));
-                device.lose_for_test(first);
+                device.report_loss(first);
                 waiter.join().expect("the waiter")
             });
             assert!(
                 !waiting,
                 "{name}: a wait for a pending signal ends at the loss"
             );
-            assert_eq!(device.loss(), Some(first), "{name}: the loss's cause");
-            device.lose_for_test(second);
+            assert_eq!(device.loss(), Some(first), "{name}: the reported loss");
+            device.report_loss(second);
             assert_eq!(
                 device.loss(),
                 Some(first),
-                "{name}: a second loss keeps the first's cause"
+                "{name}: a second report keeps the first's cause"
             );
 
             busy.open();
@@ -3656,6 +3657,31 @@ pub(crate) mod on_device {
             within("the new device's teardown", || {
                 counters.gauges() == Gauges::default()
             });
+        });
+    }
+
+    /// A reported loss is taken as given, whatever its result: a report of `SUCCESS` ends the
+    /// device's work as any loss does, the device names it, and a later commit ends DeviceLost not
+    /// in flight.
+    #[test]
+    fn every_device_takes_a_reported_loss_as_given_whatever_its_result() {
+        let report = DeviceLoss {
+            call: "vkQueuePresentKHR",
+            result: vk::Result::SUCCESS,
+        };
+        each_device("reported_loss_as_given", |name, _, device| {
+            let queue = queue(&device);
+            device.report_loss(report);
+            assert_eq!(device.loss(), Some(report), "{name}: the reported loss");
+            let late = queue.command_buffer().expect("a command buffer");
+            late.commit().expect("a commit");
+            finished(name, &late);
+            assert_eq!(
+                late.error(),
+                Some(CommandBufferError::DeviceLost { in_flight: false }),
+                "{name}"
+            );
+            drop((late, queue, device));
         });
     }
 

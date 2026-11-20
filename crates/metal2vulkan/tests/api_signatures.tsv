@@ -6832,6 +6832,7 @@ method	metal2vulkan-runtime::Device::raw	pub fn raw(&self) -> RawDevice<'_>
 method	metal2vulkan-runtime::Device::read_write_texture_support	pub fn read_write_texture_support(&self) -> ReadWriteTextureTier
 method	metal2vulkan-runtime::Device::release_block	pub fn release_block(&self, block: Block) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::release_indices	pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error>
+method	metal2vulkan-runtime::Device::report_loss	pub fn report_loss(&self, loss: DeviceLoss)
 method	metal2vulkan-runtime::Device::supports_texture_sample_count	pub fn supports_texture_sample_count(&self, count: u32) -> bool
 method	metal2vulkan-runtime::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error>
 method	metal2vulkan-runtime::Device::texture_level_info	pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo

@@ -107,7 +107,9 @@ pub enum CommandBufferError {
 /// `vkCreateCommandPool`, `vkAllocateCommandBuffers` or `vkBeginCommandBuffer` for a command buffer
 /// of the runtime's own that a submission could not record, and `vkGetSemaphoreCounterValue` or
 /// `vkWaitSemaphores` for the completion thread's read of the GPU's progress. Each takes any
-/// failed result as a loss, an out-of-memory one included.
+/// failed result as a loss, an out-of-memory one included. `call` can also be the consumer's own
+/// Vulkan call on the device, such as `vkQueuePresentKHR`, whose loss the consumer reports with a
+/// `DeviceLoss` it makes of that call's name and result ([`Device::report_loss`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceLoss {
     /// The Vulkan command, such as `vkQueueSubmit2`.
