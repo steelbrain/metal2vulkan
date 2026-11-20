@@ -976,7 +976,9 @@ pub enum Gap {
     MemorylessTexture,
     /// A texture buffer (`MTLTextureTypeTextureBuffer`).
     ///
-    /// Basis: ours (no texel-buffer array; no replay stream uses one).
+    /// Basis: ours (no texel-buffer array; no replay stream or live session has used one; harvested
+    /// guest render functions declare one in an argument buffer, validation's
+    /// texture_buffer_member).
     TextureBuffer,
     /// A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one: its image view
     /// needs Vulkan's `imageCubeArray`, which the floor does not require.

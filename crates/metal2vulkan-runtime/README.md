@@ -2775,7 +2775,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   no type here names them and the consumer refuses them itself. `new_render_pipeline_state` takes
   a vertex function: an object or mesh function in its place is the translator's refusal
   (`Error::Translation`). The translator compiles mesh pipelines (docs/API.md, "Mesh pipelines");
-  rt makes no `VkPipeline` of one.
+  rt makes no `VkPipeline` of one. No replay stream or live session has used one; harvested guest
+  functions declare them, and validation's committed object and mesh cases qualify on Metal alone
+  (its `mesh_render_pipeline` requirement).
 
 ## Render encoders
 

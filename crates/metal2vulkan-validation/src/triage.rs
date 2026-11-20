@@ -14,7 +14,7 @@ use std::path::Path;
 /// bumps it says what changed; this comment keeps no history.
 macro_rules! analyzer_version {
     () => {
-        "structural-triage-v83"
+        "structural-triage-v84"
     };
 }
 

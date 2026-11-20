@@ -75,7 +75,14 @@ pub enum ToolingRequirement {
     TessellationSystemInputLiteral,
     FragmentImageblockMemberLiteral,
     KernelStageInputLiteral,
-    TextureBufferLiteral,
+    /// A texture buffer that is no entry parameter of its own: one an argument buffer holds, or an
+    /// element of a texture-handle array (`executor_contract`). The engine's candidate runs
+    /// neither. It reaches an argument buffer's textures through the binder's planned heap, which
+    /// makes no texture buffer a member, so a handle naming one misses. No case runs a
+    /// texture-buffer array on it, and the runtime makes no texture buffer
+    /// (`metal2vulkan_runtime::Gap::TextureBuffer`). The Metal oracle makes and binds both,
+    /// so a case of either stays Metal-qualified ([`Self::qualifies_on_metal`]).
+    TextureBufferMember,
     StorageTextureFormatLiteral,
     ImplicitImageblockLiteral,
     IndirectCommandBuffer,
@@ -149,7 +156,7 @@ impl ToolingRequirement {
         Self::TessellationSystemInputLiteral,
         Self::FragmentImageblockMemberLiteral,
         Self::KernelStageInputLiteral,
-        Self::TextureBufferLiteral,
+        Self::TextureBufferMember,
         Self::StorageTextureFormatLiteral,
         Self::ImplicitImageblockLiteral,
         Self::IndirectCommandBuffer,
@@ -178,7 +185,7 @@ impl ToolingRequirement {
             Self::TessellationSystemInputLiteral => "tessellation_system_input_literal",
             Self::FragmentImageblockMemberLiteral => "fragment_imageblock_member_literal",
             Self::KernelStageInputLiteral => "kernel_stage_input_literal",
-            Self::TextureBufferLiteral => "texture_buffer_literal",
+            Self::TextureBufferMember => "texture_buffer_member",
             Self::StorageTextureFormatLiteral => "storage_texture_format_literal",
             Self::ImplicitImageblockLiteral => "implicit_imageblock_literal",
             Self::IndirectCommandBuffer => "indirect_command_buffer",
@@ -219,7 +226,8 @@ impl ToolingRequirement {
     ///   device without `VK_EXT_depth_range_unrestricted`
     ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline or a replayed
     ///   template it does not draw or replay ([`ToolingRequirement::MeshRenderPipeline`],
-    ///   [`ToolingRequirement::ReplayedTemplateResources`]).
+    ///   [`ToolingRequirement::ReplayedTemplateResources`]), and a texture buffer an argument
+    ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -230,7 +238,6 @@ impl ToolingRequirement {
             | Self::TessellationSystemInputLiteral
             | Self::FragmentImageblockMemberLiteral
             | Self::KernelStageInputLiteral
-            | Self::TextureBufferLiteral
             | Self::StorageTextureFormatLiteral
             | Self::ImplicitImageblockLiteral
             | Self::IndirectCommandBuffer
@@ -248,6 +255,7 @@ impl ToolingRequirement {
             | Self::RasterizationRateMapPlacement
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
+            | Self::TextureBufferMember
             | Self::ReplayedTemplateResources => ENGINE,
         }
     }
@@ -255,10 +263,10 @@ impl ToolingRequirement {
     /// Whether a case carrying this requirement is still a case to keep: the Metal oracle runs it
     /// and its observation is evidence for a candidate that runs the family again, so the checker
     /// accepts it with no candidate (`executor_contract::evidence_gap`), and the engine's candidate
-    /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`]: its cases are qualified
-    /// on Metal.
+    /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`] and
+    /// [`ToolingRequirement::TextureBufferMember`]: their cases are qualified on Metal.
     pub const fn qualifies_on_metal(self) -> bool {
-        matches!(self, Self::MeshRenderPipeline)
+        matches!(self, Self::MeshRenderPipeline | Self::TextureBufferMember)
     }
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except
@@ -412,8 +420,26 @@ mod tests {
                 .into_iter()
                 .filter(|requirement| requirement.qualifies_on_metal())
                 .collect::<Vec<_>>(),
-            [ToolingRequirement::MeshRenderPipeline]
+            [
+                ToolingRequirement::TextureBufferMember,
+                ToolingRequirement::MeshRenderPipeline
+            ]
         );
+    }
+
+    /// A texture buffer an argument buffer or a texture-handle array holds: a case expresses it
+    /// and the Metal oracle runs it, so its cases stay Metal-qualified; the engine's candidate runs
+    /// none, a tooling gap that keeps the census open.
+    #[test]
+    fn a_texture_buffer_member_stops_only_the_candidate() {
+        let requirement = ToolingRequirement::TextureBufferMember;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
+        assert!(requirement.blocks_closure(), "{requirement}");
+        assert!(requirement.qualifies_on_metal(), "{requirement}");
+        assert!("texture_buffer_literal"
+            .parse::<ToolingRequirement>()
+            .is_err());
     }
 
     /// Every requirement stops some executor, and an executor's name is as stable as a

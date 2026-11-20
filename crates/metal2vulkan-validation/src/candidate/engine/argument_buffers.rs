@@ -89,8 +89,9 @@ pub fn embed(
 /// The argument-buffer textures `literal` of a function whose bound buffers are `buffers`: each
 /// one as a texture of its authored type, format, extent, sample count, and contents, by its key
 /// (its `binding` is its owner's index, which only labels it), each owner grown with zeros to
-/// cover its 8-byte field. A texture buffer is refused: no heap array holds a texel buffer, so the
-/// product refuses a heap texture buffer and the binder never makes one a heap member. A key
+/// cover its 8-byte field. A texture buffer is refused, as its case's requirement refuses it first
+/// ([`TextureBufferMember`](crate::requirement::ToolingRequirement::TextureBufferMember)): the
+/// binder's planned heap makes no texture buffer a member, so a handle naming one misses. A key
 /// authored twice is refused.
 pub fn embed_textures(
     buffers: &mut BTreeMap<u32, Vec<u8>>,

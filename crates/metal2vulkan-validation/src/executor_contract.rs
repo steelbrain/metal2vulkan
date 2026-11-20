@@ -629,13 +629,15 @@ pub fn unsupported_reflection_requirements(
             requirements.insert(ToolingRequirement::KernelStageInputLiteral);
         }
         if let Some(shape) = binding.texture_shape {
+            // A texture buffer an argument buffer holds or a texture-handle array's element: a
+            // case expresses it and the Metal oracle runs it, the engine's candidate runs neither.
             if shape.dimension == TextureDimension::Buffer
                 && !matches!(
                     binding.kind,
                     ResourceKind::Texture | ResourceKind::StorageImage
                 )
             {
-                requirements.insert(ToolingRequirement::TextureBufferLiteral);
+                requirements.insert(ToolingRequirement::TextureBufferMember);
             }
             if shape.storage_format.is_some_and(|format| {
                 !matches!(
@@ -2988,6 +2990,16 @@ entry:
         assert_eq!(
             require_executor(&set(&[R::MeshRenderPipeline]), Executor::EngineCandidate),
             Err(set(&[R::MeshRenderPipeline]))
+        );
+        // So does a case of a texture buffer an argument buffer holds: the Metal oracle runs it.
+        assert_eq!(evidence_gap(&set(&[R::TextureBufferMember])), None);
+        assert_eq!(
+            require_executor(&set(&[R::TextureBufferMember]), Executor::MetalOracle),
+            Ok(())
+        );
+        assert_eq!(
+            require_executor(&set(&[R::TextureBufferMember]), Executor::EngineCandidate),
+            Err(set(&[R::TextureBufferMember]))
         );
 
         let requirements = set(&[R::RenderDeviceBufferArray]);
