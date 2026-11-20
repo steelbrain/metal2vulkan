@@ -1,0 +1,975 @@
+{
+  "format": 1,
+  "case": "resolve-store-then-load",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_resolves.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+    },
+    {
+      "fixture": "rt6_resolves.air.ll",
+      "entry": "rt6_resolve_full+rt6_resolve_masked",
+      "source_sha256": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+    },
+    {
+      "fixture": "wm_samples.ll",
+      "entry": "wm_read_samples",
+      "source_sha256": "8d850c0491a65c92690153e489cc572d3d4a8a714a1e9aed33db03db82952c5c"
+    },
+    {
+      "fixture": "wm_samples.air.ll",
+      "entry": "wm_read_samples",
+      "source_sha256": "0ec2aa58596b1611d9b34d8fe8e85dd3ffdf98474047b7d0799204fa8afeeeb1"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:draws",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "826f30ea88e648ce64e04e26abdfaa51c2c81fdd933f41e0a5b621eb7c9d18e9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:draws",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "deacd509ddf64f7fe146057f3097edfb6582b0033fd623a9d2ec49db7596aec9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air:reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8d850c0491a65c92690153e489cc572d3d4a8a714a1e9aed33db03db82952c5c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0ec2aa58596b1611d9b34d8fe8e85dd3ffdf98474047b7d0799204fa8afeeeb1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ab08f4f8f3796e1d45fa385df727fe7bcb43362dfbfcd47d0b1c860e720f8a95"
+                        }
+                      }
+                    },
+                    {
+                      "name": "compute-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f77709563b70d28bca2503b7e5089f9ad3ae65d199751022da40e14d4f48a2af"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c2451f00a5673f8d1b3818e02cc5f5ad683107cd0cfc5a6bf242a42af252078d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fb40a6a1dbe2f975c8bddb9fa70f6cc19a44e4c0d71a808a89a7e85ca6a43de9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass-a:MTLStoreActionStoreAndMultisampleResolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e3e482af8b1a50d1f912ad0b8917cd2a6185bb4fc8695e40c6d71990c0889b75"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass-a:MTLStoreActionStore",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c14b905f2626bd7c5ebf491108b4ccba455c814280da0b71d2d50f64dc42d75e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass-b",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "956e0ec9e7f56b8f2eccef10bf5675ad0e2f8a8202bf5db3a96f8e1eb124b63c"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library:draws",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "library:reads",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "compute-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-a/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-b/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:samples/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:resolve-a/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:resolve-b/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass-a",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass-b",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:samples",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-b",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-a",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/samples/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "samples/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "bytes": "AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4096
+                          }
+                        },
+                        "element": "f32",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 512,
+                        "rows": 8,
+                        "image_pitch": 4096,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-b/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve-b/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "bytes": "ADkAOgA7ADwAOQA6ADsAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADwANwA5gDoAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8gDoAO4A7ADyAOgA7gDsAPAA3ADmAOgA8ADcAOYA6ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPIA6ADuAOwA8ADwAPAA8ADwAPAA8ADwAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPAA8ADwAPAA8ADwAPAA8ADw="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              8,
+                              8,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "f16",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 64,
+                        "rows": 8,
+                        "image_pitch": 512,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-a/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve-a/MTLStoreActionStoreAndMultisampleResolve",
+                  "observed": {
+                    "value": {
+                      "bytes": "ADQAOAA6ADwANAA4ADoAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA0ADgAOgA8ADQAOAA6ADwANwA5gDoAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8gDoAO4A7ADyAOgA7gDsAPAA3ADmAOgA8ADcAOYA6ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPIA6ADuAOwA8ADwAPAA8ADwAPAA8ADwAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPAA8ADwAPAA8ADwAPAA8ADw="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              8,
+                              8,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "f16",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 64,
+                        "rows": 8,
+                        "image_pitch": 512,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-a/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:resolve-b/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:samples/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:resolve-a/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:resolve-b/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces/MTLStoreActionStore",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass-a",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass-b",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:samples",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:resolve-b",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/samples/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "samples/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "bytes": "AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4096
+                          }
+                        },
+                        "element": "f32",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 512,
+                        "rows": 8,
+                        "image_pitch": 4096,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/resolve-b/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve-b/MTLStoreActionStore",
+                  "observed": {
+                    "value": {
+                      "bytes": "ADkAOgA7ADwAOQA6ADsAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADwANwA5gDoAPAA3ADmAOgA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADcAOYA6ADwANwA5gDoAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8gDoAO4A7ADyAOgA7gDsAPAA3ADmAOgA8ADcAOYA6ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADwANwA5gDoAPAA3ADmAOgA8ADkAOgA7ADwAOQA6ADsAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8ADkAOgA7ADwAOQA6ADsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPIA6ADuAOwA8ADwAPAA8ADwAPAA8ADwAPAA5ADoAOwA8ADkAOgA7ADyAOgA7gDsAPIA6ADuAOwA8gDoAO4A7ADyAOgA7gDsAPAA8ADwAPAA8ADwAPAA8ADw="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              8,
+                              8,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "f16",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 64,
+                        "rows": 8,
+                        "image_pitch": 512,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nSet Render Pipeline State Validation\nredundant setRenderPipelineState.\nunused binding in compute encoder at Buffer index 0."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 8.24 and ours at 8.90; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 283,
+      "times": {
+        "case": "resolve-store-then-load",
+        "calls": 23,
+        "in_calls": 70667042,
+        "on_cpu": 3127627,
+        "blocked": 67587084,
+        "elsewhere": 8455750,
+        "spend": 79122792,
+        "spend_least": 76873497,
+        "spend_most": 95138837,
+        "per_call": [
+          {
+            "call": "compute_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 58125,
+            "on_cpu": 58500,
+            "blocked": 0,
+            "wall_least": 56291,
+            "wall_most": 84917,
+            "wall_total": 58125,
+            "on_cpu_total": 58500,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 29550875,
+            "on_cpu": 769333,
+            "blocked": 28788292,
+            "wall_least": 28353958,
+            "wall_most": 34439959,
+            "wall_total": 60287416,
+            "on_cpu_total": 1590124,
+            "blocked_total": 58688791
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 3209,
+            "on_cpu": 3417,
+            "blocked": 0,
+            "wall_least": 3166,
+            "wall_most": 8375,
+            "wall_total": 25041,
+            "on_cpu_total": 26209,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1118375,
+            "on_cpu": 414125,
+            "blocked": 715751,
+            "wall_least": 791834,
+            "wall_most": 2366083,
+            "wall_total": 10374751,
+            "on_cpu_total": 1071584,
+            "blocked_total": 9273501
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 216375,
+            "on_cpu": 216750,
+            "blocked": 0,
+            "wall_least": 206584,
+            "wall_most": 1192958,
+            "wall_total": 216375,
+            "on_cpu_total": 216750,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 15417,
+            "on_cpu": 15625,
+            "blocked": 0,
+            "wall_least": 14917,
+            "wall_most": 18500,
+            "wall_total": 155751,
+            "on_cpu_total": 156875,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 4958,
+            "on_cpu": 5125,
+            "blocked": 0,
+            "wall_least": 4625,
+            "wall_most": 6333,
+            "wall_total": 38167,
+            "on_cpu_total": 39166,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 8.24 and ours at 8.90; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 288,
+      "times": {
+        "case": "resolve-store-then-load",
+        "calls": 23,
+        "in_calls": 31964915,
+        "on_cpu": 15403209,
+        "blocked": 16311501,
+        "elsewhere": 29749834,
+        "spend": 62439918,
+        "spend_least": 59070043,
+        "spend_most": 265639832,
+        "per_call": [
+          {
+            "call": "compute_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3085375,
+            "on_cpu": 3086000,
+            "blocked": 0,
+            "wall_least": 2925000,
+            "wall_most": 4676500,
+            "wall_total": 3085375,
+            "on_cpu_total": 3086000,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 840542,
+            "on_cpu": 840916,
+            "blocked": 0,
+            "wall_least": 811166,
+            "wall_most": 865875,
+            "wall_total": 1839417,
+            "on_cpu_total": 1841707,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 500,
+            "on_cpu": 667,
+            "blocked": 0,
+            "wall_least": 500,
+            "wall_most": 666,
+            "wall_total": 7417,
+            "on_cpu_total": 8375,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3973625,
+            "on_cpu": 2352458,
+            "blocked": 1395250,
+            "wall_least": 3334625,
+            "wall_most": 4632250,
+            "wall_total": 20194209,
+            "on_cpu_total": 4958708,
+            "blocked_total": 15338876
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 5372791,
+            "on_cpu": 4621875,
+            "blocked": 781417,
+            "wall_least": 5106250,
+            "wall_most": 158249125,
+            "wall_total": 5372791,
+            "on_cpu_total": 4621875,
+            "blocked_total": 781417
+          },
+          {
+            "call": "target",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 72375,
+            "on_cpu": 72750,
+            "blocked": 0,
+            "wall_least": 66416,
+            "wall_most": 75292,
+            "wall_total": 745251,
+            "on_cpu_total": 744125,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 15792,
+            "on_cpu": 16083,
+            "blocked": 0,
+            "wall_least": 14792,
+            "wall_most": 16750,
+            "wall_total": 129335,
+            "on_cpu_total": 130957,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

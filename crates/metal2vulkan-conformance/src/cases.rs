@@ -159,6 +159,7 @@ pub mod render_draw_forms;
 pub mod render_pass_descriptors;
 pub mod render_residency;
 pub mod render_state;
+pub mod resolve_then_load;
 pub mod resource_facts;
 pub mod rgb10a2_srgb;
 pub mod rotated_planes;
@@ -620,6 +621,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(pass_attachment_pairs::all());
     cases.extend(pass_bound_pairs::all());
     cases.extend(pass_sequence_actions::all());
+    cases.extend(resolve_then_load::all());
     cases.extend(pass_start_reads::all());
     cases.extend(render_residency::all());
     cases.extend(frame_chains::boxed());
