@@ -22,3 +22,12 @@ slow-timeout = { period = "300s", terminate-after = 24 }
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-runtime) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
 threads-required = 'num-test-threads'
+
+# The runtime's device test of its return to its fixed Private memory within a second of going
+# idle runs alone: its premise is an idle device, and a GPU other tests share is not one. Alone on
+# an RTX 3090 (NVIDIA 620.70.06) its gauges were back 264 ms after the release and the test took
+# 0.61 s; beside the other device tests of a 16-thread run on that card they were not back after
+# 1 s, and the test took 8.56 s.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-runtime) & test(/::every_device_returns_to_its_fixed_private_memory_within_a_second_of_going_idle$/)'
+threads-required = 'num-test-threads'
