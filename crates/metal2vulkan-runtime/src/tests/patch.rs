@@ -12,6 +12,10 @@
 //! - the same patches of a post-tessellation function whose fields pass its push window (16 more
 //!   buffer arguments, written here): its parameter block survives the control stage's placement
 //!   of the vertex stage, and every buffer's address and bounds reach the function from it.
+//! - the same patches behind a fragment function whose fields fill the push range (4 to 16 buffer
+//!   arguments, written here): the state is made, as Metal makes it, with the control stage's
+//!   range at 0 below the post-tessellation function's window, and the fragment function's fields
+//!   past the range in its block.
 //! - what Metal refuses is refused: a patch draw with a plain state, a plain draw with a patch
 //!   state, a patch draw with no factor buffer and factors at an odd byte. What the runtime does
 //!   not build is a gap: a patch index buffer, a per-instance factor step and an enabled factor
@@ -85,6 +89,87 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) }
 
     /// The buffer arguments of [`wide_vertex`]'s function.
     const WIDE: u32 = 16;
+
+    /// [`wide_fragment`]'s text but its buffer arguments, their reads and their metadata.
+    const WIDE_FRAGMENT_TEMPLATE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define <4 x float> @tess_wide_fragment(<4 x float> %0ARGS) local_unnamed_addr #0 {
+READS  ret <4 x float> SUM
+}
+
+attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(read) }
+
+!llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
+!air.fragment = !{!9}
+!air.compile_options = !{!14, !15}
+!air.version = !{!16}
+!air.language_version = !{!17}
+
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}
+!1 = !{i32 1, !"wchar_size", i32 4}
+!2 = !{i32 7, !"frame-pointer", i32 2}
+!3 = !{i32 7, !"air.max_device_buffers", i32 31}
+!4 = !{i32 7, !"air.max_constant_buffers", i32 31}
+!5 = !{i32 7, !"air.max_threadgroup_buffers", i32 31}
+!6 = !{i32 7, !"air.max_textures", i32 128}
+!7 = !{i32 7, !"air.max_read_write_textures", i32 8}
+!8 = !{i32 7, !"air.max_samplers", i32 16}
+!9 = !{ptr @tess_wide_fragment, !10, !12}
+!10 = !{!11}
+!11 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
+!12 = !{!13BUFFERS}
+!13 = !{i32 0, !"air.fragment_input", !"user(locn0)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
+!14 = !{!"air.compile.denorms_disable"}
+!15 = !{!"air.compile.fast_math_enable"}
+!16 = !{i32 2, i32 8, i32 0}
+!17 = !{!"Metal", i32 4, i32 0, i32 0}
+BUFFER_META"#;
+
+    /// The buffer arguments of each of [`wide_fragment`]'s functions: the narrowest pushes
+    /// every field, the widest spills.
+    const FRAGMENT_WIDTHS: [u32; 4] = [4, 8, 12, 16];
+
+    /// A fragment function that writes its `user(locn0)` colour plus `width` `float4` buffer
+    /// arguments at indices 0 and on, each read at element 0, a read checked against the
+    /// buffer's bounds.
+    fn wide_fragment(width: u32) -> String {
+        let args: String = (0..width)
+            .map(|k| {
+                format!(
+                    r#", ptr addrspace(1) noundef readonly align 16 captures(none) "air-buffer-no-alias" %f{k}"#
+                )
+            })
+            .collect();
+        let mut reads = String::new();
+        let mut sum = "%0".to_owned();
+        for k in 0..width {
+            reads += &format!(
+                "  %v{k} = load <4 x float>, ptr addrspace(1) %f{k}, align 16\n  \
+                 %s{k} = fadd fast <4 x float> {sum}, %v{k}\n"
+            );
+            sum = format!("%s{k}");
+        }
+        let buffers: String = (0..width).map(|k| format!(", !{}", 30 + k)).collect();
+        let meta: String = (0..width)
+            .map(|k| {
+                format!(
+                    "!{} = !{{i32 {}, !\"air.buffer\", !\"air.location_index\", i32 {k}, i32 1, \
+                     !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, \
+                     !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", \
+                     !\"air.arg_name\", !\"f{k}\"}}\n",
+                    30 + k,
+                    1 + k
+                )
+            })
+            .collect();
+        WIDE_FRAGMENT_TEMPLATE
+            .replace("ARGS", &args)
+            .replace("READS", &reads)
+            .replace("SUM", &sum)
+            .replace("BUFFERS", &buffers)
+            .replace("BUFFER_META", &meta)
+    }
 
     /// [`wide_vertex`]'s text but its buffer arguments, their reads and their metadata.
     const WIDE_TEMPLATE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
@@ -449,6 +534,108 @@ BUFFER_META"#;
             println!(
                 "{name}: a patch of {} fields in its block drawn from every buffer",
                 spilled.len()
+            );
+        });
+    }
+
+    /// A patch state whose fragment function's fields fill the floor's push range behind the
+    /// post-tessellation function's ([`wide_fragment`]) is made, as Metal makes it, and draws its
+    /// patches: the control stage pushes the factors' address at 0, below the post-tessellation
+    /// function's window, and the fragment function's fields past the range go to its block. The
+    /// widest fragment function's fields reach past 248 bytes, where no range of the factors'
+    /// address is left above the pair's. Buffer `k` holds `2^(k % 4) / 255` in channel `k / 4`
+    /// and the tints are 0, so the first patch's colour holds every bit of the buffers a function
+    /// reads only where each buffer's address and bounds reach it; the second patch is culled.
+    #[test]
+    fn every_device_draws_patches_whose_fragment_fills_the_push_range() {
+        use crate::pipeline::FieldValue;
+        use crate::render::DrawPlace;
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        let mut fragments = Vec::new();
+        for width in FRAGMENT_WIDTHS {
+            match llvm_assemble_text(&wide_fragment(width)) {
+                Ok(bitcode) => fragments.push((
+                    width,
+                    Library::from_air(&bitcode).expect("the wide fragment library"),
+                )),
+                Err(AssembleError::Missing(why)) => {
+                    eprintln!("SKIPPED: {why}");
+                    return;
+                }
+                Err(error) => panic!("the wide fragment {width}: {error:?}"),
+            }
+        }
+        each_device("draw_patches_full_range", |name, _, device| {
+            let mut widest = 0;
+            for (width, library) in &fragments {
+                let mut d = patches(&libraries);
+                d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+                    library
+                        .function("tess_wide_fragment")
+                        .expect("the function"),
+                )));
+                let state = state(name, &device, &d);
+                let draws = &state.inner.compiled.draws;
+                assert!(
+                    (draws.fields.iter()).any(|(place, _, value)| matches!(
+                        (place, value),
+                        (DrawPlace::Push(0), FieldValue::TessellationFactors)
+                    )),
+                    "{name}: {width} buffers: the factors' address at 0"
+                );
+                widest = widest.max(draws.push_len);
+                let mut buffers = Buffers::new(&device);
+                let (points, _, factors) = patch_buffers(&device, &mut buffers);
+                let tints = buffers.of(&device, &[0; 32]);
+                let summed: Vec<Buffer> = (0..*width)
+                    .map(|k| {
+                        let mut value = [0.0; 4];
+                        value[(k / 4) as usize] = f32::from(1u8 << (k % 4)) / 255.0;
+                        buffers.of(&device, &floats(&value))
+                    })
+                    .collect();
+                let color = target(
+                    &device,
+                    PixelFormat::RGBA8Unorm,
+                    TextureUsage::RENDER_TARGET,
+                );
+                let queue = device.new_command_queue(4).expect("a queue");
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
+                for (k, buffer) in summed.iter().enumerate() {
+                    draw(encoder.set_fragment_buffer(Some(buffer), 0, k as u32));
+                }
+                draw(encoder.set_tessellation_factor_buffer(Some(&factors), 8, 0));
+                draw(encoder.draw_patches(3, 0, 2, None, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let mut sums = [0u8; 4];
+                for k in 0..*width {
+                    sums[(k / 4) as usize] += 1 << (k % 4);
+                }
+                let black = [0, 0, 0, 255];
+                let want: Vec<u8> = (0..SIDE * SIDE)
+                    .flat_map(|at| if at / SIDE < 4 { sums } else { black })
+                    .collect();
+                assert_eq!(read(&color, 4), want, "{name}: {width} buffers: the texels");
+                println!(
+                    "{name}: {width} fragment buffers, a push range of {} bytes, the fragment \
+                     function's block {:?}",
+                    draws.push_len,
+                    draws.blocks[crate::render::FRAGMENT]
+                );
+            }
+            assert!(
+                widest > 248,
+                "{name}: the widest pair's fields end at {widest}, not past 248"
             );
         });
     }

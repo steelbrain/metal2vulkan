@@ -35,7 +35,9 @@
 //! buffers of the control stage ([`ControlPlan::slots`]), among set 0's bindings and places the control stage's push range
 //! ([`control::PUSH_BYTES`]) at the first 4-byte-aligned offset no other stage's range covers
 //! ([`push_offset`]), within `maxPushConstantsSize` (`Unsupported{Tessellation; Limit}`
-//! otherwise). A fragment function that reads `[[primitive_id]]` behind the evaluation stage is
+//! otherwise): 0, as the post-tessellation vertex function's window starts past those bytes
+//! (`push::TESSELLATION_BASE`) and its fragment function's behind it, so the range fits beside
+//! theirs on every device the floor admits. A fragment function that reads `[[primitive_id]]` behind the evaluation stage is
 //! not implemented ([`check_fragment`]): Vulkan's primitive id there counts patches, and what
 //! Metal's is for a tessellated triangle has not been read.
 //!

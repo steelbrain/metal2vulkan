@@ -949,8 +949,9 @@ pub struct LoweringInputs {
     pub unit_axes: u8,
     /// Where a fragment function's push fields start on `Device::from_queries`' profile
     ///, whose render pipeline pushes one range `[0, 256)` for both stages:
-    /// its vertex function's fields first, from 0, then the fragment function's from this offset,
-    /// the vertex function's push end
+    /// its vertex function's fields first, from 0 (from 24 for a post-tessellation function, past
+    /// the control stage's range), then the fragment function's from this offset, the vertex
+    /// function's push end
     /// ([`CompiledFunction::fragment_push_base`](crate::library::CompiledFunction::fragment_push_base)).
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the vertex
     /// function it compiled, and `Device::render_pipeline_key` hands it out in the fragment

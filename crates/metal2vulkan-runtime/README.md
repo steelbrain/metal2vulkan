@@ -2633,7 +2633,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   differ only in a field their compile does not read are two contents, each compiled.
 - A render pipeline's two functions push their values (each buffer's address, each constexpr
   sampler's index) in one range of the floor's 256 bytes, dense by link: the vertex function's
-  from 0, ending by 248, the fragment function's from the vertex function's end, each value at
+  from 0 (from 24 for a post-tessellation function, whose control stage pushes the factors'
+  address at 0), ending by 248, the fragment function's from the vertex function's end, each value at
   the next offset aligned to it (a framebuffer fetch's element index, four bytes, before the
   eight-byte values, where the four bytes below one are free), so only the values the pair uses
   take space. Compute and render pipelines share the device's one pipeline layout and its one

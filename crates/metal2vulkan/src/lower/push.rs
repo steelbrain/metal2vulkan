@@ -4,10 +4,14 @@
 //! `maxPushConstantsSize ≥ 256`: a compute window is `[0, 256)` (a dispatch region and 24 buffer
 //! addresses below its tail), and a render
 //! pipeline's two stages share one range `[0, 256)`, dense by link: the vertex function's fields
-//! from 0, the fragment function's from its `LoweringInputs::push_base`, the vertex function's push
-//! end, so only the fields the pair places take space (a four-byte field the fragment function
-//! places before its eight-byte ones takes the four bytes the vertex function's end may leave).
-//! The vertex function's window there is `[0, 248)`, 8 bytes short of the range's end
+//! from its start ([`base`]), the fragment function's from its `LoweringInputs::push_base`, the
+//! vertex function's push end, so only the fields the pair places take space (a four-byte field
+//! the fragment function places before its eight-byte ones takes the four bytes the vertex
+//! function's end may leave). A vertex function starts at 0, and a post-tessellation one at
+//! [`TESSELLATION_BASE`], past the push range link places for the pipeline's control stage at 0,
+//! so the pair's fields never take its bytes: where they pass the range they spill, as any
+//! function's do, and the pipeline is made on every device.
+//! The vertex function's window there ends at 248, 8 bytes short of the range's end
 //! ([`VERTEX_FLOOR_END`]): a vertex function is lowered without knowing its fragment function, and
 //! a fragment function whose fields spill must push its parameter block's address (8 bytes,
 //! 8-aligned) from the vertex function's end, so the vertex function leaves that room. The
@@ -41,14 +45,16 @@
 
 use std::collections::BTreeSet;
 
+use crate::air::abi::Stage as AirStage;
+use crate::lower::select::SelectCx;
 use crate::pipeline::interface::{PlacedField, PushLoc, PushPlacement};
 use crate::pipeline::sym::{PushField, Stage};
 
 /// The byte range `[start, end)` of `stage`'s push window; `base` is a fragment function's
-/// `LoweringInputs::push_base`.
+/// `LoweringInputs::push_base`, or a vertex function's start ([`base`]).
 pub const fn window(stage: Stage, base: u32) -> (u32, u32) {
     match stage {
-        Stage::Vertex => (0, VERTEX_FLOOR_END),
+        Stage::Vertex => (base, VERTEX_FLOOR_END),
         Stage::Fragment => (base, FLOOR_BYTES),
         Stage::Kernel => (0, FLOOR_BYTES),
         // A mesh render pipeline's object, mesh and fragment functions share the 128 bytes: the
@@ -60,6 +66,34 @@ pub const fn window(stage: Stage, base: u32) -> (u32, u32) {
 
 /// The push bytes of the runtime's floor: its `maxPushConstantsSize`.
 pub const FLOOR_BYTES: u32 = 256;
+
+/// Where a post-tessellation vertex function's window starts: past the most bytes the pipeline's
+/// control stage pushes in either form (`control::PUSH_BYTES`), whose range link places at 0
+/// (`tessellation::push_offset`, the first free offset), so the control stage's range fits beside
+/// the vertex and fragment functions' whatever their fields.
+pub const TESSELLATION_BASE: u32 = crate::pipeline::link::tessellation::control::PUSH_BYTES;
+
+/// Where the fields of `cx`'s function start in its window ([`window`]): a post-tessellation
+/// vertex function's at [`TESSELLATION_BASE`], any other function's at its
+/// `LoweringInputs::push_base`, a fragment function's place behind its vertex function and 0 for
+/// the rest.
+pub fn base(cx: &SelectCx<'_>) -> u32 {
+    match cx.entry.ep.stage {
+        AirStage::Vertex { patch: Some(_) } => TESSELLATION_BASE,
+        _ => cx.inputs.push_base,
+    }
+}
+
+/// Where a fragment function's fields start on the floor behind vertex function placement
+/// `vertex`, of a post-tessellation function or not (`tessellated`): the vertex function's push
+/// end, or where it pushes nothing, its window's start ([`base`]).
+pub fn fragment_base(vertex: &PushPlacement, tessellated: bool) -> u32 {
+    let start = match tessellated {
+        true => TESSELLATION_BASE,
+        false => 0,
+    };
+    (vertex.push_range).map_or(start, |(offset, size)| offset + size)
+}
 
 /// The end of a vertex function's window on the floor: the floor's end less one address, so the
 /// fragment function's window, from the vertex function's end, always holds its parameter block's
@@ -680,17 +714,53 @@ mod tests {
         assert!(check_floor(&past).is_err());
     }
 
-    /// The windows a pipeline of each kind pushes, pinned: on the guaranteed window the fixed
-    /// ones, whatever a fragment function's base; on the floor a compute kernel's `[0, 256)`, and a
-    /// render pipeline's one range `[0, 256)`, the vertex function's from 0 and the fragment
-    /// function's from its base. A compute kernel's window does not move with a render base.
+    /// The windows a pipeline of each kind pushes, pinned: a compute kernel's `[0, 256)`, and a
+    /// render pipeline's one range `[0, 256)`, the vertex function's from its start (0, or 24 for
+    /// a post-tessellation function) and the fragment function's from its base. A compute
+    /// kernel's window does not move with a render base.
     #[test]
     fn each_kind_pushes_its_own_window() {
         for base in [0, 8, 40, 248] {
             assert_eq!(window(Stage::Kernel, base), (0, 256));
-            assert_eq!(window(Stage::Vertex, base), (0, 248));
             assert_eq!(window(Stage::Fragment, base), (base, 256));
         }
+        assert_eq!(TESSELLATION_BASE, 24);
+        for base in [0, TESSELLATION_BASE] {
+            assert_eq!(window(Stage::Vertex, base), (base, 248));
+        }
+    }
+
+    /// The control stage's push range fits below a post-tessellation vertex function's window in
+    /// either form, with every factor step and scale, so link places it at 0 beside any pair of
+    /// functions; a fragment function behind such a vertex function that pushes nothing starts
+    /// past it too, and behind any other at 0.
+    #[test]
+    fn the_control_stage_fits_below_a_post_tessellation_window() {
+        use crate::metal::TessellationFactorStepFunction as Step;
+        use crate::pipeline::link::tessellation::control::Control;
+        let steps = [
+            Step::Constant,
+            Step::PerPatch,
+            Step::PerInstance,
+            Step::PerPatchAndPerInstance,
+        ];
+        for addressed in [false, true] {
+            for step in steps {
+                for scale in [false, true] {
+                    let (bytes, align) = Control::push_bytes(addressed, step, scale);
+                    assert!(bytes <= TESSELLATION_BASE, "{addressed} {step:?} {scale}");
+                    assert_eq!(TESSELLATION_BASE % align, 0);
+                }
+            }
+        }
+        let empty = place(Stage::Vertex, TESSELLATION_BASE, &BTreeSet::new());
+        assert_eq!(empty.push_range, None);
+        assert_eq!(fragment_base(&empty, true), TESSELLATION_BASE);
+        assert_eq!(fragment_base(&empty, false), 0);
+        let one = BTreeSet::from([PushField::ArgumentTableAddress]);
+        let pushed = place(Stage::Vertex, TESSELLATION_BASE, &one);
+        assert_eq!(pushed.push_range, Some((TESSELLATION_BASE, 8)));
+        assert_eq!(fragment_base(&pushed, true), TESSELLATION_BASE + 8);
     }
 
     /// On the floor a render pipeline's fields are dense by link: a fragment function placed from

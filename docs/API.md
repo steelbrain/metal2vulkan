@@ -132,7 +132,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   the command reads it. A kernel's window is 256 bytes, as the runtime's floor requires that much
   `maxPushConstantsSize`: a dispatch region and 24 buffer addresses below its tail. A render
   pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
-  and the fragment function's runs from the vertex function's end to 256. A
+  and the fragment function's runs from the vertex function's end to 256. A post-tessellation
+  vertex function's window is `[24, 248)`, and its fragment function's starts at 24 or past: the
+  pipeline's control stage pushes its fields (8 to 24 bytes) at 0, so the pair's fields, which
+  spill where they pass their windows, never take its bytes. A
   vertex function is lowered without knowing its fragment function, so it leaves the last 8
   bytes, where a fragment function whose fields spill always pushes its block's address; that
   costs only a vertex function whose own fields pass 248 bytes, which spills where it would have

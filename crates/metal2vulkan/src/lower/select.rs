@@ -1677,7 +1677,7 @@ fn finish(
     }
 
     stage_io::finish_merged(&mut cx)?;
-    let placement = push::place(stage, cx.inputs.push_base, &cx.push);
+    let placement = push::place(stage, push::base(&cx), &cx.push);
     access::accept_placement(&cx, &placement)?;
     // On the floor every stage that pushes more than one short field ends with its tail, a hole
     // above the others, so every load a driver widens from them stays inside its upload.

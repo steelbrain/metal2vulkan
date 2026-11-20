@@ -1483,7 +1483,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         (
             cx.families.access.dynamic.used,
             identity(p),
-            cx.inputs.push_base,
+            crate::lower::push::base(cx),
         ),
         forms,
         m,
@@ -1716,7 +1716,8 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
-    cx.families.access.argument_table = table::spills(stage, cx.inputs.push_base, &cx.push);
+    cx.families.access.argument_table =
+        table::spills(stage, crate::lower::push::base(cx), &cx.push);
     // Under the identity domains a function whose fields spill, of any stage, reads them from a
     // parameter block whose address its window holds first: a render pipeline's stages too, in
     // their shares of the floor's one range (`push::VERTEX_FLOOR_END`).

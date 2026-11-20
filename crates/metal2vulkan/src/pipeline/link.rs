@@ -342,9 +342,10 @@ impl SymbolTable for Linked {
 }
 
 /// A render pipeline's fragment function pushes after its vertex function: its push fields
-/// start at or past the vertex function's end, which the floor's one range gives where the
-/// fragment compiled under its vertex function's `CompiledFunction::fragment_push_base`.
-/// `InvalidDescriptor(PushBase)` where it does not.
+/// start at or past the vertex function's end (`push::fragment_base`: past the control stage's
+/// range behind a post-tessellation function that pushes nothing), which the floor's one range
+/// gives where the fragment compiled under its vertex function's
+/// `CompiledFunction::fragment_push_base`. `InvalidDescriptor(PushBase)` where it does not.
 fn check_push_base(ifaces: &[&StageInterface]) -> Result<(), Error> {
     let [vertex, fragment, ..] = ifaces else {
         return Ok(());
@@ -352,7 +353,7 @@ fn check_push_base(ifaces: &[&StageInterface]) -> Result<(), Error> {
     if vertex.stage != Stage::Vertex || fragment.stage != Stage::Fragment {
         return Ok(());
     }
-    let vertex_end = (vertex.push.push_range).map_or(0, |(offset, size)| offset + size);
+    let vertex_end = crate::lower::push::fragment_base(&vertex.push, vertex.tessellation.is_some());
     match fragment.push.push_range {
         Some((start, _)) if start < vertex_end => {
             Err(Error::InvalidDescriptor(DescriptorError::PushBase {

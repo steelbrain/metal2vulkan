@@ -694,7 +694,8 @@ pub(crate) fn vertex_push_end(
                     let analyzed = analyze_one(r, p, m)?;
                     let widest = crate::lower::simd::WidestPin::Weighed;
                     let (plan, _) = analyzed.select(p, widest, m)?;
-                    Ok((plan.push.push_range).map_or(0, |(offset, size)| offset + size))
+                    let tessellated = crate::lower::tessellation::interface(&plan).is_some();
+                    Ok(crate::lower::push::fragment_base(&plan.push, tessellated))
                 })
             },
         )

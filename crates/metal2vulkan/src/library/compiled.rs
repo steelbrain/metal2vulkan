@@ -339,11 +339,14 @@ impl CompiledFunction {
 
     /// Where a fragment function linked after this vertex function pushes its fields on
     /// `Device::from_queries`' profile (`LoweringInputs::push_base`): this function's push end, a
-    /// multiple of 4, 0 where it pushes nothing; each fragment field is placed at the next offset
-    /// aligned to it, so a four-byte field may take the bytes below an eight-byte one. A consumer
-    /// compiling a render pipeline's fragment function on its own compiles it under this offset.
+    /// multiple of 4; where it pushes nothing, 24 for a post-tessellation function (past its
+    /// pipeline's control stage's push range) and 0 for any other. Each fragment field is placed
+    /// at the next offset aligned to it, so a four-byte field may take the bytes below an
+    /// eight-byte one. A consumer compiling a render pipeline's fragment function on its own
+    /// compiles it under this offset.
     pub fn fragment_push_base(&self) -> u32 {
-        (self.0.interface.push.push_range).map_or(0, |(offset, size)| offset + size)
+        let interface = &self.0.interface;
+        crate::lower::push::fragment_base(&interface.push, interface.tessellation.is_some())
     }
 
     /// Whether the function is a vertex function whose module writes its `[[point_size]]`
