@@ -3081,6 +3081,12 @@ impl TextureInner {
 }
 
 impl TextureInner {
+    /// For the device tests: whether its image has a storage view, its home general.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn has_storage_view(&self) -> bool {
+        self.image.storage.is_some()
+    }
+
     /// Where the texture starts in its image: a view's first level and array layer, else the
     /// image's first.
     fn base(&self) -> [u32; 2] {

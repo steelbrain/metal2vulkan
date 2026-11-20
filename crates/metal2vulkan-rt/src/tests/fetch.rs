@@ -424,4 +424,160 @@ mod on_device {
             }
         });
     }
+
+    /// A target made for shader writes (`ShaderRead | ShaderWrite | RenderTarget`) or of an
+    /// unknown usage, whose image has a storage view where the device stores `RGBA32Uint`
+    /// through a storage image without a format, its home general, is fetched as a shader-read
+    /// target is: `exf_fetch_count` over N draws, exact, through the feedback loop where the
+    /// device's image format query offers the feedback usage beside the storage, sampled and
+    /// colour usages (printed), else through the image's shadow, counted as on a shader-read
+    /// target. A device without the attachment reads, or whose query offers no such image,
+    /// refuses the first draw, `Gap::Draw { FetchedAttachment }`.
+    #[test]
+    fn every_device_fetches_a_target_made_for_shader_writes() {
+        use ash::vk;
+        let Some(d) = fetching(
+            "exf_fetch_count",
+            "exf_fetch_count",
+            PixelFormat::RGBA32Uint,
+        ) else {
+            return;
+        };
+        let usages = [
+            (
+                "shader writes",
+                TextureUsage::SHADER_READ
+                    | TextureUsage::SHADER_WRITE
+                    | TextureUsage::RENDER_TARGET,
+            ),
+            ("an unknown usage", TextureUsage::empty()),
+        ];
+        each_device("fetch_storage", |name, _, device| {
+            let count = (usages.len() * DRAWS.len()) as u32;
+            (device.grant_indices(IndexClass::Texture, 4096, count))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let reads = device.core().attachment_reads;
+            let feedback = device.core().feedback.is_some();
+            let info = vk::PhysicalDeviceImageFormatInfo2::default()
+                .format(vk::Format::R32G32B32A32_UINT)
+                .ty(vk::ImageType::TYPE_2D)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(
+                    vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::STORAGE
+                        | vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT,
+                );
+            let offered = device.core().image_format_properties(&info).is_some();
+            println!(
+                "fetch-storage: {name}: attachment reads {reads}, feedback loop {feedback}; \
+                 R32G32B32A32_UINT optimal 2D with transfer, sampled, storage, colour and \
+                 feedback usage: {}",
+                if offered { "offered" } else { "refused" },
+            );
+            let state = state(name, &device, &d);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let clear = ClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            };
+            let mut index = 4096;
+            for (what, usage) in usages {
+                let label = format!("{name}: {what}");
+                let mut counts = Vec::new();
+                let mut looped = false;
+                let mut readable = false;
+                for &draws in &DRAWS {
+                    let mut t = TextureDescriptor::new(
+                        TextureType::Type2D,
+                        PixelFormat::RGBA32Uint,
+                        SIDE,
+                        SIDE,
+                    );
+                    t.usage = usage;
+                    t.storage_mode = crate::StorageMode::Shared;
+                    let color = (device.new_texture(&t, Some(index)))
+                        .unwrap_or_else(|error| panic!("{label}: {error}"));
+                    index += 1;
+                    assert!(
+                        color.object().has_storage_view(),
+                        "{label}: the image has a storage view, its home general"
+                    );
+                    looped = color.looped();
+                    readable = reads && color.attachment_reads();
+                    if reads && feedback && offered {
+                        // Through the loop where the query offers the feedback usage beside the
+                        // storage usage (an unknown usage's image also lists its view formats).
+                        assert!(looped, "{label}: the image takes the feedback usage");
+                    }
+                    let (drew, counted) = pass_of(
+                        (label.as_str(), &device, &queue),
+                        &state,
+                        &color,
+                        clear,
+                        draws,
+                    );
+                    if !readable {
+                        assert!(
+                            matches!(
+                                drew,
+                                Err(Error::Unsupported(Gap::Draw {
+                                    kind: DrawKind::FetchedAttachment
+                                }))
+                            ),
+                            "{label}: a target the draw cannot read through: {drew:?}"
+                        );
+                        break;
+                    }
+                    drew.unwrap_or_else(|error| panic!("{label}: {draws} draws: {error}"));
+                    let three = 3u32.pow(draws);
+                    let want: Vec<u8> = (0..SIDE * SIDE)
+                        .flat_map(|_| {
+                            [0u32, 0, 0, 1]
+                                .into_iter()
+                                .enumerate()
+                                .map(move |(k, c)| c * three + (k as u32 + 1) * (three - 1) / 2)
+                        })
+                        .flat_map(u32::to_le_bytes)
+                        .collect();
+                    assert_eq!(
+                        read(&color, 16),
+                        want,
+                        "{label}: {draws} draws, every texel"
+                    );
+                    counts.push(counted);
+                }
+                if !readable {
+                    println!("fetch-storage: {label}: the fetching draw refused");
+                    continue;
+                }
+                let draws = DRAWS[1];
+                let (want, loop_reads) = more(looped, draws, 16);
+                assert_eq!(
+                    less(counts[1], counts[0]),
+                    want,
+                    "{label}: {draws} draws against 1"
+                );
+                assert_eq!(
+                    counts[1].loop_reads, loop_reads,
+                    "{label}: {draws} draws through the loop"
+                );
+                println!(
+                    "fetch-storage: {label}: {draws} fetching draws exact through {}: {:?} \
+                     against one draw's {:?}",
+                    if looped {
+                        "the feedback loop"
+                    } else {
+                        "copies into the shadow"
+                    },
+                    counts[1],
+                    counts[0],
+                );
+            }
+        });
+    }
 }
