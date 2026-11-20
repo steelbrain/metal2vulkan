@@ -101,7 +101,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::library::Library;
 use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
-use crate::lower::select::{LowerInputs, Plan};
+use crate::lower::select::{LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM};
 use crate::memory::handles::Lookup;
 use crate::metal::resource_word::TextureWord;
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
@@ -753,7 +753,8 @@ fn bicubic_slots() -> BTreeSet<SlotRef> {
 /// A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 /// coordinates reads how the filter treats each slot's bound format from the slot's push field
 /// under the identity domains, where the default domains specialize it and state its fact; a
-/// bicubic sample of a 1D texture or at pixel coordinates is still refused there.
+/// bicubic sample of a 1D texture ([`BICUBIC_LINE_FORM`]) and one at pixel coordinates
+/// ([`BICUBIC_PIXEL_FORM`]) are still refused there, each naming its own form.
 #[test]
 fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -816,15 +817,27 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
                 .contains(&PrecisionNote::BicubicFilterArithmetic),
             "{stem}"
         );
-        for (bc, entry) in [(&forms, "bcu_forms"), (&address, "bcu_address")] {
+        // `bcu_forms` samples a 1D texture at normalized coordinates, and `bcu_address` a 2D
+        // texture at pixel coordinates: each refused with its own form.
+        for (bc, entry, form) in [
+            (&forms, "bcu_forms", BICUBIC_LINE_FORM),
+            (&address, "bcu_address", BICUBIC_PIXEL_FORM),
+        ] {
             compile(bc, entry, &default)
                 .unwrap_or_else(|e| panic!("{stem}: {entry}: default domains: {e}"));
             match compile(bc, entry, &p) {
-                Err(Error::Unsupported(u)) => assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}: {entry}"
-                ),
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(
+                        (u.feature, u.needs),
+                        (Feature::IdentityDomains, Needs::NotImplemented),
+                        "{stem}: {entry}"
+                    );
+                    assert_eq!(
+                        u.symbol.map(|f| f.to_string()).as_deref(),
+                        Some(form),
+                        "{stem}: {entry}"
+                    );
+                }
                 other => panic!("{stem}: {entry}: {other:?}"),
             }
         }

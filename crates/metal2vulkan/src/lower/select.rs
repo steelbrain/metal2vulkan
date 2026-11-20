@@ -1950,6 +1950,15 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
     }
 }
 
+/// [`identity_refusal`]'s form for a bicubic sample at pixel coordinates.
+pub(crate) const BICUBIC_PIXEL_FORM: &str = "a bicubic filter at pixel coordinates";
+
+/// [`identity_refusal`]'s form for a 1D texture's bicubic sample.
+pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
+
+/// [`identity_refusal`]'s form for a two-plane texture's linear sample read in place.
+pub(crate) const IN_PLACE_LINEAR_FORM: &str = "a two-plane texture's linear sample read in place";
+
 /// The first form plan `plan` on profile `p` holds that the identity domains do not lower yet, as
 /// a Metal program reaches it, which [`identity_admits`]'s refusal names (diagnostics only);
 /// `None` where it holds none.
@@ -2062,8 +2071,10 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
     // (`sampler::IdentitySampling`), a runtime sampler's word read from its resource ID, and a 2D
     // texture slot's bicubic sample at normalized coordinates, the bound format's treatment read
     // from its push field (`PushField::BicubicTexels`): no argument buffer's sampler, array of
-    // samplers, bicubic sample of a 1D texture or at pixel coordinates, two-plane texture's linear
-    // sample read in place, or specialization of a slot's state.
+    // samplers, bicubic sample at pixel coordinates, bicubic sample of a 1D texture
+    // (`Routine::Line`), two-plane texture's linear sample read in place (`Routine::Quad`), or
+    // specialization of a slot's state.
+    use crate::lower::sampler::bicubic::routines::Routine;
     let sampled = &plan.families.sampler;
     let refused = [
         (
@@ -2083,12 +2094,14 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
             !sampled.arrays.is_empty() || !sampled.heap_arrays.is_empty(),
             "an array of samplers",
         ),
+        (sampled.bicubic_pixel, BICUBIC_PIXEL_FORM),
         (
-            sampled.bicubic_pixel
-                || (sampled.bicubic_routines.iter())
-                    .any(|r| *r != crate::lower::sampler::bicubic::routines::Routine::Plane),
-            "a bicubic filter of a 1D texture or at pixel coordinates, or a two-plane texture's \
-             linear sample read in place",
+            sampled.bicubic_routines.contains(&Routine::Line),
+            BICUBIC_LINE_FORM,
+        ),
+        (
+            sampled.bicubic_routines.contains(&Routine::Quad),
+            IN_PLACE_LINEAR_FORM,
         ),
         (
             (sampled.slots.values()).any(|r| r.min_level || r.emulated),
