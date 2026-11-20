@@ -49,8 +49,8 @@ use crate::pipeline::testing::{
     typed_module_with, AssembleError, Scratch,
 };
 use crate::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs, Reconvergence,
-    StageSource,
+    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs, PrecisionNote,
+    Reconvergence, StageSource,
 };
 use crate::spirv::interp::{run, BarrierRule, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
@@ -2995,7 +2995,8 @@ define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(
 /// (the runtime's), whose kernels take no order: there each kernel's module has no lockstep
 /// barrier, states no `RowLockstep` and takes no simd class, it does not observe its threadgroup
 /// partition with partial threadgroups, and that variant's pipeline runs its grid in tiles
-/// (`GridTiles`).
+/// (`GridTiles`). The identity domains' module records the pair it leaves unordered
+/// (`PrecisionNote::SimdgroupAccessOrder`); the ordered one records none.
 #[test]
 fn the_identity_domains_order_no_lockstep_pair() {
     let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
@@ -3025,6 +3026,17 @@ fn the_identity_domains_order_no_lockstep_pair() {
         let (plain, _) =
             typed_module(&bc, name, dev.profile()).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(lockstep(&plain), 0, "{name}: {:?}", plain.census());
+        let note = PrecisionNote::SimdgroupAccessOrder;
+        assert!(
+            plain.precision.contains(&note),
+            "{name}: {:?}",
+            plain.precision
+        );
+        assert!(
+            !ordered.precision.contains(&note),
+            "{name}: {:?}",
+            ordered.precision
+        );
         assert!(!plain.facts.contains(&RuntimeFact::RowLockstep), "{name}");
         assert_eq!(plain.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
         let f = Library::from_air(&bc)
@@ -3055,4 +3067,65 @@ fn the_identity_domains_order_no_lockstep_pair() {
             pipeline.dependencies
         );
     }
+}
+
+/// A kernel whose threads each read and write their own word of one buffer, `dst[t]` at `t` their
+/// index in the threadgroup: two threads of one simdgroup touch different words.
+fn own_word_kernel(name: &str) -> String {
+    r#"target datalayout = "DATALAYOUT"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @NAME(ptr addrspace(1) %dst, i32 %tid) {
+  %c = zext i32 %tid to i64
+  %p = getelementptr inbounds i32, ptr addrspace(1) %dst, i64 %c
+  %v = load i32, ptr addrspace(1) %p, align 4
+  %w = add i32 %v, 1
+  store i32 %w, ptr addrspace(1) %p, align 4
+  ret void
+}
+
+!air.kernel = !{!0}
+!air.version = !{!20}
+!air.language_version = !{!21}
+
+!0 = !{ptr @NAME, !1, !2}
+!1 = !{}
+!2 = !{!3, !4}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"dst"}
+!4 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+"#
+    .replace("DATALAYOUT", "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32")
+    .replace("NAME", name)
+}
+
+/// A kernel without a pair only lockstep orders ([`own_word_kernel`]) takes no lockstep barrier
+/// under the default domains on lavapipe's profile, and records no
+/// `PrecisionNote::SimdgroupAccessOrder` under either domains.
+#[test]
+fn a_kernel_without_a_lockstep_pair_records_no_access_order_note() {
+    let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
+    let resident = Device::from_queries(desc.clone(), DevicePolicy::default())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let name = "own_word";
+    let Some(bc) = assemble_text(name, &own_word_kernel(name)) else {
+        return;
+    };
+    let (ordered, _) =
+        typed_module(&bc, name, resident.profile()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let lockstep = (ordered.census().keys())
+        .filter(|name| name.starts_with("barrier.lockstep"))
+        .count();
+    assert_eq!(lockstep, 0, "{:?}", ordered.census());
+    let (plain, _) =
+        typed_module(&bc, name, dev.profile()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let note = PrecisionNote::SimdgroupAccessOrder;
+    assert!(!plain.precision.contains(&note), "{:?}", plain.precision);
+    assert!(
+        !ordered.precision.contains(&note),
+        "{:?}",
+        ordered.precision
+    );
 }

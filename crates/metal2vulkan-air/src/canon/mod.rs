@@ -351,6 +351,10 @@ pub struct Lockstep {
     /// simdgroups may span two rows (more than one row, of a width not a multiple of 32), and in
     /// any other no pair it orders meets.
     pub across_rows: Vec<crate::ir::InstId>,
+    /// The kernel holds such a pair and no barrier was inserted for it: under a profile that
+    /// orders none (the identity domains), its pairs are found and left as the program wrote
+    /// them, and the kernel records that its answer there is the device's order's.
+    pub unordered: bool,
 }
 
 impl Lockstep {

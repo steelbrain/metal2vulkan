@@ -89,6 +89,7 @@ fn every_precision_note_has_its_table_row() {
         (N::CompressedTexelDecode, Allowance::Unbounded),
         (N::SharedExponentKept, Allowance::Unbounded),
         (N::SwizzledOpaqueBlackBorder, Allowance::Unbounded),
+        (N::SimdgroupAccessOrder, Allowance::Unbounded),
     ];
     for (note, expected) in rows {
         assert_eq!(allowance(note), expected, "{note:?}");

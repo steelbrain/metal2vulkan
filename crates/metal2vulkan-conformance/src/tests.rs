@@ -1098,6 +1098,39 @@ fn the_lockstep_cases_declare_the_reconvergence_note() {
     }
 }
 
+/// **The lockstep cases' words are the access-order note's.** Both kernels hold a pair only
+/// lockstep orders, so the runtime's pipeline of each carries `SimdgroupAccessOrder`, which its
+/// side announces: an output word other than Metal's is that notice's, announced, not divergent.
+#[test]
+fn the_lockstep_cases_justify_their_words_by_the_access_order_note() {
+    let code = Degradation::SimdgroupAccessOrder.code();
+    for case in crate::cases::simdgroup_lockstep::all() {
+        let recording = crate::recording::read(case.name())
+            .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
+        let output = recording.answers[0].outcomes[0]
+            .transcript
+            .root
+            .child("output")
+            .expect("the recording holds the output");
+        let Value::Bytes(words) = &output.observed.value else {
+            panic!("{}: the recording holds no bytes", case.name());
+        };
+        // Thread 0's word, in the half both kernels write.
+        let mut other = words.clone();
+        other[0] ^= 1;
+        let mut side = StubSide::new(other).announcing(&[Degradation::SimdgroupAccessOrder]);
+        let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
+        let Verdict::Announced { fields } = &replayed.verdict else {
+            panic!("{}: not announced: {}", case.name(), replayed.verdict);
+        };
+        assert!(
+            fields.iter().any(|field| field.contains(code)),
+            "{}: {fields:?}",
+            case.name()
+        );
+    }
+}
+
 /// The suite's central claim, at the one site it is stated: a difference is a bug unless we
 /// announced it. A notice declaration is an allowance at `case/notices/*` loosened `Unchecked`,
 /// and the notices site holds the whole announced set as one value, so until the subset check

@@ -1589,6 +1589,7 @@ field	metal2vulkan-air::Lockstep.barriers	pub barriers: Vec<crate::ir::InstId>
 field	metal2vulkan-air::Lockstep.device	pub device: u32
 field	metal2vulkan-air::Lockstep.emulated	pub emulated: bool
 field	metal2vulkan-air::Lockstep.rows	pub rows: bool
+field	metal2vulkan-air::Lockstep.unordered	pub unordered: bool
 field	metal2vulkan-air::SpecRequest.call_stack_depth	pub call_stack_depth: u32
 field	metal2vulkan-air::SpecRequest.constants	pub constants: BTreeMap<u32, ConstValue>
 field	metal2vulkan-air::SpecRequest.entry	pub entry: String
@@ -10440,6 +10441,7 @@ variant	metal2vulkan-runtime::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan-runtime::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
 variant	metal2vulkan-runtime::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
 variant	metal2vulkan-runtime::PrecisionNote::SharedExponentKept	SharedExponentKept
+variant	metal2vulkan-runtime::PrecisionNote::SimdgroupAccessOrder	SimdgroupAccessOrder
 variant	metal2vulkan-runtime::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan-runtime::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan-runtime::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
@@ -12149,6 +12151,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan::pipeline::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
 variant	metal2vulkan::pipeline::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
 variant	metal2vulkan::pipeline::PrecisionNote::SharedExponentKept	SharedExponentKept
+variant	metal2vulkan::pipeline::PrecisionNote::SimdgroupAccessOrder	SimdgroupAccessOrder
 variant	metal2vulkan::pipeline::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan::pipeline::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan::pipeline::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode

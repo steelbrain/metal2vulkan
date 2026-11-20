@@ -1541,6 +1541,7 @@ codec_enum! {
         SharedExponentKept,
         DeviceRoundedResolve,
         SwizzledOpaqueBlackBorder,
+        SimdgroupAccessOrder,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

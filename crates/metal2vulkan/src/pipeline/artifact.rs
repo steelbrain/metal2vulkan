@@ -2249,6 +2249,23 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceReconvergence,
+    /// The kernel holds two accesses of threadgroup or device memory, at least one a write, that
+    /// different threads of one SIMD-group may make to the same bytes between two barriers, and
+    /// no barrier or atomic orders them: Metal's answer there comes from Apple's GPUs running a
+    /// SIMD-group's 32 threads in lockstep, each instruction completing for every active thread
+    /// before the next starts, so such a pair runs in program order there (a lane reads the slot
+    /// another lane of its SIMD-group wrote one instruction earlier). The Metal Shading Language
+    /// orders threads' memory accesses only through barriers and atomics and calls such a pair a
+    /// data race. Under the identity domains (`metal2vulkan-runtime`) the module keeps the pair as
+    /// the AIR states it, so the device runs the threads in its own order between barriers, and the
+    /// values the pair reads and leaves may be other than Metal's. Static per kernel, from the
+    /// AIR's structure alone: recorded on every device for a kernel in which the translator finds
+    /// such a pair. A profile that orders the pairs with barriers of its own (the resident-table
+    /// domains) records none.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    SimdgroupAccessOrder,
     /// The render pipeline draws into a single-sampled color attachment of a signed normalized
     /// format (`R8Snorm`, `RG8Snorm`, `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`).
     /// Metal's pass, once it draws, writes each 32 by 32 tile a draw reaches back through its

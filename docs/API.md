@@ -1826,6 +1826,19 @@ bound.
   reconverge maximally, so such an operation may see other lanes active than Metal's. Under
   subgroup-uniform control flow (`shaderSubgroupUniformControlFlow`) the lanes reconverge where
   control flow is uniform. Static per stage: recorded for any tangled instruction in the entry.
+- `metal2vulkan-degrade-simdgroup-access-order` (precision). `SimdgroupAccessOrder`: A kernel
+  holds two accesses of threadgroup or device memory, at least one a write, that different threads
+  of one SIMD-group may make to the same bytes between two barriers, and no barrier or atomic
+  orders them (a lane reads the slot another lane of its SIMD-group wrote one instruction earlier).
+  An Apple GPU runs a SIMD-group's 32 threads in lockstep, so such a pair runs in program order
+  there; the module keeps the pair as the AIR states it, and the device runs the threads in its own
+  order between barriers, so the values the pair reads and leaves may be other than Metal's. The
+  Metal Shading Language calls such a pair a data race, and the difference is an accepted one
+  (section 10, "The threads of a SIMD-group run in no order between barriers"). It is the static
+  note `PrecisionNote::SimdgroupAccessOrder` of every kernel in which the translator finds such a
+  pair, from the AIR's structure alone, on every device under the identity domains
+  (`metal2vulkan-runtime`). The resident-table domains order each pair with barriers of their own
+  and record none.
 - `metal2vulkan-degrade-snorm-minimum-kept` (precision). `SnormMinimumKept`: A draw in a render pass
   that loads a single-sampled color attachment of a signed normalized format (`R8Snorm`, `RG8Snorm`,
   `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) and does not discard it at the store. Cost:
@@ -2927,7 +2940,8 @@ each item named states the rule in full.
 - **The threads of a SIMD-group run in no order between barriers** under the identity domains (the
   runtime), where an Apple GPU runs them in lockstep: the Metal Shading Language orders their
   memory accesses only through barriers and atomics, and calls two of them that conflict between
-  barriers a data race.
+  barriers a data race. A kernel holding such a pair carries the static note
+  `PrecisionNote::SimdgroupAccessOrder` (`metal2vulkan-degrade-simdgroup-access-order`).
 - **A simdgroup barrier in divergent code waits for its tangle**, as SPIR-V defines it. The Metal
   Shading Language requires every thread of the SIMD-group to execute a `simdgroup_barrier` that
   any of them executes in a conditional or a loop iteration, so Metal defines no answer there.

@@ -15,6 +15,8 @@ pub enum Degradation {
     DeviceRoundedResolve,
     /// `metal2vulkan-degrade-device-reconvergence`.
     DeviceReconvergence,
+    /// `metal2vulkan-degrade-simdgroup-access-order`.
+    SimdgroupAccessOrder,
     /// `metal2vulkan-degrade-device-filtered-mipmaps`.
     DeviceFilteredMipmaps,
     /// `metal2vulkan-degrade-capped-lod-bias`.
@@ -188,6 +190,7 @@ impl Degradation {
     pub const ALL: &'static [Degradation] = &[
         Degradation::DeviceRoundedResolve,
         Degradation::DeviceReconvergence,
+        Degradation::SimdgroupAccessOrder,
         Degradation::DeviceFilteredMipmaps,
         Degradation::CappedLodBias,
         Degradation::SnormMinimumKept,
@@ -278,6 +281,7 @@ impl Degradation {
         match self {
             Degradation::DeviceRoundedResolve => "metal2vulkan-degrade-device-rounded-resolve",
             Degradation::DeviceReconvergence => "metal2vulkan-degrade-device-reconvergence",
+            Degradation::SimdgroupAccessOrder => "metal2vulkan-degrade-simdgroup-access-order",
             Degradation::DeviceFilteredMipmaps => "metal2vulkan-degrade-device-filtered-mipmaps",
             Degradation::CappedLodBias => "metal2vulkan-degrade-capped-lod-bias",
             Degradation::SnormMinimumKept => "metal2vulkan-degrade-snorm-minimum-kept",
@@ -502,6 +506,7 @@ impl Degradation {
             PrecisionNote::CompressedTexelDecode => Degradation::CompressedTexelDecode,
             PrecisionNote::SharedExponentKept => Degradation::SharedExponentKept,
             PrecisionNote::DeviceReconvergence => Degradation::DeviceReconvergence,
+            PrecisionNote::SimdgroupAccessOrder => Degradation::SimdgroupAccessOrder,
         }
     }
 }

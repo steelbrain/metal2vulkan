@@ -338,6 +338,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::NativeFloat8
         | N::CappedLodBias
         | N::DeviceReconvergence
+        | N::SimdgroupAccessOrder
         | N::SnormMinimumKept
         | N::DeviceDepthBias
         | N::DepthDenormals

@@ -3,9 +3,10 @@
 //!
 //! **Where it runs.** Under the resident-table domains, the old runtime's, until the cutover
 //! deletes it. Under the identity domains (`lower::access::identity`, the runtime's) no kernel
-//! is ordered ([`OrderKey::of`] is `None`): documented Metal orders the threads of a simdgroup
-//! only through barriers and atomics, and calls their conflicting accesses between barriers a data
-//! race (docs/API.md, accepted differences).
+//! is ordered ([`OrderKey::of`]'s key orders nothing): documented Metal orders the threads of a
+//! simdgroup only through barriers and atomics, and calls their conflicting accesses between
+//! barriers a data race (docs/API.md, accepted differences). The pairs are still found there, and
+//! a kernel holding one records `PrecisionNote::SimdgroupAccessOrder` (`Lockstep::unordered`).
 //!
 //! **What Metal guarantees.** The Metal Shading Language specification (4.1, §4.4.1, §5.2.3.6,
 //! §6.10) defines a simdgroup as threads that execute concurrently, and orders threadgroup
@@ -640,22 +641,30 @@ struct Decision {
 /// What [`order`] reads besides the entry, which with it decides the order completely: of the
 /// device's profile, whether it runs a simdgroup in lockstep and whether a subgroup barrier where
 /// the simdgroup's threads diverge orders the threads that run it together; and whether the
-/// kernel is its one-row variant (`LoweringInputs::one_row`). Two asks with equal keys order an
-/// entry the same way, so an ordered entry is kept under its key. A profile of the identity
-/// domains has none: its kernels take no order (the module documentation).
+/// kernel is its one-row variant (`LoweringInputs::one_row`); and whether the profile orders no
+/// pair (`unordered`: the identity domains, whose kernels take no order, the module
+/// documentation). Two asks with equal keys order an entry the same way, so an ordered entry is
+/// kept under its key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderKey {
     device: bool,
     tangle: bool,
     one_row: bool,
+    unordered: bool,
 }
 
 impl OrderKey {
-    /// The key of a device of profile `p`, for the one-row variant where `one_row`; `None` under
-    /// the identity domains (`lower::access::identity`), whose kernels take no order.
-    pub fn of(p: &DeviceProfile, one_row: bool) -> Option<OrderKey> {
+    /// The key of a device of profile `p`, for the one-row variant where `one_row`. Under the
+    /// identity domains (`lower::access::identity`) the key orders nothing: [`order`] finds the
+    /// kernel's pairs and inserts no barrier.
+    pub fn of(p: &DeviceProfile, one_row: bool) -> OrderKey {
         if crate::lower::access::identity(p) {
-            return None;
+            return OrderKey {
+                device: false,
+                tangle: false,
+                one_row,
+                unordered: true,
+            };
         }
         let device = p
             .fields()
@@ -671,11 +680,12 @@ impl OrderKey {
                 tier(&SimdClass::CrossLane(OpBits::BASIC), Stage::Kernel, model),
                 Ok(Tier::Direct | Tier::Cluster32)
             );
-        Some(OrderKey {
+        OrderKey {
             device,
             tangle,
             one_row,
-        })
+            unordered: false,
+        }
     }
 }
 
@@ -683,19 +693,16 @@ impl OrderKey {
 /// simdgroup lockstep orders, by inserting barriers into its body (see the module
 /// documentation), for the device and variant of `key`. Where the key's one-row variant
 /// (`LoweringInputs::one_row`) and, with each simdgroup lying within one row, no pair wants more
-/// than a threadgroup barrier, only the threadgroup barriers are inserted, on every device. An
-/// entry of another stage, or a kernel without such a pair, is returned unchanged.
+/// than a threadgroup barrier, only the threadgroup barriers are inserted, on every device. Under
+/// a key that orders nothing (`OrderKey::unordered`) no barrier is inserted, and a kernel with
+/// such a pair states it ([`Lockstep::unordered`]). An entry of another stage, or a kernel without
+/// such a pair, is returned unchanged.
 pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error> {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Ok(e);
     }
-    let OrderKey {
-        device,
-        tangle,
-        one_row,
-    } = key;
     let before = m.ledger();
-    let decided = decide(&e, (device, tangle), one_row, m);
+    let decided = decide(&e, key, m);
     let spent = usize::try_from(m.ledger().saturating_sub(before)).unwrap_or(usize::MAX);
     m.release(spent);
     let Some((d, rows)) = decided? else {
@@ -724,6 +731,7 @@ pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error>
         device: d.device,
         rows,
         across_rows,
+        unordered: key.unordered,
     };
     Ok(e)
 }
@@ -731,13 +739,15 @@ pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error>
 /// The barriers kernel `e` needs, or `None` when it needs none, and whether none is needed where
 /// each simdgroup lies within one row of its threadgroup ([`Lockstep::rows`]); `device`: the
 /// device runs a simdgroup in lockstep; `tangle`: a subgroup barrier in divergent flow orders the
-/// threads that run it together (maximal reconvergence on 32-lane subgroups).
-fn decide(
-    e: &Entry,
-    (device, tangle): (bool, bool),
-    one_row: bool,
-    m: &mut Meter,
-) -> Result<Option<(Decision, bool)>, Error> {
+/// threads that run it together (maximal reconvergence on 32-lane subgroups); `unordered`: the
+/// key orders nothing, so a kernel with a pair needs no barrier.
+fn decide(e: &Entry, key: OrderKey, m: &mut Meter) -> Result<Option<(Decision, bool)>, Error> {
+    let OrderKey {
+        device,
+        tangle,
+        one_row,
+        unordered,
+    } = key;
     let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
         return Ok(None);
     };
@@ -773,9 +783,23 @@ fn decide(
             Space::Device => flags.device = true,
         }
         wants.extend(found);
+        // A key that orders nothing needs one pair alone, not the other space's.
+        if unordered {
+            break;
+        }
     }
     if wants.is_empty() {
         return Ok(None);
+    }
+    // A key that orders nothing found a pair: no barrier, and nothing of the placement.
+    if unordered {
+        let none = Decision {
+            inserts: Vec::new(),
+            flags: MemFlags::default(),
+            emulated: false,
+            device: 0,
+        };
+        return Ok(Some((none, false)));
     }
     // The same pairs where each simdgroup lies within one row of its threadgroup, so that two of
     // its threads' positions differ in `x` and are equal in `y` and `z` (`AddrFacts::new`'s

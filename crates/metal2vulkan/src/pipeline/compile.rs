@@ -3027,7 +3027,7 @@ fn decoded_module(r: &Request<'_>, m: &mut Meter) -> Result<air::Decoded, Error>
 
 /// [`specialize_one`], then the order Apple's simdgroup lockstep gives threadgroup accesses made
 /// explicit for `p` where its profile takes one ([`OrderKey::of`]; under the identity domains the
-/// specialized entry alone): the entry selection reads, whose instruction indices a refusal's
+/// specialized entry with its pairs found and none ordered): the entry selection reads, whose instruction indices a refusal's
 /// location names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
 /// here, so a tool that resolves a refusal's location reads the compile's own entry.
 ///
@@ -3039,17 +3039,11 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
     if let Shared::Entry(entries, fd) = r.shared {
         let open_cl = (r.inputs.open_cl_mode(), r.inputs.open_cl_lines());
         let depth = r.inputs.call_stack_depth();
-        let kept = match key {
-            Some(key) => entries.ordered(fd, depth, open_cl, key, m)?,
-            None => entries.specialized(fd, depth, open_cl, m)?,
-        };
+        let kept = entries.ordered(fd, depth, open_cl, key, m)?;
         return Ok(Specialized::clone(&kept));
     }
     let specialized = specialize_one(r, m)?;
-    match key {
-        Some(key) => order_specialized(specialized, key, m),
-        None => Ok(specialized),
-    }
+    order_specialized(specialized, key, m)
 }
 
 /// The specialized entry `specialized` ordered for `key` ([`lockstep::order`]), its work weighing

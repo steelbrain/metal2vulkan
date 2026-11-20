@@ -1633,6 +1633,10 @@ fn finish(
     let stage = cx.stage;
     // The class of the lockstep pass's simdgroup barriers, beside the program's own.
     sync::barrier::lockstep_class(&mut cx);
+    // A kernel whose lockstep pairs the profile leaves unordered answers in the device's order.
+    if cx.entry.lockstep.unordered {
+        cx.precision.insert(PrecisionNote::SimdgroupAccessOrder);
+    }
     // Each family completes its own plan and contributes its descriptors, facts, simd class,
     // and tangled instructions before the combined checks below.
     stage_io::finish(&mut cx)?;
