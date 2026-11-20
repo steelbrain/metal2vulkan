@@ -1,12 +1,13 @@
 //! The push window, under a device cfg on every device of the cfg's kind. Each kernel reads its
 //! grid position and its buffers at a run-time offset, so it pushes a dispatch region, each
 //! buffer's address, and the containment check's fields: the zero range's address and each
-//! buffer's length, which come last in the order, so they are the first to go to a parameter
-//! block. A kernel of 12 buffers (232 bytes) pushes them all and writes nothing into the parameter
-//! ring, and its dispatches after the first push nothing, their bytes held. One of 24 buffers
-//! pushes its block's address, every buffer's address, the zero range's and two lengths, and its
-//! other 22 lengths go to a block; one of 30 pushes 26 addresses, and the other 4, the zero
-//! range's and the 30 lengths go to a block. Each of those two writes one block a dispatch, whose
+//! buffer's bounds (its bytes before the bind offset and its length, 8 bytes), which come last in
+//! the order, so they are the first to go to a parameter block. A kernel of 12 buffers (232
+//! bytes) pushes them all and writes nothing into the parameter ring, and its dispatches after
+//! the first push nothing, their bytes held. One of 24 buffers pushes its block's address, every
+//! buffer's address, the zero range's and one buffer's bounds, and the other 23 bounds go to a
+//! block; one of 30 pushes 26 addresses, and the other 4, the zero range's and the 30 bounds go
+//! to a block. Each of those two writes one block a dispatch, whose
 //! new address each dispatch pushes. All answer the fold of their inputs.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
@@ -91,7 +92,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
         // dispatch, and its pushes over the dispatches.
         for (buffers, (addresses, checks), blocks, pushes) in [
             (12u32, (0usize, 0usize), 0u64, 1u64),
-            (24, (0, 22), 1, DISPATCHES),
+            (24, (0, 23), 1, DISPATCHES),
             (30, (4, 31), 1, DISPATCHES),
         ] {
             let bitcode = match llvm_assemble_text(&kernel(buffers)) {
@@ -114,7 +115,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                     .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                     .unwrap_or_else(|error| panic!("{what}: {error}"));
                 // The fields in the block: addresses, and the check's (the zero range's address
-                // and the lengths); nothing else goes there.
+                // and the bounds); nothing else goes there.
                 let mut ringed = (0, 0);
                 for field in &state.inner.compiled.whole.interface.fields {
                     match (field.place, &field.value) {
@@ -122,7 +123,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                         (Place::Block(_), FieldValue::BufferAddress { .. }) => ringed.0 += 1,
                         (
                             Place::Block(_),
-                            FieldValue::BufferRemaining(_) | FieldValue::ZeroAddress,
+                            FieldValue::BufferBounds(_) | FieldValue::ZeroAddress,
                         ) => ringed.1 += 1,
                         (Place::Block(_), _) => panic!("{what}: another field in the block"),
                     }
