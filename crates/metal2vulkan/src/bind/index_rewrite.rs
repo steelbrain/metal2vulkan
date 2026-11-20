@@ -2038,12 +2038,7 @@ pub fn index_rewrite_run_module(
     })
 }
 
-mod gather;
 mod run;
-pub use gather::plan::{index_gather_plan_module, IndexGatherPlanModule};
-pub use gather::{
-    index_gather_module, GatherDraw, IndexGather, IndexGatherModule, IndirectGatherDraw,
-};
 pub use run::{IndexRewriteRun, RewriteRunDraw};
 
 #[cfg(test)]

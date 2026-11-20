@@ -785,18 +785,11 @@ surface! {
         struct IndexBoundsPass N;
         struct IndexBoundsPlanModule N;
         struct IndexBoundsRun O;
-        fn index_gather_module;
-        fn index_gather_plan_module;
         fn index_rewrite_module;
         fn index_rewrite_run_module;
-        struct GatherDraw E;
-        struct IndexGather O;
-        struct IndexGatherModule N;
-        struct IndexGatherPlanModule N;
         struct IndexRewriteModule N;
         struct IndexRewritePass N;
         struct IndexRewriteRun O;
-        struct IndirectGatherDraw E;
         enum RewriteOrder N;
         enum RewriteOutput N;
         enum RewritePhase N;

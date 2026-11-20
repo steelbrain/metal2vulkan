@@ -137,24 +137,6 @@ assoc-const	metal2vulkan::bind::IndexBoundsRun::DISPATCH_OFFSET	pub const DISPAT
 assoc-const	metal2vulkan::bind::IndexBoundsRun::HEADER_WORDS	pub const HEADER_WORDS: u32
 assoc-const	metal2vulkan::bind::IndexBoundsRun::SLOT_BYTES	pub const SLOT_BYTES: u64
 assoc-const	metal2vulkan::bind::IndexBoundsRun::SLOT_WORDS	pub const SLOT_WORDS: u32
-assoc-const	metal2vulkan::bind::IndexGather::DISPATCH_OFFSET	pub const DISPATCH_OFFSET: u64
-assoc-const	metal2vulkan::bind::IndexGatherModule::HEADER_WORDS	pub const HEADER_WORDS: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::INDICES_BINDING	pub const INDICES_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::MAX_GROUPS	pub const MAX_GROUPS: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::OUTPUT_BINDING	pub const OUTPUT_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::PATTERN_BINDING	pub const PATTERN_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::RECORD_WORDS	pub const RECORD_WORDS: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::IndexGatherModule::TABLE_BINDING	pub const TABLE_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::ARGUMENTS_BINDING	pub const ARGUMENTS_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::DRAWS_BINDING	pub const DRAWS_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::MAX_DRAWS	pub const MAX_DRAWS: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::POOL_BINDING	pub const POOL_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::STATUS_BINDING	pub const STATUS_BINDING: u32
-assoc-const	metal2vulkan::bind::IndexGatherPlanModule::TABLE_BINDING	pub const TABLE_BINDING: u32
 assoc-const	metal2vulkan::bind::IndexRewriteModule::ARGUMENTS_BINDING	pub const ARGUMENTS_BINDING: u32
 assoc-const	metal2vulkan::bind::IndexRewriteModule::INDICES_BINDING	pub const INDICES_BINDING: u32
 assoc-const	metal2vulkan::bind::IndexRewriteModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -620,24 +602,6 @@ assoc-const-value	metal2vulkan::bind::IndexBoundsRun::DISPATCH_OFFSET	4
 assoc-const-value	metal2vulkan::bind::IndexBoundsRun::HEADER_WORDS	8
 assoc-const-value	metal2vulkan::bind::IndexBoundsRun::SLOT_BYTES	4 * Self::SLOT_WORDS as u64
 assoc-const-value	metal2vulkan::bind::IndexBoundsRun::SLOT_WORDS	28
-assoc-const-value	metal2vulkan::bind::IndexGather::DISPATCH_OFFSET	16
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::HEADER_WORDS	12
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::INDICES_BINDING	2
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::LOCAL_SIZE	128
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::MAX_GROUPS	65_535
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::OUTPUT_BINDING	3
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::PATTERN_BINDING	1
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::RECORD_WORDS	8
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::SET	0
-assoc-const-value	metal2vulkan::bind::IndexGatherModule::TABLE_BINDING	0
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::ARGUMENTS_BINDING	1
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::DRAWS_BINDING	4
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::LOCAL_SIZE	128
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::MAX_DRAWS	512
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::POOL_BINDING	2
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::SET	0
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::STATUS_BINDING	3
-assoc-const-value	metal2vulkan::bind::IndexGatherPlanModule::TABLE_BINDING	0
 assoc-const-value	metal2vulkan::bind::IndexRewriteModule::ARGUMENTS_BINDING	1
 assoc-const-value	metal2vulkan::bind::IndexRewriteModule::INDICES_BINDING	2
 assoc-const-value	metal2vulkan::bind::IndexRewriteModule::LOCAL_SIZE	128
@@ -2753,10 +2717,6 @@ field	metal2vulkan::bind::FlatIndirect.max_total_threads	pub max_total_threads: 
 field	metal2vulkan::bind::FlatIndirect.threads_per_threadgroup	pub threads_per_threadgroup: [u32; 3]
 field	metal2vulkan::bind::FunctionTablesShape.bytes_class	pub bytes_class: u8
 field	metal2vulkan::bind::FunctionTablesShape.class	pub class: u8
-field	metal2vulkan::bind::GatherDraw.count	pub count: u32
-field	metal2vulkan::bind::GatherDraw.index_end	pub index_end: u64
-field	metal2vulkan::bind::GatherDraw.index_offset	pub index_offset: u64
-field	metal2vulkan::bind::GatherDraw.wide	pub wide: bool
 field	metal2vulkan::bind::GeneratedLayout.counts_offset	pub counts_offset: u64
 field	metal2vulkan::bind::GeneratedLayout.push_bytes	pub push_bytes: u32
 field	metal2vulkan::bind::GeneratedLayout.regions	pub regions: u32
@@ -2790,10 +2750,6 @@ field	metal2vulkan::bind::IndexBoundsPlanModule.requirements	pub requirements: R
 field	metal2vulkan::bind::IndexBoundsPlanModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::IndexBufferRef.length	pub length: u64
 field	metal2vulkan::bind::IndexBufferRef.token	pub token: u32
-field	metal2vulkan::bind::IndexGatherModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::IndexGatherModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::IndexGatherPlanModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::IndexGatherPlanModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::IndexRewriteModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::IndexRewriteModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::IndexRewritePass.arguments_range	pub arguments_range: Option<BufferRange>
@@ -2807,10 +2763,6 @@ field	metal2vulkan::bind::IndirectClamp.source_range	pub source_range: BufferRan
 field	metal2vulkan::bind::IndirectClampModule.limits	pub limits: [u32; 3]
 field	metal2vulkan::bind::IndirectClampModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::IndirectClampModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::IndirectGatherDraw.arguments_offset	pub arguments_offset: u64
-field	metal2vulkan::bind::IndirectGatherDraw.index_end	pub index_end: u64
-field	metal2vulkan::bind::IndirectGatherDraw.index_offset	pub index_offset: u64
-field	metal2vulkan::bind::IndirectGatherDraw.wide	pub wide: bool
 field	metal2vulkan::bind::IndirectRef.offset	pub offset: u64
 field	metal2vulkan::bind::IndirectRef.token	pub token: u32
 field	metal2vulkan::bind::InheritedBytes.index	pub index: u32
@@ -4222,8 +4174,6 @@ fn	metal2vulkan::bind::index_bounds_fill_module	pub fn index_bounds_fill_module(
 fn	metal2vulkan::bind::index_bounds_fill_run_module	pub fn index_bounds_fill_run_module(device: &Device) -> Result<IndexBoundsFillModule, Error>
 fn	metal2vulkan::bind::index_bounds_plan_module	pub fn index_bounds_plan_module(device: &Device) -> Result<IndexBoundsPlanModule, Error>
 fn	metal2vulkan::bind::index_bounds_plan_run_module	pub fn index_bounds_plan_run_module(device: &Device) -> Result<IndexBoundsPlanModule, Error>
-fn	metal2vulkan::bind::index_gather_module	pub fn index_gather_module(device: &Device) -> Result<IndexGatherModule, Error>
-fn	metal2vulkan::bind::index_gather_plan_module	pub fn index_gather_plan_module(device: &Device) -> Result<IndexGatherPlanModule, Error>
 fn	metal2vulkan::bind::index_rewrite_module	pub fn index_rewrite_module(device: &Device, program: RewriteProgram, phase: RewritePhase) -> Result<IndexRewriteModule, Error>
 fn	metal2vulkan::bind::index_rewrite_run_module	pub fn index_rewrite_run_module(device: &Device, program: RewriteProgram) -> Result<IndexRewriteModule, Error>
 fn	metal2vulkan::bind::indirect_clamp_module	pub fn indirect_clamp_module(device: &Device) -> Result<IndirectClampModule, Error>
@@ -7725,20 +7675,6 @@ method	metal2vulkan::bind::IndexBoundsRun::push	pub fn push(&mut self, draw: Bou
 method	metal2vulkan::bind::IndexBoundsRun::words	pub fn words(&self) -> Vec<u8>
 method	metal2vulkan::bind::IndexBufferRef::fetch_end	pub fn fetch_end(&self, index_offset: u64) -> u64
 method	metal2vulkan::bind::IndexBufferRef::new	pub fn new(token: u32, length: u64) -> IndexBufferRef
-method	metal2vulkan::bind::IndexGather::arguments_range	pub fn arguments_range(&self) -> Option<BufferRange>
-method	metal2vulkan::bind::IndexGather::capacity	pub fn capacity(&self, draw: GatherDraw) -> Option<u32>
-method	metal2vulkan::bind::IndexGather::groups	pub fn groups(&self) -> u32
-method	metal2vulkan::bind::IndexGather::indices_range	pub fn indices_range(&self) -> Option<BufferRange>
-method	metal2vulkan::bind::IndexGather::indirect	pub fn indirect((program, order): (RewriteProgram, RewriteOrder), (arguments_start, arguments_end): (u64, u64), indices: Option<(u64, u64)>, (alignment, max_range): (u64, u32), pool_bytes: u32) -> Option<IndexGather>
-method	metal2vulkan::bind::IndexGather::is_empty	pub fn is_empty(&self) -> bool
-method	metal2vulkan::bind::IndexGather::is_indirect	pub fn is_indirect(&self) -> bool
-method	metal2vulkan::bind::IndexGather::len	pub fn len(&self) -> usize
-method	metal2vulkan::bind::IndexGather::new	pub fn new((program, order): (RewriteProgram, RewriteOrder), (index_start, index_end): (u64, u64), (alignment, max_range): (u64, u32), output_words: u32) -> Option<IndexGather>
-method	metal2vulkan::bind::IndexGather::pattern	pub fn pattern(&self) -> Vec<u32>
-method	metal2vulkan::bind::IndexGather::push	pub fn push(&mut self, draw: GatherDraw) -> Option<u32>
-method	metal2vulkan::bind::IndexGather::table	pub fn table(&self) -> Vec<u32>
-method	metal2vulkan::bind::IndexGather::table_bytes	pub fn table_bytes(&self) -> Vec<u8>
-method	metal2vulkan::bind::IndexGather::written	pub fn written(&self) -> u32
 method	metal2vulkan::bind::IndexRewritePass::listed	pub fn listed(mut self) -> IndexRewritePass
 method	metal2vulkan::bind::IndexRewritePass::new	pub fn new(source: RewriteSource, restart: u32, (index_size, index_offset, index_end): (u64, u64, u64), output: RewriteOutput, alignment: u64, max_range: u32) -> Option<IndexRewritePass>
 method	metal2vulkan::bind::IndexRewritePass::with_order	pub fn with_order(mut self, order: RewriteOrder) -> IndexRewritePass
@@ -7855,10 +7791,6 @@ method	metal2vulkan::bind::RewriteOrder::arrange	pub fn arrange<T: Copy>(self, f
 method	metal2vulkan::bind::RewriteOrder::word	pub const fn word(self) -> u32
 method	metal2vulkan::bind::RewritePhase::workgroups	pub fn workgroups(self, pass: &IndexRewritePass) -> u32
 method	metal2vulkan::bind::RewriteProgram::capacity	pub fn capacity(self, count: u64) -> u64
-method	metal2vulkan::bind::RewriteProgram::capacity_terms	pub fn capacity_terms(self) -> Option<(u32, u32, u32)>
-method	metal2vulkan::bind::RewriteProgram::gather_pattern	pub fn gather_pattern(self, order: RewriteOrder) -> Option<(u32, Vec<u32>, Vec<u32>)>
-method	metal2vulkan::bind::RewriteProgram::gathers	pub fn gathers(self) -> bool
-method	metal2vulkan::bind::RewriteProgram::gathers_without_indices	pub fn gathers_without_indices(self) -> bool
 method	metal2vulkan::bind::RewriteProgram::list	pub fn list(self, values: &[u32], restart: u32, order: RewriteOrder) -> Vec<u32>
 method	metal2vulkan::bind::RewriteProgram::per_step	pub fn per_step(self) -> u32
 method	metal2vulkan::bind::RewriteProgram::restarts	pub fn restarts(self) -> bool
@@ -8704,7 +8636,6 @@ struct	metal2vulkan::bind::FlatIndirect	#[derive(Clone, Copy, Debug, PartialEq, 
 struct	metal2vulkan::bind::FunctionTableSnapshot	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct FunctionTableSnapshot
 struct	metal2vulkan::bind::FunctionTableWords	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct FunctionTableWords
 struct	metal2vulkan::bind::FunctionTablesShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FunctionTablesShape
-struct	metal2vulkan::bind::GatherDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct GatherDraw
 struct	metal2vulkan::bind::GeneratedLayout	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GeneratedLayout
 struct	metal2vulkan::bind::GeneratedReplay	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct GeneratedReplay
 struct	metal2vulkan::bind::GeneratedVariant	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct GeneratedVariant<'a>
@@ -8718,15 +8649,11 @@ struct	metal2vulkan::bind::IndexBoundsPass	#[cfg_attr(feature = "serde", derive(
 struct	metal2vulkan::bind::IndexBoundsPlanModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexBoundsPlanModule
 struct	metal2vulkan::bind::IndexBoundsRun	#[derive(Clone, Debug, PartialEq, Eq)] pub struct IndexBoundsRun
 struct	metal2vulkan::bind::IndexBufferRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndexBufferRef
-struct	metal2vulkan::bind::IndexGather	#[derive(Clone, Debug, PartialEq, Eq)] pub struct IndexGather
-struct	metal2vulkan::bind::IndexGatherModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexGatherModule
-struct	metal2vulkan::bind::IndexGatherPlanModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexGatherPlanModule
 struct	metal2vulkan::bind::IndexRewriteModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexRewriteModule
 struct	metal2vulkan::bind::IndexRewritePass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndexRewritePass
 struct	metal2vulkan::bind::IndexRewriteRun	#[derive(Clone, Debug, PartialEq, Eq)] pub struct IndexRewriteRun
 struct	metal2vulkan::bind::IndirectClamp	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectClamp
 struct	metal2vulkan::bind::IndirectClampModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndirectClampModule
-struct	metal2vulkan::bind::IndirectGatherDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct IndirectGatherDraw
 struct	metal2vulkan::bind::IndirectRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectRef
 struct	metal2vulkan::bind::InheritedBytes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InheritedBytes
 struct	metal2vulkan::bind::InstanceRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct InstanceRecord([u8; InstanceRecord::BYTES])

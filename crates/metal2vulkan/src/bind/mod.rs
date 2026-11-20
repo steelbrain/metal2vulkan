@@ -47,12 +47,7 @@
 //! [`IndexRewritePass`] of three [`index_rewrite_module`] dispatches ([`RewritePhase`]) before the
 //! render pass instance, and one indirect draw (a run of direct draws of one walk group each,
 //! over one index buffer, one [`IndexRewriteRun`] dispatch of [`index_rewrite_run_module`] for
-//! all of them instead); a run of draws whose lists follow from their
-//! positions (direct draws of a program that never restarts, [`RewriteProgram::gathers`], over
-//! one index buffer; indirect draws over one arguments buffer, [`IndirectGatherDraw`]) can take
-//! one [`IndexGather`] dispatch of [`index_gather_module`] for all of them instead (an indirect
-//! run's after one [`index_gather_plan_module`] dispatch, [`IndexGatherPlanModule`]), and one
-//! indexed draw each. A pass's visibility results are its queries' results copied to their
+//! all of them instead). A pass's visibility results are its queries' results copied to their
 //! offsets, a `Boolean` one the device's own nonzero value where a sample passed; where a split
 //! pass continues a result's query in a later render pass instance, a [`VisibilityCombine`]
 //! dispatch of [`visibility_combine_module`] sums the continuations' counts into a `Counting`
@@ -235,10 +230,9 @@ pub use index_bounds::{
     IndexBoundsPlanModule, IndexBoundsRun,
 };
 pub use index_rewrite::{
-    index_gather_module, index_gather_plan_module, index_rewrite_module, index_rewrite_run_module,
-    GatherDraw, IndexGather, IndexGatherModule, IndexGatherPlanModule, IndexRewriteModule,
-    IndexRewritePass, IndexRewriteRun, IndirectGatherDraw, RewriteOrder, RewriteOutput,
-    RewritePhase, RewriteProgram, RewriteRunDraw, RewriteSource,
+    index_rewrite_module, index_rewrite_run_module, IndexRewriteModule, IndexRewritePass,
+    IndexRewriteRun, RewriteOrder, RewriteOutput, RewritePhase, RewriteProgram, RewriteRunDraw,
+    RewriteSource,
 };
 pub use indirect_clamp::{indirect_clamp_module, IndirectClamp, IndirectClampModule};
 pub use instantiate::{
