@@ -1,28 +1,34 @@
-//! MSL's float-to-integer conversions of a NaN, in a kernel and in a fragment function.
+//! MSL's float-to-integer conversions, of a NaN and of values that are not, from `float` and
+//! `half` to every integer width, in a kernel and in a fragment function.
 //!
-//! Section 8.6 of the MSL specification: "When converting a floating-point type to an integer
-//! type, if the floating-point value is NaN, the resulting integer is 0." Metal's compiler spells
-//! every such conversion as an `air.convert` call, which the translator lowers saturating: a NaN to
-//! 0, a value past the destination's range to its nearest bound. SPIR-V's own conversions
-//! (`OpConvertFToS`, `OpConvertFToU`) leave both undefined, so a device answers Metal's only through
-//! that lowering, and this case is what shows each one doing so.
+//! Section 8.6 of the MSL specification: "When converting from a floating-point type to an
+//! integer, the conversion uses round toward zero rounding mode", and "if the floating-point value
+//! is NaN, the resulting integer is 0." Metal's compiler spells every such conversion as an
+//! `air.convert` call, which the translator lowers saturating: a NaN to 0, a value past the
+//! destination's range to its nearest bound. SPIR-V's own conversions (`OpConvertFToS`,
+//! `OpConvertFToU`) leave both undefined, so a device answers Metal's only through that lowering,
+//! and this case is what shows each one doing so.
 //!
 //! One case over two owned fixtures, the same program compiled two ways, because the lowering's
 //! NaN test takes two forms: `nan_to_int`, without fast math, whose entries keep a float operation
 //! with no fast-math flags, so its module declares `SignedZeroInfNanPreserve` where the device
 //! supports it and the test reads the float; and `nan_to_int_fast`, under the default fast math
 //! that Metal's programs are compiled with, whose module declares none, so the test reads the bits.
-//! Each fixture runs a kernel, one thread an input, and a fragment function, one texel of a one-row
-//! `RGBA32Uint` target an input, which a full-screen triangle covers. Every invocation answers four
-//! words: `int(f)`, `uint(f)`, `int(h)` and `uint(h)` of the float and the half its input holds.
+//! Each fixture runs a kernel and a fragment function, the latter one texel of a one-row
+//! `RGBA32Uint` target an invocation, which a full-screen triangle covers. Every input takes five
+//! invocations of each, which answer its twenty words: `char`, `uchar`, `short`, `ushort`, `int`,
+//! `uint`, `long` and `ulong` of its `float`, then of its `half`.
 //!
-//! The inputs are eight NaNs of each width (quiet and signalling, either sign, with payloads)
-//! beside eight values that are not NaN (`1.5`, `-1.5`, both infinities, a value past `int`'s range
-//! for a float and `half`'s largest for a half, zero, a fraction and `-1`), so a device that
-//! answered 0 everywhere fails the case. Every word compares exactly.
+//! The inputs are eight NaNs of each width (quiet and signalling, either sign, with payloads) and
+//! ten values that are not NaN: six that truncate toward zero inside the signed destinations'
+//! ranges (`1.5`, `-1.5`, `-0.75`, `-2.75`, about `123.45` and about `-100.9`), both infinities,
+//! and a value past `int`'s range and inside `long`'s for a float (`2^40` and its negative) or
+//! past `short`'s for a half (`65504` and its negative). So a device that answered 0 everywhere
+//! fails, and a value past a destination's range asks what Metal saturates it to, which MSL does
+//! not state. Every word compares exactly.
 //!
-//! Nothing here can fault a GPU: per fixture one dispatch of sixteen threads and one draw of a
-//! sixteen-texel target, each invocation reading its own two words and writing its own four.
+//! Nothing here can fault a GPU: per fixture one dispatch of 90 threads and one draw of a 90-texel
+//! target, each invocation reading its input's two words and writing its own four.
 
 use crate::allowance::Allowance;
 use crate::case::{
@@ -68,7 +74,10 @@ const PROGRAMS: [Program; 2] = [
     },
 ];
 
-/// The `float` inputs, as their bits: eight NaNs, then eight values that are not.
+/// Inputs.
+const INPUTS: usize = 18;
+
+/// The `float` inputs, as their bits: eight NaNs, then ten values that are not.
 const FLOATS: [u32; INPUTS] = [
     0x7fc0_0000, // quiet
     0xffc0_0000, // quiet, negative
@@ -80,15 +89,17 @@ const FLOATS: [u32; INPUTS] = [
     0x7fc1_2345, // quiet, a payload
     0x3fc0_0000, // 1.5
     0xbfc0_0000, // -1.5
+    0xbf40_0000, // -0.75
+    0xc030_0000, // -2.75
+    0x42f6_e979, // 123.456
+    0xc2c9_cccd, // -100.9
     0x7f80_0000, // +inf
     0xff80_0000, // -inf
-    0x4f80_0000, // 2^32, past both integers' ranges
-    0x0000_0000, // 0
-    0x42f6_e979, // 123.456
-    0xbf80_0000, // -1
+    0x5380_0000, // 2^40
+    0xd380_0000, // -2^40
 ];
 
-/// The `half` inputs, as their bits: eight NaNs, then eight values that are not.
+/// The `half` inputs, as their bits: eight NaNs, then ten values that are not.
 const HALVES: [u16; INPUTS] = [
     0x7e00, // quiet
     0xfe00, // quiet, negative
@@ -100,34 +111,102 @@ const HALVES: [u16; INPUTS] = [
     0x7e55, // quiet, a payload
     0x3e00, // 1.5
     0xbe00, // -1.5
+    0xba00, // -0.75
+    0xc180, // -2.75
+    0x57b7, // 123.4375
+    0xd64e, // -100.875
     0x7c00, // +inf
     0xfc00, // -inf
     0x7bff, // 65504, the largest half
-    0x0000, // 0
-    0x57b7, // 123.4375
-    0xbc00, // -1
+    0xfbff, // -65504
 ];
 
-/// Inputs, so invocations of each stage.
-const INPUTS: usize = 16;
+/// The invocations that answer one input's words.
+const PARTS: usize = 5;
 
-/// The words an invocation answers, in the order the fixtures write them. The names are the
-/// diff's: a failure says which conversion moved, not which offset.
-const COLUMNS: [&str; 4] = [
-    "int-of-float",
-    "uint-of-float",
-    "int-of-half",
-    "uint-of-half",
+/// Invocations of each stage.
+const INVOCATIONS: u32 = (INPUTS * PARTS) as u32;
+
+/// The bytes of one input's answer: four words an invocation.
+const ROW: u32 = PARTS as u32 * TARGET_TEXEL;
+
+/// The bytes of one stage's answer.
+const ANSWER_BYTES: usize = INPUTS * ROW as usize;
+
+/// One conversion's answer in an input's row: its name in a diff, its destination, and where it
+/// lies. The row holds the `float`'s ten words, then the `half`'s.
+struct Column {
+    name: &'static str,
+    /// The destination's bits.
+    bits: u32,
+    signed: bool,
+    /// Its byte offset in the row.
+    offset: u32,
+}
+
+/// The twenty words of an input's row as the fixtures write them, one column a conversion: a
+/// word each for the destinations of up to 32 bits (a signed one sign-extended), two for `long`
+/// and `ulong`, the low first.
+const COLUMNS: [Column; 16] = [
+    column("char-of-float", 8, true, 0),
+    column("uchar-of-float", 8, false, 4),
+    column("short-of-float", 16, true, 8),
+    column("ushort-of-float", 16, false, 12),
+    column("int-of-float", 32, true, 16),
+    column("uint-of-float", 32, false, 20),
+    column("long-of-float", 64, true, 24),
+    column("ulong-of-float", 64, false, 32),
+    column("char-of-half", 8, true, 40),
+    column("uchar-of-half", 8, false, 44),
+    column("short-of-half", 16, true, 48),
+    column("ushort-of-half", 16, false, 52),
+    column("int-of-half", 32, true, 56),
+    column("uint-of-half", 32, false, 60),
+    column("long-of-half", 64, true, 64),
+    column("ulong-of-half", 64, false, 72),
 ];
 
-/// The vertices the one draw of the full-screen triangle takes.
-const VERTICES: u32 = 3;
+const fn column(name: &'static str, bits: u32, signed: bool, offset: u32) -> Column {
+    Column {
+        name,
+        bits,
+        signed,
+        offset,
+    }
+}
 
-/// The bytes of one stage's answer: four words an invocation.
-const ANSWER_BYTES: usize = INPUTS * TARGET_TEXEL as usize;
+impl Column {
+    /// How a diff reads the column's element.
+    fn element(&self) -> Element {
+        match (self.bits, self.signed) {
+            (64, _) => Element::U64,
+            (_, true) => Element::I32,
+            (_, false) => Element::U32,
+        }
+    }
 
-/// The input buffer: invocation `i`'s float bits at word `2i` and its half in the low 16 bits of
-/// word `2i + 1`.
+    /// The layout the column is read under, in `region`: one row an input, so a diff names the
+    /// input whose answer moved. Each column's value is the whole answer, so every byte offset a
+    /// diff prints is the resource's own.
+    fn layout(&self, region: Region) -> ByteLayout {
+        ByteLayout {
+            region,
+            element: self.element(),
+            row_offset: self.offset,
+            row_elements: 1,
+            row_pitch: ROW,
+            rows: INPUTS as u32,
+            image_pitch: ROW * INPUTS as u32,
+            images: 1,
+            // The columns are read apart, so each leaves the others' words outside its own
+            // elements; the columns together cover every byte.
+            gaps: Gaps::Ignored,
+        }
+    }
+}
+
+/// The input buffer: input `i`'s float bits at word `2i` and its half in the low 16 bits of word
+/// `2i + 1`.
 fn input_bytes() -> Vec<u8> {
     FLOATS
         .iter()
@@ -135,26 +214,6 @@ fn input_bytes() -> Vec<u8> {
         .flat_map(|(float, half)| [*float, u32::from(half)])
         .flat_map(u32::to_le_bytes)
         .collect()
-}
-
-/// The layout one column's words are read under, in a region of `region`: one row an
-/// invocation, its four words at the target texel's pitch, so a diff names the input whose
-/// answer moved. Each column's value is the whole answer, so every byte offset a diff prints is
-/// the resource's own.
-fn layout(region: Region, column: u32) -> ByteLayout {
-    ByteLayout {
-        region,
-        element: Element::U32,
-        row_offset: column * 4,
-        row_elements: 1,
-        row_pitch: TARGET_TEXEL,
-        rows: INPUTS as u32,
-        image_pitch: TARGET_TEXEL * INPUTS as u32,
-        images: 1,
-        // The columns are read apart, so each leaves the other three words outside its own
-        // elements; the columns together cover every byte.
-        gaps: Gaps::Ignored,
-    }
 }
 
 /// The kernel's output buffer.
@@ -165,7 +224,7 @@ fn buffer_region() -> Region {
     }
 }
 
-/// The fragment function's target, one row of an input's texel each.
+/// The fragment function's target, a texel an invocation in one row.
 fn target_region() -> Region {
     Region::Texture {
         level: 0,
@@ -173,7 +232,7 @@ fn target_region() -> Region {
         aspect: Aspect::Color,
         sample: 0,
         origin: [0, 0, 0],
-        size: [INPUTS as u32, 1, 1],
+        size: [INVOCATIONS, 1, 1],
     }
 }
 
@@ -181,11 +240,12 @@ fn target_region() -> Region {
 fn output_node(name: String, bytes: &[u8], region: fn() -> Region) -> Node {
     Node::branch(
         name,
-        (0..COLUMNS.len() as u32)
+        COLUMNS
+            .iter()
             .map(|column| {
                 Node::leaf(
-                    COLUMNS[column as usize],
-                    Observed::bytes(bytes.to_vec(), layout(region(), column)),
+                    column.name,
+                    Observed::bytes(bytes.to_vec(), column.layout(region())),
                 )
             })
             .collect(),
@@ -220,7 +280,7 @@ impl Program {
             &at("kernel/buffer/out"),
             side.zeroed_buffer(ANSWER_BYTES),
         )?;
-        // One thread an input, as a grid of threads in one threadgroup.
+        // One thread an invocation, as a grid of threads in one threadgroup.
         let command_buffer = made(
             sites,
             &at("kernel/dispatch"),
@@ -228,8 +288,8 @@ impl Program {
                 pipeline,
                 &Bindings::buffers(&[input, output]),
                 &[],
-                [INPUTS as u32, 1, 1],
-                [INPUTS as u32, 1, 1],
+                [INVOCATIONS, 1, 1],
+                [INVOCATIONS, 1, 1],
             ),
         )?;
         call(
@@ -254,8 +314,8 @@ impl Program {
                 vertex: self.vertex,
                 fragment: self.fragment,
                 format: PixelFormat::RGBA32Uint,
-                size: [INPUTS as u32, 1],
-                row_pitch: TARGET_TEXEL * INPUTS as u32,
+                size: [INVOCATIONS, 1],
+                row_pitch: TARGET_TEXEL * INVOCATIONS,
                 buffers: &[input],
                 vertices: VERTICES,
             }),
@@ -275,6 +335,9 @@ impl Program {
         Ok(())
     }
 }
+
+/// The vertices the one draw of the full-screen triangle takes.
+const VERTICES: u32 = 3;
 
 impl Case for NanIntegerConversions {
     fn name(&self) -> &'static str {
@@ -341,17 +404,8 @@ impl Case for NanIntegerConversions {
 mod tests {
     use super::*;
 
-    /// MSL 8.6's answer for one input: truncated toward zero, a NaN 0, a value past the
-    /// destination's range its nearest bound, the signed one as its bits.
-    fn rule(value: f64) -> [u32; 2] {
-        if value.is_nan() {
-            return [0, 0];
-        }
-        let t = value.trunc();
-        let signed = t.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
-        let unsigned = t.clamp(0.0, f64::from(u32::MAX)) as u32;
-        [signed as u32, unsigned]
-    }
+    /// The inputs that are NaNs: the first of each width's.
+    const NANS: usize = 8;
 
     /// A half's value, from its bits.
     fn half(bits: u16) -> f64 {
@@ -366,64 +420,126 @@ mod tests {
         }
     }
 
-    /// The four words every invocation answers, by the rule.
-    fn want() -> Vec<u8> {
-        FLOATS
-            .iter()
-            .zip(HALVES)
-            .flat_map(|(float, bits)| {
-                let [i, u] = rule(f64::from(f32::from_bits(*float)));
-                let [hi, hu] = rule(half(bits));
-                [i, u, hi, hu]
-            })
-            .flat_map(u32::to_le_bytes)
-            .collect()
+    /// Input `input`'s source for `column`: its `half` for a column in the row's second half,
+    /// else its `float`.
+    fn source(column: &Column, input: usize) -> f64 {
+        if column.offset >= ROW / 2 {
+            half(HALVES[input])
+        } else {
+            f64::from(f32::from_bits(FLOATS[input]))
+        }
     }
 
-    /// The first eight inputs of each width are NaNs and the last eight are not, as the module's
-    /// documentation says, and the inputs are distinct.
+    /// MSL 8.6's answer of `column` for `value`, as the bits the fixture stores, where MSL states
+    /// one: a NaN converts to 0, and a value whose truncation toward zero the destination holds
+    /// converts to that. `None` for a value past the destination's range, whose answer MSL does
+    /// not state.
+    fn rule(column: &Column, value: f64) -> Option<u64> {
+        if value.is_nan() {
+            return Some(0);
+        }
+        let t = value.trunc();
+        let bits = column.bits as i32;
+        let (lo, hi) = if column.signed {
+            (-(2f64.powi(bits - 1)), 2f64.powi(bits - 1))
+        } else {
+            (0.0, 2f64.powi(bits))
+        };
+        if t < lo || t >= hi {
+            return None;
+        }
+        // Sign-extended to 64 bits, then cut to the column's element.
+        let bits = if t < 0.0 { t as i64 as u64 } else { t as u64 };
+        Some(match column.element() {
+            Element::U64 => bits,
+            _ => bits & 0xffff_ffff,
+        })
+    }
+
+    /// Column `column` of input `input` in `bytes`.
+    fn read(bytes: &[u8], column: &Column, input: usize) -> u64 {
+        let at = input * ROW as usize + column.offset as usize;
+        let width = if column.bits == 64 { 8 } else { 4 };
+        let mut word = [0u8; 8];
+        word[..width].copy_from_slice(&bytes[at..at + width]);
+        u64::from_le_bytes(word)
+    }
+
+    /// The first eight inputs of each width are NaNs and the rest are not, as the module's
+    /// documentation says; the inputs are distinct; and every column has rows MSL states an answer
+    /// for that is not 0, so a device that answered 0 everywhere fails.
     #[test]
-    fn the_inputs_are_eight_nans_then_eight_values() {
+    fn the_inputs_are_eight_nans_then_ten_values() {
         for (index, (float, bits)) in FLOATS.iter().zip(HALVES).enumerate() {
-            let nan = index < INPUTS / 2;
+            let nan = index < NANS;
             assert_eq!(f32::from_bits(*float).is_nan(), nan, "float {float:#010x}");
             assert_eq!(half(bits).is_nan(), nan, "half {bits:#06x}");
         }
         let floats: std::collections::BTreeSet<u32> = FLOATS.into_iter().collect();
         let halves: std::collections::BTreeSet<u16> = HALVES.into_iter().collect();
         assert_eq!((floats.len(), halves.len()), (INPUTS, INPUTS));
-        // The rule is not 0 everywhere: the values that are not NaN answer otherwise.
-        assert!(want().iter().any(|byte| *byte != 0));
+        for column in &COLUMNS {
+            let nonzero = (NANS..INPUTS)
+                .filter(|input| matches!(rule(column, source(column, *input)), Some(b) if b != 0))
+                .count();
+            assert!(nonzero > 0, "{}: every stated answer is 0", column.name);
+        }
     }
 
-    /// Metal's recorded answer, in both stages of both compiles, is MSL 8.6's: every NaN converts
-    /// to 0, and every other input truncates and saturates.
+    /// The columns tile an input's row, each word once, in the fixtures' order.
     #[test]
-    fn metal_converts_a_nan_to_zero() {
+    fn the_columns_cover_every_word_of_a_row_once() {
+        let mut covered = vec![0u32; ROW as usize / 4];
+        for column in &COLUMNS {
+            let words = if column.bits == 64 { 2 } else { 1 };
+            for word in 0..words {
+                covered[column.offset as usize / 4 + word] += 1;
+            }
+        }
+        assert!(covered.iter().all(|times| *times == 1), "{covered:?}");
+    }
+
+    /// Metal's recorded answer, in both stages of both compiles, is MSL 8.6's wherever MSL states
+    /// one: every NaN converts to 0 at every width, and every value a destination holds the
+    /// truncation of converts to it. A value past a destination's range is held only to Metal's
+    /// recorded answer, by the comparison.
+    #[test]
+    fn metal_converts_a_nan_to_zero_and_rounds_toward_zero() {
         let recording =
             crate::recording::read(NAME).unwrap_or_else(|e| panic!("{NAME}: no recording: {e}"));
-        let want = want();
-        let mut answers = 0;
+        let mut checked = 0;
         for metal in &recording.answers {
             for outcome in &metal.outcomes {
                 for program in &PROGRAMS {
                     for stage in ["kernel", "fragment"] {
-                        answers += 1;
                         let site = format!("{}/{stage}/output", program.site);
-                        let got = outcome
-                            .transcript
-                            .root
-                            .child(&site)
-                            .and_then(|node| node.child(COLUMNS[0]))
-                            .map(|node| &node.observed.value);
-                        assert!(
-                            matches!(got, Some(Value::Bytes(bytes)) if *bytes == want),
-                            "{NAME}: Metal's {site} is {got:?}"
-                        );
+                        for column in &COLUMNS {
+                            let got = outcome
+                                .transcript
+                                .root
+                                .child(&site)
+                                .and_then(|node| node.child(column.name))
+                                .map(|node| &node.observed.value);
+                            let Some(Value::Bytes(bytes)) = got else {
+                                panic!("{NAME}: Metal's {site}/{} is {got:?}", column.name);
+                            };
+                            for input in 0..INPUTS {
+                                let Some(want) = rule(column, source(column, input)) else {
+                                    continue;
+                                };
+                                checked += 1;
+                                assert_eq!(
+                                    read(bytes, column, input),
+                                    want,
+                                    "{NAME}: Metal's {site}/{} of input {input}",
+                                    column.name
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
-        assert!(answers > 0, "{NAME}: no Metal answer");
+        assert!(checked > 0, "{NAME}: no Metal answer");
     }
 }
