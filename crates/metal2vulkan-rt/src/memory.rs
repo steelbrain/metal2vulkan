@@ -626,12 +626,37 @@ enum Rule {
     Free(vk::DeviceMemory),
 }
 
+/// Memory of its own that an object of another thread held, given back for the block-maker thread
+/// to free in the form of every free it makes ([`free`]), its gauges falling after the free.
+pub(crate) enum Loose {
+    /// A texture's or a shadow's image-dedicated allocation (`crate::texture::Backing::Own`) of
+    /// `bytes`, `spilled` of them in a spill type.
+    Texture {
+        memory: vk::DeviceMemory,
+        bytes: u64,
+        spilled: u64,
+    },
+    /// A surface plane's import (`crate::texture::Backing::Import`) of `bytes`.
+    SurfaceImport {
+        memory: vk::DeviceMemory,
+        bytes: u64,
+    },
+    /// A copy's staging buffer of its own and its memory (`crate::staging::Staging`).
+    Staging {
+        buffer: vk::Buffer,
+        memory: vk::DeviceMemory,
+    },
+}
+
 struct State {
     /// Per class, its allocations in the order they were made.
     allocations: [Vec<Allocation>; 2],
     /// Imported and exported blocks given back, with the imports' releases, for the block-maker
     /// thread to free.
     owned: VecDeque<(Memory, Option<Release>)>,
+    /// Memory of its own other threads' objects held, given back for the block-maker thread to
+    /// free.
+    loose: VecDeque<Loose>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
@@ -754,6 +779,7 @@ impl Pool {
             state: Mutex::new(State {
                 allocations: [Vec::new(), Vec::new()],
                 owned: VecDeque::new(),
+                loose: VecDeque::new(),
                 failed: [false, false],
                 freed_at: [0, 0],
                 // The device's fixed-size internals: the block-maker thread's first work.
@@ -1076,6 +1102,18 @@ impl Pool {
         self.changed.notify_all();
     }
 
+    /// Takes back memory of its own that another thread's object held, for the block-maker
+    /// thread to free ([`Loose`]).
+    ///
+    /// # Safety
+    ///
+    /// Nothing uses the memory or the buffer, and nothing will: no GPU work that used them is
+    /// pending, and what was bound to the memory but the buffer is destroyed.
+    pub(crate) unsafe fn give_back_loose(&self, loose: Loose) {
+        self.lock().loose.push_back(loose);
+        self.changed.notify_all();
+    }
+
     /// An import's or an export's numbers: its block's, and its allocation's. Err:
     /// [`Limit::BlockIds`].
     pub(crate) fn own_numbers(&self) -> Result<(BlockId, AllocationId), Error> {
@@ -1387,6 +1425,13 @@ pub(crate) fn run(core: Arc<Core>) {
         if let Some((memory, release)) = state.owned.pop_front() {
             drop(state);
             free_own(&core, &memory, release);
+            state = pool.lock();
+            continue;
+        }
+        if let Some(loose) = state.loose.pop_front() {
+            drop(state);
+            // SAFETY: as given back.
+            unsafe { free_loose(&core, loose) };
             state = pool.lock();
             continue;
         }
@@ -2256,6 +2301,44 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
     }
 }
 
+/// Frees memory of its own another thread's object held ([`Loose`]): the buffer, then the memory,
+/// then its gauges fall. On the block-maker thread, the free is in its form of every free
+/// ([`free`]), and the submissions made during it are counted.
+///
+/// # Safety
+///
+/// As [`Pool::give_back_loose`].
+unsafe fn free_loose(core: &Core, loose: Loose) {
+    let counters = &core.counters;
+    match loose {
+        Loose::Texture {
+            memory,
+            bytes,
+            spilled,
+        } => {
+            // SAFETY: the caller's.
+            unsafe { free(&core.device, memory) };
+            counters.fall(Gauge::Blocks);
+            counters.fall_by(Gauge::TextureOwnBytes, bytes);
+            counters.fall_by(Gauge::SpilledBytes, spilled);
+        }
+        Loose::SurfaceImport { memory, bytes } => {
+            // SAFETY: the caller's.
+            unsafe { free(&core.device, memory) };
+            counters.fall(Gauge::Blocks);
+            counters.surface_import_freed(bytes);
+        }
+        Loose::Staging { buffer, memory } => {
+            // SAFETY: the caller's; freeing the memory unmaps it.
+            unsafe {
+                core.device.destroy_buffer(buffer, None);
+                free(&core.device, memory);
+            }
+            counters.fall(Gauge::Blocks);
+        }
+    }
+}
+
 /// On the block-maker thread: frees an allocation the idle rule took out, after the consumer's
 /// unmap of it, and counts its idle time. The submissions made during its `vkFreeMemory` are
 /// counted ([`free`]).
@@ -2293,12 +2376,19 @@ fn free_allocation(core: &Core, allocation: Allocation) {
 pub(crate) fn free_all(core: &mut Core) {
     let mut allocations = Vec::new();
     let mut idle = [0; 2];
-    let owned: Vec<(Memory, Option<Release>)> = {
+    let (owned, loose): (Vec<(Memory, Option<Release>)>, Vec<Loose>) = {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
-        state.owned.drain(..).collect()
+        (
+            state.owned.drain(..).collect(),
+            state.loose.drain(..).collect(),
+        )
     };
     for (memory, release) in owned {
         free_own(core, &memory, release);
+    }
+    for loose in loose {
+        // SAFETY: as given back.
+        unsafe { free_loose(core, loose) };
     }
     {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);

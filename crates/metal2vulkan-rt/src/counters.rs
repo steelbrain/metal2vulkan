@@ -1856,8 +1856,9 @@ pub struct Metrics {
     pub allocations_freed: u64,
     /// `vkQueueSubmit2` calls that met one of the block-maker thread's `vkFreeMemory` calls: made
     /// while it was inside one, or inside the driver as one began. Its frees are an idle
-    /// allocation's, an imported or exported block's given back, and one it made and could not
-    /// use. A driver may hold such a call until the free returns: on the NVIDIA cards
+    /// allocation's, an imported or exported block's given back, a texture's allocation of its
+    /// own, a surface plane's import, a copy's staging buffer of its own, and one it made and
+    /// could not use. A driver may hold such a call until the free returns: on the NVIDIA cards
     /// measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory. A call
     /// made during a free is counted as it enters the driver, one that a free began beside as it
     /// returns.
@@ -2143,7 +2144,8 @@ pub struct Gauges {
     pub handles_out: u64,
     /// Buffers.
     pub buffers: u64,
-    /// Textures: each one's image, its views and its memory, until the reaper frees them.
+    /// Textures: each one's image and its views, until the reaper frees them and gives the
+    /// block-maker thread their memory of their own to free.
     pub textures: u64,
     /// Sampler states.
     pub samplers: u64,

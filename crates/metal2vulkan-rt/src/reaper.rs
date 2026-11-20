@@ -4,11 +4,13 @@
 //! that starts in a handler or a listener, writes the lowerings the pipeline states hand it to
 //! the store, and looks at the pipeline cache once creation is quiet, writing its blob or
 //! replacing it past its bound (`crate::cache`). No driver free runs on the completion thread,
-//! so no completion waits behind one, and a submission on another thread waits behind at most one
-//! free.
+//! so no completion waits behind one. Device memory it does not free: a texture's allocation of
+//! its own, a surface plane's import and a copy's staging buffer go to the block-maker thread,
+//! whose form of every free a submission waits out at most one of (`crate::submit_calls`).
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
+use crate::memory::Loose;
 use crate::submit::Held;
 use crate::texture::{Backing, Image};
 use crate::times::host_time;
@@ -75,11 +77,6 @@ pub(crate) enum Free {
     AttachmentViews(Vec<vk::ImageView>),
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
     Sampler(vk::Sampler),
-    /// A staging buffer of texture bytes, and its memory; the blocks gauge falls with it.
-    Staging {
-        buffer: vk::Buffer,
-        memory: vk::DeviceMemory,
-    },
 }
 
 impl Reaper {
@@ -125,8 +122,8 @@ impl Reaper {
     }
 }
 
-/// Frees an image's memory: its place in a texture block, or its allocation of its own with the
-/// blocks gauge and its spilled bytes.
+/// Gives up an image's memory: its place in a texture block, or its allocation of its own or its
+/// import, which the block-maker thread frees ([`Loose`]).
 ///
 /// # Safety
 ///
@@ -134,17 +131,20 @@ impl Reaper {
 unsafe fn free_backing(core: &Core, backing: Backing) {
     match backing {
         Backing::Own(memory, bytes, spilled) => {
-            // SAFETY: the caller's contract.
-            unsafe { core.device.free_memory(memory, None) };
-            core.counters.fall(Gauge::Blocks);
-            core.counters.fall_by(Gauge::TextureOwnBytes, bytes);
-            core.counters.fall_by(Gauge::SpilledBytes, spilled);
+            let loose = Loose::Texture {
+                memory,
+                bytes,
+                spilled,
+            };
+            // SAFETY: the caller's contract: no work uses the memory, and its image is destroyed.
+            unsafe { core.pool.give_back_loose(loose) };
         }
         Backing::Import(memory, bytes) => {
-            // SAFETY: the caller's contract.
-            unsafe { core.device.free_memory(memory, None) };
-            core.counters.fall(Gauge::Blocks);
-            core.counters.surface_import_freed(bytes);
+            // SAFETY: as above.
+            unsafe {
+                core.pool
+                    .give_back_loose(Loose::SurfaceImport { memory, bytes })
+            };
         }
         Backing::Placed(place) => core.places.release(core, place),
         Backing::InBlock | Backing::Drawable => {}
@@ -234,15 +234,6 @@ fn free(core: &Core, object: Free) {
             // of it held the state until it retired.
             unsafe { device.destroy_sampler(sampler, None) };
             core.counters.fall(Gauge::DeviceSamplers);
-        }
-        Free::Staging { buffer, memory } => {
-            // SAFETY: the upload that copied through it retired, and no reader holds its mapping;
-            // freeing the memory unmaps it.
-            unsafe {
-                device.destroy_buffer(buffer, None);
-                device.free_memory(memory, None);
-            }
-            core.counters.fall(Gauge::Blocks);
         }
     }
 }

@@ -109,14 +109,17 @@ them over this crate's items:
 
 The runtime runs four threads per device: the block-maker, which makes the pool's allocations
 ahead of need and the runtime's fixed-size internals off every caller's thread (Memory blocks and
-buffers), the submit thread, the completion thread, and the reaper, which frees the semaphores
-and command pools the others give up, one at a time, so no driver free runs on the completion
-thread and a submission waits behind at most one, lowers the compute pipeline states' variants an
-encoding call waits for (the emulated-SIMD-group and the partial-threadgroups ones), and makes the
-device's pipeline cache when it starts and writes it to the cache directory once pipeline creation
-is quiet. While an old generation of the cache
-directory is removed, a thread of the store's own does it, and ends with the removal; the teardown
-waits for it. `Gauges::threads` holds the OS id of each of these threads while it runs, so a tool
+buffers) and frees device memory, the submit thread, the completion thread, and the reaper, which
+frees the semaphores and command pools the others give up, one at a time, so no driver free runs
+on the completion thread. The device memory of a texture's allocation of its own, a surface
+plane's import and a copy's staging buffer goes from the reaper or the upload's retirement to the
+block-maker, so every free of device memory but a call's undo of what it made and did not use,
+and the teardown's, is the block-maker's, and a submission waits behind at most one. The reaper
+also lowers the compute pipeline states' variants an encoding call waits for (the
+emulated-SIMD-group and the partial-threadgroups ones), and makes the device's pipeline cache when
+it starts and writes it to the cache directory once pipeline creation is quiet. While an old
+generation of the cache directory is removed, a thread of the store's own does it, and ends with
+the removal; the teardown waits for it. `Gauges::threads` holds the OS id of each of these threads while it runs, so a tool
 can tell the runtime's own work from the threads a driver starts for itself.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
@@ -970,8 +973,9 @@ the Direct3D 11 texture's payload until it is freed.
   its next one only once all of them have returned; with none left inside it goes straight on, and
   what it made is handed on as its call returns. A submit waits out at most one of its calls, the
   one it met. Its calls are the makes of the pool's 16 MiB units and of the
-  runtime's fixed-size internals, and the frees of idle allocations and of the imported and
-  exported blocks given back. `Metrics::maker_memory_calls` counts them, `maker_yields` the ones
+  runtime's fixed-size internals, and the frees of idle allocations, of the imported and
+  exported blocks given back, of textures' allocations of their own, of surface planes' imports
+  and of copies' staging buffers of their own. `Metrics::maker_memory_calls` counts them, `maker_yields` the ones
   after which it waited, and `maker_yield_nanos` the time. A single call still holds a submit for
   its own length: a take longer than a unit allocates its own length on the consumer's thread,
   with no wait, and that allocation goes back to the driver in one free of its whole length. In a

@@ -18,8 +18,7 @@
 use crate::counters::{Gauge, Site};
 use crate::device::Core;
 use crate::error::Error;
-use crate::memory::{self, Mapping, MemoryClass};
-use crate::reaper::{Free, Job};
+use crate::memory::{self, Loose, Mapping, MemoryClass};
 use ash::vk;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
@@ -273,8 +272,8 @@ impl Stage {
 
 /// A host-visible buffer of a copy's bytes, in memory of its own of the Shared type, mapped for
 /// its life, for a copy larger than the region, counted in `Gauges::staging_bytes` while it lives.
-/// The reaper frees it once its last holder, the upload that copies through it among them, is
-/// gone.
+/// The block-maker thread frees it once its last holder, the upload that copies through it among
+/// them, is gone (`crate::memory::Loose::Staging`).
 pub(crate) struct Staging {
     core: Arc<Core>,
     buffer: vk::Buffer,
@@ -382,9 +381,12 @@ fn host_buffer(
 impl Drop for Staging {
     fn drop(&mut self) {
         self.core.counters.fall_by(Gauge::StagingBytes, self.len);
-        self.core.reaper.give(Job::Free(Free::Staging {
+        let loose = Loose::Staging {
             buffer: self.buffer,
             memory: self.memory,
-        }));
+        };
+        // SAFETY: its last holder is gone: the upload that copied through it retired, and no
+        // reader holds its mapping.
+        unsafe { self.core.pool.give_back_loose(loose) };
     }
 }

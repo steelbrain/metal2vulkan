@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 ///
 /// The runtime runs four threads: the block-maker, which makes the pool's allocations ahead of need
 /// and the runtime's fixed-size internals (the zero source, the parameter ring's blocks and the
-/// staging region) off every caller's thread; the submit thread, which runs every scheduled
+/// staging region) off every caller's thread, and frees device memory; the submit thread, which runs every scheduled
 /// handler; the completion thread, which runs every completed handler and listener; and the
 /// reaper, which frees the semaphores and command pools the others give up, one at a time, so no
 /// driver free runs on the completion thread. The device is torn down when the last handle is
