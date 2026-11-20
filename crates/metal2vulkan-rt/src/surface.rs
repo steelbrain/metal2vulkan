@@ -38,7 +38,7 @@ use ash::vk;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-/// For the device tests: ends an in-place make's step `name` on this thread ([`steps`]).
+/// For the device tests: ends an in-place make's step `name` on this thread (the test-only `steps` module).
 macro_rules! step {
     ($name:literal) => {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

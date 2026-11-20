@@ -207,9 +207,9 @@ impl Device {
     /// Err: [`Limit::NoExport`] where the device does not export the handle;
     /// [`Limit::ExportType`] for a dma-buf on a device without the foreign queue family, or where
     /// the buffer's memory requirements do not list the Private type;
-    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest allocation or
-    /// buffer; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
-    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the buffer, the
+    /// [`Limit::BlockLen`] past the device's longest allocation or
+    /// buffer; [`Limit::MemoryAllocations`];
+    /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the buffer, the
     /// allocation, its binding or the handle fails; [`Error::Quiesced`].
     pub fn new_exported_block(
         &self,

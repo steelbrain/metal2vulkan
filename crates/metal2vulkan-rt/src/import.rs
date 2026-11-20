@@ -460,13 +460,13 @@ impl Device {
     /// Metal takes any page-aligned memory; here a device that offers the dma-buf only in a type
     /// the rule does not take refuses it, and the consumer chooses what comes next.
     ///
-    /// Err: [`Limit::NoImport`](crate::Limit::NoImport) where the device does not import a dma-buf;
-    /// [`Limit::ImportType`](crate::Limit::ImportType) where the rule takes no type;
-    /// [`Limit::ImportAlignment`](crate::Limit::ImportAlignment) for a length of 0 or one below
-    /// the buffer's memory requirements; [`Limit::BlockLen`](crate::Limit::BlockLen) past the
+    /// Err: [`Limit::NoImport`] where the device does not import a dma-buf;
+    /// [`Limit::ImportType`] where the rule takes no type;
+    /// [`Limit::ImportAlignment`] for a length of 0 or one below
+    /// the buffer's memory requirements; [`Limit::BlockLen`] past the
     /// device's longest allocation or buffer;
-    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
-    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the query or the
+    /// [`Limit::MemoryAllocations`];
+    /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the query or the
     /// import fails (the fd is no dma-buf of `len` bytes or more, or the device is out of memory
     /// or lost); [`Error::Quiesced`].
     #[cfg(unix)]
@@ -537,7 +537,7 @@ impl Device {
     /// and so its offset in the block, is a multiple of it: the alignment in which the device binds
     /// a sparse buffer's memory, rounded up to the host's page (64 KiB on RADV of Mesa 26.2.6, 4
     /// KiB on lavapipe). `None` where the call refuses every import
-    /// ([`Limit::NoImport`](crate::Limit::NoImport)): the device does not bind dma-bufs into a
+    /// ([`Limit::NoImport`]): the device does not bind dma-bufs into a
     /// sparse buffer (Mesa's Intel driver, 26.2.6, imports no dma-buf for one), or its sparse
     /// buffer does not take every type a plain one takes.
     #[cfg(unix)]
@@ -581,10 +581,10 @@ impl Device {
     /// `maxMemoryAllocationCount`, and in [`Gauges::imports`](crate::Gauges::imports) and
     /// [`Gauges::blocks`](crate::Gauges::blocks) while it lives.
     ///
-    /// Err: [`Limit::NoImport`](crate::Limit::NoImport) where [`Device::dma_buf_granule`] is
-    /// `None`; [`Limit::ImportAlignment`](crate::Limit::ImportAlignment) for no fds, a length of
+    /// Err: [`Limit::NoImport`] where [`Device::dma_buf_granule`] is
+    /// `None`; [`Limit::ImportAlignment`] for no fds, a length of
     /// 0 or one that is no multiple of the granule (or of the sparse buffer's alignment);
-    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest allocation or buffer;
+    /// [`Limit::BlockLen`] past the device's longest allocation or buffer;
     /// [`Limit::SparseAddressSpace`](crate::Limit::SparseAddressSpace);
     /// [`Limit::ImportType`](crate::Limit::ImportType) where the rule takes no type for an fd, or
     /// another type than the first fd's (then `listed` names that type alone);

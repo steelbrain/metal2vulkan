@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 /// an exported block's memory is freed.
 /// While a handle lives, the block's number names it to
 /// [`Device::new_buffer`](crate::Device::new_buffer) and the other calls that take one; once the
-/// last is gone, they answer [`Error::NoSuchBlock`](crate::Error::NoSuchBlock). The device's
+/// last is gone, they answer [`Error::NoSuchBlock`]. The device's
 /// teardown frees every allocation, blocks still claimed included, each after the consumer's
 /// [`BlockMappings::unmap`](crate::BlockMappings::unmap) of it returned; a handle dropped after
 /// that does nothing.
