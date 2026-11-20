@@ -533,7 +533,7 @@ mod tests {
         let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
         let text = std::fs::read_to_string(path).unwrap();
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::new(description, DevicePolicy::default()).unwrap();
+        let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
         let handles = match llvm_assemble(&engine_dir().join("handles.ll")) {
             Ok(bitcode) => bitcode,
             Err(AssembleError::Missing(why)) => {

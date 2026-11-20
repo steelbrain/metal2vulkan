@@ -395,7 +395,7 @@ fn a_restricted_context_runs_only_on_a_device_that_has_and_reports_its_profile()
     // measured there), and the same profile on SwiftShader's identity checks its buffer atomics in
     // the shader.
     let workarounds = |description: &DeviceDescription| {
-        metal2vulkan::device::Device::new(
+        metal2vulkan::device::Device::from_queries(
             description.clone(),
             metal2vulkan::device::DevicePolicy::default(),
         )

@@ -64,7 +64,7 @@ pub fn committed_profiles() -> Result<Vec<CommittedProfile>, String> {
     for stem in crate::engine::committed_profiles()? {
         let description = crate::engine::load_description(&stem)?;
         let derive = |description: DeviceDescription| {
-            Device::new(description, DevicePolicy::default())
+            Device::from_queries(description, DevicePolicy::default())
                 .map(|device| device.profile().clone())
                 .map_err(|error| format!("{stem}: {error}"))
         };

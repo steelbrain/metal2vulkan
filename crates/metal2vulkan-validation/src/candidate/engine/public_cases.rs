@@ -21,7 +21,7 @@ pub(super) fn device(stem: &str) -> Device {
     let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    Device::new(description, DevicePolicy::default()).unwrap()
+    Device::from_queries(description, DevicePolicy::default()).unwrap()
 }
 
 /// The committed cases whose AIR is a public fixture, with that fixture's source row.

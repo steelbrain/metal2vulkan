@@ -1219,7 +1219,7 @@ pub fn read_at(
 
 /// The profile of an opened description ([`opened_description`]) under the default policy.
 pub fn derived_profile(description: DeviceDescription) -> Result<DeviceProfile, String> {
-    Device::new(description, DevicePolicy::default())
+    Device::from_queries(description, DevicePolicy::default())
         .map(|device| device.profile().clone())
         .map_err(|error| format!("derive the opened device's profile: {error}"))
 }

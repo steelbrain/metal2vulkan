@@ -19,7 +19,7 @@ fn device(stem: &str) -> Device {
     let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    Device::new(description, DevicePolicy::default()).unwrap()
+    Device::from_queries(description, DevicePolicy::default()).unwrap()
 }
 
 /// The module text a case maps with when its module's stage metadata declares no render target
@@ -437,7 +437,7 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
     description
         .features
         .remove(&VkFeature::FragmentShaderPixelInterlock);
-    let unordered = Device::new(description, DevicePolicy::default()).unwrap();
+    let unordered = Device::from_queries(description, DevicePolicy::default()).unwrap();
     let (pipeline, plan, _) = planned_draw(&unordered, &render, libraries).unwrap();
     let read: Vec<u32> = (pipeline.graphics.input_attachments.iter())
         .map(|input| input.color_index)

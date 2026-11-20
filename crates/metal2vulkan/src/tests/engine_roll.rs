@@ -226,7 +226,7 @@ fn a_chain_of_applications_and_one_by_lane_are_compiled_once_on_every_profile() 
         return;
     };
     let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
-    let mvk = moltenvk_floor();
+    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
     let chained = (1..=CHAIN).fold(X, |v, j| apply(v, j as f32));
     let lanes = [0.25f32, 1.0, 2.75, 3.5];
     let cases: [(&str, Vec<u32>, Vec<u32>); 2] = [

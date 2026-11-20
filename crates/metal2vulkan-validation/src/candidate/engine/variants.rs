@@ -562,7 +562,7 @@ mod tests {
                 "\"shaderStorageImageWriteWithoutFormat\": false",
             );
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::new(description, DevicePolicy::default()).unwrap();
+        let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
         assert!(!device.profile().images().storage_write_without_format);
 
         let row = crate::acceptance::row::fragment_row(

@@ -180,12 +180,12 @@ pub struct WorkerDevice {
 }
 
 impl WorkerDevice {
-    /// Derive the `Device` of `description` under `policy` (`Device::new`'s refusals are its own).
+    /// Derive the `Device` of `description` under `policy` (`Device::from_queries`'s refusals are its own).
     pub fn new(
         description: DeviceDescription,
         policy: DevicePolicy,
     ) -> Result<WorkerDevice, Error> {
-        let device = Device::new(description.clone(), policy)?;
+        let device = Device::from_queries(description.clone(), policy)?;
         Ok(WorkerDevice {
             description,
             policy,
@@ -584,7 +584,7 @@ fn serve(
             }
         }
     }
-    let device = match Device::new(decoded.description, decoded.policy) {
+    let device = match Device::from_queries(decoded.description, decoded.policy) {
         Ok(device) => device,
         Err(error) => return Ok(output(not_compiled(&error), None)),
     };

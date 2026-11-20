@@ -485,7 +485,7 @@ fn a_member_is_enabled_only_through_a_listed_extension() {
 
 /// On every committed profile (as a context's API-1.2 query reads it), the engine's context
 /// enables exactly the product's recommendation less the excluded features, in the one closed
-/// set `with_enabled` accepts and `Device::new` derives from, with the robustness features the
+/// set `with_enabled` accepts and `Device::from_queries` derives from, with the robustness features the
 /// leg decides: every one the profile states in the stated leg, so the opened profile compiles the
 /// robust encodings it states, and none in the robustness-off leg, so it compiles the in-shader
 /// ones. The old engine's context enables a closed set too.
@@ -518,7 +518,7 @@ fn the_new_list_enables_the_recommendation_but_the_excluded() {
             assert_eq!(set, expected, "{stem} {leg:?}");
             let opened = opened_description(description.clone(), &set)
                 .unwrap_or_else(|error| panic!("{stem}: {error}"));
-            let profile = Device::new(opened, DevicePolicy::default())
+            let profile = Device::from_queries(opened, DevicePolicy::default())
                 .unwrap_or_else(|error| panic!("{stem}: {error}"))
                 .profile()
                 .clone();
@@ -771,7 +771,7 @@ fn the_new_list_with_the_stated_robustness_keeps_the_co_enable_rules() {
         }
         let opened = opened_description(description.clone(), &set)
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
-        Device::new(opened, DevicePolicy::default())
+        Device::from_queries(opened, DevicePolicy::default())
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
     }
     assert_eq!(
@@ -1231,7 +1231,7 @@ fn a_structure_is_core_from_the_version_the_product_reads_it_core() {
 /// A context restricted to a committed profile runs at the profile's version
 /// (`ProfileRestriction::context_version`) and translates for the profile read there. At that
 /// version its engine list is the product's recommendation less the excluded features, the
-/// one closed set `with_enabled` accepts and `Device::new` derives from, as at 1.2
+/// one closed set `with_enabled` accepts and `Device::from_queries` derives from, as at 1.2
 /// ([`the_new_list_enables_the_recommendation_but_the_excluded`]), and no structure core at the
 /// version is chained through its extension. The profiles at Vulkan 1.2 run at 1.2.
 #[test]
@@ -1271,7 +1271,7 @@ fn a_restricted_context_enables_the_recommendation_at_its_profiles_version() {
             assert_eq!(set, expected, "{stem} {leg:?}");
             let opened = opened_description(description.clone(), &set)
                 .unwrap_or_else(|error| panic!("{stem} {leg:?}: {error}"));
-            Device::new(opened, DevicePolicy::default())
+            Device::from_queries(opened, DevicePolicy::default())
                 .unwrap_or_else(|error| panic!("{stem} {leg:?}: {error}"));
             for structure in enables.linked.iter().filter(|s| s.core_at(version)) {
                 assert!(

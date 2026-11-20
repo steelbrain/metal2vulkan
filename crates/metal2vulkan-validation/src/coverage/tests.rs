@@ -197,7 +197,7 @@ fn a_tessellation_pipeline_census_is_its_functions() {
     };
     let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).unwrap();
-    let device = Device::new(
+    let device = Device::from_queries(
         DeviceDescription::from_khronos_json(&text, None).unwrap(),
         DevicePolicy::default(),
     )
@@ -266,7 +266,7 @@ fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
     };
     let path = crate::engine::profiles_dir().join("amd-780m-radv.json");
     let text = std::fs::read_to_string(&path).unwrap();
-    let device = Device::new(
+    let device = Device::from_queries(
         DeviceDescription::from_khronos_json(&text, None).unwrap(),
         DevicePolicy::default(),
     )

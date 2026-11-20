@@ -61,7 +61,7 @@ fn device(stem: &str, policy: DevicePolicy) -> Device {
     let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    Device::new(description, policy).unwrap()
+    Device::from_queries(description, policy).unwrap()
 }
 
 fn compile(device: &Device, bitcode: &[u8], entry: &str) -> ComputePipeline {
@@ -2148,7 +2148,7 @@ fn a_long_replay_records_the_regions_its_dispatch_bound_holds() {
     let path = crate::engine::profiles_dir().join("gate-lavapipe.json");
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    let device = Device::new(description, DevicePolicy::default()).unwrap();
+    let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
     let variants = |n: u32| -> Vec<ReplayVariant> {
         (1..=n)
             .map(|x| ReplayVariant::new(NonZeroU64::new(7).unwrap(), [x, 1, 1], [0; 31]))

@@ -1216,7 +1216,7 @@ pub fn load_profile(stem: &str) -> Result<DeviceProfile, String> {
 /// The engine's `Device` for committed profile `stem` under the default untrusted policy:
 /// what the public compile API compiles against (its profile is [`load_profile`]'s).
 pub fn load_device(stem: &str) -> Result<metal2vulkan::device::Device, String> {
-    metal2vulkan::device::Device::new(load_description(stem)?, DevicePolicy::default())
+    metal2vulkan::device::Device::from_queries(load_description(stem)?, DevicePolicy::default())
         .map_err(|error| format!("{stem}: {error}"))
 }
 
