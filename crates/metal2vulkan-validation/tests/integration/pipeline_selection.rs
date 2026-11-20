@@ -31,7 +31,9 @@ fn engine_selection_reads_only_the_selected_row_and_names_its_engine() {
             .output()
             .unwrap()
     };
-    let output = run(&["--profile", "vk12-floor", "--hash", &hash, "--compile-only"]);
+    // The kernel's threadgroup memory starts zeroed, which takes the device's
+    // `shaderZeroInitializeWorkgroupMemory`: a profile on the floor, not `vk12-floor`.
+    let output = run(&["--profile", "lavapipe", "--hash", &hash, "--compile-only"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(stdout.lines().count(), 1, "{stdout}");

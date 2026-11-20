@@ -390,10 +390,8 @@ fn a_restricted_context_runs_only_on_a_device_that_has_and_reports_its_profile()
     translated.device_type = native.device_type;
     assert_ne!(translated.driver_id, profile.driver_id);
     assert_eq!(check(&native, &tools, &queried), Ok(translated.clone()));
-    // So a driver workaround follows the driver that runs the module: the profile on lavapipe's
-    // identity carries lavapipe's (and at the gate's Mesa 26.0.8 the misplaced mesh index stores
-    // measured there), and the same profile on SwiftShader's identity checks its buffer atomics in
-    // the shader.
+    // A profile's workarounds are every device's, whatever driver runs the module: the profile on
+    // lavapipe's identity and on SwiftShader's takes the same ones.
     let workarounds = |description: &DeviceDescription| {
         metal2vulkan::device::Device::from_queries(
             description.clone(),
@@ -404,28 +402,17 @@ fn a_restricted_context_runs_only_on_a_device_that_has_and_reports_its_profile()
         .workarounds()
         .to_vec()
     };
-    assert_eq!(
-        workarounds(&translated),
-        [
-            metal2vulkan::device::DriverWorkaround::ClippedTrianglesSplitPixelFragments,
-            metal2vulkan::device::DriverWorkaround::MeshIndexComponentStoresMisplaced,
-            metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals,
-            metal2vulkan::device::DriverWorkaround::TessellatorNotMetals,
-        ]
-    );
+    let every_device = [
+        metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals,
+        metal2vulkan::device::DriverWorkaround::TessellatorNotMetals,
+    ];
+    assert_eq!(workarounds(&translated), every_device);
     let mut swiftshader_native = native.clone();
     swiftshader_native.driver_id = Some(vk::DriverId::GOOGLE_SWIFTSHADER);
     let mut swiftshader_queried = queried.clone();
     swiftshader_queried.driver_id = swiftshader_native.driver_id;
     let on_swiftshader = check(&swiftshader_native, &tools, &swiftshader_queried).unwrap();
-    assert_eq!(
-        workarounds(&on_swiftshader),
-        [
-            metal2vulkan::device::DriverWorkaround::BufferAtomicsUncontained,
-            metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals,
-            metal2vulkan::device::DriverWorkaround::TessellatorNotMetals,
-        ]
-    );
+    assert_eq!(workarounds(&on_swiftshader), every_device);
     assert!(matches!(
         check(&native, &tools[..1], &queried),
         Err(RestrictionError::Inactive { .. })
@@ -686,18 +673,14 @@ fn a_venue_run_stops_on_identity_or_key_and_reports_unread_members() {
     );
 }
 
-/// Two Raptor Lake Xe-LP devices, two translation keys: the Iris Xe of RPL-P (ANV 26.2.6), which
+/// Two Raptor Lake Xe-LP devices, one translation key: the Iris Xe of RPL-P (ANV 26.2.6), which
 /// `intel-irisxe-rplp-anv` was captured on, and the UHD Graphics 770 of RPL-S (ANV 26.2.4). Their
 /// committed captures describe the same capabilities but for `maxMemoryAllocationSize`, which the
 /// driver sizes from its host's memory and no translation reads (`DeviceDescription::allocation`),
-/// yet the RPL-P's profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, measured on
-/// that GPU alone, and the RPL-S's does not: the two derive two keys, so the venue allows the RPL-P
-/// alone (a device of another key needs a venue of its own, `Venues::check_profiles`). The RPL-P
-/// runs there; the RPL-S stops on its name, device ID and driver build, its translation key and
-/// its allocation size.
+/// so the two derive one key. The venue allows the RPL-P alone: the RPL-P runs there; the RPL-S
+/// stops on its name, device ID and driver build, and its allocation size is read as unread.
 #[test]
 fn the_intel_venue_allows_the_rplp_alone_and_stops_the_rpls() {
-    use metal2vulkan::device::DriverWorkaround;
     let venue = crate::c3::VenueProfile::committed("intel-irisxe-rplp-anv").unwrap();
     let rpls = crate::c3::VenueProfile::committed("intel-uhd770-rpls-anv").unwrap();
     let described = differences(&venue.description, &rpls.description)
@@ -709,18 +692,7 @@ fn the_intel_venue_allows_the_rplp_alone_and_stops_the_rpls() {
         described[0].starts_with("allocation.max_memory_allocation_size: "),
         "{described:?}"
     );
-    let takes = |description: &DeviceDescription| {
-        let profile = crate::acceptance::derived_profile(description.clone()).unwrap();
-        profile
-            .workarounds()
-            .contains(&DriverWorkaround::PushReadsLengthenThreadPayload)
-    };
-    assert_eq!(
-        (takes(&venue.description), takes(&rpls.description)),
-        (true, false),
-        "the workaround, on the RPL-P and the RPL-S"
-    );
-    assert_ne!(rpls.fingerprint, venue.fingerprint);
+    assert_eq!(rpls.fingerprint, venue.fingerprint);
     let allowed = std::slice::from_ref(&venue.identity);
     let check = venue_check(&venue, allowed, &venue.identity, &venue.description).unwrap();
     assert_eq!(
@@ -749,19 +721,9 @@ fn the_intel_venue_allows_the_rplp_alone_and_stops_the_rpls() {
             venue.identity.driver_info, rpls.identity.driver_info
         ),
     ];
-    assert_eq!(
-        check.stops.get(..identity.len()),
-        Some(&identity[..]),
-        "{check:?}"
-    );
-    // Past its identity, its key and its host's allocation size.
-    let rest = check.stops.get(identity.len()..).unwrap_or_default();
-    assert_eq!(rest.len(), 2, "{check:?}");
-    assert!(rest[0].starts_with("translation key: "), "{check:?}");
-    assert!(
-        rest[1].starts_with("allocation.max_memory_allocation_size: "),
-        "{check:?}"
-    );
+    assert_eq!(check.stops, identity, "{check:?}");
+    // Its key is the venue's, so its host's allocation size is unread, not a stop.
+    assert_eq!(check.unread, described, "{check:?}");
 }
 /// The restricted context requires the description it queries through the layer to be the profile
 /// as the product reads it, so every member the product reads must come from the file. A

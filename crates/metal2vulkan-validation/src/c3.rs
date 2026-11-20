@@ -114,7 +114,7 @@ use crate::source::SourceRow;
 use crate::store::CorpusStore;
 use base64::Engine as _;
 use bound::{BoundCheck, BoundedLane, UNSTATED_WORDS};
-use metal2vulkan::device::{DeviceDescription, DeviceProfile, DriverWorkaround};
+use metal2vulkan::device::{DeviceDescription, DeviceProfile};
 use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_air::abi::{Builtin, ParamRole};
@@ -291,15 +291,16 @@ pub enum AnswerGap {
     /// case drawn by the generated full-screen triangle, which extends past the viewport, at more
     /// than one sample, whose function reads `[[sample_mask]]`.
     ClippedPrimitiveSplit,
-    /// The device shades a triangle it clips as several triangles
-    /// (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`, which its profile carries:
-    /// lavapipe, whose clipper emits the clipped polygon as a fan of triangles), so a quad a seam
-    /// between the pieces crosses runs once per piece, each run holding only its own piece's
-    /// pixels as active lanes, where Metal's quad holds all four. Metal permits a partly occupied
-    /// quad, so the device's answer is a valid Metal answer, not the reference's; no Vulkan
-    /// mechanism keeps the clipped triangle one primitive (a guard band emulated by scaling the
-    /// viewport and the position is exact only within the viewport limits). The module records
-    /// `PrecisionNote::QuadsSplitByClipping`, which the runtime announces. A case meets it when its
+    /// The device shades a triangle it clips as several triangles (lavapipe,
+    /// `VK_DRIVER_ID_MESA_LLVMPIPE`, whose clipper emits the clipped polygon as a fan of
+    /// triangles; measured at Mesa 26.0.8), so a quad a seam between the pieces crosses runs once
+    /// per piece, each run holding only its own piece's pixels as active lanes, where Metal's quad
+    /// holds all four. Metal permits a partly occupied quad, so the device's answer is a valid
+    /// Metal answer, not the reference's; no Vulkan mechanism keeps the clipped triangle one
+    /// primitive (a guard band emulated by scaling the viewport and the position is exact only
+    /// within the viewport limits). No Vulkan query states the split, and the product decides
+    /// nothing by a driver's identity, so its modules record no note of it; the venue's driver
+    /// decides the gap, as it decides the clipped-primitive split. A case meets it when its
     /// answer can read a split quad: a fragment case drawn by the generated full-screen triangle,
     /// which extends past the viewport, whose function runs a quad or simdgroup operation over
     /// its active lanes (`GroupOp::reads_active_lanes`).
@@ -326,8 +327,7 @@ impl AnswerGap {
     /// gap. The subgroup gap: the fragment stage runs subgroups, and the smallest it may run one
     /// with (the product's subgroup model: the pinnable range, else the API size) holds fewer
     /// than two quads. The clipped-primitive split: the device does not draw through Metal (its
-    /// driver is not MoltenVK). The split quads: the profile carries the driver's
-    /// `ClippedTrianglesSplitPixelFragments`.
+    /// driver is not MoltenVK). The split quads: the driver is lavapipe's.
     pub fn has(self, description: &DeviceDescription, profile: &DeviceProfile) -> bool {
         match self {
             Self::FragmentSubgroupUnderTwoQuads => {
@@ -335,9 +335,7 @@ impl AnswerGap {
                 fragment.supported && fragment.sizes.min < 8
             }
             Self::ClippedPrimitiveSplit => description.driver_id != Some(DriverId::MOLTENVK),
-            Self::QuadsSplitByClipping => profile
-                .workarounds()
-                .contains(&DriverWorkaround::ClippedTrianglesSplitPixelFragments),
+            Self::QuadsSplitByClipping => description.driver_id == Some(DriverId::MESA_LLVMPIPE),
         }
     }
 

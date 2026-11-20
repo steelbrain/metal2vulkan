@@ -812,8 +812,7 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
     ];
     // The mechanism label of each fixture's targets per (stem, leg). SwiftShader states only the
     // first robustness levels and no device addresses: the buffer whose address escapes is a
-    // descriptor view there. Its robustness leaves buffer atomics uncontained, so the product
-    // checks them in the shader in both legs.
+    // descriptor view there.
     let expected = |fixture: &str, stem: &str, leg: Leg| -> &str {
         let off = leg == Leg::RobustnessOff;
         let robust1 = ["moltenvk-m3", "swiftshader"].contains(&stem);
@@ -822,7 +821,6 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
             "ob1_device_address" if stem == "swiftshader" => "descriptor-view:robust",
             "ob1_device_address" => "device-address:shader",
             "ob1_threadgroup" => "arena:shader",
-            "ob1_buffer_atomic" if stem == "swiftshader" => "descriptor-view:shader",
             _ if off => match fixture {
                 "ob1_texture" => "image:shader",
                 "ob1_texel_buffer" => "texel-buffer:shader",

@@ -24,7 +24,7 @@ fn lavapipe() -> &'static DeviceProfile {
     PROFILE.get_or_init(|| derived("gate-lavapipe"))
 }
 
-/// The M3 Max's MoltenVK profile: its `float` functions are Metal's own.
+/// The M3 Max's MoltenVK profile.
 fn moltenvk() -> &'static DeviceProfile {
     static PROFILE: OnceLock<DeviceProfile> = OnceLock::new();
     PROFILE.get_or_init(|| derived("moltenvk-m3"))
@@ -302,9 +302,8 @@ fn every_operation_is_metals_air_and_the_product_lowers_it() {
 /// division of its own (fast `float` `atan2`). Its transcendentals are the device's: `tanh`, fast
 /// or precise, `float` or `half`, is the device's `Tanh`, a transcendental, not a near-equivalent;
 /// fast `float` `sqrt` is Metal's `x * rsqrt(x)` on the device's `rsqrt`, and precise `sqrt` and
-/// `fmod`, `float` and `half`, are the one right value, which records nothing. On a device whose
-/// `float` functions are Metal's own, a fast division and those functions are Metal's own under
-/// fast math and record nothing there either.
+/// `fmod`, `float` and `half`, are the one right value, which records nothing. Every device's
+/// profile records the same notes, MoltenVK's among them.
 #[test]
 fn the_products_own_approximations_are_its_near_equivalents() {
     use msl::Prim;
@@ -327,7 +326,7 @@ fn the_products_own_approximations_are_its_near_equivalents() {
                 );
                 assert_eq!(
                     note_on(prim, format, math, moltenvk()),
-                    None,
+                    want,
                     "{prim:?} {format:?} {math:?} on MoltenVK"
                 );
             }
@@ -344,7 +343,10 @@ fn the_products_own_approximations_are_its_near_equivalents() {
     assert_eq!(note(Prim::Atan2, F32, Math::Fast), arithmetic);
     assert_eq!(note(Prim::Atan2, F32, Math::Precise), None);
     assert_eq!(note(Prim::Atan2, F16, Math::Fast), None);
-    assert_eq!(note_on(Prim::Atan2, F32, Math::Fast, moltenvk()), None);
+    assert_eq!(
+        note_on(Prim::Atan2, F32, Math::Fast, moltenvk()),
+        arithmetic
+    );
     for format in [F32, F16] {
         for math in [Math::Precise, Math::Fast] {
             for profile in [lavapipe(), moltenvk()] {
@@ -410,10 +412,9 @@ fn the_products_own_approximations_are_its_near_equivalents() {
 
 /// Fast `atan2` with a divisor past `2^126` (case f6524207's lanes 351 and 26): Table 8.2's formula
 /// `atan(y / x)` takes the fast division, whose accuracy it states only for a divisor in `[2^-126,
-/// 2^126]`, so Apple states none for the word. On MoltenVK the product's fast `atan2` in a
-/// fast-math entry is Metal's own and records no note, so such a word is within Apple's promise
-/// even where the row records the device's arithmetic for another operation; where the product
-/// computes it with a division of its own, it stays open.
+/// 2^126]`, so Apple states none for the word. The product computes it with a division of its
+/// own on every device, MoltenVK's among them, so where the row records the device's
+/// arithmetic, the word stays open.
 #[test]
 fn fast_atan2_past_the_divisors_domain_is_unstated() {
     for (y, x) in [
@@ -456,11 +457,10 @@ fn fast_atan2_past_the_divisors_domain_is_unstated() {
                 .verdict
                 .clone()
         };
-        let own = verdict(moltenvk());
-        assert_eq!(own.label(), "unstated", "{y} {x}: {own:?}");
-        assert!(!own.keeps_open(UnstatedWords::WithinPromise));
-        let near = verdict(lavapipe());
-        assert_eq!(near.label(), "near_equivalent", "{y} {x}: {near:?}");
+        for profile in [lavapipe(), moltenvk()] {
+            let near = verdict(profile);
+            assert_eq!(near.label(), "near_equivalent", "{y} {x}: {near:?}");
+        }
     }
 }
 
@@ -640,10 +640,8 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
 /// operation: its lowering is not among those that answer Metal at `float` denormals themselves
 /// (`FloatFn::metal_denormals`; precise `fmod` is one). The product's `float` `+ - *` and
 /// divisions are the device's: on lavapipe, which is not measured to read denormals as Metal does,
-/// each records the note, so a product's or quotient's subnormal stays open too; where the device
-/// is measured to (MoltenVK), a product records none and its subnormal keeps Apple's verdict, even
-/// where the row records the note for another operation. A value no subnormal touches keeps its
-/// verdict.
+/// each records the note, so a product's or quotient's subnormal stays open too, on every device's
+/// profile (MoltenVK's among them). A value no subnormal touches keeps its verdict.
 #[test]
 fn a_denormal_the_device_keeps_stays_open() {
     let tiny = 1u32; // the smallest positive `float` subnormal
@@ -672,8 +670,8 @@ fn a_denormal_the_device_keeps_stays_open() {
         assert!(open.detail().contains(part), "{part}: {open:?}");
     }
     assert_eq!(sinpi(&[]), WordVerdict::Within);
-    // `tiny * 1`: lavapipe's multiply keeps the subnormal, so the row's note is its; MoltenVK's
-    // reads it as Metal does, so the note is not its.
+    // `tiny * 1`: the device's multiply may keep the subnormal, so the row's note is its, on
+    // lavapipe and on MoltenVK alike.
     let product = |profile| {
         verdict_on(
             profile,
@@ -684,10 +682,11 @@ fn a_denormal_the_device_keeps_stays_open() {
             &denormals,
         )
     };
-    let kept = product(lavapipe());
-    assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
-    assert!(kept.detail().contains("(Metal's mul)"), "{kept:?}");
-    assert_eq!(product(moltenvk()), WordVerdict::Within);
+    for profile in [lavapipe(), moltenvk()] {
+        let kept = product(profile);
+        assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
+        assert!(kept.detail().contains("(Metal's mul)"), "{kept:?}");
+    }
     // A quotient below the smallest normal (2^-100 / 2^30): Metal's +0, the device's 2^-130.
     let bits = |e| (pow2(e) as f32).to_bits();
     let (num, den) = (bits(-100), bits(30));
@@ -713,8 +712,8 @@ fn a_denormal_the_device_keeps_stays_open() {
         &denormals,
     );
     assert_eq!(scaled.label(), "near_equivalent", "{scaled:?}");
-    // The same through two multiplies (2^-140 * 2^-1 * 2^30): lavapipe keeps the intermediate,
-    // MoltenVK reads it as Metal does.
+    // The same through two multiplies (2^-140 * 2^-1 * 2^30), whose intermediate the device may
+    // keep, on lavapipe and on MoltenVK alike.
     let multiplied = |profile| {
         verdict_on(
             profile,
@@ -725,9 +724,10 @@ fn a_denormal_the_device_keeps_stays_open() {
             &denormals,
         )
     };
-    let kept = multiplied(lavapipe());
-    assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
-    assert_eq!(multiplied(moltenvk()), WordVerdict::Within);
+    for profile in [lavapipe(), moltenvk()] {
+        let kept = multiplied(profile);
+        assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
+    }
     // A product of normals one ulp off is outside the correctly rounded bound, as before.
     let two = 2.0f32.to_bits();
     let normal = verdict_of(
