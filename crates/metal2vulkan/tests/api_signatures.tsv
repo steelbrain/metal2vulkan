@@ -17024,8 +17024,8 @@ variant	metal2vulkan::pipeline::PushField::ShaderStencilState	ShaderStencilState
 variant	metal2vulkan::pipeline::PushField::ShaderTestsState	ShaderTestsState
 variant	metal2vulkan::pipeline::PushField::ShadowStencilState	ShadowStencilState
 variant	metal2vulkan::pipeline::PushField::SlotBindOffset	SlotBindOffset(SlotRef)
+variant	metal2vulkan::pipeline::PushField::SlotBounds	SlotBounds(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SlotGuestBase	SlotGuestBase(SlotRef)
-variant	metal2vulkan::pipeline::PushField::SlotRemaining	SlotRemaining(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SnapshotPhase	SnapshotPhase
 variant	metal2vulkan::pipeline::PushField::Specialized	Specialized(SpecKey)
 variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion

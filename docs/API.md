@@ -113,22 +113,23 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
   pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table and no
   descriptor. With containment on, an access of the slot whose byte offset is not a
-  translation-time constant is checked against the slot's `PushField::SlotRemaining`, the bytes
-  from its bind offset to its buffer's end: outside, a load reads zero and a store or atomic does
-  nothing (section 5). An access at a constant offset is not checked. A slot whose argument states an
-  alignment of at least 4 (`air.arg_type_align_size`) is reached from that address as it is: each
-  access is at the pushed word plus its 32-bit byte offset plus 2^31, modulo 2^32, zero-extended,
-  which is the address plus the offset read as signed, exact as the new runtime makes no buffer
-  longer than 2 GiB (`MAX_BUFFER_LENGTH`); a constant part of the offset joins the 2^31 in one
-  constant. An access of 8 or 16 bytes at an offset proven a multiple of its size is one `uvec2`
-  or `uvec4`. The function states
-  `RuntimeFact::AddressAlignment` with that alignment (at most 16), and the new runtime refuses
-  a dispatch whose bound address is not a multiple of it, as Metal's API validation refuses the
-  bind offset (an accepted difference, section 10). A
-  slot whose argument states an alignment below 4, or none, is reached the same way where each of
+  translation-time constant is checked against the slot's buffer (`PushField::SlotBounds`), from
+  the buffer's start to its end, as Metal's domain is the buffer: an offset before the bind
+  offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a
+  store or atomic does nothing (section 5). An access at a constant offset is not checked. A slot
+  whose argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from
+  that address as it is: each access is at the pushed word plus its 32-bit byte offset plus 2^31,
+  modulo 2^32, zero-extended, which is the address plus the offset read as signed, exact as the
+  new runtime makes no buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`); a constant part of the
+  offset joins the 2^31 in one constant. An access of 8 or 16 bytes at an offset proven a multiple
+  of its size is one `uvec2` or `uvec4`. The function states `RuntimeFact::AddressAlignment` with
+  that alignment (at most 16), and the new runtime refuses a dispatch whose bound address is not a
+  multiple of it, as Metal's API validation refuses the bind offset (an accepted difference,
+  section 10). A slot whose argument states an alignment below 4, or none, is reached the same way where each of
   its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
   buffer, an `i16` one of a `ushort` buffer) on a device with that width's storage access. Any
-  other slot is reached from the word below each access, its offset zero-extended. Fields past a
+  other slot is reached from the word below each access, its offset sign-extended, so an access
+  before the bind offset reaches below the bind address as Metal's does. Fields past a
   function's push window go to a parameter block in memory, read at the device address
   `PushField::ArgumentTableAddress`, which the window always holds. A kernel's window is 128 bytes
   (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
@@ -139,7 +140,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   bytes, where a fragment function whose fields spill always pushes its block's address; that
   costs only a vertex function whose own fields pass 248 bytes, which spills where it would have
   filled them. The fields only a checked access reads
-  (`PushField::ZeroAddress` and each `PushField::SlotRemaining`) come last in the order, so they
+  (`PushField::ZeroAddress` and each `PushField::SlotBounds`) come last in the order, so they
   are the first to move to the block. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
   there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
@@ -1591,19 +1592,22 @@ for dependency in &pipeline.dependencies {
 - Under the identity domains with containment on, a buffer slot that an access may reach at a
   byte offset that is not a translation-time constant (an index the memory plan does not prove
   one value, a looping `memcpy` or `memset`, a pulled fetch) also reads
-  `PushField::SlotRemaining`: a `u32`, the bound buffer's length less the bind offset, the length
-  of its `setBytes` copy, or 0 where nothing is bound. Each such access whose offset the module
-  does not hold as a constant is checked with the normative check, `(len >= n) && (offset <= len -
-  n)` in `u32`, for an `n`-byte access at its 32-bit byte offset from the bind offset, so an
-  offset before the bind offset, which wraps to at least 2^31, is outside, as the default domains'
-  descriptor range starts at the bind offset. A load outside reads each of its units at
+  `PushField::SlotBounds`: a `uvec2`, the bound buffer's bytes before the bind offset (the bind
+  offset), then the buffer's length; 0 and the length of its `setBytes` copy; 0 and 0 where
+  nothing is bound. Each such access whose offset the module does not hold as a constant is
+  checked against the buffer: for an `n`-byte access at its 32-bit byte offset `m` from the bind
+  offset, read as signed, the normative check `(len >= n) && (m + before <= len - n)` in `u32`.
+  The domain is the bound buffer, as Metal's is and as a storage view of a whole window's is
+  (from the buffer's start): an offset before the bind offset is inside where the buffer holds
+  it, and one before the buffer's start wraps to at least 2^31, outside. That is one add more
+  than a check against the bind window. A load outside reads each of its units at
   `PushField::ZeroAddress`, a `u64` the consumer pushes: the address of 16 bytes of zeros, a
   multiple of 16, that nothing writes. That is one select of each unit's address, with no select
   of the value and no branch, and the load touches nothing of the slot. A store or an atomic
   outside sits in the check's selection and runs nothing; an atomic's answer there is 0. Nil and a
   slot shorter than one access push a length that every such access past it fails. An access at
   a constant offset, and an access through a pointer loaded from memory or made from an integer,
-  is not checked. The binder writes `SlotRemaining` from the bound buffer and refuses
+  is not checked. The binder writes `SlotBounds` from the bound buffer and refuses
   `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the new runtime's own memory.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`

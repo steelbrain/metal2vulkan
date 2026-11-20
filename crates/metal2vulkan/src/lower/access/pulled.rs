@@ -31,9 +31,9 @@
 //! contained by the profile's encoding, and a device address through the slot's root entry (`psb`,
 //! window start 0), always contained unless containment is off. Under the identity domains every
 //! source buffer is its device address, which the fetch reads from the slot's own pushed address
-//! (`SlotGuestBase`) plus its displacement, checked against the slot's pushed length
-//! (`SlotRemaining`): outside its buffer a fetch reads zero at the zero range (`ZeroAddress`). Reads are plain: a vertex function
-//! has no barrier a coherence could order them with.
+//! (`SlotGuestBase`) plus its displacement, read as signed, checked against the slot's buffer
+//! (`SlotBounds`): outside its buffer a fetch reads zero at the zero range (`ZeroAddress`). Reads
+//! are plain: a vertex function has no barrier a coherence could order them with.
 
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
@@ -255,21 +255,21 @@ pub fn psb_read(
 }
 
 /// An `n`-byte read of a source buffer under the identity domains, at the `u32` Metal
-/// displacement `m` from its bind offset in a slot whose window starts at `start`: from `address`
-/// (a `u64`), the slot's own device address, the word below the read and the byte offset in it
-/// (`psb::prepare_at`). No table is read. Where `check` holds the slot's `SlotRemaining` and
-/// `ZeroAddress` and `m` is not a constant, the read is checked as a load of the slot is
-/// (`emit::prepare`): outside its buffer it reads zero at the zero range.
+/// displacement `m` from its bind offset, read as signed: from `address` (a `u64`), the slot's own
+/// device address, the word below the read and the byte offset in it (`psb::prepare_at`). No
+/// table is read. Where `check` holds the slot's `SlotBounds` and `ZeroAddress` and `m` is not a
+/// constant, the read is checked as a load of the slot is (`emit::prepare`, `psb::in_buffer`):
+/// outside its buffer it reads zero at the zero range.
 fn address_read(
     fb: &mut FunctionBuilder<'_>,
     address: SValue,
-    (m, start): (SValue, i64),
+    m: SValue,
     (n, check): (u32, Option<(SValue, SValue)>),
 ) -> BResult<SourceRead> {
-    let a = psb::prepare_at(fb, address, m, start)?;
+    let a = psb::prepare_at(fb, address, m)?;
     let mem = match check {
-        Some((remaining, zero)) if leaf::known(fb, m)?.is_none() => {
-            let inb = contain::in_bounds(fb, m, remaining, u64::from(n))?;
+        Some((bounds, zero)) if leaf::known(fb, m)?.is_none() => {
+            let inb = psb::in_buffer(fb, m, bounds, n)?;
             a.mem.outside(inb, zero)
         }
         _ => a.mem,
@@ -298,11 +298,7 @@ pub fn prepare(
             start,
             contained,
         } => psb_read(fb, table, buffer, m, start, n, contained),
-        Source::Address {
-            address,
-            start,
-            check,
-        } => address_read(fb, address, (m, start), (n, check)),
+        Source::Address { address, check } => address_read(fb, address, m, (n, check)),
     }
 }
 
@@ -344,14 +340,10 @@ pub fn prepare_within(
             let m = fb.select(fits, m, zero)?;
             (psb_read(fb, table, buffer, m, start, n, contained)?, fits)
         }
-        Source::Address {
-            address,
-            start,
-            check,
-        } => {
+        Source::Address { address, check } => {
             let zero = k32(fb, 0)?;
             let m = fb.select(fits, m, zero)?;
-            (address_read(fb, address, (m, start), (n, check))?, fits)
+            (address_read(fb, address, m, (n, check))?, fits)
         }
     };
     let inb = match read.inb {
@@ -375,12 +367,11 @@ enum Source {
         start: i64,
         contained: bool,
     },
-    /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), in a slot
-    /// whose window starts at `start`, with its `SlotRemaining` and the `ZeroAddress` where the
-    /// access plan checks it (`AccessPlan::variable`).
+    /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), with its
+    /// `SlotBounds` and the `ZeroAddress` where the access plan checks it
+    /// (`AccessPlan::variable`).
     Address {
         address: SValue,
-        start: i64,
         check: Option<(SValue, SValue)>,
     },
 }
@@ -431,20 +422,16 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
             };
             Ok(Source::View { view, residual })
         }
-        (Some(SlotLowering::Psb { start }), _) if identity => {
+        (Some(SlotLowering::Psb { .. }), _) if identity => {
             let address = super::pointer::slot_address(cx, fb, slot)?;
             let check = match checked {
                 true => Some((
-                    cx.push_field(fb, PushField::SlotRemaining(slot))?,
+                    cx.push_field(fb, PushField::SlotBounds(slot))?,
                     cx.push_field(fb, PushField::ZeroAddress)?,
                 )),
                 false => None,
             };
-            Ok(Source::Address {
-                address,
-                start,
-                check,
-            })
+            Ok(Source::Address { address, check })
         }
         (Some(SlotLowering::Psb { start }), _) => {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;

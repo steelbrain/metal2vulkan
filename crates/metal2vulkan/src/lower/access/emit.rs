@@ -267,13 +267,15 @@ pub(super) struct Prepared {
 /// `read`.
 ///
 /// Under the identity domains a slot an access may reach at an offset that is not a
-/// translation-time constant (`AccessPlan::variable`) is checked where `m` is not a constant:
-/// the normative check (`contain::in_bounds`) of `m` against the slot's `SlotRemaining`, in
-/// `u32`, so an offset before the bind offset, which wraps to at least 2^31, is outside. A load
-/// outside reads each unit at `ZeroAddress`, 16 bytes of zeros, with one select of the unit's
-/// address and none of its value; a store or atomic outside is in the closed `if_(inb)` and runs
-/// nothing. Nil and a slot shorter than one access push a length the check fails for every
-/// offset that reaches past it, so neither reads nor writes there.
+/// translation-time constant (`AccessPlan::variable`) is checked where `m` is not a constant,
+/// against its buffer (`psb::in_buffer`): `m`, read as signed, plus the bytes before the bind
+/// offset, against the buffer's length, both from the slot's `SlotBounds`, with the normative
+/// check (`contain::in_bounds`) in `u32`. So an offset before the bind offset is inside where the
+/// buffer holds it, as Metal reads it, and outside before the buffer's start. A load outside reads
+/// each unit at `ZeroAddress`, 16 bytes of zeros, with one select of the unit's address and none
+/// of its value; a store or atomic outside is in the closed `if_(inb)` and runs nothing. Nil and a
+/// slot shorter than one access push a length the check fails for every offset, so neither reads
+/// nor writes there.
 pub(super) fn prepare(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -300,7 +302,7 @@ pub(super) fn prepare(
                 }
                 false => {
                     let address = super::pointer::slot_address(cx, fb, choice.slot)?;
-                    psb::prepare_at(fb, address, m, start)?
+                    psb::prepare_at(fb, address, m)?
                 }
             }
         } else {
@@ -319,8 +321,8 @@ pub(super) fn prepare(
         let checked = cx.plan.families.access.variable.contains(&choice.slot)
             && leaf::known(fb, m)?.is_none();
         if checked {
-            let remaining = cx.push_field(fb, PushField::SlotRemaining(choice.slot))?;
-            let inb = contain::in_bounds(fb, m, remaining, u64::from(n))?;
+            let bounds = cx.push_field(fb, PushField::SlotBounds(choice.slot))?;
+            let inb = psb::in_buffer(fb, m, bounds, n)?;
             if read {
                 let zero = cx.push_field(fb, PushField::ZeroAddress)?;
                 mem = mem.outside(inb, zero);

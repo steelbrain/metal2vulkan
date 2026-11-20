@@ -996,7 +996,7 @@ pub(crate) fn slot_field(
             slot,
             resources.biased_slot_words,
         ))),
-        PushField::SlotRemaining(slot) => Some(FieldBytes::of(&slot_remaining(state, slot))),
+        PushField::SlotBounds(slot) => Some(FieldBytes::of(&slot_bounds(state, slot))),
         _ => None,
     }
 }
@@ -1036,18 +1036,23 @@ pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef, biased: bool) ->
     guest_word(base, biased).to_le_bytes()
 }
 
-/// The bytes of `PushField::SlotRemaining(slot)` ([`slot_field`]): the bound buffer's length
-/// less its bind offset (0 past it), at most `u32::MAX`, and 0 where the slot binds no buffer.
-fn slot_remaining(state: &BindState, slot: SlotRef) -> [u8; 4] {
-    let remaining = match state
+/// The bytes of `PushField::SlotBounds(slot)` ([`slot_field`]): the bound buffer's bytes before
+/// its bind offset, then its length, each at most `u32::MAX`; 0 and 0 where the slot binds no
+/// buffer.
+fn slot_bounds(state: &BindState, slot: SlotRef) -> [u8; 8] {
+    let (before, length) = match state
         .stages
         .get(&slot.stage)
         .and_then(|t| t.buffers.get(&slot.index))
     {
-        Some(&BoundBuffer::Buffer { length, offset, .. }) => length.saturating_sub(offset),
-        _ => 0,
+        Some(&BoundBuffer::Buffer { length, offset, .. }) => (offset, length),
+        _ => (0, 0),
     };
-    u32::try_from(remaining).unwrap_or(u32::MAX).to_le_bytes()
+    let word = |v: u64| u32::try_from(v).unwrap_or(u32::MAX).to_le_bytes();
+    let mut bytes = [0; 8];
+    bytes[..4].copy_from_slice(&word(before));
+    bytes[4..].copy_from_slice(&word(length));
+    bytes
 }
 
 /// A field's bytes at its placed location: the push bytes (relative to the push range's start

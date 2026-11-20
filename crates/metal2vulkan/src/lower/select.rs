@@ -1964,7 +1964,7 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
         (field, _) => !matches!(
             field,
             PushField::SlotGuestBase(_)
-                | PushField::SlotRemaining(_)
+                | PushField::SlotBounds(_)
                 | PushField::ZeroAddress
                 | PushField::DispatchRegion
                 | PushField::TextureIntegerChannels(_)

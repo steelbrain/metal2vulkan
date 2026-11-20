@@ -194,18 +194,17 @@ enum Reach {
     Direct,
 }
 
-/// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
-/// `m` from its bind offset, under the identity domains: `address` (a `u64`) is the slot's own
-/// device address, the buffer's plus the bind offset, so no table is read. It need not be
+/// Prepare an access of a static slot at the `u32` displacement `m` from its bind offset, read as
+/// signed, under the identity domains: `address` (a `u64`) is the slot's own device address, the
+/// buffer's plus the bind offset, so no table is read, and the access is at `address` plus `m`
+/// sign-extended, below the bind address for a negative `m`, as [`prepare_direct`]'s is. Every
+/// byte of a buffer lies within 2^31 bytes of each bind address in it, the runtime making no buffer
+/// longer than 2 GiB, so the offset is exact whatever the slot's window. The address need not be
 /// 4-aligned: the word below the access and the byte offset in it come from the sum. The check,
-/// where the access takes one, is `emit::prepare`'s.
-pub fn prepare_at(
-    fb: &mut FunctionBuilder<'_>,
-    address: Value,
-    m: Value,
-    start: i64,
-) -> BResult<PsbAccess> {
-    let disp = displacement(fb, m, start)?;
+/// where the access takes one, is `emit::prepare`'s ([`in_buffer`]).
+pub fn prepare_at(fb: &mut FunctionBuilder<'_>, address: Value, m: Value) -> BResult<PsbAccess> {
+    let u64_ = u64_ty(fb)?;
+    let disp = fb.convert(ConvOp::SConvert, m, u64_)?;
     let at = fb.binary(BinOp::IAdd, address, disp)?;
     let three = k64(fb, 3)?;
     let low = fb.binary(BinOp::BitwiseAnd, at, three)?;
@@ -242,6 +241,20 @@ pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
         off: m,
         inb: None,
     }
+}
+
+/// Whether an `n`-byte access at the `u32` byte offset `m` from a slot's bind offset, read as
+/// signed, lies in the slot's buffer, by the slot's pushed `bounds` (`PushField::SlotBounds`, a
+/// `uvec2`: the bytes before the bind offset, then the buffer's length): `m` plus those bytes,
+/// against the length, with the normative check (`contain::in_bounds`), in `u32`. One add more
+/// than a check against the bind window. Exact as the new runtime makes no buffer longer than 2
+/// GiB: an offset that reaches before the buffer's start wraps to at least 2^31, past every
+/// length.
+pub fn in_buffer(fb: &mut FunctionBuilder<'_>, m: Value, bounds: Value, n: u32) -> BResult<Value> {
+    let before = fb.composite_extract(bounds, &[0])?;
+    let length = fb.composite_extract(bounds, &[1])?;
+    let at = fb.binary(BinOp::IAdd, m, before)?;
+    crate::memory::contain::in_bounds(fb, at, length, u64::from(n))
 }
 
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and

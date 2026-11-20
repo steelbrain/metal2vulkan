@@ -152,10 +152,10 @@ fn run_all(
                 addressed = true;
             }
             // The output's word per thread, and the constant's one word.
-            PushField::SlotRemaining(s) => {
+            PushField::SlotBounds(s) => {
                 let bytes = [n as usize * 4, 4][s.index as usize];
-                let word = super::engine_word_phases::remaining_word(bytes, 0);
-                push[o..o + 4].copy_from_slice(&word);
+                let word = super::engine_word_phases::bounds_word(bytes, 0);
+                push[o..o + 8].copy_from_slice(&word);
             }
             PushField::ZeroAddress => {
                 let word = super::engine_word_phases::ZERO_UNMAPPED;

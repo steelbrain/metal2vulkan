@@ -4,25 +4,25 @@
 //! Owned synthetic functions: the vertex function `vmany` sums word `vid` of each of its 24
 //! `device` buffers into word `vid` of buffer 24, and the fragment function `fmany` returns the sum
 //! of word `x` of its two buffers, `x` its position's. Every access is at a run-time offset, so each
-//! slot pushes its address and its length, and each function the zero range's address.
+//! slot pushes its address and its bounds, and each function the zero range's address.
 //!
 //! - On every committed profile `Device::from_queries` derives under the identity domains, the
 //!   vertex function's fields pass its window, `[0, 248)`: it pushes its parameter block's address
-//!   first, then every slot's address, and only the check's fields (`ZeroAddress`, the lengths)
+//!   first, then every slot's address, and only the check's fields (`ZeroAddress`, the bounds)
 //!   from the first that does not fit go to the block. Its module passes L3.
 //! - The pair compiles on each such profile: the vertex function's fields end at 248, and the
 //!   fragment function, from there, pushes its block's address in the range's last 8 bytes and
 //!   reads the rest, its slots' addresses too, from the block. Both modules pass L3.
 //! - On the CPU interpreter, four vertices with each buffer four words long sum Metal's words
-//!   where every slot's pushed length is 16 bytes; with the odd slots' lengths pushed as 12 bytes,
-//!   in the window and in the block alike, vertex 3 reads zero from each of those slots. No access
+//!   where every slot's pushed buffer is 16 bytes long; with the odd slots' pushed as 12 bytes
+//!   long, in the window and in the block alike, vertex 3 reads zero from each of those slots. No access
 //!   traps.
 //!
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
 
-use super::engine_word_phases::{identity_profiles, remaining_word, slot_word};
+use super::engine_word_phases::{bounds_word, identity_profiles, slot_word};
 use crate::budget::Budget;
 use crate::device::{Device, DevicePolicy, HandleDomain, PointerDomain};
 use crate::library::Library;
@@ -190,7 +190,7 @@ fn assert_spills(what: &str, p: &PushPlacement, start: u32, addresses: bool) {
     assert!(
         spilled
             .iter()
-            .all(|f| matches!(f, PushField::SlotRemaining(_) | PushField::ZeroAddress)),
+            .all(|f| matches!(f, PushField::SlotBounds(_) | PushField::ZeroAddress)),
         "{what}: a field other than the check's spilled: {spilled:?}"
     );
     assert!(
@@ -347,7 +347,7 @@ fn word(i: u32, v: u32) -> u32 {
 }
 
 /// One draw of `VERTICES` vertices of `vmany` on the lavapipe profile, each input slot's pushed
-/// length `length(i)`: the output buffer's words.
+/// buffer `length(i)` bytes long: the output buffer's words.
 fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
     let Some(bc) = assemble() else {
         return Vec::new();
@@ -371,10 +371,10 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
                 let at = BUFFERS + u64::from(s.index) * STRIDE;
                 to[o..o + 8].copy_from_slice(&slot_word(at).to_le_bytes());
             }
-            PushField::SlotRemaining(s) if s.index < INPUTS => {
-                to[o..o + 4].copy_from_slice(&remaining_word(length(s.index), 0))
+            PushField::SlotBounds(s) if s.index < INPUTS => {
+                to[o..o + 8].copy_from_slice(&bounds_word(length(s.index), 0))
             }
-            PushField::SlotRemaining(_) => to[o..o + 4].copy_from_slice(&remaining_word(bytes, 0)),
+            PushField::SlotBounds(_) => to[o..o + 8].copy_from_slice(&bounds_word(bytes, 0)),
             PushField::ZeroAddress => to[o..o + 8].copy_from_slice(&ZERO.to_le_bytes()),
             _ => panic!("{stem}: unexpected push field {f:?}"),
         }
@@ -416,7 +416,7 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
 }
 
 #[test]
-fn a_spilled_length_checks_its_slot_as_a_pushed_one_does() {
+fn spilled_bounds_check_their_slot_as_pushed_ones_do() {
     let all = |v: u32| (0..INPUTS).map(|i| word(i, v)).sum::<u32>();
     let whole = draw(|_| 4 * VERTICES as usize);
     if whole.is_empty() {

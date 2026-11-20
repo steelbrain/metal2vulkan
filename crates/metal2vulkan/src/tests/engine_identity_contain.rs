@@ -3,15 +3,18 @@
 //! - A kernel (`contain`, generated) that loads `data[t + k]`, stores it to `out[t + k]` and adds 1
 //!   to `out[t]` atomically, `k` the word at offset 0 of a `constant` buffer, compiles on every
 //!   committed profile `Device::from_queries` derives under the identity domains with
-//!   `SlotRemaining` for its two device slots, none for the `constant` slot read at a constant
+//!   `SlotBounds` for its two device slots, none for the `constant` slot read at a constant
 //!   offset, and one `ZeroAddress`. In its module every device-address load at a run-time offset
 //!   reads through an address selected in the shader (one select, toward the zero range), the
 //!   constant-offset load through an address no select makes, and every device-address store and
 //!   atomic sits in the true arm of a conditional branch.
-//! - On the CPU interpreter, with each slot's pushed length: in bounds it moves the program's
-//!   words; past `data`'s length its loads read zero; past `out`'s pushed length (shorter than the
-//!   buffer the interpreter holds) its stores land nowhere; a slot pushed shorter than one access
-//!   and a nil slot (length 0) read zero; and the zero range stays zeros. No access traps.
+//! - On the CPU interpreter, with each slot's pushed bounds (the bytes before its bind offset and
+//!   its buffer's length): in bounds it moves the program's words; past `data`'s length its loads
+//!   read zero; past `out`'s pushed length (shorter than the buffer the interpreter holds) its
+//!   stores land nowhere; a slot pushed shorter than one access and a nil slot (0 and 0) read
+//!   zero; before the bind offsets, inside both buffers, it moves the buffers' words there, and
+//!   before the buffers' starts it reads zero and stores nothing; the zero range stays zeros. No
+//!   access traps.
 //!
 //! `llvm-as` assembles the kernel; without it the tests skip visibly.
 
@@ -163,7 +166,7 @@ fn accesses(words: &[u32]) -> ([usize; 2], [usize; 2]) {
 }
 
 /// Every device-address access at a run-time offset carries the check on every committed
-/// profile under the identity domains: its slot reads its `SlotRemaining`, a load reads through a
+/// profile under the identity domains: its slot reads its `SlotBounds`, a load reads through a
 /// selected address, a store and an atomic sit in the check's true arm; the constant-offset load
 /// takes none of it.
 #[test]
@@ -180,12 +183,12 @@ fn every_run_time_offset_access_of_a_slot_carries_the_check() {
         let fields: BTreeSet<PushField> = plan.push.fields.iter().map(|f| f.field).collect();
         for s in [0, 1] {
             assert!(
-                fields.contains(&PushField::SlotRemaining(slot(s))),
+                fields.contains(&PushField::SlotBounds(slot(s))),
                 "{stem}: slot {s} reads no length"
             );
         }
         assert!(
-            !fields.contains(&PushField::SlotRemaining(slot(2))),
+            !fields.contains(&PushField::SlotBounds(slot(2))),
             "{stem}: the constant-offset slot reads a length"
         );
         assert!(
@@ -198,9 +201,10 @@ fn every_run_time_offset_access_of_a_slot_carries_the_check() {
     }
 }
 
-/// One dispatch of the kernel at `k`, with `data`'s and `out`'s pushed lengths `lengths` and
-/// `data` at `data_at`; `out` and the zero range after it.
-fn dispatch(k: u32, lengths: [u32; 2], data_at: u64) -> (Vec<u32>, Vec<u8>) {
+/// One dispatch of the kernel at `k`, with `data`'s and `out`'s pushed bounds `bounds` (the bytes
+/// before the bind offset, then the buffer's length), `data` bound at `data_at` and `out` at
+/// `out_at`: `out`'s words and the zero range after it.
+fn dispatch(k: u32, bounds: [(u32, u32); 2], (data_at, out_at): (u64, u64)) -> (Vec<u32>, Vec<u8>) {
     let Some(bc) = assemble() else {
         return (Vec::new(), Vec::new());
     };
@@ -217,11 +221,13 @@ fn dispatch(k: u32, lengths: [u32; 2], data_at: u64) -> (Vec<u32>, Vec<u8>) {
         let o = offset as usize;
         match f.field {
             PushField::SlotGuestBase(s) => {
-                let at = [data_at, OUT, K][s.index as usize];
+                let at = [data_at, out_at, K][s.index as usize];
                 push[o..o + 8].copy_from_slice(&slot_word(at).to_le_bytes());
             }
-            PushField::SlotRemaining(s) => {
-                push[o..o + 4].copy_from_slice(&lengths[s.index as usize].to_le_bytes())
+            PushField::SlotBounds(s) => {
+                let (before, length) = bounds[s.index as usize];
+                push[o..o + 4].copy_from_slice(&before.to_le_bytes());
+                push[o + 4..o + 8].copy_from_slice(&length.to_le_bytes());
             }
             PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO.to_le_bytes()),
             PushField::DispatchRegion => {
@@ -231,8 +237,8 @@ fn dispatch(k: u32, lengths: [u32; 2], data_at: u64) -> (Vec<u32>, Vec<u8>) {
             _ => panic!("{stem}: unexpected push field {f:?}"),
         }
     }
-    // `data`'s words; at `DATA + 32` (the case before the bind offset) the 32 bytes below the
-    // slot's address are `data` too, which no access may read.
+    // `data`'s words; at `DATA + 32` (the cases before the bind offset) the 32 bytes below the
+    // slot's address are `data` too.
     let data: Vec<u8> = (0..DATA_WORDS as u32)
         .flat_map(|w| (0x100 + w).to_le_bytes())
         .collect();
@@ -272,7 +278,7 @@ fn dispatch(k: u32, lengths: [u32; 2], data_at: u64) -> (Vec<u32>, Vec<u8>) {
 }
 
 /// What `out` holds after a dispatch at `k` whose `data` reads as `read(word)` and whose stores
-/// land below word `stored`.
+/// land below word `stored`, `out` bound at its buffer's start.
 fn expected(k: u32, read: impl Fn(u32) -> u32, stored: u32) -> Vec<u32> {
     let mut out = vec![SENTINEL; OUT_WORDS];
     for t in 0..THREADS {
@@ -286,11 +292,11 @@ fn expected(k: u32, read: impl Fn(u32) -> u32, stored: u32) -> Vec<u32> {
     out
 }
 
-/// On the CPU interpreter a load outside its slot's pushed length reads zero, a store outside it
-/// lands nowhere, a slot shorter than one access and a nil slot read zero, and nothing touches
-/// the zero range; inside, the kernel moves its words.
+/// On the CPU interpreter a load outside its slot's buffer reads zero, a store outside it lands
+/// nowhere, a slot shorter than one access and a nil slot read zero, and nothing touches the zero
+/// range; inside, the kernel moves its words, those before the bind offset in the buffer too.
 #[test]
-fn an_access_outside_the_pushed_length_reads_zero_and_writes_nothing() {
+fn an_access_outside_the_pushed_buffer_reads_zero_and_writes_nothing() {
     let data_len = (4 * DATA_WORDS) as u32;
     let word = |i: u32| {
         if (i as usize) < DATA_WORDS {
@@ -299,32 +305,70 @@ fn an_access_outside_the_pushed_length_reads_zero_and_writes_nothing() {
             0
         }
     };
-    let cases: [(&str, u32, [u32; 2], u64, Vec<u32>); 5] = [
+    let out_len = 4 * OUT_WORDS as u32;
+    let mut before = vec![SENTINEL; OUT_WORDS];
+    for t in 0..THREADS as usize {
+        before[2 + t] = 0x102 + t as u32;
+        before[8 + t] = SENTINEL + 1;
+    }
+    let cases: [(&str, u32, [(u32, u32); 2], u64, Vec<u32>); 6] = [
         (
             "inside",
             0,
-            [data_len, 4 * OUT_WORDS as u32],
+            [(0, data_len), (0, out_len)],
             DATA,
             expected(0, word, OUT_WORDS as u32),
         ),
         // Threads 2 and 3 read past `data` and store past `out`'s pushed 8 words.
-        ("past", 6, [data_len, 32], DATA, expected(6, word, 8)),
+        (
+            "past",
+            6,
+            [(0, data_len), (0, 32)],
+            DATA,
+            expected(6, word, 8),
+        ),
         // Two bytes: shorter than one access.
-        ("short", 0, [2, 64], DATA, expected(0, |_| 0, 16)),
-        // Nil: the runtime pushes its nil buffer's address and length 0.
-        ("nil", 0, [0, 64], NIL, expected(0, |_| 0, 16)),
-        // 24 to 12 bytes before the bind offset, inside the buffer the interpreter holds: the
-        // offset wraps to the top of its 32 bits, outside, and the stores land nowhere.
+        (
+            "short",
+            0,
+            [(0, 2), (0, out_len)],
+            DATA,
+            expected(0, |_| 0, 16),
+        ),
+        // Nil: the runtime pushes its nil buffer's address, and bounds of 0 and 0.
+        (
+            "nil",
+            0,
+            [(0, 0), (0, out_len)],
+            NIL,
+            expected(0, |_| 0, 16),
+        ),
+        // 24 to 12 bytes before `data`'s and `out`'s bind offsets of 32, inside their buffers:
+        // `data`'s words 2 to 5 there move to `out`'s words 2 to 5, and the atomics reach `out`'s
+        // words 8 to 11.
         (
             "before",
             u32::MAX - 5,
-            [data_len, 64],
+            [(32, 2 * data_len), (32, out_len)],
+            DATA + 32,
+            before,
+        ),
+        // The same bytes with both slots pushed as bound at their buffers' starts: before them,
+        // so the loads read zero and the stores land nowhere.
+        (
+            "before the buffer",
+            u32::MAX - 5,
+            [(0, data_len), (0, out_len)],
             DATA + 32,
             expected(u32::MAX - 5, |_| 0, 0),
         ),
     ];
-    for (case, k, lengths, data_at, want) in cases {
-        let (got, zero) = dispatch(k, lengths, data_at);
+    for (case, k, bounds, data_at, want) in cases {
+        let out_at = match case {
+            "before" => OUT + 32,
+            _ => OUT,
+        };
+        let (got, zero) = dispatch(k, bounds, (data_at, out_at));
         if got.is_empty() {
             return;
         }

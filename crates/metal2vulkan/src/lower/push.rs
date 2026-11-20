@@ -159,9 +159,9 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::TexelRows(_) => FieldShape::UVec4Array(1),
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
-        // The bytes from a slot's bind offset to its buffer's end, at most 2 GiB under the
-        // identity domains.
-        PushField::SlotRemaining(_) => FieldShape::U32,
+        // The bytes of a slot's buffer before its bind offset, and its length: each at most 2 GiB
+        // under the identity domains.
+        PushField::SlotBounds(_) => FieldShape::UVec2,
         // The identity domains' zero range.
         PushField::ZeroAddress => FieldShape::U64,
         // A texture's mipmap level count, an acceleration structure's instance count, the render
@@ -535,7 +535,7 @@ mod tests {
         assert!(spills(Stage::Vertex, PushWindow::Floor, 0, &wide(32)));
         // Fields that would reach 252, 4 bytes into what was the fragment function's, spill.
         let mut past = wide(31);
-        past.insert(PushField::SlotRemaining(slot(Stage::Vertex, 0)));
+        past.insert(PushField::VertexBufferStride(0));
         assert!(spills(Stage::Vertex, PushWindow::Floor, 0, &past));
         // The fragment function from the fullest vertex function's end pushes its block's
         // address there, at 248, and spills the rest; from an end of 244 (a base rounded to 4)

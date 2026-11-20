@@ -68,15 +68,15 @@ pub(super) fn slot_word(address: u64) -> u64 {
 /// interpreter if one goes outside.
 pub(super) const ZERO_UNMAPPED: u64 = 0x7f_0000_0000;
 
-/// The length the tests push for a slot's `PushField::SlotRemaining`: `bytes` less the bind
-/// offset `bind`.
-pub(super) fn remaining_word(bytes: usize, bind: u64) -> [u8; 4] {
-    let remaining = (bytes as u64)
-        .checked_sub(bind)
-        .expect("bound inside its buffer");
-    u32::try_from(remaining)
-        .expect("a u32 length")
-        .to_le_bytes()
+/// The bounds the tests push for a slot's `PushField::SlotBounds`: the bind offset `bind`, the
+/// bytes of the buffer before the slot, then the buffer's length `bytes`.
+pub(super) fn bounds_word(bytes: usize, bind: u64) -> [u8; 8] {
+    assert!(bind <= bytes as u64, "bound inside its buffer");
+    let word = |v: u64| u32::try_from(v).expect("a u32").to_le_bytes();
+    let mut out = [0; 8];
+    out[..4].copy_from_slice(&word(bind));
+    out[4..].copy_from_slice(&word(bytes as u64));
+    out
 }
 
 /// Every committed profile `Device::from_queries` derives under the identity domains (those with
@@ -290,9 +290,9 @@ fn dispatch(
                 let (address, bind, _) = &buffers[s.index as usize];
                 push[o..o + 8].copy_from_slice(&slot_word(address + bind).to_le_bytes());
             }
-            PushField::SlotRemaining(s) => {
+            PushField::SlotBounds(s) => {
                 let (_, bind, bytes) = &buffers[s.index as usize];
-                push[o..o + 4].copy_from_slice(&remaining_word(bytes.len(), *bind));
+                push[o..o + 8].copy_from_slice(&bounds_word(bytes.len(), *bind));
             }
             PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),

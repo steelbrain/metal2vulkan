@@ -390,15 +390,16 @@ impl Tables {
         }
     }
 
-    /// The bytes of buffer slot `slot` from its bind offset to its buffer's end: the bytes'
-    /// length for a copy, 0 where none is bound.
-    fn remaining(&self, slot: u32) -> u32 {
+    /// Buffer slot `slot`'s bounds (`FieldValue::BufferBounds`): its buffer's bytes before the
+    /// bind offset and its length; 0 and the bytes' length for a copy, 0 and 0 where none is
+    /// bound.
+    fn bounds(&self, slot: u32) -> [u8; 8] {
         match self.buffers.get(slot as usize) {
             Some(Bound::Buffer { buffer, offset }) => {
-                crate::encoder::remaining(buffer.length(), *offset)
+                crate::encoder::bounds(buffer.length(), *offset)
             }
-            Some(Bound::Bytes(_, length)) => *length,
-            Some(Bound::Empty) | None => 0,
+            Some(Bound::Bytes(_, length)) => crate::encoder::bounds(u64::from(*length), 0),
+            Some(Bound::Empty) | None => [0; 8],
         }
     }
 }
@@ -2450,10 +2451,11 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
 /// Fills `push`, the push bytes of a draw of `state`, and `blocks`, each function's parameter
 /// block where its fields spill (`Draws::blocks`; their addresses the caller writes once they are
 /// in the ring), from the `tables`, a buffer argument bound to nothing taking `nil`, the nil
-/// buffer's address, and length 0, a checked load's zero range at `zero`: a texture whose image
-/// the pass `moved` to the feedback layout reads through its second element in that layout, and
-/// one in `shadow_slots`, which reads a shadow, through its second element, the shadow's; a colour
-/// attachment of `pass` the fragment function reads is read through its texture's second element.
+/// buffer's address, and bounds of 0 and 0, a checked load's zero range at `zero`: a texture whose
+/// image the pass `moved` to the feedback layout reads through its second element in that layout,
+/// and one in `shadow_slots`, which reads a shadow, through its second element, the shadow's; a
+/// colour attachment of `pass` the fragment function reads is read through its texture's second
+/// element.
 fn fill_push(
     (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
     (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
@@ -2480,8 +2482,8 @@ fn fill_push(
                 let word = address_word(tables.address(slot, nil));
                 bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
             }
-            FieldValue::BufferRemaining(slot) => {
-                bytes[at..at + 4].copy_from_slice(&tables.remaining(slot).to_le_bytes());
+            FieldValue::BufferBounds(slot) => {
+                bytes[at..at + 8].copy_from_slice(&tables.bounds(slot));
             }
             FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
             FieldValue::TextureId(slot) => {

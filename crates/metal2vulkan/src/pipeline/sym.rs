@@ -1281,7 +1281,7 @@ pub enum PushField {
     /// no specialization constant for it, so its pipelines' keys do not carry the value and one
     /// `VkPipeline` serves every value. Last in the order of the fields a function places, so
     /// these fields follow every other kind into the window and from there into the
-    /// `ArgumentTable`; only the check's fields (`ZeroAddress`, `SlotRemaining`) follow them.
+    /// `ArgumentTable`; only the check's fields (`ZeroAddress`, `SlotBounds`) follow them.
     Specialized(SpecKey),
     /// Under the identity domains, the device address of the factors a tessellation pipeline's
     /// synthesized control stage reads (`u64`): the factor buffer's address plus the encoder's
@@ -1293,17 +1293,17 @@ pub enum PushField {
     // only a checked access reads, so where a function's fields spill into its parameter block
     // they are the first to go.
     /// Under the identity domains, the device address (`u64`) of 16 bytes of zeros, at a multiple
-    /// of 16, that nothing writes: a load of a buffer slot checked against its `SlotRemaining`
+    /// of 16, that nothing writes: a load of a buffer slot checked against its `SlotBounds`
     /// reads each of its units there where the check fails, so it reads zero (`docs/API.md`,
     /// section 5).
     ZeroAddress,
-    /// Under the identity domains, the bytes (`u32`) from a buffer slot's bind offset to its
-    /// buffer's end: the buffer's length less the bind offset, a `set*Bytes` copy's length, and 0
-    /// for nil. A load, store or atomic of the slot whose byte offset is not a translation-time
-    /// constant is checked against it, `(len >= n) && (offset <= len - n)` in `u32`: outside, a
-    /// load reads zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`,
-    /// section 5).
-    SlotRemaining(SlotRef),
+    /// Under the identity domains, a buffer slot's buffer (`uvec2`): the bytes of the buffer before
+    /// the slot's bind offset (the bind offset), then the buffer's length; for a `set*Bytes` copy 0
+    /// and its length, for nil 0 and 0. A load, store or atomic of the slot at a byte offset `m`
+    /// from the bind offset, read as signed, that is not a translation-time constant is checked
+    /// against the buffer, `(len >= n) && (m + before <= len - n)` in `u32`: outside, a load reads
+    /// zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`, section 5).
+    SlotBounds(SlotRef),
 }
 
 /// A relocatable literal: which decoration operand the serializer reserved, and for what.

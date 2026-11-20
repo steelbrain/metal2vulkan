@@ -1630,18 +1630,20 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
 - A buffer argument bound to nothing reads the nil buffer: 64 KiB of zeros, one ring chunk the
   device keeps from its first such dispatch or draw, its address the argument's pushed value, as
-  Metal's nil buffer reads zeros. Its pushed length is 0, so every checked access of it (below)
-  is outside. Reads past the 64 KiB and writes through a nil argument at a constant offset aren't
-  covered.
+  Metal's nil buffer reads zeros. Its pushed buffer is 0 bytes long, so every checked access of
+  it (below) is outside. Reads past the 64 KiB and writes through a nil argument at a constant
+  offset aren't covered.
 - A buffer argument's access at a byte offset that is not a translation-time constant is checked
-  against the bytes from the argument's bind offset to its buffer's end, which a dispatch or draw
-  pushes beside the argument's address (a `set_bytes` copy's length; 0 for nil). Outside, a load
-  reads zero, from 16 bytes of zeros the device keeps in a ring chunk of their own, taken at the
-  first dispatch or draw that checks a load, which nothing is bound to and nothing writes; a store
-  or an atomic does nothing, and an atomic answers 0. An offset before the bind offset is outside.
-  This holds on every device. An access at a constant offset is not checked: a function's fixed access past a binding shorter than it reaches
-  past the buffer, a fault of the kind above where nothing maps there. An access through a pointer
-  loaded from memory or made from an integer is not checked either: no binding bounds it.
+  against its buffer, from the buffer's start to its end, as Metal's domain is the buffer: a
+  dispatch or draw pushes, beside the argument's address, the bind offset and the buffer's length
+  (a `set_bytes` copy: 0 and its length; nil: 0 and 0). An offset before the bind offset reads and
+  writes the buffer's bytes there. Outside the buffer, a load reads zero, from 16 bytes of zeros
+  the device keeps in a ring chunk of their own, taken at the first dispatch or draw that checks a
+  load, which nothing is bound to and nothing writes; a store or an atomic does nothing, and an
+  atomic answers 0. This holds on every device. An access at a constant offset is not checked: a
+  function's fixed access past a binding shorter than it reaches past the buffer, a fault of the
+  kind above where nothing maps there. An access through a pointer loaded from memory or made
+  from an integer is not checked either: no binding bounds it.
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
@@ -2273,7 +2275,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   block first and reads the rest from the block, as a kernel does: a draw writes each such block
   into the parameter ring where it fills its pushed values anew (the state, a binding or a pushed
   value changed since the encoder's last draw), and `ring_writes` counts it. The values only a
-  checked access reads (a checked slot's length and the zero range's address) come last, so they
+  checked access reads (a checked slot's bounds and the zero range's address) come last, so they
   are the first to move to the block.
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
   (line or triangle) of the draws it serves. It takes as dynamic state the viewport, scissor, cull

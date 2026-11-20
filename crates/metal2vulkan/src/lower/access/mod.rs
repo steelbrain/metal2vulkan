@@ -702,8 +702,8 @@ pub struct AccessPlan {
     pub identity: bool,
     /// Under the identity domains with containment on ([`identity_contained`]), the buffer slots
     /// an access may reach at a byte offset that is not a translation-time constant
-    /// ([`note_variable`]): each reads its `PushField::SlotRemaining`, and each of those accesses
-    /// whose emitted offset is not a constant is checked against it (`emit::prepare`).
+    /// ([`note_variable`]): each reads its `PushField::SlotBounds`, and each of those accesses
+    /// whose emitted offset is not a constant is checked against its buffer (`emit::prepare`).
     pub variable: BTreeSet<SlotRef>,
     /// A storage view's slot declares its `RangeAtBindOffset` specialization, as a uniform view's
     /// does: the profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, so a read of
@@ -1342,14 +1342,14 @@ pub(crate) fn identity_contained(cx: &SelectCx<'_>) -> bool {
 /// An access of buffer slot `slot`, a read where `read`, whose byte offset is a translation-time
 /// constant only where `fixed`. Under the identity domains with containment on
 /// ([`identity_contained`]), a slot an access may reach at another offset is checked
-/// ([`AccessPlan::variable`]): it reads its `PushField::SlotRemaining`, and a read of it reads
+/// ([`AccessPlan::variable`]): it reads its `PushField::SlotBounds`, and a read of it reads
 /// `PushField::ZeroAddress` outside. An access at a constant offset stays unchecked.
 pub(crate) fn note_variable(cx: &mut SelectCx<'_>, slot: SlotRef, fixed: bool, read: bool) {
     if fixed || !identity_contained(cx) {
         return;
     }
     cx.families.access.variable.insert(slot);
-    cx.push.insert(PushField::SlotRemaining(slot));
+    cx.push.insert(PushField::SlotBounds(slot));
     if read {
         cx.push.insert(PushField::ZeroAddress);
     }

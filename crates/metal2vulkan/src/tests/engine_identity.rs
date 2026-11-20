@@ -79,7 +79,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::engine_word_phases::{remaining_word, slot_word, ZERO_UNMAPPED};
+use super::engine_word_phases::{bounds_word, slot_word, ZERO_UNMAPPED};
 use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
@@ -256,10 +256,10 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
                     push[o..o + 8].copy_from_slice(&slot_word(base + bind).to_le_bytes());
                     read.push(s);
                 }
-                PushField::SlotRemaining(s) => {
+                PushField::SlotBounds(s) => {
                     let (_, bind) = at[s.index as usize];
                     let bytes = [bits.len(), halves.len(), out.len()][s.index as usize];
-                    push[o..o + 4].copy_from_slice(&remaining_word(bytes, bind));
+                    push[o..o + 8].copy_from_slice(&bounds_word(bytes, bind));
                 }
                 PushField::ZeroAddress => {
                     push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
@@ -863,8 +863,8 @@ fn the_stage_in_region_is_read_from_its_pushed_field() {
                 PushField::SlotGuestBase(s) if s == slot(0) => {
                     push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
                 }
-                PushField::SlotRemaining(s) if s == slot(0) => {
-                    push[o..o + 4].copy_from_slice(&remaining_word(expected.len(), 0))
+                PushField::SlotBounds(s) if s == slot(0) => {
+                    push[o..o + 8].copy_from_slice(&bounds_word(expected.len(), 0))
                 }
                 PushField::ZeroAddress => {
                     push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
@@ -1224,12 +1224,12 @@ fn textures_at_their_resource_ids(ab: bool) {
                     }
                     // The check's fields, which the count below leaves out: the output's
                     // length, the argument buffer's, and the zero range.
-                    PushField::SlotRemaining(s) => {
+                    PushField::SlotBounds(s) => {
                         let bytes = match (ab, s.index) {
                             (false, 0) | (true, 1) => 4 * 21,
                             _ => 8 * ids.len(),
                         };
-                        push[o..o + 4].copy_from_slice(&remaining_word(bytes, 0));
+                        push[o..o + 8].copy_from_slice(&bounds_word(bytes, 0));
                         continue;
                     }
                     PushField::ZeroAddress => ZERO_UNMAPPED,
@@ -1528,8 +1528,8 @@ fn grid_push(plan: &Plan, out: (u64, usize), region: [u8; 32]) -> Vec<u8> {
             PushField::SlotGuestBase(s) if s == slot(0) => {
                 push[o..o + 8].copy_from_slice(&slot_word(out.0).to_le_bytes())
             }
-            PushField::SlotRemaining(s) if s == slot(0) => {
-                push[o..o + 4].copy_from_slice(&remaining_word(out.1, 0))
+            PushField::SlotBounds(s) if s == slot(0) => {
+                push[o..o + 8].copy_from_slice(&bounds_word(out.1, 0))
             }
             PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
@@ -2496,11 +2496,11 @@ fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
                     PushField::SlotGuestBase(s) if s == slot(1) => {
                         push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
                     }
-                    PushField::SlotRemaining(s) if s == slot(0) => {
-                        push[o..o + 4].copy_from_slice(&remaining_word(input.len(), 0))
+                    PushField::SlotBounds(s) if s == slot(0) => {
+                        push[o..o + 8].copy_from_slice(&bounds_word(input.len(), 0))
                     }
-                    PushField::SlotRemaining(s) if s == slot(1) => {
-                        push[o..o + 4].copy_from_slice(&remaining_word(16 * n as usize, 0))
+                    PushField::SlotBounds(s) if s == slot(1) => {
+                        push[o..o + 8].copy_from_slice(&bounds_word(16 * n as usize, 0))
                     }
                     PushField::ZeroAddress => {
                         push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
@@ -2694,9 +2694,9 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
                             .copy_from_slice(&slot_word(AT[s.index as usize]).to_le_bytes());
                     }
                     // `data`'s 16 bytes, `out`'s word and the count's.
-                    PushField::SlotRemaining(s) => {
+                    PushField::SlotBounds(s) => {
                         let bytes = [data.len(), 4, 4][s.index as usize];
-                        push[o..o + 4].copy_from_slice(&remaining_word(bytes, 0));
+                        push[o..o + 8].copy_from_slice(&bounds_word(bytes, 0));
                     }
                     PushField::ZeroAddress => {
                         push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())

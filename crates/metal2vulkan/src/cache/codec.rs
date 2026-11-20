@@ -923,7 +923,7 @@ codec_enum! {
         ArgumentTableAddress,
         ConstexprSampler(f0),
         TessellationFactorAddress,
-        SlotRemaining(f0),
+        SlotBounds(f0),
         ZeroAddress,
         FetchedColor { color, texels },
     }

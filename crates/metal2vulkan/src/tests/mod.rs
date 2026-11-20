@@ -85,6 +85,7 @@ mod engine_helper_picks;
 mod engine_helper_threads;
 mod engine_identity;
 mod engine_identity_contain;
+mod engine_identity_domain;
 mod engine_identity_render;
 mod engine_identity_spill;
 mod engine_image_shapes;

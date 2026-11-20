@@ -494,12 +494,12 @@ fn draws(
                         _ => return Err(draw_input()),
                     }
                 }
-                PushField::SlotRemaining(SlotRef {
+                PushField::SlotBounds(SlotRef {
                     stage,
                     class: SlotClass::Buffer,
                     index,
                 }) => {
-                    fields.push((offset, table(stage)?, FieldValue::BufferRemaining(index)));
+                    fields.push((offset, table(stage)?, FieldValue::BufferBounds(index)));
                     continue;
                 }
                 PushField::ZeroAddress => FieldValue::ZeroAddress,

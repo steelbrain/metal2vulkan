@@ -1250,11 +1250,15 @@ fn check_alignments(
     Ok((nil, zero))
 }
 
-/// The bytes of a buffer of `length` bytes from `offset` to its end, 0 past it: a slot's
-/// [`FieldValue::BufferRemaining`]. No buffer is longer than `MAX_BUFFER_LENGTH`, 2 GiB, so it
-/// fits a `u32`.
-pub(crate) fn remaining(length: u64, offset: u64) -> u32 {
-    u32::try_from(length.saturating_sub(offset)).unwrap_or(u32::MAX)
+/// A slot's [`FieldValue::BufferBounds`] for a buffer of `length` bytes bound at `offset`: the
+/// bytes before the bind offset, then the length, each a `u32`. No buffer is longer than
+/// `MAX_BUFFER_LENGTH`, 2 GiB, so both fit.
+pub(crate) fn bounds(length: u64, offset: u64) -> [u8; 8] {
+    let word = |v: u64| u32::try_from(v).unwrap_or(u32::MAX).to_le_bytes();
+    let mut bytes = [0; 8];
+    bytes[..4].copy_from_slice(&word(offset));
+    bytes[4..].copy_from_slice(&word(length));
+    bytes
 }
 
 /// A compute encoder's argument tables: buffer slots, textures and samplers.
@@ -1271,8 +1275,8 @@ impl Parameters {
     /// kernel that reads it has one: the dispatch checked first), and whose state gave its
     /// numbered samplers `sampler_ids`. Only a kernel that reads the stage-in region copies it.
     /// The block's address is written by [`Building::record_dispatch`] once the block is in the
-    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address, and its
-    /// length is 0; the zero range's address is `zero`.
+    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address, and bounds
+    /// of 0 and 0; the zero range's address is `zero`.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
     /// dispatch checked first ([`check_alignments`], which gave `nil`).
@@ -1307,15 +1311,13 @@ impl Parameters {
                     let word = address_word(address);
                     bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
                 }
-                FieldValue::BufferRemaining(slot) => {
-                    let length = match slots.get(slot as usize) {
-                        Some(Slot::Buffer { buffer, offset }) => {
-                            remaining(buffer.length(), *offset)
-                        }
-                        Some(Slot::Bytes(_, length)) => *length,
-                        Some(Slot::Empty) | None => 0,
+                FieldValue::BufferBounds(slot) => {
+                    let bounds = match slots.get(slot as usize) {
+                        Some(Slot::Buffer { buffer, offset }) => bounds(buffer.length(), *offset),
+                        Some(Slot::Bytes(_, length)) => bounds(u64::from(*length), 0),
+                        Some(Slot::Empty) | None => [0; 8],
                     };
-                    bytes[at..at + 4].copy_from_slice(&length.to_le_bytes());
+                    bytes[at..at + 8].copy_from_slice(&bounds);
                 }
                 FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
                 FieldValue::TextureId(slot) => {
