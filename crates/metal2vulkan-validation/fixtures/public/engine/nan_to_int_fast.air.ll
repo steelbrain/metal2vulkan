@@ -4,40 +4,108 @@ source_filename = "-"
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
-; Function Attrs: argmemonly mustprogress nofree nosync nounwind willreturn
+; Function Attrs: argmemonly convergent mustprogress nofree nosync nounwind willreturn
 define void @nan_to_int_fast_kernel(i32 addrspace(1)* nocapture noundef readonly "air-buffer-no-alias" %0, <4 x i32> addrspace(1)* nocapture noundef writeonly "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
-  %4 = shl i32 %2, 1
-  %5 = zext i32 %4 to i64
-  %6 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %5
-  %7 = bitcast i32 addrspace(1)* %6 to float addrspace(1)*
-  %8 = load float, float addrspace(1)* %7, align 4, !tbaa !32, !alias.scope !36, !noalias !39
-  %9 = or i32 %4, 1
-  %10 = zext i32 %9 to i64
-  %11 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %10
-  %12 = load i32, i32 addrspace(1)* %11, align 4, !tbaa !32, !alias.scope !36, !noalias !39
-  %13 = trunc i32 %12 to i16
-  %14 = bitcast i16 %13 to half
-  %15 = tail call i32 @air.convert.s.i32.f.f32(float %8) #4
-  %16 = insertelement <4 x i32> undef, i32 %15, i64 0
-  %17 = tail call i32 @air.convert.u.i32.f.f32(float %8) #4
-  %18 = insertelement <4 x i32> %16, i32 %17, i64 1
-  %19 = tail call i32 @air.convert.s.i32.f.f16(half %14) #4
-  %20 = insertelement <4 x i32> %18, i32 %19, i64 2
-  %21 = tail call i32 @air.convert.u.i32.f.f16(half %14) #4
-  %22 = insertelement <4 x i32> %20, i32 %21, i64 3
-  %23 = zext i32 %2 to i64
-  %24 = getelementptr inbounds <4 x i32>, <4 x i32> addrspace(1)* %1, i64 %23
-  store <4 x i32> %22, <4 x i32> addrspace(1)* %24, align 16, !tbaa !41, !alias.scope !39, !noalias !36
+  %4 = tail call fastcc <4 x i32> @_ZL20nan_to_int_fast_partPU9MTLdeviceKjj(i32 addrspace(1)* noundef %0, i32 noundef %2) #5, !alias.scope !32, !noalias !35
+  %5 = zext i32 %2 to i64
+  %6 = getelementptr inbounds <4 x i32>, <4 x i32> addrspace(1)* %1, i64 %5
+  store <4 x i32> %4, <4 x i32> addrspace(1)* %6, align 16, !tbaa !37, !alias.scope !35, !noalias !32
   ret void
 }
 
+; Function Attrs: argmemonly mustprogress nofree nosync nounwind readonly willreturn
+define internal fastcc <4 x i32> @_ZL20nan_to_int_fast_partPU9MTLdeviceKjj(i32 addrspace(1)* nocapture noundef readonly %0, i32 noundef %1) unnamed_addr #1 {
+  %3 = udiv i32 %1, 5
+  %4 = shl nuw nsw i32 %3, 1
+  %5 = zext i32 %4 to i64
+  %6 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %5
+  %7 = bitcast i32 addrspace(1)* %6 to float addrspace(1)*
+  %8 = load float, float addrspace(1)* %7, align 4, !tbaa !40
+  %9 = or i32 %4, 1
+  %10 = zext i32 %9 to i64
+  %11 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %10
+  %12 = load i32, i32 addrspace(1)* %11, align 4, !tbaa !40
+  %13 = trunc i32 %12 to i16
+  %14 = bitcast i16 %13 to half
+  %15 = urem i32 %1, 5
+  switch i32 %15, label %59 [
+    i32 0, label %16
+    i32 1, label %29
+    i32 2, label %38
+    i32 3, label %48
+  ]
+
+16:                                               ; preds = %2
+  %17 = tail call i8 @air.convert.s.i8.f.f32(float %8) #6
+  %18 = sext i8 %17 to i32
+  %19 = insertelement <4 x i32> undef, i32 %18, i64 0
+  %20 = tail call i8 @air.convert.u.i8.f.f32(float %8) #6
+  %21 = zext i8 %20 to i32
+  %22 = insertelement <4 x i32> %19, i32 %21, i64 1
+  %23 = tail call i16 @air.convert.s.i16.f.f32(float %8) #6
+  %24 = sext i16 %23 to i32
+  %25 = insertelement <4 x i32> %22, i32 %24, i64 2
+  %26 = tail call i16 @air.convert.u.i16.f.f32(float %8) #6
+  %27 = zext i16 %26 to i32
+  %28 = insertelement <4 x i32> %25, i32 %27, i64 3
+  br label %65
+
+29:                                               ; preds = %2
+  %30 = tail call i32 @air.convert.s.i32.f.f32(float %8) #6
+  %31 = insertelement <4 x i32> undef, i32 %30, i64 0
+  %32 = tail call i32 @air.convert.u.i32.f.f32(float %8) #6
+  %33 = insertelement <4 x i32> %31, i32 %32, i64 1
+  %34 = tail call i64 @air.convert.s.i64.f.f32(float %8) #6
+  %35 = bitcast i64 %34 to <2 x i32>
+  %36 = shufflevector <2 x i32> %35, <2 x i32> poison, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %37 = shufflevector <4 x i32> %33, <4 x i32> %36, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+  br label %65
+
+38:                                               ; preds = %2
+  %39 = tail call i64 @air.convert.u.i64.f.f32(float %8) #6
+  %40 = bitcast i64 %39 to <2 x i32>
+  %41 = shufflevector <2 x i32> %40, <2 x i32> poison, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %42 = tail call i8 @air.convert.s.i8.f.f16(half %14) #6
+  %43 = sext i8 %42 to i32
+  %44 = insertelement <4 x i32> %41, i32 %43, i64 2
+  %45 = tail call i8 @air.convert.u.i8.f.f16(half %14) #6
+  %46 = zext i8 %45 to i32
+  %47 = insertelement <4 x i32> %44, i32 %46, i64 3
+  br label %65
+
+48:                                               ; preds = %2
+  %49 = tail call i16 @air.convert.s.i16.f.f16(half %14) #6
+  %50 = sext i16 %49 to i32
+  %51 = insertelement <4 x i32> undef, i32 %50, i64 0
+  %52 = tail call i16 @air.convert.u.i16.f.f16(half %14) #6
+  %53 = zext i16 %52 to i32
+  %54 = insertelement <4 x i32> %51, i32 %53, i64 1
+  %55 = tail call i32 @air.convert.s.i32.f.f16(half %14) #6
+  %56 = insertelement <4 x i32> %54, i32 %55, i64 2
+  %57 = tail call i32 @air.convert.u.i32.f.f16(half %14) #6
+  %58 = insertelement <4 x i32> %56, i32 %57, i64 3
+  br label %65
+
+59:                                               ; preds = %2
+  %60 = tail call i64 @air.convert.s.i64.f.f16(half %14) #6
+  %61 = bitcast i64 %60 to <2 x i32>
+  %62 = tail call i64 @air.convert.u.i64.f.f16(half %14) #6
+  %63 = bitcast i64 %62 to <2 x i32>
+  %64 = shufflevector <2 x i32> %61, <2 x i32> %63, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+  br label %65
+
+65:                                               ; preds = %59, %48, %38, %29, %16
+  %66 = phi <4 x i32> [ %64, %59 ], [ %58, %48 ], [ %47, %38 ], [ %37, %29 ], [ %28, %16 ]
+  ret <4 x i32> %66
+}
+
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-define <{ <4 x float> }> @nan_to_int_fast_vertex(i32 noundef %0) local_unnamed_addr #1 {
+define <{ <4 x float> }> @nan_to_int_fast_vertex(i32 noundef %0) local_unnamed_addr #2 {
   %2 = and i32 %0, 1
-  %3 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #4
+  %3 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #6
   %4 = insertelement <2 x float> undef, float %3, i64 0
   %5 = lshr i32 %0, 1
-  %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %5) #4
+  %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %5) #6
   %7 = insertelement <2 x float> %4, float %6, i64 1
   %8 = fmul fast <2 x float> %7, <float 4.000000e+00, float 4.000000e+00>
   %9 = fadd fast <2 x float> %8, <float -1.000000e+00, float -1.000000e+00>
@@ -48,51 +116,71 @@ define <{ <4 x float> }> @nan_to_int_fast_vertex(i32 noundef %0) local_unnamed_a
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #2
+declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #3
 
-; Function Attrs: argmemonly mustprogress nofree nosync nounwind readonly willreturn
-define <4 x i32> @nan_to_int_fast_fragment(<4 x float> %0, i32 addrspace(1)* nocapture noundef readonly "air-buffer-no-alias" %1) local_unnamed_addr #3 {
+; Function Attrs: argmemonly convergent mustprogress nofree nosync nounwind readonly willreturn
+define <4 x i32> @nan_to_int_fast_fragment(<4 x float> %0, i32 addrspace(1)* nocapture noundef readonly "air-buffer-no-alias" %1) local_unnamed_addr #4 {
   %3 = extractelement <4 x float> %0, i64 0
-  %4 = tail call i32 @air.convert.u.i32.f.f32(float %3) #4
-  %5 = shl i32 %4, 1
-  %6 = zext i32 %5 to i64
-  %7 = getelementptr inbounds i32, i32 addrspace(1)* %1, i64 %6
-  %8 = bitcast i32 addrspace(1)* %7 to float addrspace(1)*
-  %9 = load float, float addrspace(1)* %8, align 4, !tbaa !32, !alias.scope !42
-  %10 = or i32 %5, 1
-  %11 = zext i32 %10 to i64
-  %12 = getelementptr inbounds i32, i32 addrspace(1)* %1, i64 %11
-  %13 = load i32, i32 addrspace(1)* %12, align 4, !tbaa !32, !alias.scope !42
-  %14 = trunc i32 %13 to i16
-  %15 = bitcast i16 %14 to half
-  %16 = tail call i32 @air.convert.s.i32.f.f32(float %9) #4
-  %17 = insertelement <4 x i32> undef, i32 %16, i64 0
-  %18 = tail call i32 @air.convert.u.i32.f.f32(float %9) #4
-  %19 = insertelement <4 x i32> %17, i32 %18, i64 1
-  %20 = tail call i32 @air.convert.s.i32.f.f16(half %15) #4
-  %21 = insertelement <4 x i32> %19, i32 %20, i64 2
-  %22 = tail call i32 @air.convert.u.i32.f.f16(half %15) #4
-  %23 = insertelement <4 x i32> %21, i32 %22, i64 3
-  ret <4 x i32> %23
+  %4 = tail call i32 @air.convert.u.i32.f.f32(float %3) #6
+  %5 = tail call fastcc <4 x i32> @_ZL20nan_to_int_fast_partPU9MTLdeviceKjj(i32 addrspace(1)* noundef %1, i32 noundef %4) #5, !alias.scope !42
+  ret <4 x i32> %5
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-declare i32 @air.convert.u.i32.f.f32(float) local_unnamed_addr #2
+declare i32 @air.convert.u.i32.f.f32(float) local_unnamed_addr #3
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-declare i32 @air.convert.s.i32.f.f32(float) local_unnamed_addr #2
+declare i8 @air.convert.s.i8.f.f32(float) local_unnamed_addr #3
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-declare i32 @air.convert.s.i32.f.f16(half) local_unnamed_addr #2
+declare i8 @air.convert.u.i8.f.f32(float) local_unnamed_addr #3
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-declare i32 @air.convert.u.i32.f.f16(half) local_unnamed_addr #2
+declare i16 @air.convert.s.i16.f.f32(float) local_unnamed_addr #3
 
-attributes #0 = { argmemonly mustprogress nofree nosync nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #1 = { mustprogress nofree nosync nounwind readnone willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #2 = { mustprogress nofree nosync nounwind readnone willreturn }
-attributes #3 = { argmemonly mustprogress nofree nosync nounwind readonly willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #4 = { nounwind readnone willreturn }
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i16 @air.convert.u.i16.f.f32(float) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i32 @air.convert.s.i32.f.f32(float) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i64 @air.convert.s.i64.f.f32(float) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i64 @air.convert.u.i64.f.f32(float) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i8 @air.convert.s.i8.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i8 @air.convert.u.i8.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i16 @air.convert.s.i16.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i16 @air.convert.u.i16.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i32 @air.convert.s.i32.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i32 @air.convert.u.i32.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i64 @air.convert.s.i64.f.f16(half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
+declare i64 @air.convert.u.i64.f.f16(half) local_unnamed_addr #3
+
+attributes #0 = { argmemonly convergent mustprogress nofree nosync nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #1 = { argmemonly mustprogress nofree nosync nounwind readonly willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #2 = { mustprogress nofree nosync nounwind readnone willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #3 = { mustprogress nofree nosync nounwind readnone willreturn }
+attributes #4 = { argmemonly convergent mustprogress nofree nosync nounwind readonly willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #5 = { nobuiltin "no-builtins" }
+attributes #6 = { nounwind readnone willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.kernel = !{!9}
@@ -135,16 +223,16 @@ attributes #4 = { nounwind readnone willreturn }
 !29 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
 !30 = !{i32 2, i32 8, i32 0}
 !31 = !{!"Metal", i32 4, i32 0, i32 0}
-!32 = !{!33, !33, i64 0}
-!33 = !{!"int", !34, i64 0}
-!34 = !{!"omnipotent char", !35, i64 0}
-!35 = !{!"Simple C++ TBAA"}
-!36 = !{!37}
-!37 = distinct !{!37, !38, !"air-alias-scope-arg(0)"}
-!38 = distinct !{!38, !"air-alias-scopes(nan_to_int_fast_kernel)"}
-!39 = !{!40}
-!40 = distinct !{!40, !38, !"air-alias-scope-arg(1)"}
-!41 = !{!34, !34, i64 0}
+!32 = !{!33}
+!33 = distinct !{!33, !34, !"air-alias-scope-arg(0)"}
+!34 = distinct !{!34, !"air-alias-scopes(nan_to_int_fast_kernel)"}
+!35 = !{!36}
+!36 = distinct !{!36, !34, !"air-alias-scope-arg(1)"}
+!37 = !{!38, !38, i64 0}
+!38 = !{!"omnipotent char", !39, i64 0}
+!39 = !{!"Simple C++ TBAA"}
+!40 = !{!41, !41, i64 0}
+!41 = !{!"int", !38, i64 0}
 !42 = !{!43}
 !43 = distinct !{!43, !44, !"air-alias-scope-arg(1)"}
 !44 = distinct !{!44, !"air-alias-scopes(nan_to_int_fast_fragment)"}
