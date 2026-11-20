@@ -681,6 +681,7 @@ edits one.
 |---|---|---|
 | `pass_bytes` | The words a compute pass wrote, exhaustively over a small input space | run on Metal |
 | `math_routines` | The words `frexp` and `ilogb` write, scalar and per lane, over both widths | run on Metal |
+| `nan_integer_conversions` | The words a kernel and a fragment function write for MSL's conversions of NaNs and of other values from `float` and `half` to every integer width, signed and unsigned, compiled with fast math off and on | run on Metal |
 | `stage_in_regions` | How a stage-in region clamps a dispatch's indices | run on Metal |
 | `extended_range_planes` | A two-plane extended-range texture joined into one and split back again | run on Metal |
 | `rgb10a2_srgb` | What a kernel reads, writes and samples of Apple's padded 10-bit sRGB format, and what a full-screen draw stores into it | run on Metal |
