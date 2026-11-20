@@ -301,9 +301,9 @@ mod on_device {
         });
     }
 
-    /// The median time of `submits` calls of `vkQueueSubmit2` on the runtime's queue, each of one
-    /// command buffer, waited for after the call and outside the time.
-    fn submit_time(device: &Device, command: vk::CommandBuffer, submits: usize) -> f64 {
+    /// The times of `submits` calls of `vkQueueSubmit2` on the runtime's queue, each of one
+    /// command buffer, waited for after the call and outside the time, in nanoseconds.
+    fn submit_times(device: &Device, command: vk::CommandBuffer, submits: usize) -> Vec<u128> {
         let raw = device.raw();
         let ash = raw.device;
         // SAFETY: the device is live.
@@ -330,21 +330,37 @@ mod on_device {
         }
         // SAFETY: nothing waits on the fence.
         unsafe { ash.destroy_fence(fence, None) };
-        nanos.sort_unstable();
-        nanos[nanos.len() / 2] as f64 / 1000.0
+        nanos
+    }
+
+    /// The median of `nanos` in microseconds, and the median with its spread as the test prints
+    /// it: the 5th and 95th percentiles, the longest and the count.
+    fn spread(nanos: &[u128]) -> (f64, String) {
+        let mut sorted = nanos.to_vec();
+        sorted.sort_unstable();
+        let at = |percent: usize| sorted[(sorted.len() - 1) * percent / 100] as f64 / 1000.0;
+        let median = at(50);
+        let shown = format!(
+            "{median:.2} us (p5 {:.2}, p95 {:.2}, max {:.2}, {} submits)",
+            at(5),
+            at(95),
+            at(100),
+            sorted.len()
+        );
+        (median, shown)
     }
 
     /// The time of a `vkQueueSubmit2` of one command buffer (empty, and one of a 4-byte fill),
-    /// beside no import, beside 40 live dma-bufs of one block over several, and beside 40 live
-    /// blocks of one dma-buf each, in three rounds of the three: the median of each arm, and the
-    /// difference from none per live import, printed. The runtime adds nothing to its own
-    /// submissions for a live block over several dma-bufs; what a driver pays for each live
-    /// import of memory, it pays for each chunk. On an instance without the validation layer,
-    /// whose own cost would be the count.
+    /// beside no import, beside 8 and 40 live dma-bufs of one block over several, and beside 8
+    /// and 40 live blocks of one dma-buf each, in three rounds of every arm: each arm's median
+    /// over its rounds' submissions with their spread, and the difference from none per live
+    /// import, printed. The runtime adds nothing to its own submissions for a live block over
+    /// several dma-bufs; what a driver pays for each live import of memory, it pays for each
+    /// chunk. On an instance without the validation layer, whose own cost would be the count.
     #[test]
     fn every_device_times_submissions_beside_live_dma_bufs() {
-        const IMPORTS: usize = 40;
-        const SUBMITS: usize = 400;
+        const COUNTS: [usize; 2] = [8, 40];
+        const SUBMITS: usize = 1000;
         const ROUNDS: usize = 3;
         let instance = crate::tests::validation::bare(&[]);
         on_each_device("dma_bufs_submit_cost", &instance, |name, _, device| {
@@ -352,8 +368,9 @@ mod on_device {
                 println!("dma_bufs: {name}: no granule; not timed");
                 return;
             };
-            let memfd = memfd(granule * IMPORTS as u64);
-            let lens = vec![granule; IMPORTS];
+            let most = COUNTS[COUNTS.len() - 1];
+            let memfd = memfd(granule * most as u64);
+            let lens = vec![granule; most];
             if chunks(&memfd, &lens[..1]).is_none() {
                 println!("dma_bufs: {name}: no /dev/udmabuf here; not timed");
                 return;
@@ -384,67 +401,75 @@ mod on_device {
                 }
             }
             let shapes = ["empty", "a fill"];
-            // [shape][arm] -> each round's median.
-            let mut times = [[[0.0f64; ROUNDS]; 3]; 2];
+            // [shape][arm] -> every round's times: arm 0 beside no import, then for the count at
+            // `at`, arm 1 + 2 * at beside one block over that many dma-bufs and arm 2 + 2 * at
+            // beside that many one-dma-buf blocks.
+            let mut times = vec![vec![Vec::new(); 1 + 2 * COUNTS.len()]; shapes.len()];
             let mut one_each = device.core().imports.dma_buf.is_some();
-            for round in 0..ROUNDS {
+            for _ in 0..ROUNDS {
                 for (shape, &command) in commands.iter().enumerate() {
-                    times[shape][0][round] = submit_time(&device, command, SUBMITS);
+                    times[shape][0].extend(submit_times(&device, command, SUBMITS));
                 }
-                let parts = chunks(&memfd, &lens).expect("the dma-bufs");
-                let (block, _) = (device.import_dma_bufs(parts, None))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-                for (shape, &command) in commands.iter().enumerate() {
-                    times[shape][1][round] = submit_time(&device, command, SUBMITS);
-                }
-                drop(block);
-                wait_until("the chunks' frees", || {
-                    device.counters().gauges().imports == 0
-                });
-                let blocks: Vec<_> = (0..IMPORTS)
-                    .filter(|_| one_each)
-                    .filter_map(|at| {
-                        let at = at as u64 * granule;
-                        let fd = udmabuf(&memfd, at, granule).expect("a dma-buf");
-                        device.import_dma_buf(fd, granule, None).ok()
-                    })
-                    .collect();
-                one_each &= blocks.len() == IMPORTS;
-                if one_each {
+                for (at, &count) in COUNTS.iter().enumerate() {
+                    let parts = chunks(&memfd, &lens[..count]).expect("the dma-bufs");
+                    let (block, _) = (device.import_dma_bufs(parts, None))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
                     for (shape, &command) in commands.iter().enumerate() {
-                        times[shape][2][round] = submit_time(&device, command, SUBMITS);
+                        times[shape][1 + 2 * at].extend(submit_times(&device, command, SUBMITS));
                     }
+                    drop(block);
+                    wait_until("the chunks' frees", || {
+                        device.counters().gauges().imports == 0
+                    });
+                    let blocks: Vec<_> = (0..count)
+                        .filter(|_| one_each)
+                        .filter_map(|chunk| {
+                            let start = chunk as u64 * granule;
+                            let fd = udmabuf(&memfd, start, granule).expect("a dma-buf");
+                            device.import_dma_buf(fd, granule, None).ok()
+                        })
+                        .collect();
+                    one_each &= blocks.len() == count;
+                    if one_each {
+                        for (shape, &command) in commands.iter().enumerate() {
+                            times[shape][2 + 2 * at]
+                                .extend(submit_times(&device, command, SUBMITS));
+                        }
+                    }
+                    drop(blocks);
+                    wait_until("the imports' frees", || {
+                        device.counters().gauges().imports == 0
+                    });
                 }
-                drop(blocks);
-                wait_until("the imports' frees", || {
-                    device.counters().gauges().imports == 0
-                });
             }
             // SAFETY: nothing is pending.
             unsafe { ash.destroy_command_pool(pool, None) };
-            let median = |rounds: [f64; ROUNDS]| {
-                let mut rounds = rounds;
-                rounds.sort_by(f64::total_cmp);
-                rounds[ROUNDS / 2]
-            };
-            for (shape, arms) in shapes.iter().zip(times) {
-                let [none, several, each] = arms.map(median);
-                let per = |time: f64| (time - none) / IMPORTS as f64;
-                let each = match one_each {
-                    false => {
-                        "no one-dma-buf blocks (the device takes no such dma-buf alone)".into()
-                    }
-                    true => format!(
-                        "{each:.2} us beside {IMPORTS} one-dma-buf blocks ({:.3} us per import)",
-                        per(each)
-                    ),
-                };
-                println!(
-                    "dma_bufs: {name}: a submit of {shape} took {none:.2} us beside no import, \
-                     {several:.2} us beside one block of {IMPORTS} dma-bufs ({:.3} us per \
-                     dma-buf), {each}",
-                    per(several)
-                );
+            for (shape, arms) in shapes.iter().zip(&times) {
+                let (none, shown) = spread(&arms[0]);
+                let mut line =
+                    format!("dma_bufs: {name}: a submit of {shape} took {shown} beside no import");
+                for (at, &count) in COUNTS.iter().enumerate() {
+                    let per = |time: f64| (time - none) / count as f64;
+                    let (several, shown) = spread(&arms[1 + 2 * at]);
+                    line += &format!(
+                        "; {shown} beside one block of {count} dma-bufs ({:.3} us per dma-buf)",
+                        per(several)
+                    );
+                    let each = &arms[2 + 2 * at];
+                    line += &match each.is_empty() {
+                        true => format!(
+                            "; no {count} one-dma-buf blocks (the device takes no such dma-buf alone)"
+                        ),
+                        false => {
+                            let (each, shown) = spread(each);
+                            format!(
+                                "; {shown} beside {count} one-dma-buf blocks ({:.3} us per import)",
+                                per(each)
+                            )
+                        }
+                    };
+                }
+                println!("{line}");
             }
         });
     }
