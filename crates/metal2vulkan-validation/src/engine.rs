@@ -136,8 +136,7 @@ pub enum UnsupportedReason {
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists.
     NotRepresentable,
-    /// The device's driver is measured to run the mechanism wrong (`Needs::DriverDefect`, the
-    /// profile's `DriverWorkaround`), or to run one the runtime itself records wrong
+    /// The device's driver is measured to run wrong a command the runtime itself records
     /// (`Needs::RuntimeDriverDefect`).
     DriverDefect,
 }
@@ -431,12 +430,10 @@ impl From<&Error> for Outcome {
                         reason: UnsupportedReason::NotRepresentable,
                         feature,
                     },
-                    Needs::DriverDefect(_) | Needs::RuntimeDriverDefect(_) => {
-                        Outcome::Unsupported {
-                            reason: UnsupportedReason::DriverDefect,
-                            feature,
-                        }
-                    }
+                    Needs::RuntimeDriverDefect(_) => Outcome::Unsupported {
+                        reason: UnsupportedReason::DriverDefect,
+                        feature,
+                    },
                     _ => Outcome::Failed {
                         failure: FailureKind::Unclassified,
                     },
@@ -1260,17 +1257,8 @@ mod tests {
                 "unsupported",
                 "not_representable HandleAsPointer",
             ),
-            // A driver's measured defect keys by reason and feature; the defect stays in the
-            // detail.
-            (
-                Error::Unsupported(Unsupported::driver_defect(
-                    Feature::FramebufferFetch,
-                    metal2vulkan::device::DriverWorkaround::EarlyTestsDropMultisampledImageWrites,
-                )),
-                "unsupported",
-                "driver_defect FramebufferFetch",
-            ),
-            // A defect the runtime records for its own mechanism keys the same way.
+            // A driver's measured defect in a command the runtime records keys by reason and
+            // feature; the defect stays in the detail.
             (
                 Error::Unsupported(Unsupported::runtime_driver_defect(
                     Feature::SeparateMultisampledDepthStencil,

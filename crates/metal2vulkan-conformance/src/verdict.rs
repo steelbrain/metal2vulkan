@@ -279,10 +279,6 @@ pub fn device_gap_of(unsupported: &Unsupported) -> Option<String> {
         Needs::DeviceCapability(capability) => {
             Some(format!("{:?} needs {capability}", unsupported.feature))
         }
-        Needs::DriverDefect(workaround) => Some(format!(
-            "{:?} on a driver measured to run it wrong ({workaround:?})",
-            unsupported.feature
-        )),
         Needs::RuntimeDriverDefect(defect) => Some(format!(
             "{:?} on a driver measured to run it wrong ({defect:?})",
             unsupported.feature

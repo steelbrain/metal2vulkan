@@ -4,8 +4,8 @@
 //! applies one large function twice holds its body twice, and every driver compiles both copies;
 //! a driver's compile time grows with the instructions it compiles. A kernel that applies one
 //! large function once per output texture took 7.6 s to create on an M3 Max and 6.2 s on an M4
-//! through MoltenVK 1.4.1 (whose SPIRV-Cross also writes every function inlined at each call,
-//! `DriverWorkaround::FunctionsInlinedAtEveryCall`), 24.4 to 27.3 s on the RTX 5080 Laptop GPU's
+//! through MoltenVK 1.4.1 (whose SPIRV-Cross also writes every function inlined at each call),
+//! 24.4 to 27.3 s on the RTX 5080 Laptop GPU's
 //! driver and 12.4 s on lavapipe, each over the 5-second creation ceiling; written once, about half
 //! the time on each.
 //!

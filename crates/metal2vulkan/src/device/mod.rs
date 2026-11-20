@@ -75,7 +75,7 @@ pub use profile::{
 // storage a thread holds.
 pub use profile::{Containment, DescriptorCaps, FunctionStorage, Robustness};
 pub use subgroup::{SimdClass, StageSubgroup, SubgroupModel, SubgroupSizes, Tier};
-// The driver defect a refusal names (`Needs::DriverDefect`).
+// The device answers a profile notes on every device (`DeviceProfile::workarounds`).
 pub use profile::DriverWorkaround;
 pub use requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, Requirements, ResolveMode, SpirvCapability,

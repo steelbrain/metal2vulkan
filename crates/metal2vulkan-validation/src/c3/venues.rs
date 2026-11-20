@@ -15,9 +15,8 @@
 //! ever silently current. A venue allows several devices only when translation cannot tell them
 //! apart: one driver build, and captures that derive one translation key, so its slots can be
 //! recorded on any of those machines. The Iris Xe of RPL-P and the UHD Graphics 770 of RPL-S are
-//! not such a pair: their captures differ only in `maxMemoryAllocationSize`, but the RPL-P's
-//! profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, measured on that GPU alone,
-//! and so derives another key; the Intel venue allows the RPL-P alone. A device Metal runs on (an Apple GPU under MoltenVK) names
+//! not such a pair: their captures differ in `maxMemoryAllocationSize`, and the Intel venue
+//! allows the RPL-P alone. A device Metal runs on (an Apple GPU under MoltenVK) names
 //! its own GPU's Metal reference environment ([`VenueDevice::metal_environment_id`]), and a run on
 //! it is compared with that environment's rows alone, since Metal's own answers differ between
 //! Apple GPUs.

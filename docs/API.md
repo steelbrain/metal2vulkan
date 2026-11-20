@@ -1153,27 +1153,7 @@ for dependency in &pipeline.dependencies {
   variables static on MoltenVK 1.4.1: its SPIRV-Cross writes Metal that does not compile for a
   dynamic buffer an entry point uses through more than one variable.
 - A buffer slot's uniform view is a `Uniform` block (`DescriptorView::UniformWords`, or
-  `UniformVec4` without `uniformBufferStandardLayout`), but on a profile that takes
-  `DriverWorkaround::ExternalUniformReadsSkipACache` (measured: `DeviceDescription::measured`; on
-  the Iris Xe RPL-P under ANV the runtime's view check finds it) a slot with an indexed read whose
-  window is `Bounded` and at most 4 KiB long takes a uniform texel buffer instead; a slot read at
-  constant offsets alone keeps its `Uniform` block, whose words a driver may load ahead into
-  registers as it cannot a texel fetch
-  (`DescriptorView::UniformTexel`: a `UniformConstant` image of `Dim` `Buffer`, `Sampled` 1, `u32`
-  texels, read with `OpImageFetch`), its binding `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER`. Write a
-  view of the planned range in `R32G32B32A32_UINT`, from the range's buffer, offset and length,
-  each command's own (the runtime makes one for each descriptor write and holds it until the
-  command buffer completed); the buffer needs the uniform texel buffer usage. The range starts at a
-  multiple of `max(minTexelBufferOffsetAlignment, 16)`, holds a multiple of 16 bytes and at most
-  `maxTexelBufferElements` texels, and the slot's use class is `AccessClass::Sampled`
-  (`VK_ACCESS_2_SHADER_SAMPLED_READ_BIT`). Its words are those a uniform buffer of the range would
-  read. On that driver a uniform buffer read of memory the device marks external (imported host
-  memory, a dma-buf) misses a cache that a uniform texel buffer read keeps: a kernel's uniform
-  buffer reads of a window over imported memory took 2.0 to 2.5 times their time over device
-  memory (5.2 to 5.5 times where each invocation read its own word), its texel reads 0.98 to 1.04
-  times. A window of up to 4 KiB read through a texel buffer was no slower than through a uniform
-  buffer of device memory in any pattern measured; longer windows keep the uniform buffer, whose
-  reads over imported memory stay slower there.
+  `UniformVec4` without `uniformBufferStandardLayout`).
 - On MoltenVK, push set 0 (a push descriptor set layout) for a pipeline whose fragment stage writes
   a storage buffer of set 0 inside its interlock (an interlock execution mode, and a `StorageBuffer`
   variable of set 0 not decorated `NonWritable`): binding through Metal argument buffers, MoltenVK

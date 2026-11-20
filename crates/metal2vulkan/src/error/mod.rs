@@ -13,8 +13,8 @@
 //!   [`Needs::AnyOf`] lists alternative sets of device [`Capability`]s (a device that enables
 //!   every capability of one set compiles it), [`Needs::NotImplemented`] is a gap of this
 //!   translator version on every device, [`Needs::NotRepresentable`] has no Vulkan 1.2+
-//!   mechanism, [`Needs::DriverDefect`] is a mechanism the device's driver is measured to run
-//!   wrong ([`Needs::RuntimeDriverDefect`] one the runtime records for itself), and
+//!   mechanism, [`Needs::RuntimeDriverDefect`] is a command the runtime records for itself that
+//!   the device's driver is measured to run wrong, and
 //!   [`Needs::StageBound`] is a stage the device's plan writes heavier than the translator hands
 //!   any driver of a device [`Device::from_queries`](crate::device::Device::from_queries) made.
 //!   The runtime adds
@@ -70,7 +70,6 @@ use crate::air::error::{MissingInput, RequestError};
 use crate::device::requirements::{
     ApiVersion, FormatUsage, VkExtension, VkFeature, VkLimit, VkProperty,
 };
-use crate::device::DriverWorkaround;
 use crate::pipeline::sym::{Axis, SlotRef, SpecKey, Stage};
 use crate::vk;
 
@@ -335,16 +334,6 @@ impl Unsupported {
         }
     }
 
-    /// Translatable on a device whose driver does not have `defect`, which this device's does.
-    pub fn driver_defect(feature: Feature, defect: DriverWorkaround) -> Unsupported {
-        Unsupported {
-            feature,
-            needs: Needs::DriverDefect(defect),
-            location: None,
-            symbol: None,
-        }
-    }
-
     /// Run by the runtime on a device whose driver does not have `defect`, which this device's
     /// does.
     pub fn runtime_driver_defect(feature: Feature, defect: RuntimeDriverDefect) -> Unsupported {
@@ -483,11 +472,6 @@ pub enum Needs {
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists for these semantics.
     NotRepresentable,
-    /// The mechanism exists, but the device's driver is measured to run it wrong: the profile
-    /// carries the named [`DriverWorkaround`], derived from the driver's identity, and the
-    /// translation refuses rather than hand back output the driver would change. A device
-    /// without the defect translates the input.
-    DriverDefect(DriverWorkaround),
     /// The mechanism exists, but the device's driver runs wrong a command the runtime would
     /// record for itself: the runtime refuses rather than hand back what the driver would
     /// change. A device without the defect runs the input.
@@ -586,11 +570,10 @@ pub enum DriverDeviation {
     /// and flushes a denormal result to one, as Metal does (`VkProperty::MetalFloatDenormals`):
     /// `OpFAdd`, `OpFSub`, `OpFMul`, `OpFmaKHR`, `OpDot`, the comparisons, and `GLSL.std.450`'s
     /// `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and `RoundEven`. Measured in entries that declare
-    /// no float-controls mode: in an entry that declares the 16-bit float controls, on a driver
-    /// measured to keep `f32` denormals there
-    /// (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), they are the device's own.
-    /// Unmeasured, such operands and results are the device's own, recorded as
-    /// `PrecisionNote::DeviceDenormals`.
+    /// no float-controls mode: in an entry that declares the 16-bit float controls a driver may
+    /// keep them, and no query tells which, so there they are the device's own on every device.
+    /// Unmeasured, or in such an entry, such operands and results are the device's own, recorded
+    /// as `PrecisionNote::DeviceDenormals`.
     MetalFloatDenormals,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
@@ -865,7 +848,7 @@ pub enum DriverDeviation {
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a
-/// translation (which [`DriverWorkaround`] covers). The runtime keys it on the driver's
+/// translation (which [`DriverWorkaround`](crate::device::DriverWorkaround) covers). The runtime keys it on the driver's
 /// identity and release (`driverID`, `driverVersion`; `runtime::driver_defects`), lists the
 /// device's in its properties, and takes another way where an exact one exists, else refuses,
 /// what the driver would run wrong ([`Needs::RuntimeDriverDefect`]), or runs it announced as a
@@ -1242,9 +1225,7 @@ pub enum Feature {
     DescriptorCount,
     /// A stage module heavier than the translator hands the device's driver: past the heaviest
     /// measured to compile within host-sized memory, on a device
-    /// [`Device::from_queries`](crate::device::Device::from_queries) made ([`Needs::StageBound`]),
-    /// or larger than the device's driver is measured to compile, intact and within host-sized
-    /// memory ([`Needs::DriverDefect`] names the defect).
+    /// [`Device::from_queries`](crate::device::Device::from_queries) made ([`Needs::StageBound`]).
     StageSize,
     /// A buffer window beyond the descriptor range limits.
     BufferRange,

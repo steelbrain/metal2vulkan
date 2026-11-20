@@ -72,7 +72,6 @@ CONSTRUCTORS = {
     "not_representable": "NotRepresentable",
     "needs": "AnyOf",
     "needs_any_of": "AnyOf",
-    "driver_defect": "DriverDefect",
     "runtime_driver_defect": "RuntimeDriverDefect",
     "metal_gpu_family": "MetalGpuFamily",
     "device_capability": "DeviceCapability",
@@ -348,7 +347,7 @@ def split_args(s):
     return args
 
 
-CAP_TOKENS = r"(VkFeature|VkExtension|VkProperty|VkLimit|ApiVersion|DriverWorkaround|RuntimeDriverDefect)::([A-Za-z0-9_]+)"
+CAP_TOKENS = r"(VkFeature|VkExtension|VkProperty|VkLimit|ApiVersion|RuntimeDriverDefect)::([A-Za-z0-9_]+)"
 
 
 def conditions(kind, needs_text):
@@ -378,9 +377,6 @@ def conditions(kind, needs_text):
                 return {f"devices without a capability the site computes (`{expr}`)"}
             return {"devices without a capability the site computes"}
         return {"devices without " + c for c in caps}
-    if kind == "DriverDefect":
-        ws = sorted({b for a, b in toks if a == "DriverWorkaround"})
-        return {"drivers with workaround " + w for w in ws} or {"drivers with a defect"}
     if kind == "RuntimeDriverDefect":
         ws = sorted({b for a, b in toks if a == "RuntimeDriverDefect"})
         return {"drivers with defect " + w for w in ws} or {"drivers with a defect"}
