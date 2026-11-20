@@ -828,8 +828,8 @@ the Direct3D 11 texture's payload until it is freed.
   less 2^31; an access adds its 32-bit offset plus 2^31 to that word, zero-extended, which is the
   offset read as signed in one 32-bit add. In a probe of one particle kernel that form was within
   0.7% of a zero-extended offset (inexact below the bind address) on the RX 7900 XTX and two
-  Radeon 780Ms, at the kernel's grid and at four times it, where the sign-extended offset it
-  replaced was 6.8 to 9.5% slower. On the Intel UHD 630's Windows driver the compute harness
+  Radeon 780Ms, at the kernel's grid and at four times it, where a sign-extended offset was 6.8
+  to 9.5% slower. On the Intel UHD 630's Windows driver the compute harness
   measured three of its 38 workloads slower in this form than in the sign-extended one:
   image_filter by 3.4%, dispatch_chain by 2.6% and burst_160 by 2.2%, the median moving 0.05%.
   Each reaches a buffer through a computed index. On that device (Gen9) the cause is inferred, not
@@ -840,15 +840,14 @@ the Direct3D 11 texture's payload until it is freed.
   loop moves the kernel by -18% to +14%, by a mechanism not shown: not the code's placement, not
   the instruction count, not the thread payload and not register numbers. ANV's compiler has no
   64-bit integer add on Gen12, so each access through an address costs, beyond a binding-table
-  access (the old runtime's form), a compare for the carry, an add of the high word and four
-  moves that pack the address into the message, and the bias one 32-bit add more: the particle
-  kernel's loop, which reads once an iteration, is 31 instructions there against the old
-  runtime's 24. That kernel alone, back to back, takes 1.26 times as long per dispatch as a native
-  Vulkan program of the same work and 1.17 times as long as the old runtime's (502.0 against 397.0
-  and 429.5 microseconds), its output bytes equal to both. Intel's Windows driver on Gen12 is
-  unaudited. In an earlier probe of
-  constant reads, 32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a
-  64-bit sum was 8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
+  access, a compare for the carry, an add of the high word and four moves that pack the address
+  into the message, and the bias one 32-bit add more: the particle kernel's loop, which reads
+  once an iteration, is 31 instructions there. That kernel alone, back to back, takes 1.26 times
+  as long per dispatch as a native Vulkan program of the same work (502.0 against 397.0
+  microseconds), its output bytes equal to the native program's. Intel's Windows driver on Gen12
+  is unaudited. In a probe of constant reads, 32-bit offsets bought 4.3 to 6.6% on AMD cards and
+  more on the RTX 3090, where a 64-bit sum was 8.9% slower on the RX 7900 XTX. A longer buffer is
+  `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
   block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
   Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that
@@ -910,10 +909,10 @@ the Direct3D 11 texture's payload until it is freed.
   Shared takes past 16 MiB took 1.46 s of the stream's 210 s. The pool keeps no memory to avoid
   it; `Metrics::consumer_allocation_nanos` counts it. On the 3090 (driver 620.70.06, rt at
   140714ceae), 64 MiB of rt's Shared memory type costs about 12.5 ms in `vkAllocateMemory`, with
-  or without a device address, and 2.75 ms more for rt to zero it through its mapping. The old
-  runtime imports host pages it mapped itself instead: about 5.8 ms for 64 MiB, 5.4 ms of it the
-  import. Importing fresh pages by host pointer takes 0.35 to 0.54 times as long as allocating
-  them, from 16 to 256 MiB on both cards. No host-visible type outside the card's 246 MiB
+  or without a device address, and 2.75 ms more for rt to zero it through its mapping. Host pages
+  a process maps itself and imports by host pointer cost about 5.8 ms for 64 MiB there, 5.4 ms of
+  it the import, and importing fresh pages so takes 0.35 to 0.54 times as long as allocating them,
+  from 16 to 256 MiB on both cards. No host-visible type outside the card's 246 MiB
   device-local heap is cheaper, and a Shared allocation is the driver's own memory on every
   device, so the import is not open to it. In another consumer's replay stream on the 2080 (the
   same driver, rt at c810d2a3df), the first 1138 frames make 304 Shared takes of 9.5 GiB, whose
@@ -1456,14 +1455,14 @@ made, with no lock, and never rewritten for layouts.
   event's semaphore leads a new group, the one held going first. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
   (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
-  expected GPU run, as the old runtime's are: a queue's expected run follows its command buffers'
+  expected GPU run: a queue's expected run follows its command buffers'
   own GPU times as each retires (a longer one raises it at once, a shorter one halves the way toward
   it), and a command buffer joins a group only while the group's expected runs, summed, stay within
   16 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
   group held going first. The bound is tested again as the group goes, with the expected run as it
   then stands: a group past it goes member by member, one `vkQueueSubmit2` each, only the last
-  signalling. At most four command buffers join a group while none of the queue's retires (four, the
-  old runtime's bound on a group), since they join on an expected run no completion has updated: in
+  signalling. At most four command buffers join a group while none of the queue's retires, since
+  they join on an expected run no completion has updated: in
   a replay stream on an RTX 3090, the most GPU time over four consecutive command buffers of a queue
   was 385.1 ms, within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen
   1,536.6 ms. The thread holds a segment whose event waits are not met, and its queue's later
@@ -1644,8 +1643,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   own end, and the second 0.8 ms after its own at the median (25 ms at the 90th percentile); on an
   RX 550, at about 7 ms each, the third about 7.7 ms late and the second 0.9-1.4 ms at the median
   (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
-  97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
-  its `gpu_end_time` to its completed handler (`late_us`).
+  97.2-97.5 ms after its commit. The harness prints each command buffer's lateness, from its
+  `gpu_end_time` to its completed handler (`late_us`).
 - Every queue's command buffers go to the device's one `VkQueue`, which takes one
   `vkQueueSubmit2` call at a time (Vulkan requires a queue's host access to be externally
   synchronized), all of them made by the device's one submit thread. A command buffer is
@@ -1669,20 +1668,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   that bound, which only the next upload call tests; with no later call they stay until the
   device drops, where Metal frees a released resource once no work uses it.
   `Metrics::held_releases` and `held_release_bytes` count such releases.
-- On NVIDIA, short command buffers committed back to back reach the GPU in more submissions than
-  the old runtime made of them, and such a burst runs behind it. The cost is NVIDIA's latency per
-  submission: the runtime submits sooner, each command buffer as soon as it can. On an RTX 2080
-  (harness row `frame_5cb`: five short command buffers a run, two runs in flight) a run takes
-  about 2.5 submissions against the old runtime's 2.0, each submission boundary leaves the GPU
-  idle for about 20-25 µs, and the row's throughput is about 8% behind. Latency from idle (one
-  run in flight) is equal. A recorded replay stream on the same card plays 1.5 times as fast as on
-  the old runtime; it was recorded before the recorder's completion fix, so that figure compares
-  the two runtimes on the same stream and no more.
+- On NVIDIA each submission pays the driver's latency per submission. The runtime submits each
+  command buffer as soon as it can, so short command buffers committed back to back reach the GPU
+  in several submissions: on an RTX 2080 (harness row `frame_5cb`: five short command buffers a
+  run, two runs in flight) a run takes about 2.5 submissions, and each submission boundary leaves
+  the GPU idle for about 20-25 µs.
 - One command buffer whose own GPU run passes the driver's job timeout still ends there: the
   runtime does not cut a command buffer's work into shorter jobs, and joins none to it (the
   grouping bound above). Linux's amdgpu ends a job past its timeout, 2 s by default (Linux 7.3.3),
-  and resets the ring, where Metal runs the command buffer within its own watchdog's longer bound
-  (the old runtime's known gap in `docs/FAST-PATHS.md` names the same limit).
+  and resets the ring, where Metal runs the command buffer within its own watchdog's longer bound.
 - A command buffer whose timestamps are not available when its submission signals reports no GPU
   times: its `gpu_start_time` and `gpu_end_time` are 0, and `Metrics::stamps_not_available`
   counts it, where Metal reports the times of every command buffer that completes. A signal says
@@ -1754,9 +1748,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - Guest processes are not isolated from each other. One device serves every guest process, and
   shaders use raw device addresses, so a guest shader can read and write any memory on the
   device: other processes' buffers and textures, and the host's own resources there. The runtime
-  does not isolate processes, and the old runtime does not either: measured, one guest process
-  read and overwrote another's Shared buffer, Private buffer and texture through addresses and
-  resource IDs it made up, with no fault. The consumer treats every byte on the device as
+  does not isolate processes: one guest process can read and overwrite another's Shared buffer,
+  Private buffer and texture through addresses and resource IDs it makes up, with no fault. The
+  consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - On NVIDIA, a GPU fault in a guest's kernel hangs that command buffer's completion, where Metal
   ends it with an error. A fault (an access to an address nothing maps) loses the device on NVIDIA's
@@ -1774,12 +1768,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. On RADV (a 780M), the
   command buffers of the submission a reset cut can report completed, since the reset signals its
   semaphore before any call reports the loss: the loss is reported by the next call, where Metal
-  ends the faulting command buffer with an error. The old runtime took a store through a pointer to
-  an address nothing maps, and one 64 TiB past a buffer, without a fault on all six GPUs, since it
-  does not hand kernels raw addresses; the new runtime refuses the first kernel and took the second
-  without a fault. A bad address that the old runtime survived ends the
-  GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
-  one device and direct addresses, which the owner accepted.
+  ends the faulting command buffer with an error. The runtime refuses a kernel that stores through
+  a pointer to an address nothing maps, and took a store 64 TiB past a buffer without a fault. A
+  bad address that faults ends the GPU's work for every guest process on NVIDIA and RADV: the
+  consequence of one device and direct addresses, which the owner accepted.
 - No guest word indexes a set 1 array past its length. A slot's texture or sampler, and a
   constexpr sampler, are read at the runtime's own placement (texture indices 1 to 65,535, sampler
   indices 1 to 3,999; a placement outside them is refused). An argument buffer's texture is read at
@@ -1882,9 +1874,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   own; `docs/API.md` section 10 says which.
 - Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
   region and up to 24 buffer addresses below the kernel's tail (`docs/API.md` section 5), each
-  kernel pushing only the bytes it reads. Fields past it go to a 16-byte aligned block in the
-  parameter ring, whose address is a field in the window: a kernel with more than 24 buffers. `Counters::metrics`' `ring_writes` counts each block and each
-  `set_bytes` copy.
+  kernel pushing only the bytes it reads. The tail placement's price, against the build before
+  it: `wide_bindings` is 4.6% slower on an RTX 3090 and 6.9% slower on an Iris Xe and 9.3% faster
+  on a Radeon 780M; `dispatch_chain` 3.0% slower on the RTX 3090; `bind_2000` 25.4% slower in
+  GPU time on the RTX 3090 with host time level; the other eight harness rows level on all three
+  cards (jobs m3-max-58429, m3-max-58430, m3-max-58431). Fields past the window go to a 16-byte
+  aligned block in the parameter ring, whose address is a field in the window: a kernel with more
+  than 24 buffers. `Counters::metrics`' `ring_writes` counts each block and each `set_bytes`
+  copy.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
@@ -2366,13 +2363,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes
   longer.
 - On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
-  `VkPipeline`, made with the state, took 1.44 to 1.51 times the old runtime's for the harness's
-  `create_state` kernel: medians of 6,680 to 6,853 µs against 4,473 to 4,761 µs, in three
-  processes of 40 compiles each with no driver cache hit. The workgroup accounts for 1.1 to 1.3 ms
-  of it: the runtime makes the pipeline at 256 threads, the tile it runs every grid of such a
-  kernel in, where the old runtime made it at the dispatch's threadgroup, here one thread. The
-  decode of the pushed tile accounts for 0.4 to 0.55 ms, and the module's device addresses, where
-  the old runtime bound storage-buffer descriptors, for 0.37 to 0.47 ms. The runtime's pipeline
+  `VkPipeline`, made with the state, took medians of 6,680 to 6,853 µs for the harness's
+  `create_state` kernel, in three processes of 40 compiles each with no driver cache hit. The
+  workgroup accounts for 1.1 to 1.3 ms of it: the runtime makes the pipeline at 256 threads, the
+  tile it runs every grid of such a kernel in, against a pipeline at the dispatch's threadgroup,
+  here one thread. The decode of the pushed tile accounts for 0.4 to 0.55 ms, and the module's
+  device addresses, against storage-buffer descriptors, for 0.37 to 0.47 ms. The runtime's pipeline
   layout and its pipeline cache cost nothing measurable there. The cost is paid once per driver
   cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
   in a new process took 45 to 48 µs.
@@ -2416,22 +2412,19 @@ or does not check is rebuilt from the generations' names, with young counted ful
   30.2 µs over grids of 4x16x312, 24x24x252 and 256x256x8 in tiles, and 2.2, 8.6 and 25.0 µs on a
   pipeline that took the tile as a specialization constant, which the runtime does not make. On
   Intel's Windows driver (101.2145) for the UHD 630, the same kernel over the 24x24x252 grid took
-  1.26 and 1.59 times the old runtime's time in two runs (medians of 93.6 against 74.0 µs and
-  79.7 against 50.0 µs; within one run, one form's rounds ranged up to 2.8 times apart). The old
-  runtime's form, the 8x8x4 threadgroup as the workgroup and the buffer through a storage-buffer
-  descriptor, took 0.97 of the tiles' time in this runtime in the first of those runs.
+  93.6 and 79.7 µs in tiles, the medians of two runs (within one run, one form's rounds ranged up
+  to 2.8 times apart); in the first, a pipeline at its 8x8x4 threadgroup with the buffer through a
+  storage-buffer descriptor, which the runtime does not make, took 0.97 of the tiles' time.
 - Such a kernel runs a grid one high and one deep in tiles too: its position comes from the pushed
   tile in all three dimensions and is tested against the grid in all three. On an RX 550 (RADV,
   Mesa 26.2.6), a kernel of 2^20 threads in a line, each reading 16 bytes 64 times from a 64 KiB
-  `constant` table and storing 4 bytes, took 1.18 times the old runtime's time (the median of
-  three pairs of runs; 2,380.8 against 2,018.3 µs in the first), and 1.18 again with the table
-  `Managed` and its first 256 bytes written before each run; the matrix's ceiling for both rows on
-  that GPU is 1.20. In workgroups of the kernel's 256x1 threadgroup it took 0.90 of its
-  time in tiles, through storage-buffer descriptors 0.89, and with both 0.89; the runtime makes
-  neither. Its reads take their 64-bit addresses from two adds with a carry each, as the RX 550's
-  loads through an address need, where the old runtime's reads through a descriptor take a 32-bit
-  offset. An Iris Xe (Mesa 26.2.6) pays neither: there the kernel took 1.03 times the old
-  runtime's GPU time, the same in 256x1 workgroups or through descriptors. In the two recorded
+  `constant` table and storing 4 bytes, took 2,380.8 µs in tiles in the first of three runs. In
+  workgroups of the kernel's 256x1 threadgroup it took 0.90 of its time in tiles, through
+  storage-buffer descriptors 0.89, and with both 0.89; the runtime makes neither. Its reads take
+  their 64-bit addresses from two adds with a carry each, as the RX 550's loads through an address
+  need, where reads through a descriptor take a 32-bit offset. An Iris Xe (Mesa 26.2.6) pays
+  neither: there the kernel took the same GPU time in tiles, in 256x1 workgroups and through
+  descriptors. In the two recorded
   streams measured, kernels that do not observe their partition ran 0.00% and 0.59% of their
   threads over grids one high and one deep.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
@@ -3011,18 +3004,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
   RX 550 and 5.2 µs on the XTX in a pass that loads an image the last pass moved home from the
   feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
   and 477.3 and 22.7 µs after a draw over the image in the pass.
-
-  The same passes on the old runtime (`metal2vulkan-runtime`), timed in the same runs, reading
-  the target / another texture, with the difference:
-
-  | Device | 3648 × 2038, this runtime | 3648 × 2038, the old runtime | 1920 × 1080, this runtime | 1920 × 1080, the old runtime |
-  |---|---|---|---|---|
-  | RX 550 (RADV) | 1,122.9 / 516.5 µs (+606.4) | 1,553.0 / 1,135.7 µs (+417.3) | 320.3 / 150.2 µs (+170.1) | 452.2 / 320.8 µs (+131.4) |
-  | RX 7900 XTX (RADV) | 54.3 / 19.1 µs (+35.2) | 54.4 / 37.6 µs (+16.8) | 20.4 / 13.1 µs (+7.2) | 31.6 / 20.1 µs (+11.5) |
-
-  A pass that reads its target takes no longer here than on the old runtime, on either card at
-  either size. On the RX 550 the difference from the plain pass is larger here, because the old
-  runtime's plain pass is 2.2 times slower.
 - On a device that does not report `attachmentFeedbackLoopLayout` and
   `attachmentFeedbackLoopDynamicState` (the UHD 630 among the lab's, Windows driver 101.2145), a
   draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
@@ -3039,10 +3020,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3. A pass that clears its target and
   reads it at its first draw, through the shadow's clear, takes 1,095.3 µs at 1920 × 1080
   and 4,200.8 µs at 3648 × 2038, against 644.2 µs and 2,341.2 µs for the same pass reading
-  another texture. Against the old runtime in the same runs, at 3648 × 2038, this form reads the
-  target faster after a barrier (4,836.4 µs against 5,429.4 µs) and at the first read of a pass
-  that loads it (3,849.6 µs against 4,218.2 µs), and within 1% at the first read of a pass that
-  clears it (4,200.8 µs against 4,159.4 µs; at 1920 × 1080, 1,095.3 µs against 1,109.1 µs).
+  another texture. At 3648 × 2038 a pass that reads its target after a barrier takes 4,836.4 µs,
+  and one that loads its target and reads it at its first draw 3,849.6 µs.
 
 ## Presenting
 
