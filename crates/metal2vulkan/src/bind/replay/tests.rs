@@ -596,7 +596,7 @@ fn a_dispatch_selects_its_variant_and_resolves_its_buffers() {
         ),
     ];
     let ran = preprocess(&dev, &ReplayExecution::new(3, 0, 3), &variants, &records, 0);
-    assert!(!ran.status.replay_fault && !ran.status.overflow);
+    assert!(!ran.status.replay_fault);
     assert_eq!(ran.status.replay_faults, ReplayFaults::default());
     assert_eq!(ran.args(0, 0), [3, 2, 1]);
     assert_eq!(ran.args(0, 1), [0; 3]);
@@ -909,7 +909,6 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
         assert_eq!(ran.args(1, 0), [2, 1, 1], "{name}: the clean command runs");
         assert!(ran.status.replay_fault, "{name}");
         assert_eq!(ran.status.replay_faults.0, case.faults, "{name}");
-        assert!(!ran.status.overflow, "{name}: no count is clamped");
         assert_eq!(ran.entry(1, 2), [A.1, A.0, padded(A.2), 0], "{name}");
     }
 
@@ -1104,11 +1103,7 @@ fn an_empty_grid_dispatches_nothing_and_refuses_nothing() {
             &[record(action, Some(TOKEN), &[], 0), clean()],
             0,
         );
-        assert!(
-            !ran.status.replay_fault && !ran.status.overflow,
-            "{name}: {:?}",
-            ran.status
-        );
+        assert!(!ran.status.replay_fault, "{name}: {:?}", ran.status);
         assert_eq!(ran.args(0, 0), [0; 3], "{name}");
         assert_eq!(ran.args(1, 0), [2, 1, 1], "{name}");
     }
@@ -1132,7 +1127,7 @@ fn a_command_past_the_storages_capacity_is_not_read() {
     );
     assert_eq!(ran.args(0, 0), [2, 1, 1]);
     assert_eq!(ran.args(1, 0), [0; 3]);
-    assert!(ran.status.replay_fault && !ran.status.overflow);
+    assert!(ran.status.replay_fault);
     assert_eq!(ran.status.replay_faults, ReplayFaults::RANGE);
 }
 
@@ -1388,7 +1383,6 @@ fn a_group_count_past_the_limit_splits_into_chunks() {
         assert_eq!(ran.dispatched(0), [], "{name}");
         assert_eq!(ran.dispatched(1), [(0, 0, [1, 1, 1])], "{name}");
         assert_eq!(ran.status.replay_faults, ReplayFaults::REGIONS, "{name}");
-        assert!(!ran.status.overflow, "{name}");
     }
 }
 

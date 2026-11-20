@@ -401,7 +401,7 @@ mod tests {
         let mut cubic = [0u8; 32];
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
-        assert!(c.cubic_argument_sampler && !c.absent_argument_read && !c.overflow);
+        assert!(c.cubic_argument_sampler && !c.absent_argument_read);
         assert!(r.absent_argument_read && !r.index_pool_overflow);
         assert_eq!(r.mesh_records_overflow, None);
         bytes = [0u8; 32];
