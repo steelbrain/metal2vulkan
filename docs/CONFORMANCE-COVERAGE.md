@@ -36,8 +36,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 518 |
 | of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 295 |
-| of those exercised, a case reaching it loosens some site | 223 |
+| of those exercised, no case reaching it loosens anything | 301 |
+| of those exercised, a case reaching it loosens some site | 217 |
 | case modules | 179 |
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
@@ -506,8 +506,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1235 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 17 |
-| tolerances in all | 21 |
+| modules that loosen a measured value | 16 |
+| tolerances in all | 20 |
 | modules declaring a notice (loosening no value) | 43 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -608,7 +608,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `library_facts` | 9 | 9 | every field | 38 |
 | `math_routines` | 2 | 2 | every field | 25 |
 | `mesh_barriers` | 2 | 2 | every field | 50 |
-| `mesh_commands` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 47 |
+| `mesh_commands` | 2 | 2 | every field | 47 |
 | `mesh_draws` | 6 | 6 | every field | 46 |
 | `mesh_partial_barriers` | 4 | 4 | every field | 45 |
 | `mesh_pipeline_descriptors` | 3 | 3 | every field | 47 |
