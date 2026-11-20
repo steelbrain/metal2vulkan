@@ -1294,8 +1294,6 @@ pub enum RenderPipelineKind {
     Imageblock,
     /// A fragment function's stencil output applied by the shader.
     ShaderStencil,
-    /// A function that reads constant data the binder supplies.
-    ConstantData,
     /// A specialization the draw would set, beside the sample and amplification counts.
     Specialization,
     /// Dynamic state the translator asks for beyond what Vulkan 1.3 leaves dynamic.

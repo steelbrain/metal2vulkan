@@ -2259,7 +2259,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
   in a new process took 45 to 48 µs.
 - A kernel that reads anything the encoder does not supply yet, a function table, a
-  `[[stage_in]]` fetch, constant data, or a sampler or texture state the translator would take
+  `[[stage_in]]` fetch, or a sampler or texture state the translator would take
   from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is
   a state for indirect command buffers (`Gap::IndirectCommandBuffers`), and a kernel that encodes
   commands into one, which the translator refuses
@@ -2481,14 +2481,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions' and a tessellation's, an imageblock, a
-  fragment function's stencil output, constant data the binder supplies, a
-  specialization other than the sample and amplification counts, dynamic state beyond Vulkan
-  1.3's (a vertex buffer layout whose stride is set per bind among it), a
-  feature or extension device creation does not enable, and a function that reads what a draw
-  does not supply (`DrawInput`: a function table, a table the binder builds, a parameter block
-  past the push range, a push field or bind-time fact the encoder does not fill, an unnormalized
-  constexpr sampler). Of the replay streams' contents that translate, every one reads only its
-  slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
+  fragment function's stencil output, a specialization other than the sample and amplification
+  counts, dynamic state beyond Vulkan 1.3's (a vertex buffer layout whose stride is set per bind
+  among it), a feature or extension device creation does not enable, and a function that reads
+  what a draw does not supply (`DrawInput`: a function table, a table the binder builds, a
+  parameter block past the push range, a push field or bind-time fact the encoder does not fill,
+  an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
+  reads only its slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
 - A fragment function whose group operations read, combine or count other lanes (every SIMD-group
   and quad group function, and the SIMD-group matrix functions) is refused at creation, an

@@ -6,8 +6,10 @@
 //! offsets with the buffer family's index rule (`access::gep_offset`), and `bitcast`,
 //! `addrspacecast`, `freeze`, and `select` copy or select the offset. Several blob globals in one
 //! root set share the representation, since their offsets are all blob offsets. A load is a
-//! word-composed leaf from the blob's storage view (`memory::blob`), contained by the descriptor
-//! encoding: none with robust descriptors, else the normative check against the bound size.
+//! word-composed leaf from the blob's words (`memory::blob`): a bound blob's storage view,
+//! contained by the descriptor encoding (none with robust descriptors, else the normative check
+//! against the bound size), or under the identity domains the module's `Private` words, checked
+//! against their length on every load.
 //!
 //! The blob is constant: a store through a blob pointer is refused, as is a root set that mixes
 //! the blob with a parameter slot or null (not implemented: it needs the blob's root in the
@@ -19,9 +21,9 @@ use crate::air::ir::{CastOp, Const, Inst, InstId, InstKind, Value, ValueId};
 use crate::error::Error;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
-use crate::memory::blob::BlobUse;
+use crate::memory::blob::{BlobDecl, BlobHome, BlobUse};
 use crate::memory::contain::{self, Check};
-use crate::memory::leaf::{self, k32, Leaf, WordOps};
+use crate::memory::leaf::{self, k32, Leaf, WordMem, WordOps};
 use crate::memory::plan::{ConstGlobalForm, MemoryPlan};
 use crate::memory::provenance::{Repr, RootSetId};
 use crate::memory::views;
@@ -149,8 +151,9 @@ pub fn lowered_pointer(cx: &SelectCx<'_>, v: Value) -> Result<Option<DemoteTy>, 
     Ok(Some(DemoteTy::ArenaOffset))
 }
 
-/// Record that the function reads the blob: the artifact carries its bytes, shared with the
-/// memory plan's, and its storage descriptor counts in the per-stage limits.
+/// Record that the function reads the blob, its bytes shared with the memory plan's: under the
+/// identity domains the module's words, with no descriptor; otherwise bound, the artifact carrying
+/// its bytes and its storage descriptor counting in the per-stage limits.
 pub fn use_blob(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.families.access.blob.is_some() {
         return Ok(());
@@ -159,9 +162,25 @@ pub fn use_blob(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         Some(b) => Arc::clone(&b.bytes),
         None => return Err(cx.invariant("a blob pointer without a blob")),
     };
-    cx.families.access.blob = Some(BlobUse { bytes });
-    cx.descriptors.storage_buffers = cx.descriptors.storage_buffers.saturating_add(1);
+    let home = match super::identity(cx.profile) {
+        true => BlobHome::Module,
+        false => BlobHome::Bound,
+    };
+    cx.families.access.blob = Some(BlobUse { bytes, home });
+    if home == BlobHome::Bound {
+        cx.descriptors.storage_buffers = cx.descriptors.storage_buffers.saturating_add(1);
+    }
     Ok(())
+}
+
+/// The containment check of a load from the blob on `cx`'s profile: the descriptor encoding's for
+/// a bound blob; in the shader for the module's words under the identity domains, which no
+/// robustness covers.
+pub fn check(cx: &SelectCx<'_>) -> Check {
+    match super::identity(cx.profile) {
+        true => Check::InShader,
+        false => contain::encoding(cx.profile),
+    }
 }
 
 /// The operand form of blob pointer `v`: a value, or a global's address as its blob offset.
@@ -192,7 +211,7 @@ pub fn load(
     Ok(BlobLoad {
         ptr: blob_ptr(cx, ptr)?,
         leaf,
-        checked: contain::encoding(cx.profile) == Check::InShader,
+        checked: check(cx) == Check::InShader,
     })
 }
 
@@ -298,34 +317,55 @@ pub fn load_at(
     off: SValue,
     checked: bool,
 ) -> BResult<SValue> {
-    let Some(view) = cx.decl.families.access.blob else {
+    let Some(decl) = cx.decl.families.access.blob else {
         return Err(cx.fail("the constant blob is not declared"));
     };
-    load_view(fb, view, leaf, off, checked)
+    load_decl(fb, decl, leaf, off, checked)
 }
 
-/// Load `leaf` at byte offset `off` of the blob's view `view`, contained when `checked`.
-pub fn load_view(
+/// Load `leaf` at byte offset `off` of the declared blob `decl`: a bound blob's view contained
+/// when `checked`, the module's words always.
+pub fn load_decl(
     fb: &mut FunctionBuilder<'_>,
-    view: views::View,
+    decl: BlobDecl,
     leaf: &Leaf,
     off: SValue,
     checked: bool,
 ) -> BResult<SValue> {
     // The blob is read-only: its words are the same on every load, which stay plain.
-    let mut mem = ViewMem(view, WordOps::default(), views::UnitViews::NONE);
-    if !checked {
-        return leaf::load(fb, &mut mem, leaf, off);
+    match decl {
+        BlobDecl::Bound(view) => {
+            let mut mem = ViewMem(view, WordOps::default(), views::UnitViews::NONE);
+            if !checked {
+                return leaf::load(fb, &mut mem, leaf, off);
+            }
+            let Some(size) = views::storage_bytes(fb, view)? else {
+                return Err(crate::spirv::error::BuildError::Dangling(
+                    crate::spirv::error::Dangling::Global(view.global),
+                ));
+            };
+            contained(fb, &mut mem, leaf, off, size)
+        }
+        BlobDecl::Module(mut words) => {
+            let size = k32(fb, words.words.saturating_mul(4))?;
+            contained(fb, &mut words, leaf, off, size)
+        }
     }
-    let Some(size) = views::storage_bytes(fb, view)? else {
-        return Err(crate::spirv::error::BuildError::Dangling(
-            crate::spirv::error::Dangling::Global(view.global),
-        ));
-    };
+}
+
+/// Load `leaf` at byte offset `off` of `mem`, whose bytes number `size`: the leaf, or zero where
+/// it does not lie wholly inside.
+fn contained(
+    fb: &mut FunctionBuilder<'_>,
+    mem: &mut dyn WordMem,
+    leaf: &Leaf,
+    off: SValue,
+    size: SValue,
+) -> BResult<SValue> {
     let inb = contain::in_bounds(fb, off, size, u64::from(leaf.bytes))?;
     let zero = k32(fb, 0)?;
     let at = fb.select(inb, off, zero)?;
-    let v = leaf::load(fb, &mut mem, leaf, at)?;
+    let v = leaf::load(fb, mem, leaf, at)?;
     let z = leaf::zero(fb, leaf)?;
     fb.select(inb, v, z)
 }

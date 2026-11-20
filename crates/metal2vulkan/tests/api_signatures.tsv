@@ -14150,7 +14150,6 @@ variant	metal2vulkan-rt::RenderPassKind::ResolveFilter	ResolveFilter
 variant	metal2vulkan-rt::RenderPassKind::SampleCounts	SampleCounts
 variant	metal2vulkan-rt::RenderPassKind::StoreAction	StoreAction
 variant	metal2vulkan-rt::RenderPassKind::TextureType	TextureType
-variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
 variant	metal2vulkan-rt::RenderPipelineKind::DepthStencilFormats	DepthStencilFormats
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
 variant	metal2vulkan-rt::RenderPipelineKind::DrawInput	DrawInput

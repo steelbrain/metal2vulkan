@@ -884,8 +884,8 @@ pub struct Declared {
     pub local: local::LocalDecl,
     /// The stage's `ArgumentTable`, when the placement spilled fields there.
     pub table: Option<table::Table>,
-    /// The constant blob's storage view, when the function reads the blob.
-    pub blob: Option<View>,
+    /// The constant blob's words, when the function reads the blob.
+    pub blob: Option<crate::memory::blob::BlobDecl>,
     /// The storage view of each pulled source buffer with a descriptor slot of its own, by Metal
     /// index ([`pulled`]).
     pub pulled: Vec<(u32, View)>,
@@ -2071,8 +2071,8 @@ pub fn declare(
             true => None,
             false => table::declare(mb, &plan.push)?,
         },
-        blob: match plan.families.access.blob {
-            Some(_) => Some(crate::memory::blob::declare(mb, plan.stage)?),
+        blob: match &plan.families.access.blob {
+            Some(b) => Some(crate::memory::blob::declare(mb, plan.stage, b)?),
             None => None,
         },
         pulled: pulled::declare(mb, &plan.families.access)?,
@@ -2338,7 +2338,7 @@ fn blob_roots(
     }
     let blob_check = if in_blob {
         blob::use_blob(cx)?;
-        Some(contain::encoding(cx.profile))
+        Some(blob::check(cx))
     } else {
         None
     };

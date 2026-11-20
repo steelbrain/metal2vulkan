@@ -950,8 +950,9 @@ fn interface(
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
     // Every argument is a pushed address, a pushed resource ID or index, or a specialization: no
-    // descriptor but set 1's, no table the binder builds, no constant data; the stage's flags are
-    // its subgroups'.
+    // descriptor but set 1's and no table the binder builds (the translator holds a kernel's
+    // constant data in its module on this device's profile); the stage's flags are its
+    // subgroups'.
     let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
@@ -960,7 +961,6 @@ fn interface(
         || translated.reaches_command_buffers
         || !translated.stage_in.is_empty()
         || !pipeline.layout.sets.iter().all(of_the_device)
-        || stage.constant_blob.is_some()
         || !subgroups.contains(stage_flags)
     {
         return Err(gap());

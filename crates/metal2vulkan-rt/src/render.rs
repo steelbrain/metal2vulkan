@@ -619,8 +619,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         RenderPipelineKind::Imageblock
     } else if g.shadow_stencil.is_some() {
         RenderPipelineKind::ShaderStencil
-    } else if (pipeline.stages.iter()).any(|stage| stage.constant_blob.is_some()) {
-        RenderPipelineKind::ConstantData
     } else if !(g.dynamic_states.iter()).all(|state| DYNAMIC.contains(&dynamic(*state))) {
         RenderPipelineKind::DynamicState
     } else if unenabled {

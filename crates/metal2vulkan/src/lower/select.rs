@@ -1817,6 +1817,9 @@ fn finish(
     }
     estimate.add(stage_io::estimate_words(&cx.families.stage_io));
     estimate.add(mesh::estimate_words(&cx.families.mesh));
+    if let Some(blob) = &cx.families.access.blob {
+        estimate.add(crate::memory::blob::declared_words(blob));
+    }
     if dispatch.as_ref().is_some_and(|d| d.flat_grid) {
         estimate.add(dispatch::FLAT_GRID_WORDS);
     }
@@ -2089,6 +2092,15 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
         return Some(format!(
             "state of a bound texture or sampler beyond its resource ID ({f:?})"
         ));
+    }
+    // The module holds the blob's words (`memory::blob`) up to its bound.
+    if let Some(blob) = &plan.families.access.blob {
+        let bytes = blob.bytes.len() as u64;
+        if bytes > crate::memory::blob::MODULE_BYTES {
+            return Some(format!(
+                "constant data of {bytes} bytes read through memory"
+            ));
+        }
     }
     if plan.descriptors.descriptors() != 0 {
         return Some("a resource bound through a descriptor".to_owned());

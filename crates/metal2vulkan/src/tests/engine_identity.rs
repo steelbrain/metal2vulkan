@@ -73,6 +73,13 @@
 //!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
 //!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
 //!   one and of 80 threads (a partial simdgroup of 16) answer Metal's products.
+//! - A kernel that reads program-scope constants through memory (`blob_words`, generated: a
+//!   `ushort3` constant read as `half3`, as `as_type` folds into the load, and a word table read
+//!   as 2-byte units at offsets only the run knows) holds the constant blob as the module's own
+//!   `Private` words: no descriptor, no blob in the artifact, the words counted in its private
+//!   bytes, and on the CPU interpreter each value read, and zero for a read past the words. The
+//!   default domains bind the same blob as before. A blob past `memory::blob::MODULE_BYTES`
+//!   (`blob_past`, generated) is refused as `Unsupported{IdentityDomains}` naming its size.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -2786,5 +2793,146 @@ fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domain
             assert_eq!((slot.class, slot.index), (SlotClass::Texture, 0));
         }
         other => panic!("Device::new: {:?}", other.map(|_| ())),
+    }
+}
+
+/// The 32-bit floats `blob_words` reads of its `ushort3` constant as `half3`: 1.0, 2.5 and -0.75.
+const BLOB_LANES: [f32; 3] = [1.0, 2.5, -0.75];
+
+/// Under the identity domains the constant blob is the module's own words. `blob_words` reads a
+/// `ushort3` constant as `half3` (the load `as_type` folds into, the records' form) and a word
+/// table as 2-byte units at offsets only the run knows, one past the table's words: it binds no
+/// descriptor and its artifact carries no blob, its private bytes count the blob's 32 padded bytes,
+/// and on the CPU interpreter each thread stores its lane's float and its unit, and zero for the
+/// read past the words. The default domains compile the same kernel with the blob bound, its 24
+/// bytes in the artifact.
+#[test]
+fn the_constant_blob_is_the_modules_words_under_the_identity_domains() {
+    use super::engine_pointer_memory::{assemble, kernel};
+    let decls = "@k = internal addrspace(2) constant <3 x i16> <i16 15360, i16 16640, i16 -17920>, align 8
+@w = internal addrspace(2) constant [4 x i32] [i32 131073, i32 262147, i32 393221, i32 524295], align 4
+";
+    let body = "  %h = load <3 x half>, ptr addrspace(2) @k, align 8
+  %l = urem i32 %t, 3
+  %e = extractelement <3 x half> %h, i32 %l
+  %f = fpext half %e to float
+  %fb = bitcast float %f to i32
+  %m = and i32 %t, 7
+  %off = shl i32 %m, 1
+  %far = icmp uge i32 %t, 8
+  %o = select i1 %far, i32 4096, i32 %off
+  %p = getelementptr i8, ptr addrspace(2) @w, i32 %o
+  %v = load i16, ptr addrspace(2) %p, align 2
+  %vz = zext i16 %v to i32
+  %i = shl i32 %t, 1
+  %q0 = getelementptr inbounds i32, ptr addrspace(1) %b0, i32 %i
+  store i32 %fb, ptr addrspace(1) %q0, align 4
+  %j = or i32 %i, 1
+  %q1 = getelementptr inbounds i32, ptr addrspace(1) %b0, i32 %j
+  store i32 %vz, ptr addrspace(1) %q1, align 4
+";
+    let name = "blob_words";
+    let Some(bc) = assemble(name, &kernel(name, 1, body, decls)) else {
+        return;
+    };
+    const THREADS: u32 = 9;
+    let address = 0x3_0000_2000u64;
+    let out = vec![0xEEu8; 8 * THREADS as usize];
+    let mut want = Vec::new();
+    for t in 0..THREADS {
+        want.extend_from_slice(&BLOB_LANES[(t % 3) as usize].to_bits().to_le_bytes());
+        let unit = if t < 8 { (t & 7) + 1 } else { 0 };
+        want.extend_from_slice(&unit.to_le_bytes());
+    }
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let (bound, bound_plan, _) =
+            compile_kept(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default: {e}"));
+        assert_eq!(bound.blob.as_deref().map(<[u8]>::len), Some(24), "{stem}");
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, name, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(a.interface.descriptors.is_empty(), "{stem}");
+        assert_eq!(a.blob, None, "{stem}");
+        assert_eq!(plan.private_bytes, bound_plan.private_bytes + 32, "{stem}");
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        let region = region_bytes([0; 3], [THREADS, 1, 1], [THREADS, 1, 1]).expect("packs");
+        for f in &plan.push.fields {
+            let PushLoc::Push { offset } = f.loc else {
+                panic!("{stem}: {f:?} spilled");
+            };
+            let o = offset as usize;
+            match f.field {
+                PushField::SlotGuestBase(_) => {
+                    push[o..o + 8].copy_from_slice(&slot_word(address).to_le_bytes());
+                }
+                PushField::SlotBounds(_) => {
+                    push[o..o + 8].copy_from_slice(&bounds_word(out.len(), 0));
+                }
+                PushField::ZeroAddress => {
+                    push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
+                }
+                PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+                _ => panic!("{stem}: unexpected push field {f:?}"),
+            }
+        }
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(address),
+                bytes: out.clone(),
+            }],
+            push,
+            spec: local_size(THREADS),
+        };
+        let got = run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[0], want, "{stem}: out");
+    }
+}
+
+/// Under the identity domains a constant blob past `memory::blob::MODULE_BYTES` is refused as
+/// `Unsupported{IdentityDomains}`, not implemented, naming the constant data's size, where the
+/// default domains bind it.
+#[test]
+fn a_constant_blob_past_the_modules_bound_is_refused_naming_its_size() {
+    use super::engine_pointer_memory::{assemble, kernel};
+    let decls = "@big = internal addrspace(2) constant [16400 x i32] zeroinitializer, align 4\n";
+    let body = "  %p = getelementptr i8, ptr addrspace(2) @big, i32 6
+  %v = load i16, ptr addrspace(2) %p, align 2
+  %vz = zext i16 %v to i32
+  store i32 %vz, ptr addrspace(1) %b0, align 4
+";
+    let name = "blob_past";
+    let Some(bc) = assemble(name, &kernel(name, 1, body, decls)) else {
+        return;
+    };
+    let bytes = 16400 * 4;
+    assert!(bytes > crate::memory::blob::MODULE_BYTES);
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let (bound, _, _) =
+            compile_kept(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default: {e}"));
+        assert_eq!(
+            bound.blob.as_deref().map(|b| b.len() as u64),
+            Some(bytes),
+            "{stem}"
+        );
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let e = match compile(&bc, name, &p) {
+            Err(e) => e,
+            Ok(_) => panic!("{stem}: compiled"),
+        };
+        let text = e.to_string();
+        let words = format!("constant data of {bytes} bytes read through memory");
+        assert!(text.contains(&words), "{stem}: {text}");
+        let Error::Unsupported(u) = e else {
+            panic!("{stem}: {text}");
+        };
+        assert_eq!(
+            (u.feature, u.needs),
+            (Feature::IdentityDomains, Needs::NotImplemented),
+            "{stem}"
+        );
     }
 }

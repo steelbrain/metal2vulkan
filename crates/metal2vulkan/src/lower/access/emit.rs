@@ -510,12 +510,12 @@ pub(super) fn access_at(
     // A pointer that may point into the blob reads it under `BLOB_ROOT` (never stored).
     let blob = match a.blob {
         Some(check) => match cx.decl.families.access.blob {
-            Some(view) => Some((view, check == Check::InShader)),
+            Some(decl) => Some((decl, check == Check::InShader)),
             None => return Err(cx.fail("the constant blob is not declared")),
         },
         None => None,
     };
-    if let Some((view, checked)) = blob {
+    if let Some((decl, checked)) = blob {
         if stored.is_some() {
             return Err(cx.fail("a store through a pointer into the constant blob"));
         }
@@ -527,8 +527,8 @@ pub(super) fn access_at(
             cases.push((vec![r], arm));
         }
         let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            Ok(ArmEnd::FallThrough(vec![super::blob::load_view(
-                fb, view, &leaf, m, checked,
+            Ok(ArmEnd::FallThrough(vec![super::blob::load_decl(
+                fb, decl, &leaf, m, checked,
             )?]))
         });
         cases.push((vec![BLOB_ROOT], arm));

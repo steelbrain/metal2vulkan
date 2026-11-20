@@ -112,7 +112,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
   pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table and no
-  descriptor. With containment on, an access of the slot whose byte offset is not a
+  descriptor. The constant blob (the program-scope constants whose address merges, escapes or is
+  compared, or that are read through another type than their own) is the module's own there: a
+  `Private` array of its words, zero-padded to 16 bytes, which every load is checked against, and
+  no stage carries a `constant_blob`. A blob past 64 KiB is refused
+  (`Unsupported{IdentityDomains}`, naming the constant data's size). With containment on, an access of the slot whose byte offset is not a
   translation-time constant is checked against the slot's buffer (`PushField::SlotBounds`), from
   the buffer's start to its end, as Metal's domain is the buffer: an offset before the bind
   offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a

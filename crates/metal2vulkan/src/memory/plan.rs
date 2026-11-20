@@ -366,7 +366,9 @@ pub struct MemoryPlan {
     /// which selection holds to the device's Function storage: the private arena (its pointers
     /// merge, escape, or reinterpret its bytes), and each typed alloca (a recursion's call stacks
     /// among them) and each constant held as a `Private` variable that some access indexes at run
-    /// time, each at its allocation size. An object reached only at constant offsets counts
+    /// time, each at its allocation size, and under the identity domains the constant blob, the
+    /// module's `Private` words (`memory::blob`), where some access reaches it at an offset only
+    /// the run knows, at their size. An object reached only at constant offsets counts
     /// nothing: a driver holds its parts in registers. Nothing is shared between objects whose
     /// lives do not overlap, so the sum is conservative.
     pub private_bytes: u64,
@@ -787,7 +789,12 @@ impl Planner<'_> {
         let (priv_arena, typed_allocas, fragment_values) = self.allocas(&mut room, m)?;
         let tg_metal_static = tg_arena.static_size;
         let (tg_arena, typed_shared) = self.typed_threadgroup(tg_arena, &mut room, m)?;
-        let private_bytes = self.private_bytes(&priv_arena, &typed_allocas, &const_globals, m)?;
+        let private_bytes = self.private_bytes(
+            &priv_arena,
+            &typed_allocas,
+            (&const_globals, blob.as_ref()),
+            m,
+        )?;
         let Reprs {
             repr,
             offsets,
@@ -829,14 +836,15 @@ impl Planner<'_> {
 
     /// The bytes of private memory a thread holds where a driver backs it with scratch memory
     /// ([`MemoryPlan::private_bytes`]): the private arena's size, and the allocation size of each
-    /// typed alloca and each `Private` constant some access indexes at run time. An alloca that
-    /// holds simdgroup matrices as fragments holds each as its two elements
-    /// ([`super::fragment::bytes`]).
+    /// typed alloca and each `Private` constant some access indexes at run time, the blob among
+    /// them under the identity domains, where it is the module's `Private` words
+    /// (`memory::blob`), at their size. An alloca that holds simdgroup matrices as fragments
+    /// holds each as its two elements ([`super::fragment::bytes`]).
     fn private_bytes(
         &self,
         arena: &ArenaLayout,
         typed: &[AllocaPlan],
-        consts: &[ConstGlobalPlan],
+        (consts, blob): (&[ConstGlobalPlan], Option<&ConstantBlob>),
         m: &mut Meter,
     ) -> Result<u64, Error> {
         let mut bytes = arena.static_size;
@@ -865,6 +873,19 @@ impl Planner<'_> {
                 .alloc_size(global.value_ty)
                 .ok_or_else(not_lowered)?;
             bytes = bytes.saturating_add(size);
+        }
+        // A blob offset only the run knows: an index, or a pointer that merges with another
+        // root's or is read back from a cell.
+        let run_time = |c: &ConstGlobalPlan| {
+            let u = self.uses(Root::Global(c.global));
+            u.indexed || u.merged || u.stored
+        };
+        let in_blob = |c: &&ConstGlobalPlan| matches!(c.form, ConstGlobalForm::Blob { .. });
+        if let Some(blob) = blob.filter(|_| crate::lower::access::identity(self.p)) {
+            if consts.iter().filter(in_blob).any(run_time) {
+                let size = super::blob::module_bytes(blob.bytes.len() as u64);
+                bytes = bytes.saturating_add(size);
+            }
         }
         Ok(bytes)
     }

@@ -3666,7 +3666,11 @@ fn lower_bounded<K>(
         precision,
         strategies: emitted_census(&plan, helper_guard),
         stats,
-        blob: plan.families.access.blob.as_ref().map(|b| b.bytes.clone()),
+        // The module's own blob (the identity domains) is in its words: the artifact carries a
+        // bound blob's bytes alone.
+        blob: (plan.families.access.blob.as_ref())
+            .filter(|b| b.home == crate::memory::blob::BlobHome::Bound)
+            .map(|b| b.bytes.clone()),
         requirements,
         variant_bits: 0,
         profile: p.fingerprint(),
