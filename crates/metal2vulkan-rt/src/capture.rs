@@ -18,8 +18,15 @@
 //! that reads it, and does not reach a command buffer committed before. The copy reads the
 //! consumer's bytes as it runs, so a write after the commit may reach it, where Metal leaves the
 //! range undefined.
+//!
+//! A range named and not yet captured holds its buffer weakly, and neither of its blocks: once the
+//! buffer's last handle is gone, nothing can read its device copy (a command buffer, an encoder's
+//! binding or a texture that could holds the buffer), so the capture forgets its ranges, and the
+//! buffer's drop lets its blocks go at once, an import's release among them. Metal runs a no-copy
+//! buffer's deallocator as it deallocates the buffer, and its `didModifyRange:` is owed only to a
+//! command buffer that accesses the buffer, which then holds it.
 
-use crate::buffer::DeviceCopy;
+use crate::buffer::{BufferInner, DeviceCopy};
 use crate::counters::Metric;
 use crate::device::Core;
 use crate::error::Error;
@@ -29,11 +36,14 @@ use crate::record::{self, Reach, Recorder};
 use crate::texture::{Image, OverCopy};
 use ash::vk;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-/// A Managed buffer's ranges named since the last capture.
+/// A Managed buffer's ranges a capture took ([`Changes::take`]), and what its copy-in holds.
 #[derive(Clone)]
 pub(crate) struct Modified {
+    /// The buffer, to name the ranges again where the copy-in never runs
+    /// ([`Changes::give_up`]); held weakly, as a range named is.
+    pub(crate) buffer: Weak<BufferInner>,
     pub(crate) copy: Arc<DeviceCopy>,
     /// The block of the consumer's bytes, held.
     pub(crate) cpu: Arc<Block>,
@@ -45,83 +55,74 @@ pub(crate) struct Modified {
     pub(crate) ranges: Vec<(u64, u64)>,
 }
 
-/// A Managed buffer whose range is named: its device copy, its consumer's bytes (the block and
-/// the buffer's offset in it) and its textures over the device copy in images of their own.
-pub(crate) struct Named<'a> {
-    pub(crate) copy: &'a Arc<DeviceCopy>,
-    pub(crate) cpu: &'a Arc<Block>,
-    pub(crate) offset: u64,
-    pub(crate) overs: &'a Arc<ManagedOvers>,
+/// A Managed buffer's ranges named and not yet captured, `start..end` in the buffer, by start, no
+/// two overlapping or touching. The buffer is held weakly (the module's doc).
+struct Named {
+    buffer: Weak<BufferInner>,
+    ranges: Vec<(u64, u64)>,
 }
 
 /// The device's ranges named and not yet captured, in the order of each buffer's first.
 #[derive(Default)]
 pub(crate) struct Changes {
-    modified: Vec<Modified>,
-    /// Each buffer's place in `modified`, by its device copy's address.
+    named: Vec<Named>,
+    /// Each buffer's place in `named`, by its address, which a weak hold keeps from reuse.
     at: HashMap<usize, usize>,
     /// What a commit captured before it failed: the next commit's command buffer takes it first.
     pub(crate) carried: Vec<CopyIn>,
 }
 
 impl Changes {
-    /// Names `start..end` of `buffer`.
-    pub(crate) fn add(&mut self, buffer: Named<'_>, start: u64, end: u64) {
-        let key = Arc::as_ptr(buffer.copy) as usize;
+    /// Names `start..end` of `buffer`, a Managed buffer with a device copy.
+    pub(crate) fn add(&mut self, buffer: &Arc<BufferInner>, start: u64, end: u64) {
+        let key = Arc::as_ptr(buffer) as usize;
         match self.at.get(&key) {
-            Some(&index) => merge(&mut self.modified[index].ranges, start, end),
+            Some(&index) => merge(&mut self.named[index].ranges, start, end),
             None => {
-                self.at.insert(key, self.modified.len());
-                self.modified.push(Modified {
-                    copy: Arc::clone(buffer.copy),
-                    cpu: Arc::clone(buffer.cpu),
-                    offset: buffer.offset,
-                    overs: Arc::clone(buffer.overs),
+                self.at.insert(key, self.named.len());
+                self.named.push(Named {
+                    buffer: Arc::downgrade(buffer),
                     ranges: vec![(start, end)],
                 });
             }
         }
     }
 
-    /// The ranges named since the last capture, taken.
+    /// The ranges named since the last capture, taken: those of the buffers that still live, each
+    /// holding the buffer's blocks from here; a buffer gone has its ranges forgotten.
     pub(crate) fn take(&mut self) -> Vec<Modified> {
         self.at.clear();
-        std::mem::take(&mut self.modified)
-    }
-
-    /// Whether a range is named.
-    pub(crate) fn named(&self) -> bool {
-        !self.modified.is_empty()
+        (self.named.drain(..))
+            .filter_map(|named| {
+                let buffer = named.buffer.upgrade()?;
+                buffer.modified(named.ranges)
+            })
+            .collect()
     }
 
     /// A capture of `modified` that will not run: its ranges are named again, for the next commit
-    /// to capture.
+    /// to capture, where the buffer still lives.
     pub(crate) fn give_up(&mut self, modified: &[Modified]) {
         for modified in modified {
+            let Some(buffer) = modified.buffer.upgrade() else {
+                continue;
+            };
             for &(start, end) in &modified.ranges {
-                self.add(modified.named(), start, end);
+                self.add(&buffer, start, end);
             }
         }
     }
 
     /// At the device's end: the ranges named are forgotten, and the copy-ins carried come back,
     /// for their recorders to be given back.
-    pub(crate) fn clear(&mut self) -> (Vec<Modified>, Vec<CopyIn>) {
-        (self.take(), std::mem::take(&mut self.carried))
+    pub(crate) fn clear(&mut self) -> Vec<CopyIn> {
+        self.at.clear();
+        self.named.clear();
+        std::mem::take(&mut self.carried)
     }
 }
 
 impl Modified {
-    /// The buffer, to name a range of it again.
-    fn named(&self) -> Named<'_> {
-        Named {
-            copy: &self.copy,
-            cpu: &self.cpu,
-            offset: self.offset,
-            overs: &self.overs,
-        }
-    }
-
     /// Its bytes named, in all.
     pub(crate) fn bytes(&self) -> u64 {
         self.ranges.iter().map(|&(start, end)| end - start).sum()

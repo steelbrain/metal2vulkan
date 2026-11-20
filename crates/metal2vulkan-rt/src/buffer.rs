@@ -1,7 +1,7 @@
 //! Buffers: views of a range of a block, with no Vulkan object of their own; a Managed buffer's
 //! device copy, where the device has one, is a range of a Private block the consumer placed it in.
 
-use crate::capture::Named;
+use crate::capture::Modified;
 use crate::counters::{Gauge, Part};
 use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
@@ -111,6 +111,22 @@ impl Drop for DeviceCopy {
         if self.block.memory.spilled() {
             (self.core.counters).fall_by(Gauge::ManagedSpilledBytes, self.len);
         }
+    }
+}
+
+impl BufferInner {
+    /// A capture's take of `ranges` of the buffer ([`crate::capture::Changes::take`]), holding its
+    /// blocks from here; none where it has no device copy.
+    pub(crate) fn modified(self: &Arc<Self>, ranges: Vec<(u64, u64)>) -> Option<Modified> {
+        let copy = self.copy.as_ref()?;
+        Some(Modified {
+            buffer: Arc::downgrade(self),
+            copy: Arc::clone(copy),
+            cpu: Arc::clone(&self.block),
+            offset: self.offset,
+            overs: Arc::clone(&self.overs),
+            ranges,
+        })
     }
 }
 
@@ -555,16 +571,10 @@ pub(crate) trait BufferObject {
                 length,
                 buffer_length: inner.length,
             }))?;
-        let Some(copy) = inner.copy.as_ref().filter(|_| length > 0) else {
+        if inner.copy.is_none() || length == 0 {
             return Ok(());
-        };
-        let named = Named {
-            copy,
-            cpu: &inner.block,
-            offset: inner.offset,
-            overs: &inner.overs,
-        };
-        inner.core.work.modify(named, start, end)
+        }
+        inner.core.work.modify(inner, start, end)
     }
 
     /// [`Buffer::length`].

@@ -38,7 +38,7 @@
 //! submission.
 
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
-use crate::capture::{self, Changes, CopyIn, Modified, Named};
+use crate::capture::{self, Changes, CopyIn, Modified};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Gauge, Metric, Site};
@@ -598,11 +598,17 @@ impl Work {
 
     /// `didModifyRange:` of a Managed buffer with a device copy: the consumer's bytes
     /// `start..end` of `buffer` changed. The range is only named, merged with the buffer's others
-    /// where they overlap or touch; the next commit of a command buffer with commands copies it
-    /// in ([`capture`](Self::capture)). It allocates nothing.
+    /// where they overlap or touch, holding the buffer weakly; the next commit of a command buffer
+    /// with commands copies it in ([`capture`](Self::capture)) where the buffer still lives. It
+    /// allocates nothing.
     ///
     /// Err: [`Error::Quiesced`].
-    pub(crate) fn modify(&self, buffer: Named<'_>, start: u64, end: u64) -> Result<(), Error> {
+    pub(crate) fn modify(
+        &self,
+        buffer: &Arc<BufferInner>,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Error> {
         let mut state = self.lock();
         if state.closed {
             return Err(Error::Quiesced);
@@ -614,9 +620,9 @@ impl Work {
     /// At a commit of a command buffer with commands, on the committing thread, under the work
     /// lock `state`, which it keeps: takes every Managed buffer's range named since the last
     /// capture (`crate::capture`) into one copy-in, GPU copies from the consumers' blocks into the
-    /// device copies, recorded into a command buffer of its own ([`capture::copy_in`]). Returns
-    /// the copy-ins the committing command buffer takes: a commit that failed after its capture
-    /// left its own first.
+    /// device copies, recorded into a command buffer of its own ([`capture::copy_in`]); none
+    /// where every buffer named is gone. Returns the copy-ins the committing command buffer
+    /// takes: a commit that failed after its capture left its own first.
     ///
     /// Err: [`Error::Quiesced`]; what making the copy-in's command buffer returns. The ranges are
     /// then named again for the next commit.
@@ -625,11 +631,11 @@ impl Work {
         core: &Core,
         mut state: MutexGuard<'a, WorkState>,
     ) -> Result<(MutexGuard<'a, WorkState>, Vec<CopyIn>), Error> {
-        if !state.changes.named() {
+        let named = state.changes.take();
+        if named.is_empty() {
             let carried = std::mem::take(&mut state.changes.carried);
             return Ok((state, carried));
         }
-        let named = state.changes.take();
         if state.closed {
             return Err(self.unwind(state, &named, Error::Quiesced));
         }
@@ -1731,13 +1737,12 @@ pub(crate) fn run(core: Arc<Core>) {
                 .flat_map(|fifo| end(fifo.entries, |_| CommandBufferError::NotRun))
                 .collect();
             let upload = state.drop_upload();
-            // The ranges named and the copy-ins carried hold device copies, which hold the core.
-            let (named, carried) = state.changes.clear();
+            // The copy-ins carried hold device copies, which hold the core.
+            let carried = state.changes.clear();
             drop(state);
             if let Some(upload) = upload {
                 upload.retire(&core);
             }
-            drop(named);
             for copy_in in carried {
                 copy_in.retire(&core);
             }

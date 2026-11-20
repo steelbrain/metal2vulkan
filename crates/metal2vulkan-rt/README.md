@@ -356,7 +356,11 @@ in its memory.
   consumer wrote before its commit, as Metal's `didModifyRange:` asks, and a write made after the
   commit may reach it, where Metal leaves the range undefined for the GPU.
   `Metrics::managed_bytes_captured` counts the bytes the copies take. A command buffer keeps each
-  device copy it uses, and the consumer's blocks its copies read, until it retires.
+  device copy it uses, and the consumer's blocks its copies read, until it retires. A range named
+  and not yet taken keeps neither block: once the buffer's last handle is gone (a command buffer,
+  an encoder or a texture that could read the copy would hold the buffer), its ranges are
+  forgotten and its blocks go at once, an imported block's release among them, as Metal runs a
+  no-copy buffer's deallocator when it deallocates the buffer.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each buffer it uses, and so its
