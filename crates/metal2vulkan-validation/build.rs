@@ -127,8 +127,7 @@ fn main() {
     // draw's work buffer layout, factor reads and tessellator, which its scan runs
     // (`src/lower/tessellation/{work,factors,tessellator}.rs`),
     // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
-    // transfer and half conversions the mipmap filter takes from `air.pack`'s lowering
-    // (`src/lower/arith/pack.rs`), the blend color an
+    // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), the blend color an
     // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), and half-float
     // conversion. The translator's paths above are below its crate (`metal2vulkan/src/...`). Each
     // path is a product file below the workspace's crates/ directory, this crate's parent: those

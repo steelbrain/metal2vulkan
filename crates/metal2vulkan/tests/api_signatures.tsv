@@ -51,21 +51,9 @@ assoc-const	metal2vulkan-runtime::ResourceUsage::WRITE	pub const WRITE: Resource
 assoc-const	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	pub const MIN_ENTRIES: u64
 assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
-assoc-const	metal2vulkan::bind::ChromaConvertModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::ALL	pub const ALL: [ChromaDecode; 2]
 assoc-const	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	pub const TEXEL_BYTES: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::PAIRS_BINDING	pub const PAIRS_BINDING: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
-assoc-const	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
@@ -159,11 +147,6 @@ assoc-const	metal2vulkan::bind::MeshScanModule::RECORDS_BINDING	pub const RECORD
 assoc-const	metal2vulkan::bind::MeshScanModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::MeshScanModule::STATUS_BINDING	pub const STATUS_BINDING: u32
 assoc-const	metal2vulkan::bind::MeshScanModule::WORK_BINDING	pub const WORK_BINDING: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	pub const PARAMS_BINDING: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::NeutralResource::SINK_BYTES	pub const SINK_BYTES: u32
 assoc-const	metal2vulkan::bind::PlanesCopy::ALL	pub const ALL: [PlanesCopy; 6]
 assoc-const	metal2vulkan::bind::PlanesMergeModules::PLANES_BINDING	pub const PLANES_BINDING: u32
@@ -374,21 +357,9 @@ assoc-const-value	metal2vulkan-runtime::ResourceUsage::WRITE	ResourceUsage(2)
 assoc-const-value	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	16
 assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	2
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	0
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	8
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SET	0
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SHAPE_BINDING	1
-assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SHAPE_WORDS	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::ALL	[ChromaDecode::Gbgr, ChromaDecode::Bgrg]
 assoc-const-value	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	4
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::LOCAL_SIZE	8
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::PAIRS_BINDING	0
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SET	0
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SHAPE_BINDING	1
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	5
-assoc-const-value	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	2
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
@@ -482,11 +453,6 @@ assoc-const-value	metal2vulkan::bind::MeshScanModule::RECORDS_BINDING	3
 assoc-const-value	metal2vulkan::bind::MeshScanModule::SET	0
 assoc-const-value	metal2vulkan::bind::MeshScanModule::STATUS_BINDING	1
 assoc-const-value	metal2vulkan::bind::MeshScanModule::WORK_BINDING	0
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::DESTINATION_BINDING	1
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::LOCAL_SIZE	kernel::LOCAL_SIZE
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	2
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SET	0
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::NeutralResource::SINK_BYTES	64
 assoc-const-value	metal2vulkan::bind::PlanesCopy::ALL	[PlanesCopy::R8, PlanesCopy::R16, PlanesCopy::R32, PlanesCopy::Rg32, PlanesCopy::Rgba32, PlanesCopy::Alpha8]
 assoc-const-value	metal2vulkan::bind::PlanesMergeModules::PLANES_BINDING	0
@@ -2290,10 +2256,6 @@ field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
 field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
-field	metal2vulkan::bind::ChromaConvertModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ChromaConvertModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::ChromaSampleModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ChromaSampleModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthSplitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
@@ -2483,20 +2445,6 @@ field	metal2vulkan::bind::MetalInstance.options	pub options: u32
 field	metal2vulkan::bind::MetalInstance.structure	pub structure: AccelerationStructureLevel
 field	metal2vulkan::bind::MetalInstance.transform	pub transform: [[f32; 3]; 4]
 field	metal2vulkan::bind::MetalInstance.user_id	pub user_id: u32
-field	metal2vulkan::bind::MipmapFilterChain.bytes	pub bytes: u64
-field	metal2vulkan::bind::MipmapFilterChain.fetch	pub fetch: Option<Format>
-field	metal2vulkan::bind::MipmapFilterChain.layers	pub layers: u32
-field	metal2vulkan::bind::MipmapFilterChain.levels	pub levels: Vec<MipmapFilterLevel>
-field	metal2vulkan::bind::MipmapFilterChain.pixel_format	pub pixel_format: PixelFormat
-field	metal2vulkan::bind::MipmapFilterChain.zeroed	pub zeroed: bool
-field	metal2vulkan::bind::MipmapFilterLevel.bytes	pub bytes: u64
-field	metal2vulkan::bind::MipmapFilterLevel.extent	pub extent: [u32; 3]
-field	metal2vulkan::bind::MipmapFilterLevel.groups	pub groups: [u32; 2]
-field	metal2vulkan::bind::MipmapFilterLevel.kernel	pub kernel: Option<MipmapFilterKernel>
-field	metal2vulkan::bind::MipmapFilterLevel.offset	pub offset: u64
-field	metal2vulkan::bind::MipmapFilterLevel.params	pub params: Option<(u64, Vec<u32>)>
-field	metal2vulkan::bind::MipmapFilterModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::MipmapFilterModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ObjectFold.discarded	pub discarded: bool
 field	metal2vulkan::bind::ObjectFold.dispatch	pub dispatch: [u32; 3]
 field	metal2vulkan::bind::ObjectFold.past	pub past: bool
@@ -3741,8 +3689,6 @@ fn	metal2vulkan-air::specialize_linked	pub fn specialize_linked(d: Decoded, r: &
 fn	metal2vulkan-runtime::host_time	pub fn host_time() -> u64
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
-fn	metal2vulkan::bind::chroma_convert_module	pub fn chroma_convert_module(device: &Device, decode: ChromaDecode) -> Result<ChromaConvertModule, Error>
-fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
@@ -3787,7 +3733,6 @@ fn	metal2vulkan::bind::mesh_arguments_module	pub fn mesh_arguments_module(device
 fn	metal2vulkan::bind::mesh_object_arguments_module	pub fn mesh_object_arguments_module(device: &Device) -> Result<MeshScanModule, Error>
 fn	metal2vulkan::bind::mesh_scan_module	pub fn mesh_scan_module(device: &Device) -> Result<MeshScanModule, Error>
 fn	metal2vulkan::bind::metal_object_grid	pub fn metal_object_grid(groups: [u32; 3], threads: [u32; 3], direct: bool) -> Option<([u32; 3], [u32; 3])>
-fn	metal2vulkan::bind::mipmap_filter_module	pub fn mipmap_filter_module(device: &Device, kernel: MipmapFilterKernel) -> Result<MipmapFilterModule, Error>
 fn	metal2vulkan::bind::part_texels	pub fn part_texels(limits: &Limits) -> u64
 fn	metal2vulkan::bind::planes_merge_modules	pub fn planes_merge_modules(device: &Device, copy: PlanesCopy) -> Result<PlanesMergeModules, Error>
 fn	metal2vulkan::bind::planes_split_module	pub fn planes_split_module(device: &Device, copy: PlanesCopy) -> Result<PlanesSplitModule, Error>
@@ -7173,14 +7118,11 @@ method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSampl
 method	metal2vulkan::bind::BoundTexture::shape	pub fn shape(&self) -> TextureShape
 method	metal2vulkan::bind::BufferRanges::length_class	pub fn length_class(&self, length: u64) -> u8
 method	metal2vulkan::bind::BufferRanges::of	pub fn of(limits: &Limits) -> BufferRanges
-method	metal2vulkan::bind::ChromaConvertModule::shape	pub fn shape(size: [u32; 2], first: u32, row: u32) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::ChromaDecode::block_extent	pub fn block_extent(self) -> [u32; 2]
 method	metal2vulkan::bind::ChromaDecode::decode	pub fn decode(self, pairs: &[u8], size: [u32; 3]) -> Vec<u8>
 method	metal2vulkan::bind::ChromaDecode::decode_into	pub fn decode_into(self, pairs: &[u8], [width, height, depth]: [u32; 3], out: &mut [u8])
-method	metal2vulkan::bind::ChromaDecode::format	pub fn format(self) -> Format
 method	metal2vulkan::bind::ChromaDecode::of	pub fn of(pf: PixelFormat) -> Option<ChromaDecode>
 method	metal2vulkan::bind::ChromaDecode::texel_format	pub fn texel_format(self) -> Format
-method	metal2vulkan::bind::ChromaSampleModule::shape	pub fn shape(size: [u32; 2], first: u32, extent: [u32; 2]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
 method	metal2vulkan::bind::DrawMergeModule::push_constants	pub fn push_constants(header: u64, status: u64) -> Vec<u8>
 method	metal2vulkan::bind::DrawReplay::new	pub fn new(capacity: u32, first: u32, count: u32, primitive_types: Vec<u32>) -> DrawReplay
@@ -7262,11 +7204,6 @@ method	metal2vulkan::bind::MeshArguments::new	pub fn new(source: IndirectRef, fo
 method	metal2vulkan::bind::MeshArguments::scratch_bytes	pub const fn scratch_bytes(form: MeshArgumentsForm) -> u32
 method	metal2vulkan::bind::MeshGridRule::of	pub fn of(form: MeshArgumentsForm, limits: &crate::device::MeshLimits) -> MeshGridRule
 method	metal2vulkan::bind::MetalInstance::new	pub fn new() -> MetalInstance
-method	metal2vulkan::bind::MipmapFilterChain::expected_levels	pub fn expected_levels(&self, first: &[u8]) -> Option<Vec<Vec<u8>>>
-method	metal2vulkan::bind::MipmapFilterChain::outside_bound	pub fn outside_bound(&self, level: usize, above: &[u8], got: &[u8]) -> Option<Vec<u64>>
-method	metal2vulkan::bind::MipmapFilterChain::plan	pub fn plan(pixel_format: PixelFormat, extent: [u32; 3], layers: u32, levels: u32, volume: bool, alignment: u64, max_range: u32, max_groups: [u32; 2], fetch: Option<Format>) -> Option<MipmapFilterChain>
-method	metal2vulkan::bind::MipmapFilterChain::texel_bytes	pub fn texel_bytes(pixel_format: PixelFormat) -> Option<u32>
-method	metal2vulkan::bind::MipmapFilterKernel::fetches	pub fn fetches(&self) -> bool
 method	metal2vulkan::bind::NeutralResource::for_image	pub fn for_image(class: &ImageHandleClass) -> Option<NeutralResource>
 method	metal2vulkan::bind::NeutralResource::format	pub fn format(&self) -> Option<vk::Format>
 method	metal2vulkan::bind::ObjectFold::bytes	pub fn bytes(&self) -> Vec<u8>
@@ -8121,8 +8058,6 @@ struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
 struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
-struct	metal2vulkan::bind::ChromaConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaConvertModule
-struct	metal2vulkan::bind::ChromaSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaSampleModule
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
 struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
 struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
@@ -8174,10 +8109,6 @@ struct	metal2vulkan::bind::MeshGridRule	#[derive(Clone, Copy, Debug, PartialEq, 
 struct	metal2vulkan::bind::MeshRecordsFault	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshRecordsFault
 struct	metal2vulkan::bind::MeshScanModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MeshScanModule
 struct	metal2vulkan::bind::MetalInstance	#[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct MetalInstance
-struct	metal2vulkan::bind::MipmapFilterChain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MipmapFilterChain
-struct	metal2vulkan::bind::MipmapFilterKernel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct MipmapFilterKernel
-struct	metal2vulkan::bind::MipmapFilterLevel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MipmapFilterLevel
-struct	metal2vulkan::bind::MipmapFilterModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MipmapFilterModule
 struct	metal2vulkan::bind::ObjectFold	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ObjectFold
 struct	metal2vulkan::bind::PlanesMergeModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PlanesMergeModules
 struct	metal2vulkan::bind::PlanesSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct PlanesSplitModule

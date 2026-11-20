@@ -54,10 +54,7 @@
 //! the attachment into them with [`planes_split_module`] and merges them back with
 //! [`planes_merge_modules`], through the [`PlanesCopy`] view of its texel size. A multisampled
 //! depth or stencil aspect moves between images without colour copies through the draws of
-//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`]. The mipmaps of a format the device's blits cannot filter
-//! are
-//! a bilinear filter in `float` through the
-//! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
+//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
 //! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered
 //! [`ReplayVariant`]s, recorded with [`replay_preprocess_module`], writes each command's arguments
@@ -75,10 +72,7 @@
 //! format through a twin of its texels' codes ([`PvrtcDecode`]); an ETC2 or EAC texture on a
 //! device without the formats through a twin of its codes or an 11-bit format's values
 //! ([`EtcDecode`], in the texels [`EtcTexels`] names); a 4:2:2 texture through a twin of its
-//! texels' codes ([`ChromaDecode`]), or, where the device converts the format itself, [`chroma_sample_module`] samples through the device's
-//! own Y′CbCr conversion ([`ChromaSampleModule`]); one over a buffer's bytes through an image of
-//! those codes, which [`chroma_convert_module`] writes from the pairs where they lie
-//! ([`ChromaConvertModule`]).
+//! texels' codes ([`ChromaDecode`]).
 //! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, [`heap_classes`] the
 //! classes of the handle heap's arrays on a profile, [`FunctionTableWords`] the words of a
 //! visible-function table's buffer, and [`FunctionTableSnapshot`] the one buffer of a command's
@@ -115,7 +109,6 @@ pub mod indirect_commands;
 pub(crate) mod instantiate;
 pub(crate) mod mesh_arguments;
 pub(crate) mod mesh_scan;
-pub(crate) mod mipmap_filter;
 pub(crate) mod neutral;
 pub(crate) mod plan;
 pub(crate) mod pvrtc_decode;
@@ -144,10 +137,7 @@ pub use argument_buffer::{
     ArgumentType, ARGUMENT_HANDLE_BYTES,
 };
 pub use astc_decode::{AstcDecode, AstcTexels};
-pub use chroma_decode::{
-    chroma_convert_module, chroma_sample_module, ChromaConvertModule, ChromaDecode,
-    ChromaSampleModule,
-};
+pub use chroma_decode::ChromaDecode;
 pub use depth_clamp::clamped_depth;
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
@@ -185,10 +175,6 @@ pub use mesh_arguments::{
     METAL_MESH_GRID_TOTAL, METAL_OBJECT_GRID_TOTAL,
 };
 pub use mesh_scan::{mesh_object_arguments_module, mesh_scan_module, MeshScanModule};
-pub use mipmap_filter::{
-    mipmap_filter_module, MipmapFilterChain, MipmapFilterKernel, MipmapFilterLevel,
-    MipmapFilterModule,
-};
 pub use neutral::NeutralResource;
 pub use plan::resources::sampler_desc;
 pub use plan::{

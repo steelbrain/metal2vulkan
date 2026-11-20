@@ -637,10 +637,6 @@ surface! {
         enum EtcDecode N;
         enum EtcTexels N;
         enum ChromaDecode N;
-        fn chroma_sample_module;
-        struct ChromaSampleModule N;
-        fn chroma_convert_module;
-        struct ChromaConvertModule N;
         fn mesh_scan_module;
         fn mesh_object_arguments_module;
         struct MeshScanModule N;
@@ -659,11 +655,6 @@ surface! {
         fn tessellation_scan_module;
         struct TessellationScanKernel N;
         struct TessellationScanModule N;
-        fn mipmap_filter_module;
-        struct MipmapFilterChain N;
-        struct MipmapFilterKernel O;
-        struct MipmapFilterLevel N;
-        struct MipmapFilterModule N;
         fn ycbcr_convert_module;
         fn ycbcr_convert_floats_module;
         fn ycbcr_texel;

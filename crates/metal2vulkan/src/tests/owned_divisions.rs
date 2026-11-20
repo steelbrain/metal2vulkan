@@ -2,7 +2,7 @@
 //! `2^64 - 1`): that division is the overflow test (`b <= (2^32 - 1) / a`) NVIDIA's compiler
 //! refuses in some modules, and the modules test a product's overflow by its high word instead
 //! (`bind::replay::checked_mul`). The modules are every compute module function of `bind`, at
-//! every value of each closed parameter (every mipmap kernel a chain may dispatch, every
+//! every value of each closed parameter (every
 //! tessellation scan of each domain, partitioning, winding, step and scaling), each built on
 //! every committed profile: one a profile refuses (`Unsupported`) is skipped there, and each
 //! function builds on one profile at least.
@@ -98,12 +98,6 @@ fn modules() -> Vec<Build> {
         push(
             format!("depth_split_module({form:?})"),
             Box::new(move |d| Ok(bind::depth_split_module(d, form, Feature::Format)?.spirv)),
-        );
-    }
-    for kernel in bind::mipmap_filter::tests::every_kernel() {
-        push(
-            format!("mipmap_filter_module({kernel:?})"),
-            Box::new(move |d| Ok(bind::mipmap_filter_module(d, kernel)?.spirv)),
         );
     }
     for domain in [PatchDomain::Triangle, PatchDomain::Quad] {
