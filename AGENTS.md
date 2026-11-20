@@ -310,7 +310,8 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
   it, or restructure around an explicit result. Remove an existing occurrence when you touch it.
 - Run `cargo fmt --all` before every commit; keep clippy clean.
 - Match the surrounding style; prefer small files and structural fixes over special-case tables.
-- No dead code: delete what nothing uses.
+- No dead code: delete what nothing uses. A published crate's public item that a consumer
+  calls is used, though no caller is in this tree: ask the consumer before deleting one.
 
 ## Docs and comments
 
