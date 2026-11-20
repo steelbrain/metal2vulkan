@@ -255,42 +255,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "device_memory_allocated": 205520896,
-        "image_blocks_made_ahead": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queues_sharing_a_vk_queue": 8,
-        "slot_waits": 5
-      },
-      "moving": {
-        "pooled_memory_blocks_made": 0,
-        "slot_waits": 4
-      },
-      "composed": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "device_memory_allocated": 205520896,
-        "image_blocks_made_ahead": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queues_sharing_a_vk_queue": 4
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -320,41 +286,6 @@
             "wall_total": 1641551583,
             "on_cpu_total": 7635791,
             "blocked_total": 1634658541
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "command-queue-slots",
-        "calls": 4,
-        "in_calls": 1636056959,
-        "on_cpu": 825209,
-        "blocked": 1635399416,
-        "elsewhere": 2685125,
-        "spend": 1638153459,
-        "spend_least": 1634155001,
-        "spend_most": 1644690624,
-        "per_call": [
-          {
-            "call": "queue_slots",
-            "least_calls": 4,
-            "most_calls": 4,
-            "wall": 410110375,
-            "on_cpu": 181125,
-            "blocked": 410034041,
-            "wall_least": 406331458,
-            "wall_most": 410368875,
-            "wall_total": 1636056959,
-            "on_cpu_total": 825209,
-            "blocked_total": 1635399416
           }
         ]
       }

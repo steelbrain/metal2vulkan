@@ -648,93 +648,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 3,
-        "bare_starts": 15,
-        "batches_submitted_by_waiters": 15,
-        "batches_with_none_pending": 15,
-        "blocks_ahead_hurried": 1,
-        "blocks_ahead_waited_for": 4,
-        "buffer_blocks_made_ahead": 3,
-        "command_buffers_begun": 15,
-        "command_buffers_begun_encoders": 15,
-        "command_buffers_deferred": 15,
-        "command_buffers_submitted": 15,
-        "commands_recorded.begin_command_buffer": 15,
-        "commands_recorded.cmd_copy_buffer": 22,
-        "commands_recorded.cmd_fill_buffer": 5,
-        "commands_recorded.cmd_pipeline_barrier": 27,
-        "commands_recorded.cmd_update_buffer": 5,
-        "commands_recorded.end_command_buffer": 15,
-        "commits_handed_off": 15,
-        "commits_taken_in": 15,
-        "completed_waits": 16,
-        "completed_where_seen": 15,
-        "completion_arms": 15,
-        "completion_arms_after_a_wake": 15,
-        "completion_waiter_parks": 15,
-        "device_memory_allocated": 272629760,
-        "encoder_command_buffers_begun": 15,
-        "fence_waits": 15,
-        "fills_recorded": 5,
-        "finales_folded": 15,
-        "gate_waits": 15,
-        "gate_waits_slept": 15,
-        "image_blocks_made_ahead": 1,
-        "new_buffer_bytes_cleared": 71581760,
-        "object_churn.buffers_parked": 20,
-        "object_churn.buffers_recycled": 6,
-        "object_churn.vk_buffer_bindings": 14,
-        "object_churn.vk_buffers_made": 14,
-        "plain_buffer_blocks_made": 3,
-        "pooled_memory_blocks_made": 4,
-        "queue_submissions": 15,
-        "queues_sharing_a_vk_queue": 1,
-        "scheduled_where_submitted": 15,
-        "scheduler_passes": 2,
-        "scheduler_passes_by_waiters": 15,
-        "scheduler_sleeps": 15,
-        "scheduler_wakes_commit": 15,
-        "slot_returns": 15,
-        "spare_command_pools_taken": 15,
-        "submit_infos": 15,
-        "trail_waits": 15,
-        "wakes_completion_waiters": 15,
-        "wakes_spared": 105
-      },
-      "moving": {
-        "gate_waits_slept": 9
-      },
-      "composed": {
-        "blocks_ahead_hurried": 1,
-        "blocks_ahead_waited_for": 4,
-        "buffer_blocks_made_ahead": 3,
-        "command_buffers_deferred": 0,
-        "commands_recorded.cmd_copy_buffer": 10,
-        "commands_recorded.cmd_fill_buffer": 0,
-        "commands_recorded.cmd_pipeline_barrier": 15,
-        "commands_recorded.cmd_update_buffer": 0,
-        "commands_recorded.end_command_buffer": 0,
-        "device_memory_allocated": 268435456,
-        "image_blocks_made_ahead": 1,
-        "plain_buffer_blocks_made": 3,
-        "queues_sharing_a_vk_queue": 0
-      },
-      "ceilings": {
-        "addressable_buffers_made": 3,
-        "pooled_memory_blocks_made": 4
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -764,41 +679,6 @@
             "wall_total": 13536958,
             "on_cpu_total": 3757833,
             "blocked_total": 9859832
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "fresh-buffer-shared",
-        "calls": 5,
-        "in_calls": 8359584,
-        "on_cpu": 2397335,
-        "blocked": 5721001,
-        "elsewhere": 1414875,
-        "spend": 9717209,
-        "spend_least": 8777167,
-        "spend_most": 11425252,
-        "per_call": [
-          {
-            "call": "work",
-            "least_calls": 5,
-            "most_calls": 5,
-            "wall": 1312000,
-            "on_cpu": 55542,
-            "blocked": 1267375,
-            "wall_least": 1058625,
-            "wall_most": 1408375,
-            "wall_total": 8359584,
-            "on_cpu_total": 2397335,
-            "blocked_total": 5721001
           }
         ]
       }

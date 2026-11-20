@@ -963,18 +963,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {}
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -1016,54 +1006,6 @@
             "wall_most": 42083,
             "wall_total": 16500,
             "on_cpu_total": 16708,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "pipeline-descriptor-defaults",
-        "calls": 2,
-        "in_calls": 128584,
-        "on_cpu": 131833,
-        "blocked": 0,
-        "elsewhere": 6958,
-        "spend": 135958,
-        "spend_least": 129751,
-        "spend_most": 154499,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 125917,
-            "on_cpu": 129083,
-            "blocked": 0,
-            "wall_least": 121042,
-            "wall_most": 144875,
-            "wall_total": 125917,
-            "on_cpu_total": 129083,
-            "blocked_total": 0
-          },
-          {
-            "call": "render_descriptor_facts",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 2666,
-            "on_cpu": 2834,
-            "blocked": 0,
-            "wall_least": 2500,
-            "wall_most": 3000,
-            "wall_total": 2666,
-            "on_cpu_total": 2834,
             "blocked_total": 0
           }
         ]

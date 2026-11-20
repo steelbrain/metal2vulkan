@@ -781,110 +781,8 @@
       }
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-emulated-sparse-texture"
-      ],
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "bare_starts": 3,
-        "batches_submitted_by_waiters": 2,
-        "batches_with_none_pending": 3,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 2,
-        "command_barriers": 6,
-        "command_buffers_begun": 19,
-        "command_buffers_begun_batch_barriers": 2,
-        "command_buffers_begun_batch_work": 9,
-        "command_buffers_begun_continuations": 6,
-        "command_buffers_begun_encoders": 2,
-        "command_buffers_submitted": 19,
-        "commands_recorded.begin_command_buffer": 19,
-        "commands_recorded.cmd_copy_buffer": 9,
-        "commands_recorded.cmd_copy_buffer_to_image": 9,
-        "commands_recorded.cmd_copy_image": 2,
-        "commands_recorded.cmd_copy_image_to_buffer": 12,
-        "commands_recorded.cmd_pipeline_barrier": 33,
-        "commands_recorded.end_command_buffer": 19,
-        "commits_handed_off": 3,
-        "commits_taken_in": 3,
-        "completed_waits": 6,
-        "completed_where_seen": 3,
-        "completion_arms": 3,
-        "completion_arms_after_a_wake": 3,
-        "completion_waiter_parks": 3,
-        "device_memory_allocated": 205520896,
-        "encoder_command_buffers_begun": 8,
-        "fence_waits": 3,
-        "finales_apart": 2,
-        "finales_folded": 1,
-        "gate_waits": 3,
-        "gate_waits_slept": 3,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 1,
-        "new_buffer_bytes_cleared": 295520,
-        "object_churn.buffers_evicted": 6,
-        "object_churn.buffers_parked": 25,
-        "object_churn.buffers_recycled": 19,
-        "object_churn.images_other": 2,
-        "object_churn.making_sites_dropped": 4,
-        "object_churn.textures_in_heaps": 2,
-        "object_churn.vk_buffer_bindings": 6,
-        "object_churn.vk_buffers_destroyed": 6,
-        "object_churn.vk_buffers_made": 6,
-        "object_churn.vk_image_bindings": 2,
-        "object_churn.vk_images_destroyed": 2,
-        "object_churn.vk_images_made": 2,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queue_submissions": 3,
-        "queues_sharing_a_vk_queue": 1,
-        "scheduled_where_submitted": 3,
-        "scheduler_passes": 1,
-        "scheduler_passes_by_waiters": 3,
-        "scheduler_sleeps": 3,
-        "scheduler_wakes_commit": 3,
-        "slot_returns": 3,
-        "spare_command_pools_taken": 3,
-        "submit_infos": 5,
-        "trail_waits": 3,
-        "wakes_completion_waiters": 3,
-        "wakes_spared": 22
-      },
-      "moving": {
-        "gate_waits_slept": 2
-      },
-      "composed": {
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 0,
-        "commands_recorded.cmd_copy_buffer": 0,
-        "commands_recorded.cmd_copy_buffer_to_image": 0,
-        "commands_recorded.cmd_copy_image": 0,
-        "commands_recorded.cmd_copy_image_to_buffer": 0,
-        "commands_recorded.cmd_pipeline_barrier": 0,
-        "commands_recorded.end_command_buffer": 0,
-        "device_memory_allocated": 201326592,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 0,
-        "plain_buffer_blocks_made": 2,
-        "queues_sharing_a_vk_queue": 0
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 3
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -914,44 +812,6 @@
             "wall_total": 5470250,
             "on_cpu_total": 698291,
             "blocked_total": 4788291
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 26.12 and ours at 26.12; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 286,
-      "times": {
-        "case": "sparse-mapping-move-of-a-source-past-the-level",
-        "calls": 1,
-        "in_calls": 2280958,
-        "on_cpu": 870708,
-        "blocked": 1427625,
-        "elsewhere": 849041,
-        "spend": 3046583,
-        "spend_least": 2869918,
-        "spend_most": 4143416,
-        "degraded": [
-          "metal2vulkan-degrade-emulated-sparse-texture"
-        ],
-        "per_call": [
-          {
-            "call": "sparse_mapping",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 2280958,
-            "on_cpu": 870708,
-            "blocked": 1427625,
-            "wall_least": 2070834,
-            "wall_most": 3163833,
-            "wall_total": 2280958,
-            "on_cpu_total": 870708,
-            "blocked_total": 1427625
           }
         ]
       }

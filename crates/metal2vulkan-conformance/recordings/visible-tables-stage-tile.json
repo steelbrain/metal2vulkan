@@ -278,66 +278,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "creation_pipelines_made": 1,
-        "creation_render_pipelines_made": 1,
-        "descriptor_keys_built": 1,
-        "driver_diagnostics_withheld": 1,
-        "functions_translated": 1,
-        "image_blocks_made_ahead": 1,
-        "linked_use_questions_asked": 3,
-        "new_buffer_bytes_cleared": 16,
-        "object_churn.buffers_parked": 1,
-        "object_churn.buffers_recycled": 1,
-        "pipeline_layouts_made": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "render_passes_made": 1,
-        "shader_modules_made": 1,
-        "stage_entries_shared": 1,
-        "stage_entries_specialized": 2,
-        "variant_pipelines_made": 1,
-        "variants_taken_back": 1
-      },
-      "composed": {
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "creation_render_pipelines_made": 1,
-        "driver_diagnostics_withheld": 1,
-        "functions_translated": 1,
-        "image_blocks_made_ahead": 1,
-        "linked_use_questions_asked": 3,
-        "plain_buffer_blocks_made": 2,
-        "render_passes_made": 1,
-        "stage_entries_shared": 1,
-        "stage_entries_specialized": 2
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "creation_pipelines_made": 1,
-        "pipeline_layouts_made": 1,
-        "pooled_memory_blocks_made": 3,
-        "shader_modules_made": 1,
-        "variant_pipelines_made": 1
-      },
-      "per_state": {
-        "pipelines": 0,
-        "states": 1
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -379,54 +321,6 @@
             "wall_most": 166542,
             "wall_total": 146084,
             "on_cpu_total": 146292,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "visible-tables-stage-tile",
-        "calls": 3,
-        "in_calls": 213542,
-        "on_cpu": 217542,
-        "blocked": 0,
-        "elsewhere": 6125,
-        "spend": 223709,
-        "spend_least": 208668,
-        "spend_most": 291126,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 2,
-            "most_calls": 2,
-            "wall": 72708,
-            "on_cpu": 72916,
-            "blocked": 0,
-            "wall_least": 71000,
-            "wall_most": 79625,
-            "wall_total": 167667,
-            "on_cpu_total": 171458,
-            "blocked_total": 0
-          },
-          {
-            "call": "visible_function_table",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 45875,
-            "on_cpu": 46084,
-            "blocked": 0,
-            "wall_least": 42000,
-            "wall_most": 74834,
-            "wall_total": 45875,
-            "on_cpu_total": 46084,
             "blocked_total": 0
           }
         ]

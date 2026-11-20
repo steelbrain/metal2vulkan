@@ -156,34 +156,6 @@ pub fn validated_leg(case: &dyn Case) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether our leg's shader cache carries over between the cases of a round.
-///
-/// **This exists because the first whole-set run produced a figure nobody could defend.** Metal's
-/// `library` cost 46 ms a call against our 0.2 ms, which read as our compiling 200 times faster.
-/// It is not a compiler comparison. The suite's 547 recordings make 733 shader references over
-/// **152 distinct (shader, entry) pairs**, so 90% of the references are to a shader another case
-/// already used, and our leg has a shader cache while Metal's `newLibraryWithData` recompiles
-/// every call. Warm is what a consumer sees across a session and is the right default; cold is the
-/// only setting under which the compile rows compare like with like.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shaders {
-    /// One device and one shader cache for the whole round, so a shader another case compiled is
-    /// already there. What a consumer sees, and what the counters half measures.
-    Warm,
-    /// A device and a shader cache of its own for every case, so no case is handed another's
-    /// compile.
-    ///
-    /// **This setting is one-sided and a reader has to know it.** It turns off *our* reuse and
-    /// leaves Metal's leg exactly as it was: there is no public call that empties Metal's own
-    /// shader cache, and this host's on-disk one is not writable under SIP. So a cold ratio is
-    /// our cold cost against Metal's cost as it comes, and the claim that Metal is recompiling
-    /// too is a measurement and not an assumption -- over the warm and cold runs of one twelve
-    /// case selection Metal's per-call totals moved 3.0%, and its `newLibraryWithData` costs
-    /// about 24.6 ms a call in both, which is a price at which a compile is happening. The
-    /// comparison still has a floor that nobody here controls; say so beside any figure from it.
-    Cold,
-}
-
 /// Measure what `cases` cost **on native Metal** on this Mac, over `rounds` rounds.
 ///
 /// A case record mode must not run on Metal is not run here either, and for the same reason: the
@@ -195,10 +167,7 @@ pub fn metal_times(
     cases: &[Box<dyn Case>],
     rounds: u32,
 ) -> Result<crate::times::Measurement, String> {
-    let mut calibration = crate::slow_calls::Calibration {
-        before: crate::times::instrument_nanos(),
-        after: 0,
-    };
+    let before = crate::times::instrument_nanos();
     let mut venue = String::new();
     let mut taken: Vec<Vec<crate::times::CaseRound>> = Vec::new();
     for _ in 0..rounds.max(1) {
@@ -236,12 +205,13 @@ pub fn metal_times(
         venue = "native Metal".to_owned();
         taken.push(round);
     }
-    calibration.after = crate::times::instrument_nanos();
+    // Read again after the leg, because a leg is minutes long and a reading from its first
+    // milliseconds says nothing about the rest: the figure kept is the mean of the two.
+    let instrument = (before + crate::times::instrument_nanos()) / 2;
     Ok(crate::times::fold(
-        crate::times::Leg::Metal,
         venue,
         rounds.max(1),
-        calibration,
+        instrument,
         cases,
         &taken,
     ))
@@ -317,82 +287,52 @@ fn span(before: Option<u64>, after: Option<u64>) -> u64 {
     }
 }
 
-/// Write what `metal` and `ours` measured into the cases' own recordings, answering where each
-/// went or why it could not be written.
+/// Write what `metal` measured into the cases' own recordings, answering where each went or why
+/// it could not be written.
 ///
-/// A leg whose round **stopped** before the case finished is not written: its calls are a part of
-/// the case. A leg that announced a degrade notice **is** written, with the codes beside the
-/// figures, because the figures are a true measurement of what that device did — it is the
-/// *comparison* that the notices rule out, and [`crate::times::judge`] is where that happens.
+/// A case whose run announced a degrade notice **is** written, with the codes beside the figures,
+/// because the figures are a true measurement of what that device did.
 pub fn record_times(
-    metal: Option<&crate::times::Measurement>,
-    ours: Option<&crate::times::Measurement>,
+    metal: &crate::times::Measurement,
     words: &str,
 ) -> Vec<(String, Result<std::path::PathBuf, String>)> {
-    let mut names: Vec<&str> = Vec::new();
-    for measured in [metal, ours].into_iter().flatten() {
-        for case in &measured.cases {
-            if !names.contains(&case.case.as_str()) {
-                names.push(&case.case);
-            }
-        }
-    }
-    names
-        .into_iter()
-        .map(|name| (name.to_owned(), record_one_time(name, metal, ours, words)))
+    metal
+        .cases
+        .iter()
+        .map(|times| (times.case.clone(), record_one_time(times, metal, words)))
         .collect()
 }
 
-/// Put one case's time records in its recording, replacing this machine's records for the legs
-/// measured and keeping every other machine's.
+/// Put one case's time record in its recording, replacing this machine's record and keeping every
+/// other machine's.
 fn record_one_time(
-    case: &str,
-    metal: Option<&crate::times::Measurement>,
-    ours: Option<&crate::times::Measurement>,
+    times: &crate::times::CaseTimes,
+    metal: &crate::times::Measurement,
     words: &str,
 ) -> Result<std::path::PathBuf, String> {
     use crate::times::TimeRecord;
-    let mut recording = crate::recording::read(case)?;
-    let mut written = 0;
-    for measured in [metal, ours].into_iter().flatten() {
-        let Some(times) = measured.case(case) else {
-            continue;
-        };
-        // **A leg that did not finish the case still writes its record**, carrying the reason in
-        // `CaseTimes::stopped`. The absence of a record and a recorded hole mean different things
-        // to a reader and to a test: every case carrying its timing is what makes "every suite has
-        // its timing recorded" a structural property instead of a habit, and a case whose Metal leg
-        // the safety rule refuses must say so in its own file rather than by having nothing there.
-        // Such a record's figures are not a measurement of the case and nothing compares them:
-        // `crate::times::judge` refuses a stopped leg before it reaches the margin.
-        let record = TimeRecord {
-            leg: measured.leg,
-            venue: measured.venue.clone(),
-            chip: crate::recording::ORACLE_CHIP.to_owned(),
-            os_build: crate::recording::ORACLE_OS_BUILD.to_owned(),
-            rounds: measured.rounds,
-            measured: words.to_owned(),
-            instrument: measured.instrument,
-            times: times.clone(),
-        };
-        recording.times.retain(|held| {
-            held.leg != record.leg
-                || held.venue != record.venue
-                || held.chip != record.chip
-                || held.os_build != record.os_build
-        });
-        recording.times.push(record);
-        written += 1;
-    }
-    if written == 0 {
-        return Err(
-            "the measurement holds no leg for this case at all, so nothing can be written; a case \
-             the run did not reach cannot carry its timing"
-                .to_owned(),
-        );
-    }
+    let mut recording = crate::recording::read(&times.case)?;
+    // **A leg that did not finish the case still writes its record**, carrying the reason in
+    // `CaseTimes::stopped`. The absence of a record and a recorded hole mean different things to a
+    // reader and to a test: every case carrying its timing is what makes "every suite has its
+    // timing recorded" a structural property instead of a habit, and a case whose Metal leg the
+    // safety rule refuses must say so in its own file rather than by having nothing there. Such a
+    // record's figures are not a measurement of the case.
+    let record = TimeRecord {
+        venue: metal.venue.clone(),
+        chip: crate::recording::ORACLE_CHIP.to_owned(),
+        os_build: crate::recording::ORACLE_OS_BUILD.to_owned(),
+        rounds: metal.rounds,
+        measured: words.to_owned(),
+        instrument: metal.instrument,
+        times: times.clone(),
+    };
+    recording.times.retain(|held| {
+        held.venue != record.venue || held.chip != record.chip || held.os_build != record.os_build
+    });
+    recording.times.push(record);
     recording
         .times
-        .sort_by(|one, two| (one.leg, &one.venue).cmp(&(two.leg, &two.venue)));
+        .sort_by(|one, two| one.venue.cmp(&two.venue));
     crate::recording::write(&recording)
 }

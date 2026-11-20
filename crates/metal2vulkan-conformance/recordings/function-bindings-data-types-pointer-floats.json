@@ -8360,43 +8360,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "functions_translated": 1,
-        "image_blocks_made_ahead": 1,
-        "pipeline_layouts_made": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "shader_modules_made": 1,
-        "stage_entries_specialized": 1
-      },
-      "composed": {
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "image_blocks_made_ahead": 1,
-        "plain_buffer_blocks_made": 2
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 3
-      },
-      "per_state": {
-        "pipelines": 0,
-        "states": 1
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -8439,54 +8404,6 @@
             "wall_total": 26417000,
             "on_cpu_total": 620750,
             "blocked_total": 25815625
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "function-bindings-data-types-pointer-floats",
-        "calls": 2,
-        "in_calls": 4144001,
-        "on_cpu": 3948833,
-        "blocked": 197250,
-        "elsewhere": 208375,
-        "spend": 4352376,
-        "spend_least": 4267333,
-        "spend_most": 5178707,
-        "per_call": [
-          {
-            "call": "compute_pipeline_bindings",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 3371459,
-            "on_cpu": 3172917,
-            "blocked": 197250,
-            "wall_least": 3292208,
-            "wall_most": 4111333,
-            "wall_total": 3371459,
-            "on_cpu_total": 3172917,
-            "blocked_total": 197250
-          },
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 780125,
-            "on_cpu": 780417,
-            "blocked": 0,
-            "wall_least": 764250,
-            "wall_most": 812416,
-            "wall_total": 780125,
-            "on_cpu_total": 780417,
-            "blocked_total": 0
           }
         ]
       }

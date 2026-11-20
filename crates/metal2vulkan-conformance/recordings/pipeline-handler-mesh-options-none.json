@@ -425,44 +425,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 1,
-        "image_blocks_made_ahead": 1,
-        "linked_use_questions_asked": 4,
-        "pipeline_layouts_made": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "shader_modules_made": 4,
-        "stage_entries_shared": 4,
-        "stage_entries_specialized": 2,
-        "variants_taken_back": 1
-      },
-      "composed": {
-        "addressable_buffers_made": 0,
-        "blocks_ahead_waited_for": 1,
-        "image_blocks_made_ahead": 1,
-        "plain_buffer_blocks_made": 2
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 3
-      },
-      "per_state": {
-        "pipelines": 0,
-        "states": 2
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -505,54 +469,6 @@
             "wall_total": 271666,
             "on_cpu_total": 89417,
             "blocked_total": 187208
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "pipeline-handler-mesh-options-none",
-        "calls": 2,
-        "in_calls": 3779084,
-        "on_cpu": 3780084,
-        "blocked": 0,
-        "elsewhere": 5834,
-        "spend": 3784918,
-        "spend_least": 3628874,
-        "spend_most": 3832917,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 187375,
-            "on_cpu": 188167,
-            "blocked": 0,
-            "wall_least": 178916,
-            "wall_most": 199500,
-            "wall_total": 187375,
-            "on_cpu_total": 188167,
-            "blocked_total": 0
-          },
-          {
-            "call": "pipeline_both_paths",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 3582084,
-            "on_cpu": 3585625,
-            "blocked": 0,
-            "wall_least": 3442500,
-            "wall_most": 3641000,
-            "wall_total": 3582084,
-            "on_cpu_total": 3585625,
-            "blocked_total": 0
           }
         ]
       }

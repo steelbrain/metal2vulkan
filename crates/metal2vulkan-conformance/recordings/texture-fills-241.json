@@ -119,111 +119,8 @@
       "validated": "not_run"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-carried-decoded-twin",
-        "metal2vulkan-degrade-unpacked-fill-color"
-      ],
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "arena_pools_made": 2,
-        "bare_starts": 22,
-        "batches_submitted_by_waiters": 22,
-        "batches_with_none_pending": 22,
-        "block_decode_passes": 44,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 2,
-        "chroma_device_decodes": 44,
-        "chroma_device_twins": 22,
-        "command_barriers": 88,
-        "command_buffers_begun": 44,
-        "command_buffers_begun_batch_work": 22,
-        "command_buffers_begun_encoders": 22,
-        "command_buffers_submitted": 44,
-        "commands_recorded.begin_command_buffer": 44,
-        "commands_recorded.cmd_bind_descriptor_sets": 44,
-        "commands_recorded.cmd_bind_pipeline": 44,
-        "commands_recorded.cmd_clear_color_image": 44,
-        "commands_recorded.cmd_copy_buffer": 44,
-        "commands_recorded.cmd_copy_buffer_to_image": 132,
-        "commands_recorded.cmd_copy_image_to_buffer": 66,
-        "commands_recorded.cmd_dispatch": 44,
-        "commands_recorded.cmd_pipeline_barrier": 440,
-        "commands_recorded.end_command_buffer": 44,
-        "commits_handed_off": 22,
-        "commits_taken_in": 22,
-        "completed_waits": 25,
-        "completed_where_seen": 22,
-        "completion_arms": 22,
-        "completion_arms_after_a_wake": 22,
-        "completion_waiter_parks": 22,
-        "device_memory_allocated": 205520896,
-        "encoder_command_buffers_begun": 22,
-        "fence_waits": 22,
-        "finales_folded": 22,
-        "gate_waits": 22,
-        "gate_waits_slept": 22,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 1,
-        "new_buffer_bytes_cleared": 4288,
-        "object_churn.buffers_parked": 154,
-        "object_churn.buffers_recycled": 154,
-        "object_churn.images_evicted": 2,
-        "object_churn.images_own_memory": 44,
-        "object_churn.images_parked": 44,
-        "object_churn.images_recycled": 42,
-        "object_churn.making_sites_dropped": 66,
-        "object_churn.textures_image": 22,
-        "object_churn.vk_image_bindings": 24,
-        "object_churn.vk_image_views_made": 22,
-        "object_churn.vk_images_destroyed": 24,
-        "object_churn.vk_images_made": 24,
-        "owned_descriptor_pools": 44,
-        "owned_kernel_spirv_bytes": 1968,
-        "owned_kernels_made": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queue_submissions": 22,
-        "queues_sharing_a_vk_queue": 1,
-        "scheduled_where_submitted": 22,
-        "scheduler_passes": 1,
-        "scheduler_passes_by_waiters": 22,
-        "scheduler_sleeps": 22,
-        "scheduler_wakes_commit": 22,
-        "slot_returns": 22,
-        "spare_command_pools_taken": 22,
-        "submit_infos": 22,
-        "trail_waits": 22,
-        "wakes_completion_waiters": 22,
-        "wakes_spared": 154
-      },
-      "moving": {
-        "gate_waits_slept": 19
-      },
-      "composed": {
-        "addressable_buffers_made": 2,
-        "arena_pools_made": 2,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 0,
-        "device_memory_allocated": 201326592,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 0,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queues_sharing_a_vk_queue": 0
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -242,45 +139,6 @@
         "spend_most": 0,
         "stopped": "the case forbids running its Metal leg here: Metal fills a texture through private API alone, so no public call exists to record it from",
         "per_call": []
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "texture-fills-241",
-        "calls": 22,
-        "in_calls": 15845959,
-        "on_cpu": 1096085,
-        "blocked": 14910999,
-        "elsewhere": 5543167,
-        "spend": 21372043,
-        "spend_least": 20996041,
-        "spend_most": 29199165,
-        "degraded": [
-          "metal2vulkan-degrade-carried-decoded-twin",
-          "metal2vulkan-degrade-unpacked-fill-color"
-        ],
-        "per_call": [
-          {
-            "call": "work",
-            "least_calls": 22,
-            "most_calls": 22,
-            "wall": 678875,
-            "on_cpu": 22708,
-            "blocked": 656625,
-            "wall_least": 657500,
-            "wall_most": 945750,
-            "wall_total": 15845959,
-            "on_cpu_total": 1096085,
-            "blocked_total": 14910999
-          }
-        ]
       }
     }
   ]

@@ -248,8 +248,7 @@ fn times(
     write: bool,
     show: bool,
 ) -> Result<bool, String> {
-    use metal2vulkan_conformance::clocks::host_load;
-    use metal2vulkan_conformance::slow_calls::LegLoad;
+    use metal2vulkan_conformance::clocks::{host_load, LegLoad};
     let before = host_load();
     let metal = run::metal_times(cases, runs)?;
     let load = LegLoad {
@@ -267,17 +266,14 @@ fn times(
             None => "this host answers no load average".to_owned(),
         }
     );
-    print!(
-        "{}",
-        metal2vulkan_conformance::times::render(None, &metal, show)
-    );
+    print!("{}", metal2vulkan_conformance::times::render(&metal, show));
     if !write {
         println!("nothing written; pass --write to keep these figures in the recordings");
         return Ok(true);
     }
     let mut written_all = true;
     let mut wrote = 0;
-    for (case, written) in run::record_times(Some(&metal), None, &words) {
+    for (case, written) in run::record_times(&metal, &words) {
         match written {
             Ok(_) => wrote += 1,
             Err(why) => {

@@ -5123,64 +5123,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_hurried": 1,
-        "blocks_ahead_waited_for": 4,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 348127232,
-        "host_copy_blocks_made_in_place": 1,
-        "host_copy_blocks_readied": 1,
-        "image_blocks_made_ahead": 2,
-        "image_blocks_made_in_place": 2,
-        "images_started_on_the_host": 8,
-        "object_churn.buffers_parked": 2,
-        "object_churn.buffers_recycled": 2,
-        "object_churn.images_evicted": 24,
-        "object_churn.images_own_memory": 34,
-        "object_churn.images_parked": 26,
-        "object_churn.images_recycled": 2,
-        "object_churn.making_sites_dropped": 8,
-        "object_churn.textures_image": 34,
-        "object_churn.textures_texels": 2,
-        "object_churn.vk_image_bindings": 32,
-        "object_churn.vk_images_destroyed": 44,
-        "object_churn.vk_images_made": 44,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 5,
-        "requirement_images_made": 22,
-        "requirement_limits_asked": 22
-      },
-      "composed": {
-        "blocks_ahead_hurried": 0,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 0,
-        "device_memory_allocated": 335544320,
-        "host_copy_blocks_made_in_place": 0,
-        "host_copy_blocks_readied": 1,
-        "image_blocks_made_ahead": 2,
-        "image_blocks_made_in_place": 1,
-        "plain_buffer_blocks_made": 2,
-        "requirement_images_made": 22,
-        "requirement_limits_asked": 22
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 5
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -5222,54 +5166,6 @@
             "wall_most": 3250,
             "wall_total": 131882,
             "on_cpu_total": 136210,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "texture-pairs-plain-contents",
-        "calls": 72,
-        "in_calls": 301660,
-        "on_cpu": 310416,
-        "blocked": 0,
-        "elsewhere": 125,
-        "spend": 301745,
-        "spend_least": 299586,
-        "spend_most": 308626,
-        "per_call": [
-          {
-            "call": "heap_texture_size_and_align",
-            "least_calls": 36,
-            "most_calls": 36,
-            "wall": 1042,
-            "on_cpu": 1167,
-            "blocked": 0,
-            "wall_least": 1042,
-            "wall_most": 1125,
-            "wall_total": 63498,
-            "on_cpu_total": 67998,
-            "blocked_total": 0
-          },
-          {
-            "call": "queried_texture_facts",
-            "least_calls": 36,
-            "most_calls": 36,
-            "wall": 7042,
-            "on_cpu": 7167,
-            "blocked": 0,
-            "wall_least": 6791,
-            "wall_most": 7167,
-            "wall_total": 237994,
-            "on_cpu_total": 242375,
             "blocked_total": 0
           }
         ]

@@ -8568,18 +8568,8 @@
       }
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 0,
-      "measured": "no measurement: the run stopped before the case finished (refused unsupported: Unsupported { feature: Format, needs: NotImplemented, location: None, symbol: Some(\"MTLPixelFormatRGB10A8_2P\") }, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture)",
-      "bounds": {},
-      "unmeasurable": "refused unsupported: Unsupported { feature: Format, needs: NotImplemented, location: None, symbol: Some(\"MTLPixelFormatRGB10A8_2P\") }, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture"
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -8660,42 +8650,6 @@
             "wall_most": 4583,
             "wall_total": 19457,
             "on_cpu_total": 20000,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "format-footprints-two-plane-ten-bit",
-        "calls": 1,
-        "in_calls": 1125,
-        "on_cpu": 1292,
-        "blocked": 0,
-        "elsewhere": 458,
-        "spend": 1958,
-        "spend_least": 1042,
-        "spend_most": 2083,
-        "stopped": "a call did not answer, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/size-and-align",
-        "per_call": [
-          {
-            "call": "heap_texture_size_and_align",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 1125,
-            "on_cpu": 1292,
-            "blocked": 0,
-            "wall_least": 917,
-            "wall_most": 1541,
-            "wall_total": 1125,
-            "on_cpu_total": 1292,
             "blocked_total": 0
           }
         ]

@@ -138,7 +138,6 @@
   ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -168,41 +167,6 @@
             "wall_total": 15945916,
             "on_cpu_total": 1963084,
             "blocked_total": 14043000
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 5.66 and ours at 5.66; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 287,
-      "times": {
-        "case": "fence-none-tracked-behind-busy",
-        "calls": 1,
-        "in_calls": 625,
-        "on_cpu": 791,
-        "blocked": 0,
-        "elsewhere": 1291,
-        "spend": 1916,
-        "spend_least": 625,
-        "spend_most": 2000,
-        "per_call": [
-          {
-            "call": "fence_order",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 625,
-            "on_cpu": 791,
-            "blocked": 0,
-            "wall_least": 584,
-            "wall_most": 833,
-            "wall_total": 625,
-            "on_cpu_total": 791,
-            "blocked_total": 0
           }
         ]
       }

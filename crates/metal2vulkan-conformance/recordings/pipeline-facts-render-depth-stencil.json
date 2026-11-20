@@ -234,7 +234,6 @@
   ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -289,67 +288,6 @@
             "wall_most": 26250,
             "wall_total": 23792,
             "on_cpu_total": 24000,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 9.26 and ours at 9.26; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 286,
-      "times": {
-        "case": "pipeline-facts-render-depth-stencil",
-        "calls": 3,
-        "in_calls": 4269001,
-        "on_cpu": 3590626,
-        "blocked": 701999,
-        "elsewhere": 1862291,
-        "spend": 6128667,
-        "spend_least": 5502916,
-        "spend_most": 11787249,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 1005834,
-            "on_cpu": 1007208,
-            "blocked": 0,
-            "wall_least": 943875,
-            "wall_most": 1077084,
-            "wall_total": 1005834,
-            "on_cpu_total": 1007208,
-            "blocked_total": 0
-          },
-          {
-            "call": "render_pipeline",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 3213667,
-            "on_cpu": 2554917,
-            "blocked": 701999,
-            "wall_least": 2931625,
-            "wall_most": 8494791,
-            "wall_total": 3213667,
-            "on_cpu_total": 2554917,
-            "blocked_total": 701999
-          },
-          {
-            "call": "render_pipeline_facts",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 13209,
-            "on_cpu": 13375,
-            "blocked": 0,
-            "wall_least": 11250,
-            "wall_most": 25250,
-            "wall_total": 13209,
-            "on_cpu_total": 13375,
             "blocked_total": 0
           }
         ]

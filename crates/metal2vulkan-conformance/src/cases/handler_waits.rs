@@ -208,7 +208,7 @@ mod tests {
             // measurements on a venue, taken by other legs, and a case states nothing about
             // either.
             assert_eq!(
-                committed.without_costs().without_times(),
+                committed.without_times(),
                 stated,
                 "{}: its committed recording is not the answer the case states",
                 case.name()

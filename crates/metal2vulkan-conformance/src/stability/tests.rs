@@ -3,9 +3,8 @@
 
 use super::{Moved, Stability};
 use crate::case::Venue;
-use crate::cost::{CostVerdict, Counts};
 use crate::replay::{Allowances, Replayed};
-use crate::report::{CostRow, Report};
+use crate::report::Report;
 use crate::transcript::{Node, Observed, Sites, Value};
 use crate::verdict::Verdict;
 
@@ -22,9 +21,8 @@ fn venue() -> Venue {
     }
 }
 
-/// One report of one case: its verdict, the one site it observed and the one count the cost half
-/// read over it.
-fn report(verdict: Verdict, observed: Value, count: u64, nanos: u64) -> Report {
+/// One report of one case: its verdict and the one site it observed.
+fn report(verdict: Verdict, observed: Value) -> Report {
     let mut sites = Sites::new();
     sites.push(Node::leaf("output", Observed::value(observed)));
     let mut built = Report::new();
@@ -35,13 +33,6 @@ fn report(verdict: Verdict, observed: Value, count: u64, nanos: u64) -> Report {
         allowances: Allowances::default(),
         measured_on: None,
         ours: sites.finish(),
-    });
-    built.add_cost(CostRow {
-        case: "one-case".to_owned(),
-        verdict: CostVerdict::Within { held: 1 },
-        counts: Counts::read(&format!("WorkCounts {{\n    buffers_made: {count},\n}}")).unwrap(),
-        nanos,
-        reported: [0, 0, 0],
     });
     built
 }
@@ -54,30 +45,29 @@ fn moved_reading(stability: &Stability, reading: &str) -> Option<Moved> {
         .find(|row| row.reading == reading)
 }
 
-/// A count that reads one number on one run and another on the next is flagged, with the case,
-/// the count and both readings in order.
+/// A value that reads one number on one run and another on the next is flagged, with the case,
+/// the site and both readings in order.
 ///
-/// This is the shape the cost gate's own instability had: `host_texel_copies` in
-/// `chroma-pair-texel-reads-bgrg422` read 2 over three rounds and then 3, and the only reason
-/// anybody saw it was a stream re-running a tree it had not touched. A one-shot gate reads the
-/// second number as a regression, because that is the only reading it has.
+/// A one-shot gate reads the second number as a regression, because that is the only reading it
+/// has.
 #[test]
-fn a_count_that_moves_between_runs_is_flagged_with_both_readings() {
-    let first = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
-    let again = report(Verdict::Exact, Value::Uint(7), 3, 1_000);
+fn a_value_that_moves_between_runs_is_flagged_with_both_readings() {
+    let first = report(Verdict::Exact, Value::Uint(2));
+    let again = report(Verdict::Exact, Value::Uint(3));
     let mut stability = Stability::new(2);
     stability.observe(2, &first, &again);
     assert!(!stability.is_stable());
-    let row = moved_reading(&stability, "the count buffers_made").expect("the count");
+    let row = moved_reading(&stability, "the site case/output").expect("the site");
     assert_eq!(row.case, "one-case");
-    assert_eq!(row.runs, vec!["2".to_owned(), "3".to_owned()]);
+    assert!(row.runs[0].contains("\"uint\":2"), "{:?}", row.runs);
+    assert!(row.runs[1].contains("\"uint\":3"), "{:?}", row.runs);
     let printed = stability.render();
     assert!(
-        printed.contains("one-case: the count buffers_made moved"),
+        printed.contains("one-case: the site case/output moved"),
         "{printed}"
     );
-    assert!(printed.contains("run 1: 2"), "{printed}");
-    assert!(printed.contains("run 2: 3"), "{printed}");
+    assert!(printed.contains("run 1: "), "{printed}");
+    assert!(printed.contains("run 2: "), "{printed}");
 }
 
 /// A **verdict** that moves is flagged, and so is the site whose value moved under it: the two are
@@ -85,7 +75,7 @@ fn a_count_that_moves_between_runs_is_flagged_with_both_readings() {
 /// one run and not the next) and a value can move inside a verdict that stays the same word.
 #[test]
 fn a_verdict_and_a_value_that_move_are_each_their_own_reading() {
-    let first = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
+    let first = report(Verdict::Exact, Value::Uint(7));
     let again = report(
         Verdict::Divergent {
             found: vec![crate::diff::Divergence::new(
@@ -98,8 +88,6 @@ fn a_verdict_and_a_value_that_move_are_each_their_own_reading() {
             refused: Vec::new(),
         },
         Value::Uint(9),
-        2,
-        1_000,
     );
     let mut stability = Stability::new(2);
     stability.observe(2, &first, &again);
@@ -115,17 +103,11 @@ fn a_verdict_and_a_value_that_move_are_each_their_own_reading() {
     assert!(site.runs[1].contains("\"uint\":9"), "{:?}", site.runs);
 }
 
-/// Two runs that read the same thing move nothing, **and** a run that took a different amount of
-/// time moves nothing either.
-///
-/// Both halves matter, and the second is the one that keeps this usable: a time moves on every
-/// host under every load, so a comparison that flagged it would print a row for every case of
-/// every run and the three readings that mean something would be unreadable. The check must
-/// refuse a moved count and accept a moved clock, so it is held to both here.
+/// Two runs that read the same thing move nothing, and one run alone claims nothing.
 #[test]
-fn an_unchanged_run_moves_nothing_and_a_clock_is_not_a_reading() {
-    let first = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
-    let again = report(Verdict::Exact, Value::Uint(7), 2, 9_999_999);
+fn an_unchanged_run_moves_nothing() {
+    let first = report(Verdict::Exact, Value::Uint(7));
+    let again = report(Verdict::Exact, Value::Uint(7));
     let mut stability = Stability::new(2);
     stability.observe(2, &first, &again);
     assert!(stability.is_stable(), "{:?}", stability.moved());
@@ -148,24 +130,21 @@ fn an_unchanged_run_moves_nothing_and_a_clock_is_not_a_reading() {
 /// device to find out when.
 #[test]
 fn the_readings_are_in_run_order_however_late_one_moves() {
-    let first = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
-    let same = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
-    let third = report(Verdict::Exact, Value::Uint(7), 5, 1_000);
-    let fourth = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
+    let first = report(Verdict::Exact, Value::Uint(2));
+    let same = report(Verdict::Exact, Value::Uint(2));
+    let third = report(Verdict::Exact, Value::Uint(5));
+    let fourth = report(Verdict::Exact, Value::Uint(2));
     let mut stability = Stability::new(4);
     stability.observe(2, &first, &same);
     stability.observe(3, &first, &third);
     stability.observe(4, &first, &fourth);
-    let row = moved_reading(&stability, "the count buffers_made").expect("the count");
-    assert_eq!(
-        row.runs,
-        vec![
-            "2".to_owned(),
-            "2".to_owned(),
-            "5".to_owned(),
-            "2".to_owned()
-        ]
-    );
+    let row = moved_reading(&stability, "the site case/output").expect("the site");
+    let read: Vec<bool> = row
+        .runs
+        .iter()
+        .map(|one| one.contains("\"uint\":5"))
+        .collect();
+    assert_eq!(read, [false, false, true, false], "{:?}", row.runs);
 }
 
 /// A site one run emitted and another did not is a move, said in words rather than left as a
@@ -176,7 +155,7 @@ fn the_readings_are_in_run_order_however_late_one_moves() {
 /// is as unstable as one that is sometimes wrong.
 #[test]
 fn a_site_only_one_run_emitted_is_a_move() {
-    let first = report(Verdict::Exact, Value::Uint(7), 2, 1_000);
+    let first = report(Verdict::Exact, Value::Uint(7));
     let mut sites = Sites::new();
     let mut again = Report::new();
     again.add(Replayed {
@@ -206,8 +185,8 @@ fn a_site_only_one_run_emitted_is_a_move() {
 #[test]
 fn a_long_reading_is_held_by_its_digest_and_still_moves() {
     let long = |byte: u8| Value::Bytes(vec![byte; 4096]);
-    let first = report(Verdict::Exact, long(0xAA), 2, 1_000);
-    let again = report(Verdict::Exact, long(0xBB), 2, 1_000);
+    let first = report(Verdict::Exact, long(0xAA));
+    let again = report(Verdict::Exact, long(0xBB));
     let mut stability = Stability::new(2);
     stability.observe(2, &first, &again);
     let row = moved_reading(&stability, "the site case/output").expect("the site");
@@ -222,6 +201,6 @@ fn a_long_reading_is_held_by_its_digest_and_still_moves() {
     // And the same long value twice moves nothing: the digest is a projection of the value, not
     // of the run.
     let mut steady = Stability::new(2);
-    steady.observe(2, &first, &report(Verdict::Exact, long(0xAA), 2, 1_000));
+    steady.observe(2, &first, &report(Verdict::Exact, long(0xAA)));
     assert!(steady.is_stable(), "{:?}", steady.moved());
 }

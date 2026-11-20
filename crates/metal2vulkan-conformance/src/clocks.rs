@@ -169,6 +169,28 @@ pub fn host_load() -> Option<f64> {
     }
 }
 
+/// What the host was doing while one leg ran: its one-minute load average ([`host_load`]) on each
+/// side of that leg.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LegLoad {
+    /// The reading taken immediately before this leg started.
+    pub before: Option<f64>,
+    /// The reading taken immediately after it finished.
+    pub after: Option<f64>,
+}
+
+impl LegLoad {
+    /// The load to describe this leg by: the mean of its two readings, or whichever one the host
+    /// answered.
+    pub fn typical(self) -> Option<f64> {
+        match (self.before, self.after) {
+            (Some(before), Some(after)) => Some((before + after) / 2.0),
+            (Some(one), None) | (None, Some(one)) => Some(one),
+            (None, None) => None,
+        }
+    }
+}
+
 /// The one-minute entry of `getloadavg`, or `None` where the host keeps no load average.
 #[cfg(unix)]
 fn load_average() -> Option<f64> {

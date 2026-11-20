@@ -623,17 +623,14 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
     ]
 };
 
-/// The codes of `announced` the cost and times halves' degraded-set rule counts, sorted and once
-/// each: every one but the device's native answers ([`NATIVE_NOTES`]).
+/// The codes of `announced` the times half's degraded-set rule counts, sorted and once each:
+/// every one but the device's native answers ([`NATIVE_NOTES`]).
 ///
 /// **What the rule is for.** A notice can say the device lacked the exact form and the runtime did
-/// something cheaper, so a count or a time taken with it is of a different amount of work, and
-/// comparing it with one taken without it would read the device's gap as a saving
-/// ([`crate::cost::judge`], [`crate::times::classify`]). A native note never says that: the
-/// device's native form of the operation is the only form the runtime builds, under either policy,
-/// so the work is the same whether the note fired or not. Counting one withheld a verdict from
-/// nearly every case that computes, converts or samples, and made a record taken on a run that did
-/// not provoke a note incomparable with the same work on one that did.
+/// something cheaper, so a time taken with it is of a different amount of work, and pooling it
+/// with one taken without it would read the device's gap as a saving ([`crate::times::fold`]). A
+/// native note never says that: the device's native form of the operation is the only form the
+/// runtime builds, so the work is the same whether the note fired or not.
 pub fn degrading(announced: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut codes: Vec<String> = announced
         .into_iter()

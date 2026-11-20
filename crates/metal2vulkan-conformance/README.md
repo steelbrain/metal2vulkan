@@ -250,7 +250,7 @@ prints it. The figures gate nothing.
 
 ```sh
 conformance times --runs 8                  # Metal's leg, print the table
-conformance times --runs 8 --show           # and every per-case row, not only the interesting ones
+conformance times --runs 8 --show           # and every case's own row
 conformance times --runs 8 --write          # keep the figures in the cases' recordings
 ```
 
@@ -260,11 +260,7 @@ call's wall time into the calling thread's own CPU and the time it was blocked. 
 cost a call is measured on the host and printed above the table; it is never subtracted.
 
 `--write` keeps the figures in the case's own recording, because Metal's cost on a given macOS build
-cannot be re-taken once the machine updates. A recording may also hold a `costs` field (work counts
-and their bounds) and a leg of ours beside Metal's under `times`. Nothing reads or writes either:
-`metal2vulkan-rt` keeps no work counter the suite can read, and `times` measures Metal's leg alone.
-`known-slow-calls.tsv`, the per-call ledger that compared the two legs, is likewise read by nothing
-this command runs.
+cannot be re-taken once the machine updates. `--show` adds every case's own figures to the table.
 
 ## This crate is not the validation suite
 
@@ -297,7 +293,6 @@ edits one.
 | `validated` | The second oracle: the same case under Metal's API validation layer, in a child process |
 | `record`, `replay` | Taking Metal's answer, and comparing a run against it |
 | `report` | Verdict counts and the matrix of case against venue |
-| `cost` | The cost record a recording may hold: work counts, their regions and their bounds |
 | `work`, `rt_side::work`, `metal_work` | The copy-and-fill vocabulary a case states as data, and the two sides that run it |
 | `measured` | The committed Metal measurements a ported case reads, under the public fixtures |
 | `argument_encoders` | The argument-encoder vocabulary: what a case asks an `MTLArgumentEncoder` to do, and the layout facts it can observe without a host's own addresses in them |

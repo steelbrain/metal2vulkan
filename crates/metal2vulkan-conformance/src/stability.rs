@@ -1,11 +1,9 @@
 //! Whether an unchanged selection answers the same thing twice.
 //!
-//! Every other reading the suite takes is of **one** run. A verdict, a transcript's site and a
-//! cost count are each read once and then held against a recording or a bound, so a reading that
-//! moves run to run is indistinguishable from a reading that moved because the implementation
-//! changed — and the gate gives the second answer, because that is the only one it can give. The
-//! cost half's instability was found only because a stream re-ran a tree it had not touched and
-//! noticed two different numbers; nothing in the suite was looking.
+//! Every other reading the suite takes is of **one** run. A verdict and a transcript's site are
+//! each read once and then held against a recording, so a reading that moves run to run is
+//! indistinguishable from a reading that moved because the implementation changed — and the gate
+//! gives the second answer, because that is the only one it can give.
 //!
 //! This looks. `conformance replay --runs N` replays the selection N times in the one process and
 //! flags every reading that is not the same in all N. It is off by default — `--runs 1` flattens
@@ -13,15 +11,14 @@
 //!
 //! # What a reading is
 //!
-//! One run of one case offers three kinds, and all three are taken:
+//! One run of one case offers two kinds, and both are taken:
 //!
 //! - its **verdict**, by its word and in full, which is what the ledger and the exit status read;
 //! - every **site** of the transcript it emitted, by its path from the root, which is where a
-//!   value that moves shows up;
-//! - every **count** the cost half read over it, by name, with that half's own verdict.
+//!   value that moves shows up.
 //!
 //! What is deliberately not a reading: how long the case took. A time moves on every host under
-//! every load, so flagging it would bury the three readings that mean something.
+//! every load, so flagging it would bury the readings that mean something.
 //!
 //! # Why the readings are held short
 //!
@@ -203,19 +200,6 @@ fn readings(report: &Report) -> BTreeMap<(String, String), String> {
             ),
             held("yes"),
         );
-    }
-    for row in report.cost_rows() {
-        let case = row.case.clone();
-        read.insert(
-            (case.clone(), "the cost verdict".to_owned()),
-            held(row.verdict.word()),
-        );
-        for (name, count) in row.counts.iter() {
-            read.insert(
-                (case.clone(), format!("the count {name}")),
-                held(&count.to_string()),
-            );
-        }
     }
     read
 }

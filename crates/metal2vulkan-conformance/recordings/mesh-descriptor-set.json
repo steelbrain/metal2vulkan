@@ -730,18 +730,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {}
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -783,54 +773,6 @@
             "wall_most": 2079458,
             "wall_total": 241458,
             "on_cpu_total": 242083,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 286,
-      "times": {
-        "case": "mesh-descriptor-set",
-        "calls": 2,
-        "in_calls": 1661125,
-        "on_cpu": 1636625,
-        "blocked": 52083,
-        "elsewhere": 3083,
-        "spend": 1746625,
-        "spend_least": 1307710,
-        "spend_most": 3514584,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 1626750,
-            "on_cpu": 1602042,
-            "blocked": 52083,
-            "wall_least": 1271459,
-            "wall_most": 3465000,
-            "wall_total": 1626750,
-            "on_cpu_total": 1602042,
-            "blocked_total": 52083
-          },
-          {
-            "call": "mesh_descriptor_facts",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 34959,
-            "on_cpu": 35167,
-            "blocked": 0,
-            "wall_least": 32917,
-            "wall_most": 51375,
-            "wall_total": 34959,
-            "on_cpu_total": 35167,
             "blocked_total": 0
           }
         ]

@@ -132,24 +132,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {
-        "linked_use_questions_asked": 2
-      },
-      "per_state": {
-        "pipelines": 0,
-        "states": 1
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -192,54 +176,6 @@
             "wall_total": 3102625,
             "on_cpu_total": 321042,
             "blocked_total": 2788709
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 286,
-      "times": {
-        "case": "mesh-limits-max-object-2048",
-        "calls": 2,
-        "in_calls": 910292,
-        "on_cpu": 912542,
-        "blocked": 0,
-        "elsewhere": 875,
-        "spend": 911167,
-        "spend_least": 822334,
-        "spend_most": 3636083,
-        "per_call": [
-          {
-            "call": "library",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 846292,
-            "on_cpu": 848292,
-            "blocked": 0,
-            "wall_least": 769792,
-            "wall_most": 3571250,
-            "wall_total": 846292,
-            "on_cpu_total": 848292,
-            "blocked_total": 0
-          },
-          {
-            "call": "mesh_pipeline_limits",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 61375,
-            "on_cpu": 61666,
-            "blocked": 0,
-            "wall_least": 51417,
-            "wall_most": 76334,
-            "wall_total": 61375,
-            "on_cpu_total": 61666,
-            "blocked_total": 0
           }
         ]
       }

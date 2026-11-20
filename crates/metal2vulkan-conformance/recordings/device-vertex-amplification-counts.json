@@ -294,18 +294,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {}
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -334,41 +324,6 @@
             "wall_most": 42,
             "wall_total": 874,
             "on_cpu_total": 4667,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "device-vertex-amplification-counts",
-        "calls": 17,
-        "in_calls": 791,
-        "on_cpu": 5165,
-        "blocked": 0,
-        "elsewhere": 875,
-        "spend": 1582,
-        "spend_least": 332,
-        "spend_most": 6042,
-        "per_call": [
-          {
-            "call": "supports_vertex_amplification_count",
-            "least_calls": 17,
-            "most_calls": 17,
-            "wall": 42,
-            "on_cpu": 250,
-            "blocked": 0,
-            "wall_least": 0,
-            "wall_most": 83,
-            "wall_total": 791,
-            "on_cpu_total": 5165,
             "blocked_total": 0
           }
         ]

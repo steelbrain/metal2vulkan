@@ -17,7 +17,6 @@
 //! is named by its committed fixture and its bitcode's digest, because a host without Metal cannot
 //! compile one.
 
-use crate::cost::CostRecord;
 use crate::transcript::Transcript;
 use serde::{Deserialize, Serialize};
 
@@ -285,31 +284,12 @@ pub struct Recording {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shaders: Vec<ShaderRef>,
     pub answers: Vec<Answer>,
-    /// What **our** side cost to produce the case's transcript, per venue
-    /// ([`crate::cost`]): the counts the old runtime's `WorkCounts` moved,
-    /// each with the most the measurement saw.
+    /// What Metal's calls cost in time over the case, per venue and machine ([`crate::times`]):
+    /// the per-call and per-case figures a `times` run measured.
     ///
-    /// It lives here, beside the Metal answers and in the same file, so a host with no Metal
-    /// replays the cost half unchanged with the rest of the recording. It is **not** a Metal fact
-    /// and nothing compares it with one: Metal has no counterpart for any of these counts, so they
-    /// never produce a correctness verdict. A recording taken before the cost half existed holds
-    /// none, and reads as `Unmeasured`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub costs: Vec<CostRecord>,
-    /// What **each leg** cost in time over the case, per leg and venue ([`crate::times`]): the
-    /// per-call and per-case figures a `times` run measured.
-    ///
-    /// It is here for one reason the counts half does not have: **Metal's own cost on a given
-    /// macOS build cannot be re-taken later.** A measurement of ours is one command away on any
-    /// host; what Metal charged for a call on 26A434 is gone the moment the machine updates. This
-    /// is the plan's standing property — that a year of Metal measurements stops evaporating —
-    /// applied to cost.
-    ///
-    /// Nothing compares a stored figure with a live one. A time comparison is only ever made
-    /// between two legs measured in the same run, on one machine, from the identical transcript
-    /// ([`crate::times::judge`]); off this Mac the stored Metal figures are another machine's, and
-    /// even here they are another moment's. A recording taken before the times half existed holds
-    /// none, which is a reported hole and never a failure.
+    /// It is here because **Metal's own cost on a given macOS build cannot be re-taken later**:
+    /// what Metal charged for a call on 26A434 is gone the moment the machine updates. Nothing
+    /// compares a stored figure with a live one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub times: Vec<crate::times::TimeRecord>,
 }
@@ -323,24 +303,20 @@ impl Recording {
             suite_version: SUITE_VERSION,
             shaders,
             answers,
-            costs: Vec::new(),
             times: Vec::new(),
         }
     }
 
-    /// The same recording holding `costs`: what our side cost on each venue measured.
-    #[must_use]
     /// `self`, a recording already written, with everything a fresh run of Metal **measures**
     /// taken from `fresh` and everything else kept.
     ///
     /// The carry is inverted on purpose: keeping is the default and dropping takes an explicit
-    /// line here. Listing the halves to keep instead is the shape that loses one. It has already
-    /// cost this crate a defect — the cost half's ceiling bounds were carried by a list of maps,
-    /// a later change added evidence that belonged in no map on that list, and a re-measure
-    /// dropped 389 bounds across 149 cases with nothing in any output saying so. A half measured
-    /// by another leg, on another machine, is the normal case and not the exception: Metal's
-    /// answers come from a Mac, the counters from a venue, and nothing re-taken here refreshes or
-    /// invalidates the rest.
+    /// line here. Listing the halves to keep instead is the shape that loses one: a half added
+    /// later would be dropped by every re-record with nothing in any output saying so. A half
+    /// measured by another command is the normal case and not the exception: the answers come
+    /// from `record`, the times from `times`, and nothing re-taken here refreshes or invalidates
+    /// the rest.
+    #[must_use]
     pub fn carrying_the_answers_of(mut self, fresh: Recording) -> Recording {
         self.format = fresh.format;
         self.suite_version = fresh.suite_version;
@@ -350,31 +326,11 @@ impl Recording {
         self
     }
 
-    pub fn with_costs(mut self, costs: Vec<CostRecord>) -> Self {
-        self.costs = costs;
-        self
-    }
-
-    /// The same recording with the cost half dropped: **Metal's answer alone**.
+    /// The same recording with the times half dropped: **Metal's answer alone**.
     ///
-    /// What a case can state about itself. The cost half is our own measurement on a venue, taken
-    /// by a different leg and written by a different command, so a test that ties a committed
-    /// recording to the answer its case states compares this and not the whole file — otherwise
-    /// measuring the cost of a hand-written recording's case would break the test that keeps that
-    /// file honest.
-    #[must_use]
-    pub fn without_costs(mut self) -> Self {
-        self.costs = Vec::new();
-        self
-    }
-
-    /// The same recording with the times half dropped, for the same reason
-    /// [`Recording::without_costs`] exists and never folded into it, because the two names would
-    /// then each describe half of what the one call does.
-    ///
-    /// A time is our own measurement of a run on a venue, written by the `times` command. A case
-    /// states nothing about it, so a test that ties a committed recording to the answer its case
-    /// states drops this half as well.
+    /// A time is a measurement of a run, written by the `times` command. A case states nothing
+    /// about it, so a test that ties a committed recording to the answer its case states compares
+    /// this and not the whole file.
     #[must_use]
     pub fn without_times(mut self) -> Self {
         self.times = Vec::new();

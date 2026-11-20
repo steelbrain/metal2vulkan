@@ -1024,64 +1024,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-emulated-sparse-texture"
-      ],
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_hurried": 2,
-        "blocks_ahead_waited_for": 5,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 348127232,
-        "empty_memory_blocks_live": 2,
-        "image_blocks_made_ahead": 3,
-        "image_blocks_made_in_place": 3,
-        "memory_frees.pooled_emptied": 1,
-        "new_buffer_bytes_cleared": 6272,
-        "object_churn.buffers_evicted": 12,
-        "object_churn.buffers_parked": 37,
-        "object_churn.buffers_recycled": 25,
-        "object_churn.images_other": 30,
-        "object_churn.making_sites_dropped": 60,
-        "object_churn.textures_in_heaps": 30,
-        "object_churn.vk_buffer_bindings": 12,
-        "object_churn.vk_buffers_destroyed": 12,
-        "object_churn.vk_buffers_made": 12,
-        "object_churn.vk_image_bindings": 30,
-        "object_churn.vk_images_destroyed": 30,
-        "object_churn.vk_images_made": 30,
-        "object_churn.vk_memory_allocations": 3,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 5
-      },
-      "moving": {
-        "blocks_ahead_hurried": 0,
-        "blocks_ahead_waited_for": 1
-      },
-      "composed": {
-        "addressable_buffers_made": 2,
-        "blocks_ahead_waited_for": 5,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 0,
-        "device_memory_allocated": 335544320,
-        "image_blocks_made_ahead": 3,
-        "image_blocks_made_in_place": 0,
-        "memory_frees.pooled_emptied": 0,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 5
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -1136,70 +1080,6 @@
             "wall_most": 83,
             "wall_total": 2168,
             "on_cpu_total": 5706,
-            "blocked_total": 0
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "sparse-tails-by-texture-type",
-        "calls": 61,
-        "in_calls": 269877,
-        "on_cpu": 277796,
-        "blocked": 0,
-        "elsewhere": 791,
-        "spend": 270961,
-        "spend_least": 253035,
-        "spend_most": 284493,
-        "degraded": [
-          "metal2vulkan-degrade-emulated-sparse-texture"
-        ],
-        "per_call": [
-          {
-            "call": "heap_texture",
-            "least_calls": 30,
-            "most_calls": 30,
-            "wall": 7500,
-            "on_cpu": 7625,
-            "blocked": 0,
-            "wall_least": 7250,
-            "wall_most": 7875,
-            "wall_total": 268961,
-            "on_cpu_total": 273169,
-            "blocked_total": 0
-          },
-          {
-            "call": "sparse_heap",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 375,
-            "on_cpu": 500,
-            "blocked": 0,
-            "wall_least": 292,
-            "wall_most": 458,
-            "wall_total": 375,
-            "on_cpu_total": 500,
-            "blocked_total": 0
-          },
-          {
-            "call": "sparse_texture_facts",
-            "least_calls": 30,
-            "most_calls": 30,
-            "wall": 0,
-            "on_cpu": 125,
-            "blocked": 0,
-            "wall_least": 0,
-            "wall_most": 41,
-            "wall_total": 583,
-            "on_cpu_total": 3833,
             "blocked_total": 0
           }
         ]

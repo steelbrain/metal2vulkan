@@ -526,97 +526,8 @@
       "validated": "ran"
     }
   ],
-  "costs": [
-    {
-      "venue": "Apple M3 Max",
-      "runs": 8,
-      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
-      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-emulated-sparse-texture"
-      ],
-      "bounds": {
-        "addressable_buffers_made": 2,
-        "bare_starts": 6,
-        "batches_submitted_by_waiters": 10,
-        "batches_with_none_pending": 10,
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 2,
-        "command_buffers_begun": 13,
-        "command_buffers_begun_batch_barriers": 6,
-        "command_buffers_begun_batch_work": 7,
-        "command_buffers_submitted": 13,
-        "commands_recorded.begin_command_buffer": 13,
-        "commands_recorded.cmd_copy_buffer": 9,
-        "commands_recorded.cmd_copy_buffer_to_image": 4,
-        "commands_recorded.cmd_pipeline_barrier": 28,
-        "commands_recorded.end_command_buffer": 13,
-        "commits_handed_off": 10,
-        "commits_taken_in": 10,
-        "completed_waits": 9,
-        "completed_where_seen": 10,
-        "completion_arms": 10,
-        "completion_arms_after_a_wake": 10,
-        "completion_waiter_parks": 10,
-        "device_memory_allocated": 205520896,
-        "fence_waits": 10,
-        "finales_apart": 6,
-        "gate_waits": 10,
-        "gate_waits_slept": 10,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 1,
-        "new_buffer_bytes_cleared": 304,
-        "object_churn.buffers_parked": 9,
-        "object_churn.buffers_recycled": 9,
-        "object_churn.images_other": 1,
-        "object_churn.making_sites_dropped": 2,
-        "object_churn.textures_in_heaps": 1,
-        "object_churn.vk_image_bindings": 1,
-        "object_churn.vk_images_destroyed": 1,
-        "object_churn.vk_images_made": 1,
-        "object_churn.vk_memory_allocations": 1,
-        "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_made": 3,
-        "queue_submissions": 10,
-        "queues_sharing_a_vk_queue": 1,
-        "scheduled_where_submitted": 10,
-        "scheduler_passes_by_waiters": 10,
-        "scheduler_sleeps": 10,
-        "scheduler_wakes_commit": 10,
-        "slot_returns": 10,
-        "spare_command_pools_taken": 10,
-        "submit_infos": 16,
-        "trail_waits": 10,
-        "wakes_completion_waiters": 10,
-        "wakes_spared": 70
-      },
-      "moving": {
-        "gate_waits_slept": 5
-      },
-      "composed": {
-        "blocks_ahead_waited_for": 3,
-        "buffer_blocks_made_ahead": 2,
-        "buffer_blocks_made_in_place": 0,
-        "commands_recorded.cmd_copy_buffer": 0,
-        "commands_recorded.cmd_copy_buffer_to_image": 0,
-        "commands_recorded.cmd_pipeline_barrier": 0,
-        "commands_recorded.end_command_buffer": 0,
-        "device_memory_allocated": 201326592,
-        "image_blocks_made_ahead": 1,
-        "image_blocks_made_in_place": 0,
-        "plain_buffer_blocks_made": 2,
-        "queues_sharing_a_vk_queue": 0
-      },
-      "ceilings": {
-        "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 3
-      }
-    }
-  ],
   "times": [
     {
-      "leg": "metal",
       "venue": "native Metal",
       "chip": "apple-m3-max",
       "os_build": "26A434",
@@ -646,44 +557,6 @@
             "wall_total": 7317959,
             "on_cpu_total": 243625,
             "blocked_total": 7105709
-          }
-        ]
-      }
-    },
-    {
-      "leg": "ours",
-      "venue": "Apple M3 Max",
-      "chip": "apple-m3-max",
-      "os_build": "26A434",
-      "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
-      "times": {
-        "case": "sparse-mapping-modes-and-region-sizes",
-        "calls": 1,
-        "in_calls": 4939625,
-        "on_cpu": 125792,
-        "blocked": 4813833,
-        "elsewhere": 1195125,
-        "spend": 6134750,
-        "spend_least": 4876042,
-        "spend_most": 7044459,
-        "degraded": [
-          "metal2vulkan-degrade-emulated-sparse-texture"
-        ],
-        "per_call": [
-          {
-            "call": "sparse_mapping",
-            "least_calls": 1,
-            "most_calls": 1,
-            "wall": 4939625,
-            "on_cpu": 125792,
-            "blocked": 4813833,
-            "wall_least": 3765792,
-            "wall_most": 5676250,
-            "wall_total": 4939625,
-            "on_cpu_total": 125792,
-            "blocked_total": 4813833
           }
         ]
       }

@@ -871,7 +871,7 @@ mod tests {
         // Metal's answer alone: the cost and timing halves of the file are our own measurements on
         // a venue, taken by another leg, and a case states nothing about either.
         assert_eq!(
-            committed.without_costs().without_times(),
+            committed.without_times(),
             stated,
             "{}: its committed recording is not the answer the case states",
             case.name()
