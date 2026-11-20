@@ -1121,10 +1121,11 @@ does not read). A timing verdict between two plays needs all three of:
    both plays gets no verdict until a play adds one: a stream's own `m2v.check`, or the shown
    texture that `--check-presents` checks at the frame's present, in a play of each arm apart
    from the timed ones. A picture difference at the judged frame is accepted only when its size
-   is printed and its first parting draw on that card is traced to a function that carries a
-   static precision note, with no state difference. Such a row reads "pictures differ within
-   <note>: N pixels, largest difference D", and its time verdict stands. No trace means no
-   verdict.
+   is printed and its first parting draw on that card is traced either to a function that
+   carries a static precision note, with no state difference, or to a counted player
+   substitute. Such a row reads "pictures differ within <note>: N pixels, largest difference
+   D", or for a substitute "pictures differ in a WxH region where the replay substitutes
+   <what>", and its time verdict stands. No trace means no verdict.
 
 An NVIDIA time row is GPU ms a present over presents whose covering clock sample is the same
 state on both arms, the state named, at least 30 presents an arm; otherwise 'not comparable by
