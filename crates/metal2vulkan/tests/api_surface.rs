@@ -599,10 +599,6 @@ surface! {
         const MERGED_CHUNK;
         const MERGED_HEADER_BYTES;
         const MERGED_REST_FIRST;
-        fn flat_dispatch_module;
-        enum FlatArguments N;
-        struct FlatDispatchModule N;
-        struct FlatIndirect N;
         struct FunctionTableSnapshot O;
         struct FunctionTableWords O;
         fn geometry_flags;

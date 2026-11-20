@@ -53,10 +53,6 @@
 //! command whose threadgroup has a zero axis or more threads than the state's
 //! `maxTotalThreadsPerThreadgroup` runs nothing, as Metal's does, and reports nothing.
 //!
-//! **One indirect dispatch** (`flat`): a Metal dispatch whose grid and threadgroup size are GPU
-//! data runs on a flat variant through [`flat_dispatch_module`], which derives the same flat
-//! dispatch from the dispatch's arguments ([`FlatIndirect`]).
-//!
 //! **Nothing is guessed.** A command the closed variant set cannot run exactly dispatches nothing,
 //! and the preprocess sets [`StatusBits::REPLAY_FAULT`] and its reasons ([`ReplayFaults`]) in the
 //! command buffer's `ExecutionStatus`: the producer's sticky encoding fault, a malformed record, a
@@ -153,8 +149,6 @@ pub use draws::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
     DrawReplayPreprocess, InheritedBytes, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
 };
-mod flat;
-pub use flat::{flat_dispatch_module, FlatArguments, FlatDispatchModule, FlatIndirect};
 mod merged;
 pub use merged::{
     draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, DRAW_INDEX_ENTRY_BYTES,

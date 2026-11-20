@@ -1717,246 +1717,12 @@ fn the_generated_preprocess_meters_each_command_alone() {
     );
 }
 
-/// The device address of Metal's arguments in the flat-dispatch module's harness.
-const ARGUMENTS: u64 = 0x0000_0040_0000_0000;
-
-/// What one run of the flat-dispatch module left: the record, the command, and the status.
-type FlatRan = ([u32; 8], [u32; 3], StatusReport);
-
-/// Run the flat-dispatch module for `limits` over `dispatch`'s inputs and Metal's `arguments`,
-/// a buffer of exactly their words at [`ARGUMENTS`], so a read past them traps.
-fn flat_run(limits: [u32; 3], dispatch: FlatIndirect, arguments: &[u32]) -> FlatRan {
-    let mut scratch = vec![0xEE; FlatIndirect::SCRATCH_BYTES as usize];
-    let inputs = FlatIndirect::INPUTS_OFFSET as usize;
-    scratch[inputs..inputs + 32].copy_from_slice(&dispatch.inputs());
-    let bytes: Vec<u8> = arguments.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let res = Resources {
-        buffers: vec![
-            Buffer {
-                slot: None,
-                address: Some(SCRATCH),
-                bytes: scratch,
-            },
-            Buffer {
-                slot: None,
-                address: Some(ARGUMENTS),
-                bytes: bytes.clone(),
-            },
-            Buffer {
-                slot: None,
-                address: Some(STATUS),
-                bytes: ExecutionStatus::initial().to_vec(),
-            },
-        ],
-        push: FlatDispatchModule::push_constants(SCRATCH, STATUS).to_vec(),
-        spec: Default::default(),
-    };
-    let cfg = Config {
-        workgroups: [1, 1, 1],
-        ..Config::default()
-    };
-    let m = flat::typed_module(limits).expect("module");
-    let out = run(&m, &cfg, res).expect("run").buffers;
-    assert_eq!(out[1], bytes, "the arguments are only read");
-    let record = FlatIndirect::RECORD_OFFSET as usize;
-    let command = FlatIndirect::COMMAND_OFFSET as usize;
-    let status: [u8; ExecutionStatus::BYTES] = out[2].as_slice().try_into().expect("status");
-    (
-        std::array::from_fn(|i| word(&out[0], record + 4 * i)),
-        std::array::from_fn(|i| word(&out[0], command + 4 * i)),
-        ExecutionStatus::decode(&status),
-    )
-}
-
-/// The flat dispatch of the threads form's arguments at [`ARGUMENTS`] on a variant of `size`
-/// threads for a state of at most `max` threads.
-fn flat_threads(size: [u32; 3], max: u32) -> FlatIndirect {
-    FlatIndirect::new(ARGUMENTS, FlatArguments::Threads, size, max).expect("a flat dispatch")
-}
-
-/// The flat dispatch of the threadgroups form's arguments, of the call's threadgroup size
-/// `local`, on a variant of `size` threads for a state of at most `max` threads.
-fn flat_groups(local: [u32; 3], size: [u32; 3], max: u32) -> FlatIndirect {
-    let form = FlatArguments::Threadgroups {
-        threads_per_threadgroup: local,
-    };
-    FlatIndirect::new(ARGUMENTS, form, size, max).expect("a flat dispatch")
-}
-
-/// The flat-dispatch module is valid on every committed profile with device addresses and refused
-/// by name on the others.
-#[test]
-fn the_flat_dispatch_module_is_valid_where_device_addresses_are() {
-    let mut seen = (0, 0);
-    for (stem, dev) in devices() {
-        let p = dev.profile();
-        if addressed(&dev) {
-            seen.0 += 1;
-            let limits = p.fields().limits.max_compute_work_group_count;
-            assert_valid(flat::typed_module(limits).expect("module"), p);
-            let m = flat_dispatch_module(&dev).unwrap_or_else(|e| panic!("{stem}: {e}"));
-            assert_eq!(m.limits, limits, "{stem}");
-            assert!(p.check(&m.requirements).is_ok(), "{stem}");
-            assert!(m.layout.sets.is_empty(), "{stem}");
-            assert_eq!(
-                m.layout
-                    .push_constants
-                    .iter()
-                    .map(|r| (r.stages, r.offset, r.size))
-                    .collect::<Vec<_>>(),
-                vec![(
-                    crate::vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    FlatDispatchModule::PUSH_BYTES
-                )],
-                "{stem}"
-            );
-        } else {
-            seen.1 += 1;
-            let e = Unsupported::needs_any_of(
-                Feature::GpuEncodedIndirectCommands,
-                vec![p.addressed_needs()],
-            );
-            assert_eq!(
-                flat_dispatch_module(&dev),
-                Err(Error::Unsupported(e)),
-                "{stem}"
-            );
-        }
-    }
-    assert!(seen.0 > 0 && seen.1 > 0, "{seen:?}");
-}
-
-/// On group-count limits of 3 x 2 x 64: either form's grid spreads its threadgroups of the
-/// variant's size over `x`, then `y`, then `z`, with Metal's `threads_per_grid` in the record; what
-/// Metal runs nothing for is a zero command and no fault; a grid no group count holds, or a
-/// threadgroup grid above `2^32 - 1` threads on an axis, is a zero command and the `GROUP_COUNT`
-/// fault. The threadgroups form reads 12 bytes of arguments and no more.
-#[test]
-fn an_indirect_dispatch_runs_on_its_flat_variant_as_metal_runs_it() {
-    let limits = [3, 2, 64];
-    let clean = |(record, command, status): FlatRan| {
-        assert!(!status.replay_fault, "{status:?}");
-        (record, command)
-    };
-    // 42 threads in 11 threadgroups of 4: 3 x 2 x 2.
-    assert_eq!(
-        clean(flat_run(
-            limits,
-            flat_threads([4, 1, 1], 1024),
-            &[7, 2, 3, 7, 1, 1]
-        )),
-        ([0, 0, 0, 0, 7, 2, 3, 0], [3, 2, 2])
-    );
-    // 2 x 3 groups of 4 x 2: 48 threads in 6 threadgroups of 8, 3 x 2 x 1.
-    assert_eq!(
-        clean(flat_run(
-            limits,
-            flat_groups([4, 2, 1], [8, 1, 1], 64),
-            &[2, 3, 1]
-        )),
-        ([0, 0, 0, 0, 8, 6, 1, 0], [3, 2, 1])
-    );
-    // Metal runs nothing: a zero axis of the grid or the threadgroup, more threads a
-    // threadgroup than the state's maximum, and a zero group count.
-    for (dispatch, arguments) in [
-        (flat_threads([4, 1, 1], 1024), vec![0, 4, 1, 4, 1, 1]),
-        (flat_threads([4, 1, 1], 1024), vec![8, 1, 1, 0, 1, 1]),
-        (flat_threads([4, 1, 1], 1024), vec![8, 1, 1, 64, 32, 1]),
-        (flat_groups([0, 1, 1], [4, 1, 1], 1024), vec![1, 1, 1]),
-        (flat_groups([4, 1, 1], [4, 1, 1], 1024), vec![1, 0, 1]),
-    ] {
-        let (_, command) = clean(flat_run(limits, dispatch, &arguments));
-        assert_eq!(command, [0; 3], "{dispatch:?} {arguments:?}");
-    }
-    // 500 threadgroups of 4 need 84 along `z`; 2^31 groups of 2 are 2^32 threads along `x`.
-    for (dispatch, arguments) in [
-        (flat_threads([4, 1, 1], 1024), vec![2000, 1, 1, 1, 1, 1]),
-        (flat_groups([2, 1, 1], [4, 1, 1], 1024), vec![1 << 31, 1, 1]),
-    ] {
-        let (_, command, status) = flat_run(limits, dispatch, &arguments);
-        assert_eq!(command, [0; 3], "{dispatch:?} {arguments:?}");
-        assert!(status.replay_fault, "{dispatch:?} {arguments:?}");
-        assert_eq!(status.replay_faults, ReplayFaults::GROUP_COUNT);
-    }
-}
-
-/// The folded dispatch of the threadgroups form's arguments, of the call's threadgroup size
-/// `local`, for a state of at most `max` threads.
-fn folded_groups(local: [u32; 3], max: u32) -> FlatIndirect {
-    let form = FlatArguments::FoldedThreadgroups {
-        threads_per_threadgroup: local,
-    };
-    FlatIndirect::new(ARGUMENTS, form, local, max).expect("a folded dispatch")
-}
-
-/// On group-count limits of 3 x 2 x 64: the folded form spreads the product of Metal's group counts
-/// over `x`, then `y`, then `z`, with Metal's `threads_per_grid` and the call's threadgroup size
-/// packed in the record; what Metal runs nothing for is a zero command and no fault; group counts
-/// no dispatch holds, or a grid above `2^32 - 1` threads on an axis, are a zero command and the
-/// `GROUP_COUNT` fault. It reads 12 bytes of arguments and no more.
-#[test]
-fn an_indirect_threadgroup_dispatch_folds_its_group_counts() {
-    let limits = [3, 2, 64];
-    let clean = |(record, command, status): FlatRan| {
-        assert!(!status.replay_fault, "{status:?}");
-        (record, command)
-    };
-    // 5 x 3 x 2 groups of 2 x 2 x 1: 30 groups, 3 x 2 x 5; packed (1, 1, 0).
-    assert_eq!(
-        clean(flat_run(limits, folded_groups([2, 2, 1], 64), &[5, 3, 2])),
-        ([0, 0, 0, 1 | 1 << 10, 10, 6, 2, 0], [3, 2, 5])
-    );
-    // Within the limits: 2 x 1 x 1 groups of 4 x 2 x 2; packed (3, 1, 1).
-    assert_eq!(
-        clean(flat_run(limits, folded_groups([4, 2, 2], 64), &[2, 1, 1])),
-        ([0, 0, 0, 3 | 1 << 10 | 1 << 20, 8, 2, 2, 0], [2, 1, 1])
-    );
-    // 1 x 70000 groups of one thread: past every committed profile's `y`, 3 x 2 x 11667.
-    assert_eq!(
-        clean(flat_run(
-            [3, 2, 1 << 20],
-            folded_groups([1, 1, 1], 64),
-            &[1, 70000, 1]
-        )),
-        ([0, 0, 0, 0, 1, 70000, 1, 0], [3, 2, 11667])
-    );
-    // Metal runs nothing for a zero group count.
-    for arguments in [[0, 1, 1], [4, 0, 1], [4, 1, 0]] {
-        let (_, command) = clean(flat_run(limits, folded_groups([4, 1, 1], 64), &arguments));
-        assert_eq!(command, [0; 3], "{arguments:?}");
-    }
-    // 500 groups need 84 along `z`; 2^31 groups of 2 are 2^32 threads along `x`.
-    for (dispatch, arguments) in [
-        (folded_groups([1, 1, 1], 64), vec![500, 1, 1]),
-        (folded_groups([2, 1, 1], 64), vec![1 << 31, 1, 1]),
-    ] {
-        let (_, command, status) = flat_run(limits, dispatch, &arguments);
-        assert_eq!(command, [0; 3], "{dispatch:?} {arguments:?}");
-        assert!(status.replay_fault, "{dispatch:?} {arguments:?}");
-        assert_eq!(status.replay_faults, ReplayFaults::GROUP_COUNT);
-    }
-}
-
-/// No flat dispatch is described for arguments at an address that is not a multiple of 4, or for a
-/// variant no flat registration states.
-#[test]
-fn a_flat_dispatch_is_described_only_as_a_flat_variant_runs_it() {
-    let threads = FlatArguments::Threads;
-    assert!(FlatIndirect::new(ARGUMENTS + 2, threads, [4, 1, 1], 1024).is_none());
-    assert!(FlatIndirect::new(ARGUMENTS, threads, [4, 0, 1], 1024).is_none());
-    assert!(FlatIndirect::new(ARGUMENTS, threads, [1 << 16, 1 << 16, 1], 1024).is_none());
-    assert!(FlatIndirect::new(ARGUMENTS, threads, [4, 1, 1], 0).is_none());
-    assert!(FlatIndirect::new(ARGUMENTS, threads, [4, 1, 1], 1025).is_none());
-    assert!(FlatIndirect::new(ARGUMENTS + 4, threads, [4, 1, 1], 1).is_some());
-}
-
 /// The replay's modules test a product's overflow only by `OpUMulExtended`'s high word, never by
 /// the forms NVIDIA's compiler (615.71.09) refuses beside the preprocess's other arithmetic: a
 /// division of the largest `u64` (`b > (2^64 - 1) / a`), or a comparison with `2^32 - 1` of a
 /// product of two widened `u32`s (or a select of one). Every `OpUMulExtended` is 32-bit: a `u64`
-/// product is four of its halves' (`FunctionBuilder::mul_extended_from_halves`). Both modules on
-/// every committed profile with device addresses.
+/// product is four of its halves' (`FunctionBuilder::mul_extended_from_halves`). The preprocess
+/// on every committed profile with device addresses.
 #[test]
 fn the_replay_modules_test_overflow_by_a_products_high_word() {
     const TYPE_INT: u32 = 21;
@@ -1972,65 +1738,63 @@ fn the_replay_modules_test_overflow_by_a_products_high_word() {
     for (stem, dev) in devices().into_iter().filter(|(_, d)| addressed(d)) {
         seen += 1;
         let preprocess = replay_preprocess_module(&dev).expect("preprocess");
-        let flat = flat_dispatch_module(&dev).expect("flat");
-        for (what, words) in [("preprocess", &preprocess.spirv), ("flat", &flat.spirv)] {
-            let consts = int_constants(words);
-            let is = |id: u32, width: u32, value: u64| consts.get(&id) == Some(&(width, value));
-            let mut widened = std::collections::BTreeSet::new();
-            let mut products = std::collections::BTreeSet::new();
-            // Each integer, vector or struct type's (first member's) integer width.
-            let mut widths = std::collections::BTreeMap::new();
-            let mut extended = std::collections::BTreeMap::<u32, u32>::new();
-            let mut i = 5;
-            while let Some(&w) = words.get(i) {
-                let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
-                let at = |k: usize| words.get(i + k).copied().unwrap_or(0);
-                match op {
-                    TYPE_INT => {
-                        widths.insert(at(1), at(2));
-                    }
-                    TYPE_VECTOR | TYPE_STRUCT => {
-                        if let Some(&w) = widths.get(&at(2)) {
-                            widths.insert(at(1), w);
-                        }
-                    }
-                    UCONVERT => {
-                        widened.insert(at(2));
-                    }
-                    IMUL if widened.contains(&at(3)) && widened.contains(&at(4)) => {
-                        products.insert(at(2));
-                    }
-                    SELECT if products.contains(&at(4)) || products.contains(&at(5)) => {
-                        products.insert(at(2));
-                    }
-                    // OpUDiv type, result, dividend, divisor.
-                    UDIV => assert!(!is(at(3), 64, u64::MAX), "{stem} {what}: (2^64 - 1) / x"),
-                    // OpUGreaterThan type, result, a, b.
-                    UGREATER_THAN => assert!(
-                        !(products.contains(&at(3)) && is(at(4), 64, u64::from(u32::MAX))),
-                        "{stem} {what}: a widened u32 product compared with 2^32 - 1"
-                    ),
-                    // OpUMulExtended type, result, a, b.
-                    UMUL_EXTENDED => {
-                        let width = widths.get(&at(1)).copied().unwrap_or(0);
-                        *extended.entry(width).or_default() += 1;
-                    }
-                    _ => {}
+        let (what, words) = ("preprocess", &preprocess.spirv);
+        let consts = int_constants(words);
+        let is = |id: u32, width: u32, value: u64| consts.get(&id) == Some(&(width, value));
+        let mut widened = std::collections::BTreeSet::new();
+        let mut products = std::collections::BTreeSet::new();
+        // Each integer, vector or struct type's (first member's) integer width.
+        let mut widths = std::collections::BTreeMap::new();
+        let mut extended = std::collections::BTreeMap::<u32, u32>::new();
+        let mut i = 5;
+        while let Some(&w) = words.get(i) {
+            let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
+            let at = |k: usize| words.get(i + k).copied().unwrap_or(0);
+            match op {
+                TYPE_INT => {
+                    widths.insert(at(1), at(2));
                 }
-                if len == 0 {
-                    break;
+                TYPE_VECTOR | TYPE_STRUCT => {
+                    if let Some(&w) = widths.get(&at(2)) {
+                        widths.insert(at(1), w);
+                    }
                 }
-                i += len;
+                UCONVERT => {
+                    widened.insert(at(2));
+                }
+                IMUL if widened.contains(&at(3)) && widened.contains(&at(4)) => {
+                    products.insert(at(2));
+                }
+                SELECT if products.contains(&at(4)) || products.contains(&at(5)) => {
+                    products.insert(at(2));
+                }
+                // OpUDiv type, result, dividend, divisor.
+                UDIV => assert!(!is(at(3), 64, u64::MAX), "{stem} {what}: (2^64 - 1) / x"),
+                // OpUGreaterThan type, result, a, b.
+                UGREATER_THAN => assert!(
+                    !(products.contains(&at(3)) && is(at(4), 64, u64::from(u32::MAX))),
+                    "{stem} {what}: a widened u32 product compared with 2^32 - 1"
+                ),
+                // OpUMulExtended type, result, a, b.
+                UMUL_EXTENDED => {
+                    let width = widths.get(&at(1)).copied().unwrap_or(0);
+                    *extended.entry(width).or_default() += 1;
+                }
+                _ => {}
             }
-            // Five `u64` products of four each and three `u32` ones in the flat dispatch; the
-            // preprocess's own three `u32` ones beside it.
-            let want = if what == "flat" { 23 } else { 26 };
-            assert_eq!(
-                extended,
-                std::collections::BTreeMap::from([(32, want)]),
-                "{stem} {what}: OpUMulExtended by width"
-            );
+            if len == 0 {
+                break;
+            }
+            i += len;
         }
+        // The flat dispatch's five `u64` products of four each and three `u32` ones
+        // (`flat_dispatch`), and the preprocess's own three `u32` ones.
+        let want = 26;
+        assert_eq!(
+            extended,
+            std::collections::BTreeMap::from([(32, want)]),
+            "{stem} {what}: OpUMulExtended by width"
+        );
     }
     assert!(seen > 0);
 }

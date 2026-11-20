@@ -72,13 +72,6 @@ assoc-const	metal2vulkan::bind::DrawReplayModule::STATUS_PUSH	pub const STATUS_P
 assoc-const	metal2vulkan::bind::EtcDecode::ALL	pub const ALL: [EtcDecode; 7]
 assoc-const	metal2vulkan::bind::ExecutionStatus::BYTES	pub const BYTES: usize
 assoc-const	metal2vulkan::bind::ExecutionStatus::WORDS	pub const WORDS: usize
-assoc-const	metal2vulkan::bind::FlatDispatchModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::FlatDispatchModule::SCRATCH_PUSH	pub const SCRATCH_PUSH: u32
-assoc-const	metal2vulkan::bind::FlatDispatchModule::STATUS_PUSH	pub const STATUS_PUSH: u32
-assoc-const	metal2vulkan::bind::FlatIndirect::COMMAND_OFFSET	pub const COMMAND_OFFSET: u64
-assoc-const	metal2vulkan::bind::FlatIndirect::INPUTS_OFFSET	pub const INPUTS_OFFSET: u64
-assoc-const	metal2vulkan::bind::FlatIndirect::RECORD_OFFSET	pub const RECORD_OFFSET: u64
-assoc-const	metal2vulkan::bind::FlatIndirect::SCRATCH_BYTES	pub const SCRATCH_BYTES: u64
 assoc-const	metal2vulkan::bind::GeneratedLayout::INDEX_OFFSET	pub const INDEX_OFFSET: u32
 assoc-const	metal2vulkan::bind::GeneratedLayout::PUSH_OFFSET	pub const PUSH_OFFSET: u32
 assoc-const	metal2vulkan::bind::IndexBoundsFillModule::INDICES_BINDING	pub const INDICES_BINDING: u32
@@ -366,13 +359,6 @@ assoc-const-value	metal2vulkan::bind::DrawReplayModule::STATUS_PUSH	8
 assoc-const-value	metal2vulkan::bind::EtcDecode::ALL	[EtcDecode::Rgb8, EtcDecode::Rgb8A1, EtcDecode::Rgba8, EtcDecode::R11Unorm, EtcDecode::R11Snorm, EtcDecode::Rg11Unorm, EtcDecode::Rg11Snorm]
 assoc-const-value	metal2vulkan::bind::ExecutionStatus::BYTES	32
 assoc-const-value	metal2vulkan::bind::ExecutionStatus::WORDS	8
-assoc-const-value	metal2vulkan::bind::FlatDispatchModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::FlatDispatchModule::SCRATCH_PUSH	0
-assoc-const-value	metal2vulkan::bind::FlatDispatchModule::STATUS_PUSH	8
-assoc-const-value	metal2vulkan::bind::FlatIndirect::COMMAND_OFFSET	32
-assoc-const-value	metal2vulkan::bind::FlatIndirect::INPUTS_OFFSET	48
-assoc-const-value	metal2vulkan::bind::FlatIndirect::RECORD_OFFSET	0
-assoc-const-value	metal2vulkan::bind::FlatIndirect::SCRATCH_BYTES	48 + 32
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::INDEX_OFFSET	0
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::PUSH_OFFSET	4
 assoc-const-value	metal2vulkan::bind::IndexBoundsFillModule::INDICES_BINDING	1
@@ -970,7 +956,6 @@ enum	metal2vulkan::bind::DrawReplayRule	#[derive(Clone, Copy, Debug, PartialEq, 
 enum	metal2vulkan::bind::EtcDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum EtcDecode
 enum	metal2vulkan::bind::EtcTexels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum EtcTexels
 enum	metal2vulkan::bind::FieldLocation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FieldLocation
-enum	metal2vulkan::bind::FlatArguments	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FlatArguments
 enum	metal2vulkan::bind::FragmentTests	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FragmentTests
 enum	metal2vulkan::bind::GeneratedRefusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum GeneratedRefusal
 enum	metal2vulkan::bind::HeapElement	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum HeapElement
@@ -2315,14 +2300,6 @@ field	metal2vulkan::bind::DrawReplayPreprocess.parent	pub parent: Vec<u8>
 field	metal2vulkan::bind::DrawReplayPreprocess.push_constants	pub push_constants: Vec<u8>
 field	metal2vulkan::bind::DrawReplayPreprocess.push_holes	pub push_holes: Vec<PushHole>
 field	metal2vulkan::bind::DrawReplayPreprocess.resident	pub resident: RootTable
-field	metal2vulkan::bind::FlatDispatchModule.layout	pub layout: PipelineLayout
-field	metal2vulkan::bind::FlatDispatchModule.limits	pub limits: [u32; 3]
-field	metal2vulkan::bind::FlatDispatchModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::FlatDispatchModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::FlatIndirect.arguments	pub arguments: u64
-field	metal2vulkan::bind::FlatIndirect.form	pub form: FlatArguments
-field	metal2vulkan::bind::FlatIndirect.max_total_threads	pub max_total_threads: u32
-field	metal2vulkan::bind::FlatIndirect.threads_per_threadgroup	pub threads_per_threadgroup: [u32; 3]
 field	metal2vulkan::bind::FunctionTablesShape.bytes_class	pub bytes_class: u8
 field	metal2vulkan::bind::FunctionTablesShape.class	pub class: u8
 field	metal2vulkan::bind::GeneratedLayout.counts_offset	pub counts_offset: u64
@@ -3666,7 +3643,6 @@ fn	metal2vulkan::bind::fan_out::clip_entry	pub const fn clip_entry(axis: u32, k:
 fn	metal2vulkan::bind::fan_out::line_entry	pub const fn line_entry(axis: u32, k: u32) -> u32
 fn	metal2vulkan::bind::fan_out::scissors	pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>>
 fn	metal2vulkan::bind::fan_out::table	pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>>
-fn	metal2vulkan::bind::flat_dispatch_module	pub fn flat_dispatch_module(device: &Device) -> Result<FlatDispatchModule, Error>
 fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3], threads: [u32; 3], task: MeshGridLimits, direct: bool) -> Option<ObjectFold>
 fn	metal2vulkan::bind::geometry_flags	pub fn geometry_flags(opaque: bool, allow_duplicate_invocation: bool) -> u32
 fn	metal2vulkan::bind::geometry_table_offset	pub fn geometry_table_offset(offsets: &[u64]) -> Result<u32, Unsupported>
@@ -7099,10 +7075,6 @@ method	metal2vulkan::bind::EtcDecode::texel_bytes	pub fn texel_bytes(self, texel
 method	metal2vulkan::bind::EtcDecode::texel_format	pub fn texel_format(self, texels: EtcTexels) -> Format
 method	metal2vulkan::bind::ExecutionStatus::decode	pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport
 method	metal2vulkan::bind::ExecutionStatus::initial	pub const fn initial() -> [u8; ExecutionStatus::BYTES]
-method	metal2vulkan::bind::FlatArguments::bytes	pub fn bytes(self) -> u64
-method	metal2vulkan::bind::FlatDispatchModule::push_constants	pub fn push_constants(scratch: u64, status: u64) -> [u8; 16]
-method	metal2vulkan::bind::FlatIndirect::inputs	pub fn inputs(&self) -> [u8; 32]
-method	metal2vulkan::bind::FlatIndirect::new	pub fn new(arguments: u64, form: FlatArguments, threads_per_threadgroup: [u32; 3], max_total_threads: u32) -> Option<FlatIndirect>
 method	metal2vulkan::bind::FragmentTests::of	pub fn of(depth_stencil: &metal::state::DepthStencilDescriptor, depth: bool, stencil: bool, counted: bool) -> FragmentTests
 method	metal2vulkan::bind::FunctionTableSnapshot::byte_len	pub fn byte_len(&self) -> u64
 method	metal2vulkan::bind::FunctionTableSnapshot::bytes	pub fn bytes<'a>(&self, tables: impl IntoIterator<Item = &'a [u8]>) -> Option<Vec<u8>>
@@ -8028,8 +8000,6 @@ struct	metal2vulkan::bind::DrawReplayLayout	#[derive(Clone, Copy, Debug, Partial
 struct	metal2vulkan::bind::DrawReplayModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DrawReplayModule
 struct	metal2vulkan::bind::DrawReplayPreprocess	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DrawReplayPreprocess
 struct	metal2vulkan::bind::ExecutionStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ExecutionStatus
-struct	metal2vulkan::bind::FlatDispatchModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FlatDispatchModule
-struct	metal2vulkan::bind::FlatIndirect	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FlatIndirect
 struct	metal2vulkan::bind::FunctionTableSnapshot	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct FunctionTableSnapshot
 struct	metal2vulkan::bind::FunctionTableWords	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct FunctionTableWords
 struct	metal2vulkan::bind::FunctionTablesShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FunctionTablesShape
@@ -9986,9 +9956,6 @@ variant	metal2vulkan::bind::EtcTexels::Compact	Compact
 variant	metal2vulkan::bind::EtcTexels::Float	Float
 variant	metal2vulkan::bind::FieldLocation::ArgumentTable	ArgumentTable { offset: u32 }
 variant	metal2vulkan::bind::FieldLocation::PushWindow	PushWindow { offset: u32 }
-variant	metal2vulkan::bind::FlatArguments::FoldedThreadgroups	FoldedThreadgroups { threads_per_threadgroup: [u32; 3] }
-variant	metal2vulkan::bind::FlatArguments::Threadgroups	Threadgroups { threads_per_threadgroup: [u32; 3] }
-variant	metal2vulkan::bind::FlatArguments::Threads	Threads
 variant	metal2vulkan::bind::FragmentTests::Any	Any
 variant	metal2vulkan::bind::FragmentTests::Depth	Depth { writes: bool }
 variant	metal2vulkan::bind::FragmentTests::Drop	Drop

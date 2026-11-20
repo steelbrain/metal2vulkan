@@ -35,7 +35,6 @@ fn modules() -> Vec<Build> {
         };
     }
     plain!(
-        flat_dispatch_module,
         index_bounds_fill_module,
         index_bounds_plan_module,
         mesh_object_arguments_module,

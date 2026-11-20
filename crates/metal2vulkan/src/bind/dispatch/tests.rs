@@ -979,18 +979,15 @@ fn a_flat_plan_runs_a_ragged_dispatch_in_one_region() {
         }],
     );
 
-    // The variant's indirect dispatch: its one region's key is the direct one's, and its record is
-    // the preprocess's.
+    // The variant's indirect dispatch outside a device replay is not built: only the replay's
+    // preprocess writes such a dispatch's record.
     let indirect = Dispatch::ThreadgroupsIndirect {
         indirect: IndirectRef::new(0, 0),
         threads_per_group: local,
     };
-    let gpu = compute_plan(&t, flat_variant())
+    assert!(compute_plan(&t, flat_variant())
         .instantiate_dispatch(&s, &indirect)
-        .expect("the flat indirect region");
-    assert_eq!(gpu.regions.len(), 1);
-    assert_eq!(gpu.regions[0].specialization, r.specialization);
-    assert_eq!(gpu.region_record, None);
+        .is_err());
 }
 
 /// The flat form's counting, exhaustively over every grid up to 9 x 5 x 3 threads and every

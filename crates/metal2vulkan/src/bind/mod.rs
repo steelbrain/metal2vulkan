@@ -62,9 +62,7 @@
 //! [`ReplayFaults`] reports the commands it refused. Where the device states
 //! `VK_EXT_device_generated_commands` with compute pipeline binding,
 //! [`replay_preprocess_generated`] over each variant's [`GeneratedVariant`] writes a token stream
-//! for one execution per segment instead ([`GeneratedLayout`]). An indirect dispatch of a kernel
-//! that does not observe its threadgroup partition runs on a flat variant through
-//! [`flat_dispatch_module`], which reads its arguments on the device ([`FlatIndirect`]).
+//! for one execution per segment instead ([`GeneratedLayout`]).
 //! [`clamped_depth`] is a 32-bit float depth clamped into `[0, 1]`, as a copy into a depth image
 //! of a device without `VK_EXT_depth_range_unrestricted` needs it. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
@@ -197,14 +195,13 @@ pub use replay::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
     DrawReplayPreprocess, InheritedBytes, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
 };
+pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
 pub use replay::{
-    flat_dispatch_module, replay_preprocess, replay_preprocess_generated, replay_preprocess_module,
-    FlatArguments, FlatDispatchModule, FlatIndirect, GeneratedLayout, GeneratedRefusal,
-    GeneratedReplay, GeneratedVariant, ReplayExecution, ReplayLayout, ReplayPreprocess,
-    ReplayPreprocessModule, ReplayRefusal, ReplayVariant, MAX_REPLAY_DISPATCHES,
+    replay_preprocess, replay_preprocess_generated, replay_preprocess_module, GeneratedLayout,
+    GeneratedRefusal, GeneratedReplay, GeneratedVariant, ReplayExecution, ReplayLayout,
+    ReplayPreprocess, ReplayPreprocessModule, ReplayRefusal, ReplayVariant, MAX_REPLAY_DISPATCHES,
     MAX_REPLAY_REGIONS, MAX_REPLAY_SLOTS, MAX_REPLAY_VARIANTS,
 };
-pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,

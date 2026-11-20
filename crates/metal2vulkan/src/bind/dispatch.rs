@@ -202,8 +202,8 @@ pub struct DispatchCommands {
     /// The 32-byte region record a direct dispatch on a flat variant
     /// ([`VariantKey::flat_grid`]) reads: the consumer writes exactly these bytes where the
     /// device reads them by address, 16-byte aligned, and fills the single
-    /// [`PushHole::ReplayRegionAddress`] with that address. `None` for every other dispatch: an
-    /// indirect one's record its preprocess writes, and a plan that is not a flat variant's reads
+    /// [`PushHole::ReplayRegionAddress`] with that address. `None` for every other dispatch: a
+    /// replayed one's record its preprocess writes, and a plan that is not a flat variant's reads
     /// its region from its own push bytes.
     pub region_record: Option<[u8; 32]>,
     /// The resident root table, when the function reads it.
@@ -969,29 +969,16 @@ impl BindingPlan {
     /// never on the contents of an indirect buffer. A dispatch that runs on another variant of the
     /// pipeline ([`BindingPlan::dispatch_variant`]) is `BindError::NeedsVariant`.
     ///
-    /// The plan of a flat variant ([`VariantKey::flat_grid`]) runs one region, which reads the
-    /// grid from a 32-byte region record whose device address fills its single
-    /// `PushHole::ReplayRegionAddress`:
-    ///
-    /// - A `ThreadgroupsIndirect` of the variant's threadgroup size runs at the group counts a
-    ///   preprocess wrote with the grid's flat dispatch (`flat_dispatch`), which lie within the
-    ///   device's limits, read by `vkCmdDispatchIndirect` with no clamp prepass; the record is the
-    ///   one the preprocess wrote beside them, and the consumer orders both writes before the
-    ///   dispatch.
-    /// - A `Threads` dispatch runs at group counts of its own, enough threadgroups of its own
-    ///   threadgroup size to cover the grid, whatever a whole number of them that grid is
-    ///   (`regions`, a private reader that spreads the count a grid needs over the axes the
-    ///   device admits); the record is [`DispatchCommands::region_record`], which the consumer
-    ///   writes.
-    ///
-    /// Any other form is `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`.
-    ///
-    /// The plan of a folded variant ([`VariantKey::folded_groups`]) runs one region too, of its
-    /// threadgroup size, at the group counts a preprocess wrote (Metal's folded within the device's
-    /// limits, `FlatArguments::FoldedThreadgroups`): `dispatch` is the `ThreadgroupsIndirect` of
-    /// the call's threadgroup size, read by `vkCmdDispatchIndirect` with no clamp prepass, and the
-    /// region reads its group counts and its grid builtins from the region record at its
-    /// `PushHole::ReplayRegionAddress` (`MultiRegion` 1).
+    /// The plan of a flat variant ([`VariantKey::flat_grid`]) runs a `Threads` dispatch as one
+    /// region, which reads the grid from a 32-byte region record whose device address fills its
+    /// single `PushHole::ReplayRegionAddress`, at group counts of its own: enough threadgroups of
+    /// its own threadgroup size to cover the grid, whatever a whole number of them that grid is
+    /// (`regions`, a private reader that spreads the count a grid needs over the axes the device
+    /// admits); the record is [`DispatchCommands::region_record`], which the consumer writes. Any
+    /// other dispatch of a flat variant, and every dispatch of a folded variant
+    /// ([`VariantKey::folded_groups`]), whose records only a device replay's preprocess writes
+    /// ([`BindingPlan::instantiate_replay`]), is `Unsupported{GpuEncodedIndirectCommands,
+    /// NotImplemented}`.
     ///
     /// The plan of a partial-threadgroups variant ([`VariantKey::partial_threadgroups`]) runs a
     /// `Threads` dispatch whose grid is not a whole number of threadgroups as the threadgroups its
@@ -1028,8 +1015,7 @@ impl BindingPlan {
         let ragged = Ragged::of(&self.variant);
         let records = match (flat || self.variant.folded_groups, dispatch) {
             (false, _) => Records::Binder,
-            (true, Dispatch::ThreadgroupsIndirect { .. }) => Records::Flat,
-            // A flat variant takes a direct dispatch too, whose record the consumer writes
+            // A flat variant takes a direct dispatch, whose record the consumer writes
             // ([`DispatchCommands::region_record`]).
             (true, Dispatch::Threads { .. }) if flat => Records::Flat,
             (true, _) => return Err(not_implemented(Feature::GpuEncodedIndirectCommands)),
@@ -1051,10 +1037,6 @@ impl BindingPlan {
             return Err(BindError::NeedsVariant {
                 variant: Box::new(self.unit_axes_key(0)),
             });
-        }
-        // A folded variant's region reads its record.
-        if self.variant.folded_groups {
-            planned.regions.read_records();
         }
         instantiate(t, planned, (state, dispatch), records, commands)
     }
@@ -1382,12 +1364,11 @@ fn check_replay(t: &ComputeTemplate, state: &BindState) -> Result<(), BindError>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Records {
     /// None: the binder writes each region's `DispatchRegion`, and an indirect dispatch's counts
-    /// are Metal's, clamped to the device's limits where it needs.
+    /// are Metal's, read where it wrote them.
     Binder,
-    /// A flat or folded variant's record at its `ReplayRegionAddress`: for an indirect dispatch
-    /// the preprocess writes it, and the group counts at its indirect arguments within the
-    /// device's limits; for a direct dispatch on a flat variant the consumer writes it
-    /// ([`DispatchCommands::region_record`]) and the region takes its own group counts.
+    /// A flat variant's record at its `ReplayRegionAddress`, which the consumer writes for a
+    /// direct dispatch ([`DispatchCommands::region_record`]); the region takes its own group
+    /// counts.
     Flat,
     /// The device replay's preprocess: the records per command and region, the arguments, and the
     /// slot table that stands for the root table.
@@ -1609,7 +1590,7 @@ fn instantiate(
     // (base 0, the dispatch's threadgroup size, and the grid in threads), since the flat lowering
     // reads the record by address wherever its group counts come from.
     *region_record_out = match (records, *dispatch) {
-        (Records::Flat, Dispatch::ThreadgroupsIndirect { .. }) | (Records::Binder, _) => None,
+        (Records::Binder, _) => None,
         (Records::Flat, _) => Some(
             region_bytes([0; 3], grid, nominal)
                 .ok_or_else(|| internal("an unpackable nominal threadgroup size"))?,
