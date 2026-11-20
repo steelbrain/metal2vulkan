@@ -8,7 +8,20 @@
 // bytes `(uint8_t)(i * 31 + 21 + 7 * level + 50 * slice)`, written by replaceRegion. A view that is
 // made prints its width, height, depth, mipmapLevelCount, arrayLength, textureType,
 // parentRelativeLevel and parentRelativeSlice, and the FNV-1a 64 of its level 0, slice 0 bytes
-// copied by a blit to a Shared buffer (rows of 4 bytes a texel, tight).
+// copied by a blit to a Shared buffer (rows of the format's bytes a texel, tight).
+//
+// Views of another pixel format of the same component layout (Apple's `pixelFormatView` page: a
+// layout differs "if the number of components differs, or if their size or order is different"),
+// each of a 2D parent of ShaderRead usage alone unless the name ends in `-usage`:
+//
+//   r8-a8              A8Unorm view of an R8Unorm parent
+//   r8-a8-usage        the same, the parent of ShaderRead | PixelFormatView usage
+//   r8-r8snorm         R8Snorm view of an R8Unorm parent
+//   r8-r8uint          R8Uint view of an R8Unorm parent
+//   rgba8-rgba8uint    RGBA8Uint view of the RGBA8Unorm parent
+//   rgba8-bgra8        BGRA8Unorm view of the RGBA8Unorm parent
+//   rgba8-bgra8srgb    BGRA8Unorm_sRGB view of the RGBA8Unorm parent
+//   rg8-r16            R16Unorm view of an RG8Unorm parent
 //
 //   whole          2D, levels 0..3, slices 0..1
 //   levels         2D, levels 1..3
@@ -25,7 +38,9 @@
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o texture_view_rules texture_view_rules.m
 //   for c in whole levels level-one array-2d array-2d-last array-slices levels-past \
-//       levels-empty slices-past format format-usage; do MTL_DEBUG_LAYER=1 ./texture_view_rules $c
+//       levels-empty slices-past format format-usage r8-a8 r8-a8-usage r8-r8snorm r8-r8uint \
+//       rgba8-rgba8uint rgba8-bgra8 rgba8-bgra8srgb rg8-r16; do
+//     MTL_DEBUG_LAYER=1 ./texture_view_rules $c
 //   done
 //
 // WHAT IT MEASURED: see the rt crate's `Texture::new_texture_view`, with the run it came from.
@@ -48,6 +63,8 @@ int main(int argc, const char **argv) {
             NSUInteger level, levels, slice, slices;
             MTLPixelFormat format;
             BOOL view_usage;
+            MTLPixelFormat parent;
+            NSUInteger texel;
         } cases[] = {
             {"whole", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatRGBA8Unorm, NO},
             {"levels", NO, MTLTextureType2D, 1, 2, 0, 1, MTLPixelFormatRGBA8Unorm, NO},
@@ -60,6 +77,20 @@ int main(int argc, const char **argv) {
             {"slices-past", YES, MTLTextureType2D, 0, 1, 3, 1, MTLPixelFormatRGBA8Unorm, NO},
             {"format", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatR32Uint, NO},
             {"format-usage", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatR32Uint, YES},
+            {"r8-a8", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatA8Unorm, NO,
+             MTLPixelFormatR8Unorm, 1},
+            {"r8-a8-usage", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatA8Unorm, YES,
+             MTLPixelFormatR8Unorm, 1},
+            {"r8-r8snorm", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatR8Snorm, NO,
+             MTLPixelFormatR8Unorm, 1},
+            {"r8-r8uint", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatR8Uint, NO,
+             MTLPixelFormatR8Unorm, 1},
+            {"rgba8-rgba8uint", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatRGBA8Uint, NO},
+            {"rgba8-bgra8", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatBGRA8Unorm, NO},
+            {"rgba8-bgra8srgb", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatBGRA8Unorm_sRGB,
+             NO},
+            {"rg8-r16", NO, MTLTextureType2D, 0, 3, 0, 1, MTLPixelFormatR16Unorm, NO,
+             MTLPixelFormatRG8Unorm, 2},
         };
         int found = -1;
         for (int i = 0; i < (int)(sizeof cases / sizeof cases[0]); i++) {
@@ -71,9 +102,13 @@ int main(int argc, const char **argv) {
         }
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         BOOL array = cases[found].array;
+        // A case that names no parent views the RGBA8Unorm one, 4 bytes a texel.
+        MTLPixelFormat parent_format = cases[found].parent ? cases[found].parent
+                                                           : MTLPixelFormatRGBA8Unorm;
+        NSUInteger texel = cases[found].texel ? cases[found].texel : 4;
         MTLTextureDescriptor *d = [MTLTextureDescriptor new];
         d.textureType = array ? MTLTextureType2DArray : MTLTextureType2D;
-        d.pixelFormat = MTLPixelFormatRGBA8Unorm;
+        d.pixelFormat = parent_format;
         d.width = 8;
         d.height = 8;
         d.arrayLength = array ? 3 : 1;
@@ -86,15 +121,15 @@ int main(int argc, const char **argv) {
         for (NSUInteger level = 0; level < d.mipmapLevelCount; level++) {
             for (NSUInteger slice = 0; slice < d.arrayLength; slice++) {
                 NSUInteger side = 8 >> level;
-                for (NSUInteger i = 0; i < side * side * 4; i++) {
+                for (NSUInteger i = 0; i < side * side * texel; i++) {
                     bytes[i] = (uint8_t)(i * 31 + 21 + 7 * level + 50 * slice);
                 }
                 [parent replaceRegion:MTLRegionMake2D(0, 0, side, side)
                           mipmapLevel:level
                                 slice:slice
                             withBytes:bytes
-                          bytesPerRow:side * 4
-                        bytesPerImage:side * side * 4];
+                          bytesPerRow:side * texel
+                        bytesPerImage:side * side * texel];
             }
         }
         id<MTLTexture> view =
@@ -115,7 +150,7 @@ int main(int argc, const char **argv) {
                (unsigned long)view.arrayLength, (unsigned long)view.textureType,
                (unsigned long)view.parentRelativeLevel, (unsigned long)view.parentRelativeSlice);
         NSUInteger side = view.width;
-        NSUInteger len = side * view.height * 4;
+        NSUInteger len = side * view.height * texel;
         id<MTLBuffer> out = [device newBufferWithLength:len options:MTLResourceStorageModeShared];
         id<MTLCommandQueue> queue = [device newCommandQueue];
         id<MTLCommandBuffer> cb = [queue commandBuffer];
@@ -127,7 +162,7 @@ int main(int argc, const char **argv) {
                           sourceSize:MTLSizeMake(side, view.height, 1)
                             toBuffer:out
                    destinationOffset:0
-              destinationBytesPerRow:side * 4
+              destinationBytesPerRow:side * texel
             destinationBytesPerImage:len];
         [blit endEncoding];
         [cb commit];
