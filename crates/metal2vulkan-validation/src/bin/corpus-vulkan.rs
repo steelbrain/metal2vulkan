@@ -2,7 +2,6 @@ mod candidate_batch;
 mod candidate_common;
 
 use metal2vulkan_validation::gpu::DeviceType;
-use metal2vulkan_validation::observation::Backend;
 use std::path::PathBuf;
 
 fn main() {
@@ -30,8 +29,8 @@ fn main() {
         }
         _ => {}
     }
-    if !candidate_batch::serve(Backend::Vulkan) {
-        candidate_common::main(Backend::Vulkan);
+    if !candidate_batch::serve() {
+        candidate_common::main();
     }
 }
 

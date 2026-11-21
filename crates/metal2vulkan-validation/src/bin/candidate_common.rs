@@ -2,7 +2,6 @@ use metal2vulkan_validation::candidate::{engine, exit_status};
 use metal2vulkan_validation::check::admission::ExecutorError;
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout};
 use metal2vulkan_validation::gpu::DeviceType;
-use metal2vulkan_validation::observation::Backend;
 use metal2vulkan_validation::source::corpus_root;
 use metal2vulkan_validation::store::CorpusStore;
 use metal2vulkan_validation::worker::alloc::CountingAllocator;
@@ -16,10 +15,10 @@ use std::path::PathBuf;
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-pub fn main(backend: Backend) {
+pub fn main() {
     serve_if_requested();
     device::serve_if_requested();
-    match run(backend) {
+    match run() {
         Ok(()) => {}
         Err(ExecutorError::Refused(refused)) => {
             println!("{refused}");
@@ -42,13 +41,13 @@ pub fn main(backend: Backend) {
             std::process::exit(exit_status::VENUE_MISMATCH);
         }
         Err(ExecutorError::Failed(error)) => {
-            eprintln!("corpus-{}: {error}", backend.directory());
+            eprintln!("corpus-vulkan: {error}");
             std::process::exit(1);
         }
     }
 }
 
-fn run(backend: Backend) -> Result<(), ExecutorError> {
+fn run() -> Result<(), ExecutorError> {
     let mut root = corpus_root();
     let mut case_id = None;
     let mut air_sha256 = None;
@@ -84,7 +83,7 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
             )?)?)?,
             "-h" | "--help" => {
                 println!(
-                    "usage: corpus-{} [--corpus DIR] [--private-corpus DIR] --case-id HASH --metal-environment-id ID --environment-id ID --device-type cpu|gpu \\\n\
+                    "usage: corpus-vulkan [--corpus DIR] [--private-corpus DIR] --case-id HASH --metal-environment-id ID --environment-id ID --device-type cpu|gpu \\\n\
                      [--air-sha256 HASH] [--source-index FILE] \\\n\
                      [--gpu-wait-timeout SECONDS] [--profiles-layer P] \\\n\
                      [--without-generated-commands]\n\
@@ -121,8 +120,7 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
                      The executor compares only against the case's Metal observation in the\n\
                      --metal-environment-id environment recorded by the current oracle for the\n\
                      checked case; without one it reports needs_metal_qualification{{...}} (exit 6)\n\
-                     before any device opens.",
-                    backend.directory()
+                     before any device opens."
                 );
                 return Ok(());
             }
@@ -149,7 +147,6 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
         &root,
         case,
         device_type,
-        backend,
         &metal_environment_id,
         &environment_id,
         &CompileWorker::current()?,

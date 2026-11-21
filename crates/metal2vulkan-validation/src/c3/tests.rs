@@ -12,7 +12,7 @@ use crate::case::{
 };
 use crate::cutover::SignOff;
 use crate::hash::{hex_encode, sha256_bytes};
-use crate::observation::MetalStatus;
+use crate::observation::{Backend, MetalStatus};
 use crate::observation_contract::ComparisonClass;
 use metal2vulkan::pipeline::PrecisionNote;
 use reference::ReferenceEnvironment;
@@ -224,7 +224,6 @@ fn report_of(
 /// A row of `case` in `environment_id` reading `output` against Metal's `golden`.
 fn row(
     case: &AuthoredCase,
-    backend: Backend,
     environment_id: String,
     output: &[u8],
     golden: &[u8],
@@ -239,7 +238,7 @@ fn row(
         translator_fingerprint: String::new(),
         candidate_output_sha256: sha256_bytes(output),
         output_b64: b64(output),
-        backend,
+        backend: Backend::Vulkan,
         environment_id,
         environment: serde_json::json!({}),
         executor_abi: String::new(),
@@ -256,18 +255,11 @@ fn row(
 /// A current engine row in the stated slot of `environment`, as the executor records it.
 fn new_row(
     case: &AuthoredCase,
-    backend: Backend,
     environment: &str,
     output: &[u8],
     golden: &[u8],
 ) -> CandidateObservation {
-    let mut row = row(
-        case,
-        backend,
-        engine_slot(environment, None),
-        output,
-        golden,
-    );
+    let mut row = row(case, engine_slot(environment, None), output, golden);
     row.executor_abi = ENGINE_EXECUTOR_ABI.into();
     row.translator_fingerprint = engine_fingerprint_of(&PROFILE);
     row.environment = recorded_environment(environment);
@@ -381,7 +373,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         public_air: [bounded.air_sha256.clone()].into(),
         ..C3Input::default()
     };
-    let lavapipe = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let lavapipe = new_row(&bounded, LAVAPIPE, &DEVICE, &METAL);
     input.vulkan.push(lavapipe.clone());
 
     // Unlisted, the current mismatch is a mismatch, and C3 does not hold.
@@ -516,7 +508,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
 #[test]
 fn stale_rows_are_not_evidence_and_their_reviewed_reading_still_names_them() {
     let bounded = case(1, "bounded");
-    let mut stale = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let mut stale = new_row(&bounded, LAVAPIPE, &DEVICE, &METAL);
     // Recorded by another product build.
     stale.translator_fingerprint = engine_fingerprint_of(&[9; 32]);
     let input = C3Input {
@@ -564,7 +556,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
         oracle_abi: "metal-literal-resources-v1".into(),
         ..metal(case, &METAL)
     };
-    let mut other_build = new_row(&rebuilt, Backend::Vulkan, LAVAPIPE, &METAL, &METAL);
+    let mut other_build = new_row(&rebuilt, LAVAPIPE, &METAL, &METAL);
     other_build.translator_fingerprint = engine_fingerprint_of(&[9; 32]);
     let mut stale_refusal = refusal_of(
         &refused,
@@ -575,10 +567,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     let input = C3Input {
         cases: vec![awaiting.clone(), rebuilt.clone(), refused.clone()],
         metals: vec![older(&awaiting), metal(&rebuilt, &METAL), older(&refused)],
-        vulkan: vec![
-            new_row(&awaiting, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
-            other_build,
-        ],
+        vulkan: vec![new_row(&awaiting, LAVAPIPE, &METAL, &METAL), other_build],
         refusals: vec![stale_refusal],
         public_air: [&awaiting, &rebuilt, &refused]
             .iter()
@@ -653,7 +642,7 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
         metals: vec![gap_row(&gap_case), gap_row(&stale_gap)],
         vulkan: vec![
             // Recorded against a Metal output the oracle no longer holds: stale.
-            new_row(&stale_gap, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
+            new_row(&stale_gap, LAVAPIPE, &METAL, &METAL),
         ],
         public_air: [&gap_case, &stale_gap, &unqualified]
             .map(|case| case.air_sha256.clone())
@@ -707,14 +696,10 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
     qualified.metals.push(metal(&unqualified, &METAL));
     qualified
         .vulkan
-        .push(new_row(&unqualified, Backend::Vulkan, GPU, &METAL, &METAL));
-    qualified.vulkan.push(new_row(
-        &unqualified,
-        Backend::Vulkan,
-        LAVAPIPE,
-        &METAL,
-        &METAL,
-    ));
+        .push(new_row(&unqualified, GPU, &METAL, &METAL));
+    qualified
+        .vulkan
+        .push(new_row(&unqualified, LAVAPIPE, &METAL, &METAL));
     let entry = |case: &AuthoredCase, apple_family, sign_off| ReferenceGapEntry {
         case_id: case.case_id.clone(),
         name: case.name.clone(),
@@ -791,7 +776,7 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
 fn a_reviewed_reading_that_disagrees_with_the_store_is_reported() {
     let bounded = case(1, "bounded");
     let other = case(2, "other");
-    let lavapipe = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let lavapipe = new_row(&bounded, LAVAPIPE, &DEVICE, &METAL);
     let input = C3Input {
         cases: vec![bounded.clone()],
         metals: vec![metal(&bounded, &METAL)],
@@ -1112,7 +1097,7 @@ fn a_device_interpolation_row_stays_a_mismatch() {
     assert!(!DEFERRED_NEAR_EQUIVALENTS.contains(&note));
     let drawn = case(1, "drawn");
     let noted = |output: &[u8]| {
-        let mut row = new_row(&drawn, Backend::Vulkan, LAVAPIPE, output, &METAL);
+        let mut row = new_row(&drawn, LAVAPIPE, output, &METAL);
         row.census = Some(ExecutedCensus {
             out_of_bounds: None,
             rate_map_pass: None,
@@ -1209,7 +1194,7 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
     use crate::coverage::{ExecutedCensus, ModuleCensus};
     let sampled = case(1, "sampled");
     let noted = |output: &[u8]| {
-        let mut row = new_row(&sampled, Backend::Vulkan, LAVAPIPE, output, &METAL);
+        let mut row = new_row(&sampled, LAVAPIPE, output, &METAL);
         row.census = Some(ExecutedCensus {
             out_of_bounds: None,
             rate_map_pass: None,
@@ -1305,7 +1290,7 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
 #[test]
 fn metals_latitude_may_be_signed_off_and_the_fma_cause_is_gone() {
     let fma = case(3, "fma");
-    let row = new_row(&fma, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let row = new_row(&fma, LAVAPIPE, &DEVICE, &METAL);
     assert!(
         serde_json::from_str::<Cause>("\"pinned_by_metal_not_vulkan\"").is_err(),
         "a superseded cause parses"
@@ -1330,7 +1315,7 @@ fn metals_latitude_may_be_signed_off_and_the_fma_cause_is_gone() {
 #[test]
 fn an_apple_reading_is_signed_off_only_with_well_formed_lanes() {
     let bounded = case(1, "bounded");
-    let row = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let row = new_row(&bounded, LAVAPIPE, &DEVICE, &METAL);
     let list = |change: &dyn Fn(&mut Reading)| {
         let mut entry = reading(&bounded, vec![reviewed(&row, &METAL)]);
         change(&mut entry);
@@ -1423,7 +1408,7 @@ fn a_signed_off_apple_reading_holds_only_while_every_differing_word_is_within_ap
     let bounded = case(1, "bounded");
     let at = |device: f32, entry: &dyn Fn(&mut Reading)| {
         let device = device.to_le_bytes();
-        let row = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &device, &METAL);
+        let row = new_row(&bounded, LAVAPIPE, &device, &METAL);
         let mut reading = reading(&bounded, vec![reviewed(&row, &METAL)]);
         entry(&mut reading);
         let input = C3Input {
@@ -1542,10 +1527,7 @@ fn an_unstated_word_the_product_approximates_keeps_its_reading_open() {
     }
     let report_of = |word: &Word, notes: &[PrecisionNote]| {
         let case = case(word.tag, word.computes);
-        let row = noting(
-            new_row(&case, Backend::Vulkan, LAVAPIPE, &word.device, &word.metal),
-            notes,
-        );
+        let row = noting(new_row(&case, LAVAPIPE, &word.device, &word.metal), notes);
         let mut reading = reading(&case, vec![reviewed(&row, &word.metal)]);
         reading.lanes = vec![lane(word.computes, Math::Fast, &word.operands)];
         let input = C3Input {
@@ -1643,10 +1625,7 @@ fn a_word_within_apples_bound_that_shows_a_recorded_near_equivalent_keeps_its_re
                      notes: &[PrecisionNote]| {
         let case = case(5, "product");
         let (golden, output) = (golden.to_le_bytes(), output.to_le_bytes());
-        let row = noting(
-            new_row(&case, Backend::Vulkan, LAVAPIPE, &output, &golden),
-            notes,
-        );
+        let row = noting(new_row(&case, LAVAPIPE, &output, &golden), notes);
         let mut reading = reading(&case, vec![reviewed(&row, &golden)]);
         let operands = operands.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         reading.lanes = vec![lane(computes, math, &operands)];
@@ -1751,11 +1730,11 @@ fn each_venue_covers_its_own_population() {
         ..C3Input::default()
     };
     // One real GPU ran the public and the private case.
-    let radv = |case: &AuthoredCase| new_row(case, Backend::Vulkan, RADV, &METAL, &METAL);
+    let radv = |case: &AuthoredCase| new_row(case, RADV, &METAL, &METAL);
     input.vulkan = vec![
         radv(&public),
         radv(&private),
-        new_row(&public, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
+        new_row(&public, LAVAPIPE, &METAL, &METAL),
     ];
     let report = report_of(
         &input,
@@ -1802,7 +1781,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
         cases: vec![private.clone(), unqualified.clone()],
         metals: vec![metal(&private, &METAL)],
         // Only one real GPU recorded the private case; nothing recorded the unqualified one.
-        vulkan: vec![new_row(&private, Backend::Vulkan, RADV, &METAL, &METAL)],
+        vulkan: vec![new_row(&private, RADV, &METAL, &METAL)],
         ..C3Input::default()
     };
     let judge = |input: &C3Input| {
@@ -1844,7 +1823,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
     for venue in [GPU, LAVAPIPE] {
         recorded
             .vulkan
-            .push(new_row(&private, Backend::Vulkan, venue, &METAL, &METAL));
+            .push(new_row(&private, venue, &METAL, &METAL));
     }
     let report = judge(&recorded);
     for venue in [GPU, LAVAPIPE] {
@@ -1870,7 +1849,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
         vulkan: rows,
         ..C3Input::default()
     };
-    let declared = new_row(&bounded, Backend::Vulkan, RADV, &METAL, &METAL);
+    let declared = new_row(&bounded, RADV, &METAL, &METAL);
     let mut updated = declared.clone();
     updated.environment["driver_info"] = "Mesa 26.2.5".into();
     updated.environment["driver_version"] = 109060101.into();
@@ -1924,9 +1903,9 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
 
     // Another device, and a row that records no identity, are stale too; so is a mismatching
     // row's reviewed reading, which is no longer current evidence.
-    let mut other_device = new_row(&bounded, Backend::Vulkan, RADV, &DEVICE, &METAL);
+    let mut other_device = new_row(&bounded, RADV, &DEVICE, &METAL);
     other_device.environment["device_id"] = 0x1681.into();
-    let mut unrecorded = new_row(&bounded, Backend::Vulkan, RADV, &METAL, &METAL);
+    let mut unrecorded = new_row(&bounded, RADV, &METAL, &METAL);
     unrecorded
         .environment
         .as_object_mut()
@@ -1964,8 +1943,8 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
 #[test]
 fn a_reading_reviewed_in_one_venue_does_not_cover_another() {
     let bounded = case(1, "bounded");
-    let lavapipe = new_row(&bounded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
-    let radv = new_row(&bounded, Backend::Vulkan, RADV, &DEVICE, &METAL);
+    let lavapipe = new_row(&bounded, LAVAPIPE, &DEVICE, &METAL);
+    let radv = new_row(&bounded, RADV, &DEVICE, &METAL);
     assert_eq!(
         (&lavapipe.spv_sha256, &lavapipe.candidate_output_sha256),
         (&radv.spv_sha256, &radv.candidate_output_sha256)
@@ -2022,12 +2001,7 @@ fn unbounded_by(row: CandidateObservation, notes: &[PrecisionNote]) -> Candidate
 #[test]
 fn a_fast_math_blend_of_a_half_output_shows_the_regrouping_cause() {
     let blend = case(1, "half_blend");
-    let row = |notes: &[PrecisionNote]| {
-        unbounded_by(
-            new_row(&blend, Backend::Vulkan, GPU, &DEVICE, &METAL),
-            notes,
-        )
-    };
+    let row = |notes: &[PrecisionNote]| unbounded_by(new_row(&blend, GPU, &DEVICE, &METAL), notes);
     let regrouping = Cause::FastMathRegrouping;
     assert!(regrouping.shown_by(&row(&[PrecisionNote::HalfOutputFastMathBlend])));
     assert!(regrouping.shown_by(&row(&[PrecisionNote::FastMathRewrites])));
@@ -2046,9 +2020,9 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let regroup = [PrecisionNote::FastMathRewrites];
     let fft = case(1, "fft");
     let mut rows = [
-        new_row(&fft, Backend::Vulkan, GPU, &DEVICE, &METAL),
-        new_row(&fft, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL),
-        new_row(&fft, Backend::Vulkan, RADV, &OTHER, &METAL),
+        new_row(&fft, GPU, &DEVICE, &METAL),
+        new_row(&fft, LAVAPIPE, &DEVICE, &METAL),
+        new_row(&fft, RADV, &OTHER, &METAL),
     ]
     .map(|row| unbounded_by(row, &regroup));
     for (at, row) in rows.iter_mut().enumerate() {
@@ -2101,7 +2075,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 
     // A row that no longer records the cause is an open mismatch in its own slot alone.
     let mut pinned = rows.clone();
-    pinned[2] = new_row(&fft, Backend::Vulkan, RADV, &OTHER, &METAL);
+    pinned[2] = new_row(&fft, RADV, &OTHER, &METAL);
     let report = judge(&input_of(&pinned), &list);
     assert_eq!(
         verdicts(&report),
@@ -2112,7 +2086,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 
     // In the reviewed observation's own slot, the reading reads changed too: review it again.
     let mut pinned = rows.clone();
-    pinned[1] = new_row(&fft, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    pinned[1] = new_row(&fft, LAVAPIPE, &DEVICE, &METAL);
     let report = judge(&input_of(&pinned), &list);
     assert_eq!(
         verdicts(&report),
@@ -2123,10 +2097,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 
     // A row that now matches Metal is a match, and the reading no longer describes its slot.
     let mut matched = rows.clone();
-    matched[1] = unbounded_by(
-        new_row(&fft, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
-        &regroup,
-    );
+    matched[1] = unbounded_by(new_row(&fft, LAVAPIPE, &METAL, &METAL), &regroup);
     let report = judge(&input_of(&matched), &list);
     assert_eq!(
         verdicts(&report),
@@ -2137,7 +2108,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     // A deferred near-equivalent beside the cause keeps its row open with its reason.
     let mut deferred = rows.clone();
     deferred[2] = unbounded_by(
-        new_row(&fft, Backend::Vulkan, RADV, &OTHER, &METAL),
+        new_row(&fft, RADV, &OTHER, &METAL),
         &[
             PrecisionNote::FastMathRewrites,
             PrecisionNote::SparseResidency,
@@ -2344,8 +2315,7 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
 }
 
 /// Each committed venue keys its native engine slot with its committed profile's translation key,
-/// which a record holds only by recording it; a venue is found by its operator environment and
-/// backend.
+/// which a record holds only by recording it; a venue is found by its operator environment.
 #[test]
 fn each_venue_keys_its_slots_with_its_profiles_key() {
     let committed = Venues::load(&Venues::committed_path()).unwrap();
@@ -2356,25 +2326,18 @@ fn each_venue_keys_its_slots_with_its_profiles_key() {
             VenueProfile::key_of(&profile.description).unwrap(),
             profile.fingerprint
         );
-        let backend = venue.backend();
         let slot = engine_slot(&venue.environment_id, None);
-        assert_eq!(
-            keys.expected(backend, &slot),
-            Some(profile.fingerprint.as_str())
-        );
+        assert_eq!(keys.expected(&slot), Some(profile.fingerprint.as_str()));
         let mut environment = serde_json::json!({});
-        assert!(!keys.holds(backend, &slot, &environment));
+        assert!(!keys.holds(&slot, &environment));
         environment[VENUE_PROFILE] = profile.record();
-        assert!(keys.holds(backend, &slot, &environment));
+        assert!(keys.holds(&slot, &environment));
         assert_eq!(
             VenueProfile::recorded_stem(&environment),
             Some(venue.profile.as_str())
         );
-        assert_eq!(keys.expected(backend, &venue.environment_id), None);
-        assert_eq!(
-            committed.venue_of(&venue.environment_id, backend),
-            Some(venue)
-        );
+        assert_eq!(keys.expected(&venue.environment_id), None);
+        assert_eq!(committed.venue_of(&venue.environment_id), Some(venue));
     }
 }
 
@@ -2441,16 +2404,12 @@ fn a_subgroup_gap_names_a_mismatch_only_where_the_device_has_it() {
         public_air: [counted.air_sha256.clone(), other.air_sha256.clone()].into(),
         ..C3Input::default()
     };
-    input.vulkan.push(new_row(
-        &counted,
-        Backend::Vulkan,
-        LAVAPIPE,
-        &DEVICE,
-        &METAL,
-    ));
     input
         .vulkan
-        .push(new_row(&other, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL));
+        .push(new_row(&counted, LAVAPIPE, &DEVICE, &METAL));
+    input
+        .vulkan
+        .push(new_row(&other, LAVAPIPE, &DEVICE, &METAL));
     let gap = AnswerGap::FragmentSubgroupUnderTwoQuads;
     let list = ReviewedList {
         answer_gaps: vec![AnswerGapEntry {
@@ -2504,9 +2463,7 @@ fn a_subgroup_gap_names_a_mismatch_only_where_the_device_has_it() {
 
     // The other case matching, the listed case alone keeps the slot open.
     input.vulkan.retain(|row| row.case_id != other.case_id);
-    input
-        .vulkan
-        .push(new_row(&other, Backend::Vulkan, LAVAPIPE, &METAL, &METAL));
+    input.vulkan.push(new_row(&other, LAVAPIPE, &METAL, &METAL));
     let report = judged(&input, &keys, &list);
     let stated = slot(&report, LAVAPIPE);
     assert!(!stated.holds());
@@ -2540,7 +2497,7 @@ fn the_clipped_primitive_split_names_a_mismatch_only_where_the_case_meets_it() {
         cases: vec![split.clone()],
         metals: vec![metal(&split, &METAL)],
         public_air: [split.air_sha256.clone()].into(),
-        vulkan: vec![new_row(&split, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL)],
+        vulkan: vec![new_row(&split, LAVAPIPE, &DEVICE, &METAL)],
         ..C3Input::default()
     };
     let gap = AnswerGap::ClippedPrimitiveSplit;
@@ -2832,7 +2789,7 @@ fn a_refused_case_reads_refused_never_missing() {
 
     // A row in the slot is judged, not a refusal beside it.
     let mut ran = input.clone();
-    ran.vulkan = vec![new_row(&refused, Backend::Vulkan, RADV, &METAL, &METAL)];
+    ran.vulkan = vec![new_row(&refused, RADV, &METAL, &METAL)];
     assert_eq!(
         verdict_of(slot(&judge(&ran), RADV), &refused),
         Verdict::Match
@@ -3014,7 +2971,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
     use crate::case::{RateMapLayerLiteral, RateMapLiteral, RateSample};
     use crate::coverage::{ExecutedCensus, ModuleCensus};
     let decoded = case(1, "decoded");
-    let mut row = new_row(&decoded, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
+    let mut row = new_row(&decoded, LAVAPIPE, &DEVICE, &METAL);
     row.census = Some(ExecutedCensus {
         out_of_bounds: None,
         rate_map_pass: None,
@@ -3141,14 +3098,13 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
     assert_eq!(refusal.refusal.class, RefusalClass::Device);
     assert!(crate::index::refusal_is_current(
         &refused,
-        Backend::Vulkan,
         &refusal,
         &VenueKeys::default()
     ));
     let input = C3Input {
         cases: vec![refused.clone()],
         metals: vec![metal(&refused, &METAL)],
-        vulkan: vec![new_row(&refused, Backend::Vulkan, RADV, &METAL, &METAL)],
+        vulkan: vec![new_row(&refused, RADV, &METAL, &METAL)],
         refusals: vec![refusal],
         ..C3Input::default()
     };

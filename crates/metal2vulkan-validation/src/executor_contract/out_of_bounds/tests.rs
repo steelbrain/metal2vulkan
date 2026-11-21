@@ -614,7 +614,6 @@ fn dependencies<'a>(
         metal,
         spv_sha256: Some(SPV_SHA256),
         translator_fingerprint: TRANSLATOR,
-        backend: crate::observation::Backend::Vulkan,
         environment_id: "vk-env",
         executor_abi: "executor-v1",
     }

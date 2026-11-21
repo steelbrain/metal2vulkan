@@ -15,8 +15,6 @@ use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use std::collections::BTreeMap;
 
-pub(crate) const BACKEND: Backend = Backend::Vulkan;
-
 pub(crate) fn case(entry: &str, buffer: Vec<u8>, dispatch: Dispatch) -> ComputeCase {
     let length = buffer.len() as u64;
     ComputeCase {
@@ -86,7 +84,6 @@ fn run_linked(
         },
         |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
         &[],
-        BACKEND,
     )
     .result
 }

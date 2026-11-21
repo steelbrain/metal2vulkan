@@ -13,7 +13,7 @@
 //! The exchange, step by step:
 //!
 //! 1. The parent writes a `DeviceInput` to the file that becomes the child's stdin: the case,
-//!    the corpus root, the device type and backend, the bound of every device wait
+//!    the corpus root, the device type, the bound of every device wait
 //!    ([`wait_timeout()`]), the committed profile its contexts are restricted to
 //!    (`--profiles-layer P`), the
 //!    read-only source index its private sources are read through (`--source-index`), and the
@@ -55,7 +55,7 @@ use crate::gpu::wait::{
     report_incident, set_wait_timeout, wait_timeout, SubmissionBackend, HANG_EXIT_CODE,
 };
 use crate::gpu::DeviceType;
-use crate::observation::{Backend, CaseTiming, TRANSLATOR_FINGERPRINT};
+use crate::observation::{CaseTiming, TRANSLATOR_FINGERPRINT};
 use crate::observation_contract::ComparisonClass;
 use crate::ScratchDir;
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,6 @@ pub(crate) struct DeviceInput {
     /// The case as the parent admitted it.
     pub(crate) case: AuthoredCase,
     pub(crate) device: DeviceType,
-    pub(crate) backend: Backend,
     /// The digest of the parent's checked input (`CheckedCase::primary.input_sha256`): the
     /// child's own check must produce it, so both halves ran the same case on the same sources.
     pub(crate) input_sha256: String,

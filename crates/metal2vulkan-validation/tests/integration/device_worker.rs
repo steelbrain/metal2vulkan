@@ -22,7 +22,7 @@ const CASE: &str = r#"{"acceleration_structures":[{"binding":5,"kind":"primitive
 /// claiming a checked-input digest the case does not have.
 fn input(restricted_to: Option<&str>, generated_commands: bool) -> String {
     format!(
-        r#"{{"root":"/nonexistent/device-worker-corpus","case":{CASE},"device":"Cpu","backend":"vulkan","input_sha256":"{}","wait_timeout_ms":10000,"restricted_to":{},"generated_commands":{generated_commands}}}"#,
+        r#"{{"root":"/nonexistent/device-worker-corpus","case":{CASE},"device":"Cpu","input_sha256":"{}","wait_timeout_ms":10000,"restricted_to":{},"generated_commands":{generated_commands}}}"#,
         "0".repeat(64),
         serde_json::to_string(&restricted_to).unwrap()
     )

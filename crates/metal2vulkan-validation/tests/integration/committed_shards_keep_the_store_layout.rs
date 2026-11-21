@@ -10,7 +10,6 @@
 //! MoltenVK shards. Byte-level canonical form is not part of this check: rows of executor v34 still
 //! carry the legacy `containment.device_addresses` field that a rewrite drops.
 
-use metal2vulkan_validation::observation::Backend;
 use metal2vulkan_validation::store::CorpusStore;
 
 #[test]
@@ -30,7 +29,7 @@ fn committed_shards_keep_the_store_layout() {
     let cases = store.read_all_cases().expect("committed cases");
     let metal = store.read_metal().expect("committed Metal observations");
     let vulkan = store
-        .read_candidates(Backend::Vulkan)
+        .read_candidates()
         .expect("committed Vulkan observations");
     assert!(
         !cases.is_empty() && !metal.is_empty() && !vulkan.is_empty(),
@@ -42,7 +41,7 @@ fn committed_shards_keep_the_store_layout() {
 }
 
 /// Every committed observation and every committed refusal record names a committed case, with
-/// that case's AIR. The store's readers check this when they read a backend's rows or refusals, so
+/// that case's AIR. The store's readers check this when they read the rows or refusals, so
 /// this reads every one of them from the committed store. A case re-keyed or deleted on one branch
 /// while another committed rows or refusals of its old id leaves records that name no case:
 /// `corpus-status --c3` then refuses the whole store (a case was once re-keyed while six refusals
@@ -56,13 +55,12 @@ fn every_committed_observation_and_refusal_names_a_committed_case() {
         errors.push(format!("Metal observations: {error}"));
     }
     let mut refusals = 0;
-    let backend = Backend::Vulkan;
-    if let Err(error) = store.read_candidates(backend) {
-        errors.push(format!("{} observations: {error}", backend.directory()));
+    if let Err(error) = store.read_candidates() {
+        errors.push(format!("vulkan observations: {error}"));
     }
-    match store.read_refusals(backend) {
+    match store.read_refusals() {
         Ok(rows) => refusals += rows.len(),
-        Err(error) => errors.push(format!("{} refusals: {error}", backend.directory())),
+        Err(error) => errors.push(format!("vulkan refusals: {error}")),
     }
     assert!(
         errors.is_empty(),

@@ -215,18 +215,12 @@ pub struct CandidateObservation {
     pub status: CandidateStatus,
 }
 
+/// The backend a stored candidate row or refusal names: always `vulkan`, the rows' literal
+/// field, which no reader decides anything by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
     Vulkan,
-}
-
-impl Backend {
-    pub fn directory(self) -> &'static str {
-        match self {
-            Self::Vulkan => "vulkan",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,7 +342,6 @@ pub struct CandidateDependencies<'a> {
     pub metal: &'a MetalObservation,
     pub spv_sha256: Option<&'a str>,
     pub translator_fingerprint: &'a str,
-    pub backend: Backend,
     pub environment_id: &'a str,
     pub executor_abi: &'a str,
 }
@@ -514,7 +507,6 @@ impl CandidateObservation {
             && self.golden_output_sha256 == dependencies.metal.metal_output_sha256
             && self.spv_sha256.as_deref() == dependencies.spv_sha256
             && self.translator_fingerprint == dependencies.translator_fingerprint
-            && self.backend == dependencies.backend
             && self.environment_id == dependencies.environment_id
             && self.executor_abi == dependencies.executor_abi
             && base64::engine::general_purpose::STANDARD
@@ -822,7 +814,6 @@ mod tests {
             metal: &metal,
             spv_sha256: Some(&spv_sha256),
             translator_fingerprint: &candidate.translator_fingerprint,
-            backend: Backend::Vulkan,
             environment_id: "vk-env",
             executor_abi: "executor-v1",
         };

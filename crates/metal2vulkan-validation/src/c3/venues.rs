@@ -3,8 +3,8 @@
 //! device and driver its rows must have run on.
 //!
 //! The list is data (`validation/cutover/c3-venues.json`): another device is one more entry, never
-//! new code. The report treats every venue alike; a venue's kind decides only which store backend
-//! holds its rows and which device type its lane runs.
+//! new code. The report treats every venue alike; a venue's kind decides only which device type
+//! its lane runs.
 //!
 //! **Driver drift.** Every engine row records the device it ran on (`environment`: the device
 //! name, vendor and device IDs, and the driver's ID, version, and info string). A venue declares
@@ -35,7 +35,6 @@ use super::AnswerGap;
 use crate::authored_compile::{CurrentArtifacts, ProfileStem};
 use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::cutover::list_path;
-use crate::observation::Backend;
 use metal2vulkan::device::ApiVersion;
 use metal2vulkan::device::DeviceDescription;
 use metal2vulkan::vk;
@@ -61,13 +60,6 @@ impl VenueKind {
         match self {
             Self::CpuIcd => "cpu_icd",
             Self::NativeGpu => "native_gpu",
-        }
-    }
-
-    /// The store backend that holds the venue's rows.
-    pub fn backend(self) -> Backend {
-        match self {
-            Self::CpuIcd | Self::NativeGpu => Backend::Vulkan,
         }
     }
 }
@@ -255,10 +247,6 @@ pub struct VenueDevice {
 }
 
 impl Venue {
-    pub fn backend(&self) -> Backend {
-        self.kind.backend()
-    }
-
     /// Whether a record of `identity` ran on a device the venue allows.
     pub fn allows(&self, identity: &DeviceIdentity) -> bool {
         self.devices
@@ -486,10 +474,10 @@ impl Venues {
 }
 
 /// What each venue's records must hold. The key: by engine slot (each venue's native slot), the
-/// venue's backend and its committed profile's [`VenueProfile::fingerprint`]. The
-/// one currency rule (`index::candidate_slot_state`, `index::refusal_is_current`) reads a record in
-/// such a slot of that backend stale unless it recorded that fingerprint; a record anywhere else is
-/// no venue's, and the rule asks nothing of it.
+/// venue's committed profile's [`VenueProfile::fingerprint`]. The one currency rule
+/// (`index::candidate_slot_state`, `index::refusal_is_current`) reads a record in such a slot
+/// stale unless it recorded that fingerprint; a record anywhere else is no venue's, and the rule
+/// asks nothing of it.
 ///
 /// The artifacts: this build's digest of each case on each venue's profile
 /// ([`CurrentArtifacts`]). A venue's record of another build is current for its product while
@@ -505,7 +493,6 @@ pub struct VenueKeys {
 /// A venue's native engine slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VenueSlot {
-    backend: Backend,
     /// The committed profile's fingerprint.
     fingerprint: String,
     /// The committed profile.
@@ -513,19 +500,12 @@ struct VenueSlot {
 }
 
 impl VenueKeys {
-    /// Hold `environment_id`'s native slot in `backend` to `fingerprint`, the key of the
-    /// committed profile `profile` (its stem).
-    pub fn insert(
-        &mut self,
-        environment_id: &str,
-        backend: Backend,
-        fingerprint: &str,
-        profile: &str,
-    ) {
+    /// Hold `environment_id`'s native slot to `fingerprint`, the key of the committed profile
+    /// `profile` (its stem).
+    pub fn insert(&mut self, environment_id: &str, fingerprint: &str, profile: &str) {
         self.by_slot.insert(
             crate::candidate::engine::engine_environment_id(environment_id),
             VenueSlot {
-                backend,
                 fingerprint: fingerprint.into(),
                 profile: ProfileStem {
                     stem: profile.into(),
@@ -554,39 +534,32 @@ impl VenueKeys {
         self.gaps.get(slot).is_some_and(|gaps| gaps.contains(&gap))
     }
 
-    /// The venue slot `slot` of `backend` is, when it is one.
-    fn slot(&self, backend: Backend, slot: &str) -> Option<&VenueSlot> {
+    /// The fingerprint a record in `slot` must have recorded, when it is a venue's.
+    pub fn expected(&self, slot: &str) -> Option<&str> {
         self.by_slot
             .get(slot)
-            .filter(|venue_slot| venue_slot.backend == backend)
-    }
-
-    /// The fingerprint a record in `slot` of `backend` must have recorded, when it is a venue's.
-    pub fn expected(&self, backend: Backend, slot: &str) -> Option<&str> {
-        self.slot(backend, slot)
             .map(|venue_slot| venue_slot.fingerprint.as_str())
     }
 
-    /// Whether a record of `backend` in `slot` whose environment is `environment` holds the key its
-    /// venue requires: always for a record no venue keys.
-    pub fn holds(&self, backend: Backend, slot: &str, environment: &Value) -> bool {
-        self.expected(backend, slot).is_none_or(|expected| {
+    /// Whether a record in `slot` whose environment is `environment` holds the key its venue
+    /// requires: always for a record no venue keys.
+    pub fn holds(&self, slot: &str, environment: &Value) -> bool {
+        self.expected(slot).is_none_or(|expected| {
             VenueProfile::recorded_fingerprint(environment) == Some(expected)
         })
     }
 
-    /// Whether a venue's record of `case_id` in `slot` of `backend` executed `executed`, this
+    /// Whether a venue's record of `case_id` in `slot` executed `executed`, this
     /// build's artifact of the case on the slot's profile (`ExecutedArtifact::is_current`).
     /// Never for a record no venue keys, one that recorded no digest, or a case and profile this
     /// build's file holds no digest of.
     pub fn artifact_is_current(
         &self,
-        backend: Backend,
         slot: &str,
         case_id: &str,
         executed: Option<&ExecutedArtifact>,
     ) -> bool {
-        self.slot(backend, slot).is_some_and(|venue_slot| {
+        self.by_slot.get(slot).is_some_and(|venue_slot| {
             executed.is_some_and(|executed| {
                 executed.is_current(self.artifacts.get(case_id, &venue_slot.profile))
             })
@@ -661,19 +634,14 @@ impl Venues {
     }
 
     /// What every venue's records must hold ([`VenueKeys`]): each venue's committed profile's
-    /// fingerprint, in its backend, and `artifacts`, this build's digests
+    /// fingerprint, and `artifacts`, this build's digests
     /// (`CurrentArtifacts::load` of the corpus whose records are judged).
     pub fn keys(&self, artifacts: CurrentArtifacts) -> Result<VenueKeys, String> {
         let mut keys = VenueKeys::default().with_artifacts(artifacts);
         for venue in &self.venues {
             let profile = VenueProfile::committed(&venue.profile)
                 .map_err(|error| format!("C3 venue {:?}: {error}", venue.environment_id))?;
-            keys.insert(
-                &venue.environment_id,
-                venue.backend(),
-                &profile.fingerprint,
-                &venue.profile,
-            );
+            keys.insert(&venue.environment_id, &profile.fingerprint, &venue.profile);
             let derived = crate::acceptance::derived_profile(profile.description.clone())
                 .map_err(|error| format!("C3 venue {:?}: {error}", venue.environment_id))?;
             keys.insert_gaps(
@@ -684,12 +652,12 @@ impl Venues {
         Ok(keys)
     }
 
-    /// The venue whose rows of `backend` are recorded under the operator environment
-    /// `environment_id`, if one is.
-    pub fn venue_of(&self, environment_id: &str, backend: Backend) -> Option<&Venue> {
+    /// The venue whose rows are recorded under the operator environment `environment_id`, if one
+    /// is.
+    pub fn venue_of(&self, environment_id: &str) -> Option<&Venue> {
         self.venues
             .iter()
-            .find(|venue| venue.environment_id == environment_id && venue.backend() == backend)
+            .find(|venue| venue.environment_id == environment_id)
     }
 
     /// Read and check the venue list at `path`; an error names the file.

@@ -97,9 +97,7 @@ use crate::cutover::scope::OutOfScope;
 use crate::cutover::{List, Review, SignOff};
 use crate::index::EvidenceState;
 use crate::metal::ORACLE_ABI;
-use crate::observation::{
-    validate_hash, Backend, CandidateObservation, CandidateStatus, MetalObservation,
-};
+use crate::observation::{validate_hash, CandidateObservation, CandidateStatus, MetalObservation};
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::{Refusal, RefusalClass, RefusalObservation};
 use crate::source::public_sources;
@@ -596,8 +594,8 @@ impl C3Input {
         Ok(C3Input {
             cases: store.read_all_cases()?,
             metals: store.read_metal()?,
-            vulkan: store.read_candidates(Backend::Vulkan)?,
-            refusals: store.read_refusals(Backend::Vulkan)?,
+            vulkan: store.read_candidates()?,
+            refusals: store.read_refusals()?,
             public_air: public_sources()?
                 .into_iter()
                 .map(|source| source.air_sha256)
@@ -1292,11 +1290,11 @@ pub fn report(
                         .is_some_and(|gaps| gaps.contains(&entry.gap)))
         })
     };
-    let verdict = |case: &AuthoredCase, backend: Backend, slot: &str| -> Option<Verdict> {
+    let verdict = |case: &AuthoredCase, slot: &str| -> Option<Verdict> {
         let Some(row) = rows.get(&(case.case_id.as_str(), slot)) else {
             let refusal = refusals.get(&(case.case_id.as_str(), slot))?;
             if other_device(slot, &refusal.environment)
-                || !crate::index::refusal_is_current(case, backend, refusal, keys)
+                || !crate::index::refusal_is_current(case, refusal, keys)
             {
                 return Some(Verdict::Stale);
             }
@@ -1319,7 +1317,7 @@ pub fn report(
         }
         let judging = judged_by(case);
         Some(
-            match crate::index::candidate_slot_state(case, backend, judging.as_slice(), row, keys) {
+            match crate::index::candidate_slot_state(case, judging.as_slice(), row, keys) {
                 EvidenceState::Current => Verdict::Match,
                 EvidenceState::Failed
                     if list.reviews(row).is_some() && deferred_note(row).is_none() =>
@@ -1366,7 +1364,7 @@ pub fn report(
             // not join the population.
             let judgeable = judged_by(case).is_some();
             report.population += usize::from(required);
-            let judged = match verdict(case, venue.backend(), &slot) {
+            let judged = match verdict(case, &slot) {
                 Some(verdict) => verdict,
                 None if required || judgeable => Verdict::Missing,
                 None => continue,
@@ -1478,13 +1476,7 @@ pub fn report(
                     let judging = judged_by(case);
                     !row_on_other_device(row)
                         && matches!(
-                            crate::index::candidate_slot_state(
-                                case,
-                                row.backend,
-                                judging.as_slice(),
-                                row,
-                                keys,
-                            ),
+                            crate::index::candidate_slot_state(case, judging.as_slice(), row, keys,),
                             EvidenceState::Current | EvidenceState::Failed
                         )
                 }

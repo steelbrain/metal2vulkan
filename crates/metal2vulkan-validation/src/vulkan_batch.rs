@@ -57,12 +57,11 @@ use crate::gpu::wait::{SubmissionBackend, HANG_EXIT_CODE};
 use crate::gpu::DeviceType;
 use crate::metal::{ORACLE_ABI, REFERENCE_GAP_EXIT};
 use crate::observation::{
-    Backend, CandidateObservation, CandidateStatus, MetalObservation, MetalStatus,
-    TRANSLATOR_FINGERPRINT,
+    CandidateObservation, CandidateStatus, MetalObservation, MetalStatus, TRANSLATOR_FINGERPRINT,
 };
 use crate::refusal::RefusalObservation;
 use crate::source::shard_name_for_hash;
-use crate::store::{refusal_directory, CorpusStore};
+use crate::store::{CorpusStore, CANDIDATE_DIRECTORY, REFUSAL_DIRECTORY};
 use crate::worker::device::VALIDATION_FINGERPRINT;
 use crate::ScratchDir;
 use base64::Engine as _;
@@ -588,7 +587,7 @@ impl BatchDevice {
     }
 }
 
-/// Whose rows a batch records: a candidate backend's (its executor's engine runs), or Metal's
+/// Whose rows a batch records: the Vulkan candidate's (its executor's engine runs), or Metal's
 /// (the oracle's qualifications).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -598,27 +597,11 @@ pub enum BatchBackend {
 }
 
 impl BatchBackend {
-    /// The candidate backend, for a candidate batch.
-    pub fn candidate(self) -> Option<Backend> {
-        match self {
-            Self::Vulkan => Some(Backend::Vulkan),
-            Self::Metal => None,
-        }
-    }
-
     /// Its rows' directory under `observations/` (`vulkan`, `metal`).
     pub fn directory(self) -> &'static str {
-        match self.candidate() {
-            Some(backend) => backend.directory(),
-            None => "metal",
-        }
-    }
-}
-
-impl From<Backend> for BatchBackend {
-    fn from(backend: Backend) -> Self {
-        match backend {
-            Backend::Vulkan => Self::Vulkan,
+        match self {
+            Self::Vulkan => "vulkan",
+            Self::Metal => "metal",
         }
     }
 }
@@ -1023,18 +1006,18 @@ fn hang(
 
 /// A job's store at `store`: links to `corpus`'s cases, reviews, private sources, and library
 /// modules (each that exists), and the rows `backend`'s runs read; and empty shard directories of
-/// its own for the rows they write. A candidate run reads the Metal rows and writes `backend`'s
+/// its own for the rows they write. A candidate run reads the Metal rows and writes the candidate
 /// rows and refusals; a Metal run reads no rows and writes Metal's.
 fn worker_store(corpus: &Path, store: &Path, backend: BatchBackend) -> Result<(), String> {
-    let (own, read) = match backend.candidate() {
-        Some(backend) => (
+    let (own, read) = match backend {
+        BatchBackend::Vulkan => (
             vec![
-                Path::new("observations").join(backend.directory()),
-                refusal_directory(backend),
+                PathBuf::from(CANDIDATE_DIRECTORY),
+                PathBuf::from(REFUSAL_DIRECTORY),
             ],
             vec![PathBuf::from("observations/metal")],
         ),
-        None => (vec![PathBuf::from("observations/metal")], Vec::new()),
+        BatchBackend::Metal => (vec![PathBuf::from("observations/metal")], Vec::new()),
     };
     for own in own {
         let own = store.join(own);
@@ -1126,13 +1109,12 @@ fn execute_run(config: &BatchConfig, store: &Path, run: &Run) -> Result<Executed
 
     let recorded = match run.pass {
         Pass::Engine => {
-            let backend = config
-                .backend
-                .candidate()
-                .ok_or("a Metal batch runs no engine")?;
+            if config.backend == BatchBackend::Metal {
+                return Err("a Metal batch runs no engine".into());
+            }
             let slot = engine_slot(&config.environment_id, config.restricted_to.as_deref());
-            let row = find_row(store, backend, run, &slot)?;
-            let refusal = find_refusal(store, backend, run, &slot)?;
+            let row = find_row(store, run, &slot)?;
+            let refusal = find_refusal(store, run, &slot)?;
             Recorded {
                 outcome: classify(
                     ended,
@@ -1253,10 +1235,9 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Result<Ended, String> {
     }
 }
 
-/// The store line and status of `run`'s row of `backend` in `slot`, if the job store holds one.
+/// The store line and status of `run`'s candidate row in `slot`, if the job store holds one.
 fn find_row(
     store: &Path,
-    backend: Backend,
     run: &Run,
     slot: &str,
 ) -> Result<Option<(String, CandidateStatus)>, String> {
@@ -1266,26 +1247,21 @@ fn find_row(
         environment_id: String,
         status: CandidateStatus,
     }
-    let directory = store.join("observations").join(backend.directory());
+    let directory = store.join(CANDIDATE_DIRECTORY);
     Ok(find_line::<Key>(&directory, run, |key| {
         key.case_id == run.case_id && key.environment_id == slot
     })?
     .map(|(line, key)| (line, key.status)))
 }
 
-/// The store line of `run`'s refusal of `backend` in `slot`, if the job store holds one.
-fn find_refusal(
-    store: &Path,
-    backend: Backend,
-    run: &Run,
-    slot: &str,
-) -> Result<Option<String>, String> {
+/// The store line of `run`'s refusal in `slot`, if the job store holds one.
+fn find_refusal(store: &Path, run: &Run, slot: &str) -> Result<Option<String>, String> {
     #[derive(serde::Deserialize)]
     struct Key {
         case_id: String,
         environment_id: String,
     }
-    let directory = store.join(refusal_directory(backend));
+    let directory = store.join(REFUSAL_DIRECTORY);
     Ok(find_line::<Key>(&directory, run, |key| {
         key.case_id == run.case_id && key.environment_id == slot
     })?
@@ -1382,11 +1358,10 @@ pub struct Installed {
 /// row ([`ROWS`]), a typed refusal its last refusal ([`REFUSALS`]; a refusal before a device
 /// opened recorded none, and installs nothing). Evidence no finished run lists (an append cut
 /// before its done-list line) is not installed. The store keeps a slot's row or its refusal,
-/// never both, so the installed one replaces the other. Every row and refusal must be of
-/// `backend`, and so must the out directory's record (one without a record is Vulkan's). The
-/// record is returned: only rows of this build ([`BatchBuild::is_this_build`]) are current once
+/// never both, so the installed one replaces the other. The out directory's record must be a
+/// Vulkan batch's (one without a record is). The record is returned: only rows of this build ([`BatchBuild::is_this_build`]) are current once
 /// installed, which the caller checks before it commits them.
-pub fn install(out: &Path, store: &CorpusStore, backend: Backend) -> Result<Installed, String> {
+pub fn install(out: &Path, store: &CorpusStore) -> Result<Installed, String> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Evidence {
         Row,
@@ -1396,12 +1371,11 @@ pub fn install(out: &Path, store: &CorpusStore, backend: Backend) -> Result<Inst
     let recorded = build
         .as_ref()
         .map_or(BatchBackend::Vulkan, |build| build.backend);
-    if recorded != BatchBackend::from(backend) {
+    if recorded != BatchBackend::Vulkan {
         return Err(format!(
-            "{} holds runs of the {} backend, not {}",
+            "{} holds runs of the {} backend, not vulkan",
             out.display(),
-            recorded.directory(),
-            backend.directory()
+            recorded.directory()
         ));
     }
     let output = BatchOutput::read(out)?;
@@ -1416,26 +1390,10 @@ pub fn install(out: &Path, store: &CorpusStore, backend: Backend) -> Result<Inst
     }
     let mut rows = BTreeMap::new();
     for row in output.rows {
-        if row.backend != backend {
-            return Err(format!(
-                "row {} {} is not a {} row",
-                row.case_id,
-                row.environment_id,
-                backend.directory()
-            ));
-        }
         rows.insert((row.case_id.clone(), row.environment_id.clone()), row);
     }
     let mut refusals = BTreeMap::new();
     for refusal in output.refusals {
-        if refusal.backend != backend {
-            return Err(format!(
-                "refusal {} {} is not a {} refusal",
-                refusal.case_id,
-                refusal.environment_id,
-                backend.directory()
-            ));
-        }
         refusals.insert(
             (refusal.case_id.clone(), refusal.environment_id.clone()),
             refusal,

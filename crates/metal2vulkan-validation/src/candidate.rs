@@ -1,5 +1,4 @@
 use crate::gpu::DeviceType;
-use crate::observation::Backend;
 use std::sync::OnceLock;
 
 /// The exit statuses of the candidate executor's processes (`corpus-vulkan`): one per [`ExecutorError`](crate::check::admission::ExecutorError) kind that is not a failure, so a caller that runs them as processes
@@ -114,8 +113,9 @@ pub(crate) fn echo_validation_messages() {
     platform::echo_validation_messages();
 }
 
-fn validate_backend_host(backend: Backend) -> Result<(), String> {
-    if backend == Backend::Vulkan && cfg!(target_os = "macos") {
+/// Refuse candidate execution on macOS: its Vulkan is MoltenVK's, which no candidate runs on.
+fn validate_host() -> Result<(), String> {
+    if cfg!(target_os = "macos") {
         return Err("Vulkan candidate execution is not available on macOS".into());
     }
     Ok(())
@@ -182,7 +182,6 @@ mod platform {
             &super::engine::ChildCommand,
         ) -> Result<super::engine::CompiledChild, ExecutorError>,
         _registered: &[metal2vulkan::bind::ReplayVariant],
-        _backend: Backend,
     ) -> super::engine::RunAttempt {
         super::engine::RunAttempt::of(Err(
             "candidate execution is supported only on Linux and macOS".into(),
@@ -206,7 +205,6 @@ mod platform {
             &metal2vulkan::bind::BindShape,
             &super::engine::ChildCommand,
         ) -> Result<super::engine::CompiledChild, ExecutorError>,
-        _backend: Backend,
     ) -> super::engine::RunAttempt {
         super::engine::RunAttempt::of(Err(
             "candidate execution is supported only on Linux and macOS".into(),

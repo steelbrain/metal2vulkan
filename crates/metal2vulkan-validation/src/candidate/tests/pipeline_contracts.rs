@@ -3,9 +3,9 @@ use super::*;
 #[test]
 fn vulkan_candidates_run_off_macos_alone() {
     if cfg!(target_os = "macos") {
-        assert!(validate_backend_host(Backend::Vulkan).is_err());
+        assert!(validate_host().is_err());
     } else if cfg!(target_os = "linux") {
-        assert!(validate_backend_host(Backend::Vulkan).is_ok());
+        assert!(validate_host().is_ok());
     }
 }
 

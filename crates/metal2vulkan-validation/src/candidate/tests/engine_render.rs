@@ -4,7 +4,6 @@
 //! (y-up clip space, pixel-center coverage). `G-linux`'s `m2v_cpu_icd` step runs these on lavapipe.
 //! The looping fragment runs as compiled on both lanes.
 
-use super::engine_compute::BACKEND;
 use super::*;
 use crate::candidate::engine::graphics::tests::{
     checked_companion, draw_request, reflected_imageblock, two_stage_case, RenderLibraries,
@@ -39,7 +38,6 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
             compile_render(compile_worker(), device, &request, &sources, case, &[])
         },
         |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
-        BACKEND,
     )
     .result
 }

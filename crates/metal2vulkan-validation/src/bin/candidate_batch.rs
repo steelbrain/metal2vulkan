@@ -4,12 +4,11 @@
 use metal2vulkan_validation::gpu::tripwire::TripwirePaths;
 use metal2vulkan_validation::gpu::wait::parse_wait_timeout;
 use metal2vulkan_validation::gpu::DeviceType;
-use metal2vulkan_validation::observation::Backend;
 use metal2vulkan_validation::source::corpus_root;
 use metal2vulkan_validation::store::CorpusStore;
 use metal2vulkan_validation::vulkan_batch::{
-    self, plan, qualified_cases, read_done_list, report, requested_cases, run_batch, BatchBuild,
-    BatchConfig, BatchDevice, BatchOutput, Class, Outcome, Pass, DONE_LIST,
+    self, plan, qualified_cases, read_done_list, report, requested_cases, run_batch, BatchBackend,
+    BatchBuild, BatchConfig, BatchDevice, BatchOutput, Class, Outcome, Pass, DONE_LIST,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -63,7 +62,7 @@ sources), the only build whose rows are current once installed.";
 
 /// Run a batch mode if the command line names one (its first argument): `true` when it did (and
 /// it exited the process on an error), `false` for a single-case invocation, the workers' included.
-pub fn serve(backend: Backend) -> bool {
+pub fn serve() -> bool {
     let mut args = std::env::args().skip(1);
     let Some(mode) = args.next().filter(|arg| {
         matches!(
@@ -73,16 +72,15 @@ pub fn serve(backend: Backend) -> bool {
     }) else {
         return false;
     };
-    if let Err(error) = main(backend, &mode, args.collect()) {
-        eprintln!("corpus-{} {mode}: {error}", backend.directory());
+    if let Err(error) = main(&mode, args.collect()) {
+        eprintln!("corpus-vulkan {mode}: {error}");
         std::process::exit(1);
     }
     true
 }
 
-/// Run the batch mode `mode` (`--batch`, `--batch-report`, `--batch-install`) of `backend` with
-/// `args`.
-fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
+/// Run the batch mode `mode` (`--batch`, `--batch-report`, `--batch-install`) with `args`.
+fn main(mode: &str, args: Vec<String>) -> Result<(), String> {
     let mut corpus = corpus_root();
     let mut out = None;
     let mut install = None;
@@ -136,7 +134,7 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
     match mode {
         "--batch-install" => {
             let target = install.ok_or("--batch-install DIR is required")?;
-            let installed = vulkan_batch::install(&out, &CorpusStore::new(&target), backend)?;
+            let installed = vulkan_batch::install(&out, &CorpusStore::new(&target))?;
             println!(
                 "batch-install rows={} refusals={} store={} this_build={}",
                 installed.rows,
@@ -160,7 +158,7 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
                 Some(recorded) => Some(
                     *recorded
                         == BatchBuild::current(
-                            backend.into(),
+                            BatchBackend::Vulkan,
                             &metal_environment_id,
                             &environment_id,
                             restricted_to.as_deref(),
@@ -242,7 +240,7 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
             let config = BatchConfig {
                 executor: std::env::current_exe()
                     .map_err(|error| format!("this executable: {error}"))?,
-                backend: backend.into(),
+                backend: BatchBackend::Vulkan,
                 corpus,
                 out,
                 metal_environment_id,

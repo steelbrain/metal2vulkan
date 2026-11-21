@@ -6,7 +6,7 @@ use crate::case::{
 };
 use crate::check::admission::NotSupported;
 use crate::hash::sha256_bytes;
-use crate::observation::{MetalStatus, ReferenceGap};
+use crate::observation::{Backend, MetalStatus, ReferenceGap};
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::Refusal;
 
@@ -1022,24 +1022,24 @@ fn installed_evidence_is_each_slots_last_run() {
     )
     .unwrap();
     assert_eq!(
-        install(&out, &store, Backend::Vulkan).unwrap(),
+        install(&out, &store).unwrap(),
         Installed {
             rows: 2,
             refusals: 1,
             build: None,
         }
     );
-    let mut installed = store.read_candidates(Backend::Vulkan).unwrap();
+    let mut installed = store.read_candidates().unwrap();
     installed.sort_by(|left, right| left.case_id.cmp(&right.case_id));
     let mut expected = vec![fresh, after_refusal];
     expected.sort_by(|left, right| left.case_id.cmp(&right.case_id));
     assert_eq!(installed, expected);
-    assert_eq!(store.read_refusals(Backend::Vulkan).unwrap(), [refused]);
+    assert_eq!(store.read_refusals().unwrap(), [refused]);
 
     // A Metal batch's record: the Vulkan backend installs none of its runs.
     let build = BatchBuild::current(BatchBackend::Metal, METAL_ENV, ENV, None, DeviceType::Gpu);
     fs::write(out.join(BUILD), serde_json::to_vec(&build).unwrap()).unwrap();
-    assert!(install(&out, &store, Backend::Vulkan)
+    assert!(install(&out, &store)
         .unwrap_err()
         .contains("runs of the metal backend"));
 }
@@ -1587,7 +1587,7 @@ exit 9
     let mut expected_rows = vec![row, gap_row];
     expected_rows.sort_by(|left, right| left.case_id.cmp(&right.case_id));
     assert_eq!(target_rows, expected_rows);
-    let error = install(&config.out, &target, Backend::Vulkan).unwrap_err();
+    let error = install(&config.out, &target).unwrap_err();
     assert!(error.contains("not vulkan"), "{error}");
     let vulkan_out = scratch.path().join("vulkan-out");
     fs::create_dir_all(&vulkan_out).unwrap();

@@ -6,7 +6,7 @@
 //! answer exactly in both. Where the queried description does not fire the rule there is no second
 //! form to run, and the test says so and skips. It times nothing.
 
-use super::engine_compute::{case, BACKEND};
+use super::engine_compute::case;
 use super::*;
 use crate::candidate::engine::{compile_case, ComputeOutput, ComputeRun};
 use crate::check::admission::ExecutorError;
@@ -97,7 +97,6 @@ fn run(
         },
         |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
         &[],
-        BACKEND,
     )
     .result
 }

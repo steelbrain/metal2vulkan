@@ -125,7 +125,6 @@ pub(super) mod device {
             },
             |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
             &[],
-            super::super::engine_compute::BACKEND,
         )
         .result
     }

@@ -71,7 +71,7 @@
 use super::acceptance::{unmet_requirements, LayoutError, LayoutObjects};
 use super::buffers::{create_host_buffer, HostBuffer};
 use super::compute::{
-    allocate, allocate_in, attempt, check_backend, command_replay, environment, executed_census,
+    allocate, allocate_in, attempt, command_replay, environment, executed_census,
     incompatible_binding, module_censuses, opened_device, refused_attempt, replay_commands,
     table_bytes, upload_root_table, Allocation, CompileChild, Live, OnDevice, Replay, ReplayPath,
 };
@@ -99,7 +99,6 @@ use crate::gpu::wait::{with_submission_label, SubmissionLabel};
 use crate::gpu::DeviceType;
 use crate::hash::sha256_bytes;
 use crate::literal::{LiteralDepthStencil, LiteralTexture};
-use crate::observation::Backend;
 use crate::worker::compile::WorkerDevice;
 use ash::vk;
 use metal2vulkan::bind::{
@@ -137,13 +136,12 @@ pub fn execute_engine_render(
         &BindShape,
         &ChildCommand,
     ) -> Result<CompiledChild, ExecutorError>,
-    backend: Backend,
 ) -> RunAttempt {
     if let Some(refused) = refused_attempt(device_type, "engine-render") {
         return refused;
     }
     with_validated_context(device_type, |context| {
-        let result = run(context, case_id, case, (compile, children), backend);
+        let result = run(context, case_id, case, (compile, children));
         Ok(attempt(context, result, "engine-render"))
     })
     .unwrap_or_else(|error| RunAttempt::of(Err(ExecutorError::Failed(error))))
@@ -162,9 +160,7 @@ fn run(
             &ChildCommand,
         ) -> Result<CompiledChild, ExecutorError>,
     ),
-    backend: Backend,
 ) -> Result<ComputeRun, ExecutorError> {
-    check_backend(context, backend)?;
     let target = opened_device(context)?;
     let addressed = context
         .enabled

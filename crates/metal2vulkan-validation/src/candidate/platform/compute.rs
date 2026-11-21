@@ -36,7 +36,7 @@ use crate::gpu::wait::{with_submission_label, SubmissionLabel};
 use crate::gpu::DeviceType;
 use crate::hash::sha256_bytes;
 use crate::literal::LiteralTexture;
-use crate::observation::{Backend, TRANSLATOR_FINGERPRINT};
+use crate::observation::TRANSLATOR_FINGERPRINT;
 use crate::worker::compile::WorkerDevice;
 use ash::vk;
 use metal2vulkan::bind::BindingPlan;
@@ -88,20 +88,12 @@ pub fn execute_engine(
         &ChildCommand,
     ) -> Result<CompiledChild, ExecutorError>,
     registered: &[ReplayVariant],
-    backend: Backend,
 ) -> RunAttempt {
     if let Some(refused) = refused_attempt(device_type, "engine-compute") {
         return refused;
     }
     with_validated_context(device_type, |context| {
-        let result = run(
-            context,
-            case_id,
-            case,
-            (compile, children),
-            registered,
-            backend,
-        );
+        let result = run(context, case_id, case, (compile, children), registered);
         Ok(attempt(context, result, "engine-compute"))
     })
     .unwrap_or_else(|error| RunAttempt::of(Err(ExecutorError::Failed(error))))
@@ -231,18 +223,6 @@ pub(super) fn opened_device(context: &VulkanContext) -> Result<WorkerDevice, Exe
         .map_err(|e| product_refusal(&e))
 }
 
-/// The Vulkan backend's rows are a native ICD's: it never runs on MoltenVK.
-pub(super) fn check_backend(
-    context: &VulkanContext,
-    backend: Backend,
-) -> Result<(), ExecutorError> {
-    let moltenvk = context.driver.driver_id == vk::DriverId::MOLTENVK.as_raw();
-    match backend {
-        Backend::Vulkan if moltenvk => Err("the vulkan backend opened MoltenVK".into()),
-        Backend::Vulkan => Ok(()),
-    }
-}
-
 fn run(
     context: &VulkanContext,
     case_id: &str,
@@ -257,9 +237,7 @@ fn run(
         ) -> Result<CompiledChild, ExecutorError>,
     ),
     registered: &[ReplayVariant],
-    backend: Backend,
 ) -> Result<ComputeRun, ExecutorError> {
-    check_backend(context, backend)?;
     let target = opened_device(context)?;
     let addressed = context
         .enabled

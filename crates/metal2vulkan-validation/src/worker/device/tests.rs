@@ -14,7 +14,6 @@ fn input(device: DeviceType) -> DeviceInput {
         root: PathBuf::from("/nonexistent/device-worker-corpus"),
         case: crate::case::attachmentless_fragment_test_case("00".repeat(32), "frag".into()),
         device,
-        backend: Backend::Vulkan,
         input_sha256: "11".repeat(32),
         wait_timeout_ms: 7_000,
         restricted_to: None,

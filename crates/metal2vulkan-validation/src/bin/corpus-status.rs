@@ -130,8 +130,8 @@ fn run() -> Result<(), String> {
                      \"fingerprint\"}}). --rekey-venues migrates venue records to this build's keys\n\
                      without running anything: LIST is a JSON array of {{\"stem\", \"from\":\n\
                      {{\"sha256\", \"fingerprint\"}}, \"to\": {{...}}}}, each \"to\" this build's key of\n\
-                     \"stem\" (as --venue-keys prints it), and every row and refusal, of either\n\
-                     backend, that recorded \"stem\" at exactly \"from\" records \"to\" instead, in\n\
+                     \"stem\" (as --venue-keys prints it), and every row and refusal that\n\
+                     recorded \"stem\" at exactly \"from\" records \"to\" instead, in\n\
                      one transaction; no other record changes, and a second run changes nothing.\n\
                      Use it only for a change whose authored-compile census leaves every artifact\n\
                      digest byte-identical: the records then stay their venue's\n\

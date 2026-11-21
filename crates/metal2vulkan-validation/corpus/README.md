@@ -149,12 +149,11 @@ targeted cascade without installing a replacement.
 
 ## Observations
 
-A Metal slot is `(case_id, environment_id)`. A candidate slot is
-`(case_id, backend, environment_id)`. Requalification replaces the exact slot; duplicate active
-slots are rejected.
+A Metal slot is `(case_id, environment_id)`, and so is a candidate slot. Requalification replaces
+the exact slot; duplicate active slots are rejected.
 
 Metal evidence carries case, AIR, input, output, environment, and oracle-ABI hashes. Candidate
-evidence additionally carries the exact Metal output hash, SPIR-V hash, backend environment, and
+evidence additionally carries the exact Metal output hash, SPIR-V hash, Vulkan environment, and
 executor ABI. Reuse requires every dependency to match.
 
 Metal qualification runs a checked literal case three times. All selected outputs must be

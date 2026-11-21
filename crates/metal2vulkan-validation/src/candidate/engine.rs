@@ -2317,7 +2317,6 @@ pub fn execute(
     root: &Path,
     case: AuthoredCase,
     device_type: DeviceType,
-    backend: Backend,
     metal_environment_id: &str,
     environment_id: &str,
     worker: &CompileWorker,
@@ -2333,7 +2332,6 @@ pub fn execute(
         device_type,
         root,
         admitted,
-        backend,
         metal_environment_id,
         environment_id,
         worker,
@@ -2349,7 +2347,6 @@ pub fn execute_case(
     device: DeviceType,
     root: &Path,
     admitted: AdmittedCase,
-    backend: Backend,
     metal_environment_id: &str,
     environment_id: &str,
     worker: &CompileWorker,
@@ -2357,7 +2354,6 @@ pub fn execute_case(
     execute_prepared(
         root,
         prepare_case(device, admitted)?,
-        backend,
         metal_environment_id,
         environment_id,
         worker,
@@ -3115,7 +3111,7 @@ pub(crate) fn run_on_device(input: &DeviceInput) -> DeviceOutcome {
     match prepare_on_device(input) {
         Ok((prepared, worker)) => {
             let clock = crate::budgets::CreationClock::start();
-            let attempt = run_on_context(&prepared, input.backend, &worker);
+            let attempt = run_on_context(&prepared, &worker);
             let timing = CaseTiming::of_one(clock.read());
             DeviceOutcome {
                 result: attempt.result.map(|run| DeviceRun {
@@ -3199,28 +3195,22 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
 /// Compile (in `worker`), bind, and execute one prepared case on the executor's context: a
 /// kernel case as one dispatch, a vertex or fragment case as one draw. The run's row or refusal
 /// records what it compiled, by content ([`artifact::CaseArtifact`]).
-fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWorker) -> RunAttempt {
+fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt {
     let case = &prepared.checked.primary.case;
     let templates = &prepared.templates;
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
-    // A case the runtime runs, run so in this process's default run: the native backend and no
-    // profiles-layer restriction. It records no artifact: the runtime keeps what it compiled to
+    // A case the runtime runs, run so in this process's default run: no profiles-layer
+    // restriction. It records no artifact: the runtime keeps what it compiled to
     // itself.
     if let Mapped::Compute(compute) = &prepared.mapped {
-        if backend == Backend::Vulkan
-            && runs_through_runtime(case, compute)
-            && super::requested_restriction().is_none()
-        {
+        if runs_through_runtime(case, compute) && super::requested_restriction().is_none() {
             return run_on_runtime(prepared, compute);
         }
     }
     if let Mapped::Render(render) = &prepared.mapped {
-        if backend == Backend::Vulkan
-            && runs_render_through_runtime(case, render)
-            && super::requested_restriction().is_none()
-        {
+        if runs_render_through_runtime(case, render) && super::requested_restriction().is_none() {
             return run_render_on_runtime(prepared, render);
         }
     }
@@ -3261,7 +3251,6 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
                 },
                 children,
                 &registered,
-                backend,
             )
         }
         Mapped::Render(render) => {
@@ -3290,7 +3279,6 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
                     Ok(compiled)
                 },
                 children,
-                backend,
             )
         }
         // A run's preparation refuses a mesh case before it maps (`prepare_case`); only the
@@ -3475,7 +3463,6 @@ fn replay_variant_request<'a>(
 pub fn execute_prepared(
     root: &Path,
     prepared: PreparedCase,
-    backend: Backend,
     metal_environment_id: &str,
     environment_id: &str,
     worker: &CompileWorker,
@@ -3490,7 +3477,7 @@ pub fn execute_prepared(
         )
         .into());
     }
-    super::validate_backend_host(backend)?;
+    super::validate_host()?;
     let PreparedCase {
         device, checked, ..
     } = prepared;
@@ -3511,7 +3498,7 @@ pub fn execute_prepared(
     let venue = match restricted_to {
         Some(_) => None,
         None => Venues::load(&Venues::committed_path())?
-            .venue_of(environment_id, backend)
+            .venue_of(environment_id)
             .map(|venue| VenueRun {
                 environment_id: environment_id.into(),
                 profile: venue.profile.clone(),
@@ -3526,7 +3513,6 @@ pub fn execute_prepared(
         root: root.to_path_buf(),
         case: case.clone(),
         device,
-        backend,
         input_sha256: checked.primary.input_sha256.clone(),
         wait_timeout_ms: u64::try_from(wait_timeout().as_millis()).unwrap_or(u64::MAX),
         restricted_to,
@@ -3547,7 +3533,7 @@ pub fn execute_prepared(
                     air_sha256: case.air_sha256.clone(),
                     input_sha256: input.input_sha256.clone(),
                     translator_fingerprint: opened.translator_fingerprint,
-                    backend,
+                    backend: Backend::Vulkan,
                     environment_id: engine_slot(environment_id, input.restricted_to.as_deref()),
                     environment: opened.environment,
                     executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3586,7 +3572,7 @@ pub fn execute_prepared(
         translator_fingerprint: run.translator_fingerprint.clone(),
         candidate_output_sha256,
         output_b64: base64::engine::general_purpose::STANDARD.encode(&run.output),
-        backend,
+        backend: Backend::Vulkan,
         environment_id: slot.clone(),
         environment: run.environment,
         executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3603,7 +3589,6 @@ pub fn execute_prepared(
         metal: &metal,
         spv_sha256: run.spv_sha256.as_deref(),
         translator_fingerprint: &run.translator_fingerprint,
-        backend,
         environment_id: &slot,
         executor_abi: ENGINE_EXECUTOR_ABI,
     };
