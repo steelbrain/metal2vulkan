@@ -27,9 +27,9 @@
 //! [`crate::buffer_texture::ends_metals_process`] refuses the call on the Metal side as the second
 //! line of defence. What the case pins is the one fact there is — Metal did not come back — against
 //! the runtime's typed error at the same site, so a release where it answers reads as a divergence
-//! rather than as a pass. The row is a texture buffer, which the runtime does not build
-//! (`Gap::TextureBuffer`); a 2D texture whose rows are closer than a row is
-//! `Refusal::BufferTextureLayout`.
+//! rather than as a pass. The row is a texture buffer whose `bytesPerRow` is less than its width's
+//! bytes, which the runtime refuses as it refuses a 2D texture whose rows are closer than a row
+//! (`Refusal::BufferTextureLayout`).
 //!
 //! # What is deliberately not a case, and why
 //!
@@ -223,8 +223,8 @@ const ASSERTED_IN: &str = "AGX's own assertion text, which this suite's own whol
 const ASSERTED_SAYS: &str =
     "a texture over a buffer whose bytesPerRow is below the texture's own row fails AGX's \
      assertion `bytes_per_row >= used_bytes_per_row`, which ends Metal's process in the call; the \
-     runtime refuses it typed (it builds no texture buffer, Gap::TextureBuffer) and that refusal \
-     is what the row pins";
+     runtime refuses it typed (Refusal::BufferTextureLayout) and that refusal is what the row \
+     pins";
 
 /// The runs behind the answer: the finding met the assertion once and the process ended with it.
 const ASSERTED_RUNS: u32 = 1;

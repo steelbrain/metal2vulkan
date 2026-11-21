@@ -11,8 +11,9 @@
 //! case can state; over a 20000-byte buffer, whose `allocatedSize` is 32768, it is the rest of the
 //! buffer's own allocation, and it reads zero. So the case asks the second shape, where Metal's
 //! answer is one a case can compare: 1024 `R32Uint` texels from byte 16384 of a 20000-byte
-//! buffer, the first 904 inside the length and the last 120 past it. The runtime builds no texture
-//! buffer (`Gap::TextureBuffer`, its README, Textures), so no run of it reaches the texels.
+//! buffer, the first 904 inside the length and the last 120 past it. The runtime refuses a texture
+//! buffer whose texels run past its buffer (`Refusal::BufferTextureLayout`), as it refuses a 2D
+//! texture's, so no run of it reaches the texels.
 //!
 //! `buffer-tails-texture-buffer` reads texels through `ob1_texel_buffer` (the owned fixture whose
 //! thread `t` of eight reads texel `idx[t]` of its first texture buffer and writes `0xA0000000 |
