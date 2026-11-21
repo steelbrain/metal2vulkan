@@ -2379,11 +2379,11 @@ mod tests {
         };
         let bound = product(true);
         let compiled = RefusalObservation {
-            environment_id: "env@engine@vk12-floor".into(),
+            environment_id: "env@engine@runtime-floor".into(),
             ..product(false)
         };
         let mut earlier = serde_json::to_value(RefusalObservation {
-            environment_id: "env@engine@roadmap-2022".into(),
+            environment_id: "env@engine@lavapipe".into(),
             ..product(false)
         })
         .unwrap();
