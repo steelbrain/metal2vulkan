@@ -2,9 +2,10 @@
 //! `metal2vulkan` command line, which writes one for a failure after it read its inputs, under
 //! `METAL2VULKAN_REPRO_DIR` (`env_vars`). Not consumer API: the binary's, hidden as `env_vars` is.
 //!
-//! A bundle holds the input (`input.metallib`, `input.air`, `input.ll` or `input.bin`), the
-//! profile (`profile.json`, which `--profile` reads), the descriptor files the command names
-//! (`stage-input.json`, `vertex-descriptor.json`), the command (`repro-command.txt`, and `repro.sh`, which runs it from
+//! A bundle holds the input (`input.metallib`, `input.air`, `input.ll` or `input.bin`), the device
+//! file (`profile.json`, which `--profile` reads, or `device.json`, which `--device` reads: a
+//! [`ReproDevice`]), the descriptor files the command names (`stage-input.json`,
+//! `vertex-descriptor.json`), the command (`repro-command.txt`, and `repro.sh`, which runs it from
 //! the bundle's directory) and `failure.txt`: why it failed, and each part of the request the
 //! command does not replay ([`ReproBundle::unreplayed`]).
 //!
@@ -21,6 +22,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::{Digest, Sha256};
 
 use crate::cache::Hash256;
+use crate::device::{DeviceDescription, DevicePolicy};
+
+/// The device a command compiles for, as `device.json` holds it and the command line's `--device`
+/// reads it: a description and a policy, which build the same `Device` (`Device::from_queries`).
+/// A runtime's compile device is one: metal2vulkan-runtime's is the device's description
+/// restricted to the features it enables, with the identity pointer and handle domains, which a
+/// Khronos profile read by `--profile` (the default domains) does not reproduce.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReproDevice {
+    pub description: DeviceDescription,
+    pub policy: DevicePolicy,
+}
+
+impl ReproDevice {
+    /// The device of `description` and `policy`.
+    pub fn new(description: DeviceDescription, policy: DevicePolicy) -> ReproDevice {
+        ReproDevice {
+            description,
+            policy,
+        }
+    }
+
+    /// The device's `device.json`.
+    pub fn to_json(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec_pretty(self).map_err(|e| e.to_string())
+    }
+
+    /// The device a `device.json` holds.
+    pub fn from_json(json: &str) -> Result<ReproDevice, String> {
+        serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+}
 
 /// One bundle, built in memory and written by [`write`](Self::write).
 #[derive(Clone, Debug)]

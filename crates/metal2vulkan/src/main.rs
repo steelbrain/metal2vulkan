@@ -3,7 +3,9 @@
 //! the library's API (`Device::compile_compute_pipeline`, `compile_render_pipeline`, and
 //! `compile_tile_pipeline`).
 //!
-//! Usage: `metal2vulkan <in.metallib|in.air|in.ll> [out.spv] --profile <profile.json> [options]`.
+//! Usage: `metal2vulkan <in.metallib|in.air|in.ll> [out.spv] --profile <profile.json> [options]`,
+//! or `--device <device.json>` in place of `--profile` (a device description and policy, such as a
+//! runtime's compile device).
 //! A success prints a line containing `PASS`. Any failure prints `metal2vulkan: FALLBACK (why)`
 //! and exits with status 2; a failure after the inputs are read also writes a repro bundle
 //! (`metal2vulkan::repro`; `METAL2VULKAN_REPRO_DIR`, by default `$TMPDIR/metal2vulkan-repros`).
@@ -29,13 +31,14 @@ use metal2vulkan::pipeline::{
     SpecializationLayout, StageEntries, StageInputDescriptor, StageModule, StageSource,
     TileRenderPipelineDescriptor, VertexDescriptor, VertexInputState,
 };
-use metal2vulkan::repro::{shell_join, ReproBundle};
+use metal2vulkan::repro::{shell_join, ReproBundle, ReproDevice};
 use metal2vulkan::{vk, Budget};
 
 const USAGE: &str =
     "usage: metal2vulkan <in.metallib|in.air|in.ll> [out.spv] --profile <profile.json> [options]";
 
 const HELP: &str = r#"usage: metal2vulkan <in.metallib|in.air|in.ll> [out.spv] --profile <profile.json> [options]
+       metal2vulkan <in.metallib|in.air|in.ll> [out.spv] --device <device.json> [options]
 
 Compiles one pipeline of the input library for the device a Khronos profile describes, and writes
 its SPIR-V. A kernel writes out.spv; a render pipeline writes one module per stage, named by
@@ -45,9 +48,14 @@ output is <input-without-extension>.vk.spv. A .ll input is assembled with llvm-a
 newer).
 
 options:
-  --profile FILE           Khronos profiles JSON for the target device (required; the
-                           repository's crates/metal2vulkan-validation/profiles/ holds examples)
+  --profile FILE           Khronos profiles JSON for the target device (this or --device is
+                           required; the repository's crates/metal2vulkan-validation/profiles/
+                           holds examples)
   --profile-name NAME      the profile to read when FILE holds more than one
+  --device FILE            the target device as a description and a policy: the JSON form of
+                           metal2vulkan::device::DeviceDescription and DevicePolicy,
+                           {"description": ..., "policy": ...}, in place of --profile (a
+                           runtime's compile device; --profile takes the default domains)
   --function NAME          the kernel or vertex function (default: the library's only one)
   --fragment NAME          the fragment function of a render pipeline
   --constant ID:TYPE:VALUE function-constant value (repeatable): ID is an index or a name, TYPE a
@@ -76,6 +84,29 @@ const DESCRIPTOR_FILES: [(&str, &str); 2] = [
     ("--vertex-descriptor", "vertex-descriptor.json"),
 ];
 
+/// The device the command compiles for, as its file reads: a Khronos profiles document
+/// (`--profile`), or a device description and policy (`--device`).
+enum DeviceFile {
+    Profile(String),
+    Device(String),
+}
+
+impl DeviceFile {
+    /// The device file's name in a repro bundle, and the options that name it there.
+    fn bundled(&self) -> (&'static str, [&'static str; 2], &[u8]) {
+        match self {
+            DeviceFile::Profile(json) => (
+                "profile.json",
+                ["--profile", "profile.json"],
+                json.as_bytes(),
+            ),
+            DeviceFile::Device(json) => {
+                ("device.json", ["--device", "device.json"], json.as_bytes())
+            }
+        }
+    }
+}
+
 /// What the command line asks for.
 #[derive(Default)]
 struct Args {
@@ -83,6 +114,7 @@ struct Args {
     output: Option<String>,
     profile: Option<String>,
     profile_name: Option<String>,
+    device: Option<String>,
     function: Option<String>,
     fragment: Option<String>,
     constants: Vec<(String, FunctionConstantValue)>,
@@ -96,7 +128,8 @@ struct Args {
     timeout: Option<Duration>,
     emit_meta: Option<String>,
     spirv_val: bool,
-    /// The options a repro bundle replays: every one but `--profile` and `--emit-meta`, with each descriptor file named as the bundle's copy of it
+    /// The options a repro bundle replays: every one but `--profile`, `--device` and
+    /// `--emit-meta`, with each descriptor file named as the bundle's copy of it
     /// ([`DESCRIPTOR_FILES`]).
     replay: Vec<String>,
 }
@@ -148,20 +181,27 @@ fn main() {
     let read = |path: &str| {
         fs::read_to_string(path).unwrap_or_else(|e| fail(&format!("cannot read {path}: {e}")))
     };
-    let Some(profile) = &args.profile else {
-        fail(
+    let device_file = match (&args.profile, &args.device) {
+        (Some(profile), None) => DeviceFile::Profile(read(profile)),
+        (None, Some(device)) => {
+            if args.profile_name.is_some() {
+                fail("--profile-name names a profile of --profile's document; --device has none");
+            }
+            DeviceFile::Device(read(device))
+        }
+        (Some(_), Some(_)) => fail("--profile and --device each name the device: give one"),
+        (None, None) => fail(
             "no --profile: name a Khronos profiles JSON for the target device (the repository's \
              crates/metal2vulkan-validation/profiles/ holds examples, and the Vulkan SDK and \
-             vulkaninfo --json produce more)",
-        )
+             vulkaninfo --json produce more), or a device description and policy with --device",
+        ),
     };
-    let profile = read(profile);
     let source = fs::read(&input).unwrap_or_else(|e| fail(&format!("cannot read {input}: {e}")));
     let output = args
         .output
         .clone()
         .unwrap_or_else(|| default_output_path(&input));
-    match run(&args, &source, &profile, &input, &output) {
+    match run(&args, &source, &device_file, &input, &output) {
         Ok(line) => println!("{line}"),
         Err(failure) => {
             if let Some(detail) = &failure.detail {
@@ -171,7 +211,7 @@ fn main() {
                 original: &original,
                 input: &input,
                 source: &source,
-                profile: &profile,
+                device_file: &device_file,
                 args: &args,
                 output: &output,
             };
@@ -188,14 +228,25 @@ fn main() {
 fn run(
     args: &Args,
     source: &[u8],
-    profile: &str,
+    device_file: &DeviceFile,
     input: &str,
     output: &str,
 ) -> Result<String, Failure> {
-    let description = DeviceDescription::from_khronos_json(profile, args.profile_name.as_deref())
-        .map_err(|e| Failure::detailed("profile not read", e.to_string()))?;
-    let device = Device::from_queries(description, DevicePolicy::default())
-        .map_err(|e| Failure::detailed("profile refused", e.to_string()))?;
+    let device = match device_file {
+        DeviceFile::Profile(json) => {
+            let description =
+                DeviceDescription::from_khronos_json(json, args.profile_name.as_deref())
+                    .map_err(|e| Failure::detailed("profile not read", e.to_string()))?;
+            Device::from_queries(description, DevicePolicy::default())
+                .map_err(|e| Failure::detailed("profile refused", e.to_string()))?
+        }
+        DeviceFile::Device(json) => {
+            let device = ReproDevice::from_json(json)
+                .map_err(|e| Failure::detailed("device not read", e))?;
+            Device::from_queries(device.description, device.policy)
+                .map_err(|e| Failure::detailed("device refused", e.to_string()))?
+        }
+    };
     let assembled;
     let bitcode: &[u8] = if input.ends_with(".ll") {
         assembled = assemble(source)?;
@@ -693,6 +744,10 @@ fn parse_args(args: &[String]) -> Args {
                 parsed.profile = Some(value());
                 replayed = false;
             }
+            "--device" => {
+                parsed.device = Some(value());
+                replayed = false;
+            }
             "--profile-name" => parsed.profile_name = Some(value()),
             "--function" => parsed.function = Some(value()),
             "--fragment" => parsed.fragment = Some(value()),
@@ -943,22 +998,23 @@ struct Bundle<'a> {
     original: &'a [String],
     input: &'a str,
     source: &'a [u8],
-    profile: &'a str,
+    device_file: &'a DeviceFile,
     args: &'a Args,
     output: &'a str,
 }
 
 impl Bundle<'_> {
-    /// A bundle (`metal2vulkan::repro`) holding the input, the profile, the descriptor files,
+    /// A bundle (`metal2vulkan::repro`) holding the input, the device file, the descriptor files,
     /// the command that replays the failure on them, and why it failed, under
     /// `METAL2VULKAN_REPRO_DIR` or `$TMPDIR/metal2vulkan-repros`.
     fn write(&self, failure: &Failure) -> Result<PathBuf, String> {
         let base = metal2vulkan::env_vars::repro_dir()
             .map(PathBuf::from)
             .unwrap_or_else(|| env::temp_dir().join("metal2vulkan-repros"));
+        let (device_name, device_options, device_bytes) = self.device_file.bundled();
         let mut bundle = ReproBundle::new(repro_input_name(self.input), self.source)
-            .file("profile.json", self.profile.as_bytes().to_vec())
-            .options(["--profile", "profile.json"]);
+            .file(device_name, device_bytes.to_vec())
+            .options(device_options);
         let descriptors = [&self.args.stage_input, &self.args.vertex_descriptor];
         for (path, (_, name)) in descriptors.into_iter().zip(DESCRIPTOR_FILES) {
             // A descriptor file that cannot be read is the failure the bundle records: its replay
