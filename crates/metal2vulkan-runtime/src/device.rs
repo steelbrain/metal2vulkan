@@ -268,6 +268,10 @@ pub(crate) struct Core {
     /// `VK_EXT_device_fault`'s command, where device creation enabled it (where the device lists
     /// it): a lost device's fault report, read once, at its first loss (`crate::fault`).
     pub(crate) fault: Option<ash::ext::device_fault::Device>,
+    /// `VK_EXT_device_generated_commands`' entry points, limits and the indirect command buffers'
+    /// caches, where device creation enabled it (`floor::Capabilities::indirect_commands`); an
+    /// indirect command buffer is refused without them.
+    pub(crate) indirect: Option<crate::indirect::Indirect>,
     /// A draw may read an attachment of its own pass through a texture
     /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
     /// set, else through a copy of the image into its shadow (`crate::shadow`).
@@ -521,6 +525,8 @@ impl Device {
             mut linear_attachment,
             mut fault,
             mut line_rasterization,
+            mut generated_commands,
+            mut maintenance5,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -583,6 +589,11 @@ impl Device {
         }
         if enabled(ash::ext::device_fault::NAME) {
             features = features.push_next(&mut fault);
+        }
+        if capabilities.indirect_commands.is_some() {
+            features = features
+                .push_next(&mut generated_commands)
+                .push_next(&mut maintenance5);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
@@ -686,6 +697,12 @@ impl Device {
             .extensions
             .contains(&ash::ext::device_fault::NAME))
         .then(|| ash::ext::device_fault::Device::new(vk_instance, &device));
+        let indirect = (capabilities.indirect_commands).and_then(|limits| {
+            // SAFETY: the device was made from `vk_instance`, with the extension, as the limits
+            // are there.
+            let entries = unsafe { crate::dgc::Dgc::load(vk_instance, device.handle()) }?;
+            Some(crate::indirect::Indirect::new(entries, limits))
+        });
         let limits = &properties.properties.limits;
         // The sampler arrays' two defaults count against the device's samplers too.
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
@@ -741,6 +758,7 @@ impl Device {
             calibrated,
             feedback,
             fault,
+            indirect,
             attachment_reads: capabilities.attachment_reads,
             linear_attachments: (capabilities.features.linear_attachment).linear_color_attachment
                 == vk::TRUE,
@@ -1596,6 +1614,10 @@ impl Drop for Shared {
             // The map's kernels hold the core: a kernel no state holds goes now, its modules and
             // pipelines freed with the core.
             core.kernels.clear(&core.counters);
+            // So do the templates of reset commands, whose blocks hold it.
+            if let Some(indirect) = &core.indirect {
+                indirect.clear(core);
+            }
         };
         if matches!(role(&self.core), Role::Complete | Role::Submit) {
             // A handler or listener dropped the last handle: the reaper tears down, once the
@@ -1631,6 +1653,10 @@ impl Drop for Core {
                 .fall_by(Gauge::StagingBytes, crate::staging::REGION_LEN);
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
+        }
+        // The idle preprocess regions of executions that retired after the teardown's.
+        if let Some(indirect) = &self.indirect {
+            indirect.clear(self);
         }
         memory::free_all(self);
         #[cfg(unix)]

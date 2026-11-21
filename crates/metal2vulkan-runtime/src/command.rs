@@ -276,6 +276,9 @@ pub(crate) struct Gpu {
     /// The fences its encoders wait on and update: the submit thread orders it after another
     /// queue's command buffer it holds that updates one it waits on (`crate::fence`).
     pub(crate) fences: Fences,
+    /// Its executions of indirect command buffers' layouts and preprocess regions, each region
+    /// given back to the device's pool as it retires (`crate::indirect`).
+    pub(crate) executed: Vec<crate::indirect::Executed>,
 }
 
 impl Gpu {
@@ -385,6 +388,7 @@ impl CommandBuffer {
                             managed: false,
                             images: Vec::new(),
                             fences: Fences::default(),
+                            executed: Vec::new(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -1248,6 +1252,17 @@ impl Building {
         unsafe { self.gpu.kept.buffers.keep(buffer) }
     }
 
+    /// Keeps an execution's layout and preprocess region until the command buffer retires.
+    pub(crate) fn keep_executed(&mut self, executed: crate::indirect::Executed) {
+        self.gpu.executed.push(executed);
+    }
+
+    /// The push bytes are undefined from now: an execution of an indirect command buffer's
+    /// commands left them so, and the next draw pushes its own again.
+    pub(crate) fn pushes_lost(&mut self) {
+        self.pushed = Pushed::default();
+    }
+
     /// Keeps `block` until the command buffer retires.
     pub(crate) fn keep_block(&mut self, block: &Arc<Block>) {
         let blocks = &mut self.gpu.blocks;
@@ -1573,12 +1588,13 @@ pub(crate) fn retire(
         managed: _,
         images,
         fences,
+        executed,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, images, fences));
+    drop((segments, blocks, images, fences, executed));
     kept.clear();
     if let Some(pair) = stamps {
         times::reset(&core.device, pair.pool, pair.first, written);

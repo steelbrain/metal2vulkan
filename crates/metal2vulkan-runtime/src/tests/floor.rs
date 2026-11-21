@@ -3,13 +3,13 @@
 //! what the code checks, and, under a device cfg, every device the loader lists is above the floor.
 
 use crate::floor::{
-    choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS, BARYCENTRIC_EXTENSIONS,
-    BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, FAULT_REPORTS, FILL_MODES,
-    INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL,
-    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY,
-    PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS,
-    TIME_DOMAINS, VERSION,
+    choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, IndirectCommandLimits,
+    MemoryTypes, Missing, Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS,
+    BARYCENTRIC_EXTENSIONS, BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS,
+    FAULT_REPORTS, FILL_MODES, INDIRECT_COMMANDS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
+    MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS,
+    PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY,
+    SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -138,6 +138,83 @@ fn at_the_floor() -> Queried {
         }],
         memory: memory(&[DEVICE_LOCAL, SHARED_MEMORY, RING_MEMORY]),
         time_domains: TIME_DOMAINS.to_vec(),
+        generated_commands: crate::dgc::DgcProperties::default(),
+    }
+}
+
+/// A device at the floor that lists both extensions of indirect command buffers, reports both
+/// features, and offers an execution of the runtime's largest command: lavapipe's limits.
+fn with_indirect_commands() -> Queried {
+    let mut device = at_the_floor();
+    (device.extensions).extend(INDIRECT_COMMANDS.iter().map(|&name| name.to_owned()));
+    device.features.generated_commands.device_generated_commands = vk::TRUE;
+    device.features.maintenance5.maintenance5 = vk::TRUE;
+    let offered = &mut device.generated_commands;
+    offered.max_indirect_sequence_count = 1 << 20;
+    offered.max_indirect_commands_token_count = 16;
+    offered.max_indirect_commands_token_offset = 2047;
+    offered.max_indirect_commands_indirect_stride = 2048;
+    offered.supported_input_modes = crate::dgc::INPUT_MODE_VULKAN;
+    offered.supported_shader_stages = crate::dgc::STAGES;
+    device
+}
+
+/// Indirect command buffers come with both extensions and both features, enabled together, and
+/// the device's limits; a device short of either feature, of the Vulkan index buffer input mode or
+/// of a command's 536 bytes gets neither extension and neither feature, and stays above the floor.
+#[test]
+fn indirect_commands_take_both_extensions_or_neither() {
+    let capabilities = decide(&with_indirect_commands()).expect("above the floor");
+    assert_eq!(
+        capabilities.indirect_commands,
+        Some(IndirectCommandLimits {
+            sequences: 1 << 20,
+            tokens: 16,
+            token_offset: 2047,
+            stride: 2048,
+        })
+    );
+    for name in INDIRECT_COMMANDS {
+        assert!(capabilities.extensions.contains(name), "{name:?} enabled");
+    }
+    let features = &capabilities.features;
+    assert_eq!(
+        (
+            features.generated_commands.device_generated_commands,
+            features.maintenance5.maintenance5
+        ),
+        (vk::TRUE, vk::TRUE)
+    );
+    let short: [fn(&mut Queried); 4] = [
+        |device| device.features.maintenance5.maintenance5 = vk::FALSE,
+        |device| device.features.generated_commands.device_generated_commands = vk::FALSE,
+        |device| device.generated_commands.supported_input_modes = 0,
+        |device| {
+            device
+                .generated_commands
+                .max_indirect_commands_indirect_stride = 512
+        },
+    ];
+    for (at, shorten) in short.into_iter().enumerate() {
+        let mut device = with_indirect_commands();
+        shorten(&mut device);
+        let capabilities = decide(&device).expect("above the floor");
+        assert_eq!(capabilities.indirect_commands, None, "short of item {at}");
+        for name in INDIRECT_COMMANDS {
+            assert!(
+                !capabilities.extensions.contains(name),
+                "{name:?} with item {at} short"
+            );
+        }
+        let features = &capabilities.features;
+        assert_eq!(
+            (
+                features.generated_commands.device_generated_commands,
+                features.maintenance5.maintenance5
+            ),
+            (vk::FALSE, vk::FALSE),
+            "short of item {at}"
+        );
     }
 }
 
@@ -1661,6 +1738,11 @@ fn the_readme_states_the_floor() {
                 .iter()
                 .map(|name| (name, "device, where reported")),
         )
+        .chain(
+            INDIRECT_COMMANDS
+                .iter()
+                .map(|name| (name, "device, with indirect command buffers")),
+        )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
     assert_eq!(stated, code, "the README's extensions");
@@ -1885,6 +1967,8 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut linear_attachment,
             mut fault,
             mut line_rasterization,
+            mut generated_commands,
+            mut maintenance5,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1930,6 +2014,11 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::ext::device_fault::NAME) {
             features = features.push_next(&mut fault);
+        }
+        if capabilities.indirect_commands.is_some() {
+            features = features
+                .push_next(&mut generated_commands)
+                .push_next(&mut maintenance5);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

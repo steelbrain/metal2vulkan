@@ -1525,8 +1525,9 @@ made, with no lock, and never rewritten for layouts.
   for a draw completes that one form and adds none.
 - An opaque-black border sampled through a view whose component mapping is not the identity (a
   swizzle, or the mapping a pixel format takes: `A8Unorm` is held in `R8_UNORM` read through
-  `(0, 0, 0, r)` on every device, as rt uses Vulkan 1.3 and does not enable
-  `VK_KHR_maintenance5`, so `A8_UNORM` is not exposed) is the device's answer on a device that
+  `(0, 0, 0, r)` on every device, as rt uses Vulkan 1.3 and takes no format of
+  `VK_KHR_maintenance5`, so `A8_UNORM` is not used; where indirect command buffers enable
+  `VK_KHR_maintenance5`, that changes nothing here) is the device's answer on a device that
   does not report `borderColorSwizzleFromImage`
   (`VkPhysicalDeviceBorderColorSwizzleFeaturesEXT`, `VK_EXT_border_color_swizzle`): Vulkan leaves
   that texel undefined, and the NVIDIA driver reads `(0, 0, 0, 1)` through such a view, where
@@ -2458,7 +2459,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   the descriptor's size, `[0, 0, 0]` where it set none, as the M3 recordings
   `pipeline-facts-compute-plain` and `pipeline-facts-compute-described` answer, and
   `supportIndirectCommandBuffers` (`support_indirect_command_buffers`) is false: a descriptor that
-  asks for indirect command buffers is refused at the making (`Gap::IndirectCommandBuffers`).
+  asks for indirect command buffers is refused at the making (`Gap::IndirectCommandBuffers`,
+  `IndirectCommandsKind::ComputeCommands`).
 
 ### The cache directory
 
@@ -2671,9 +2673,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   fetch, or a sampler or texture state the translator would take from the bound object rather than
   from its resource ID, is refused (`Gap::KernelInput`, whose `KernelInputKind` names what the
   runtime found: `Slot` for a function table, `StageIn` for a `[[stage_in]]` fetch). So is a state
-  for indirect command buffers (`Gap::IndirectCommandBuffers`), and a kernel that encodes commands
-  into one, which the translator refuses (`Unsupported{GpuEncodedIndirectCommands,
-  NotImplemented}`).
+  for indirect command buffers (`Gap::IndirectCommandBuffers`, `IndirectCommandsKind::ComputeCommands`).
+  A kernel that encodes indexed triangle draws into an indirect command buffer is built (Indirect
+  command buffers, below); one that encodes anything else the translator refuses
+  (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses
@@ -2782,9 +2785,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   with indirect-command support or without; `R8Unorm` then `RG16Float` 6 and 192 (`RG16Float`
   at byte 2, its component's alignment, where packing tight would answer 5 and aligning to 4
   would answer 8); `RGBA8Unorm` then `RGBA16Float` with a `Depth32Float_Stencil8` depth and
-  stencil attachment 12 and 384, as without it. `support_indirect_command_buffers` is false, as a
-  compute state's is: a descriptor that asks for indirect command buffers is refused at the
-  making. The runtime makes no tile render state, so it has no tile getters
+  stencil attachment 12 and 384, as without it. `support_indirect_command_buffers` is the
+  descriptor's: a state made with it pulls every vertex attribute its vertex function reads, and
+  its commands run in an execution of an indirect command buffer (Indirect command buffers,
+  below). The runtime makes no tile render state, so it has no tile getters
   (`maxTotalThreadsPerThreadgroup`, a tile threadgroup's, `threadgroupSizeMatchesTileSize`,
   `requiredThreadsPerTileThreadgroup`).
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
@@ -2927,8 +2931,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   that reads what a draw does not supply (`DrawInput`: a function table, a table the binder builds,
   a parameter block past the push range, a push field or bind-time fact the encoder does not fill,
   an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
-  reads only its slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
-  command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
+  reads only its slots' addresses, resource IDs and constexpr sampler indices. The
+  `completionHandler:` forms are not built.
 - On a device that does not list `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]`
   output is refused at creation, an `Error::Translation` naming `StencilExport`: under the identity
   domains the pixel interlock chooses no other form. Metal's feature set tables give stencil
@@ -3393,13 +3397,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   a declared write of a Shared buffer, or of a texture over one, reaches the host once the command
   buffer completes. A declared write of a texture with no storage element refuses the encoder's
   later draws that may reach one beyond their slots (the known gaps of textures).
-- Not built, and so not methods: `useHeap:stages:`, the store action options setters, tile
-  functions, `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read
-  only by a state that enables the scale, which is refused) and `drawIndexedPatches:` (whose
-  control-point index buffer only a state of a control-point index type reads, which is refused).
-  Where a replay stream calls `useHeap:stages:` (`command-replay shapes` counts a stream's calls of
-  each selector), it is built in the compute encoder's form, `use_heap`: the command buffer keeps
-  the block and declares no access.
+- Not built, and so not methods: the store action options setters, tile functions,
+  `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read only by a
+  state that enables the scale, which is refused) and `drawIndexedPatches:` (whose control-point
+  index buffer only a state of a control-point index type reads, which is refused).
+  `useHeap:stages:` is `use_heap`, in the compute encoder's form: the command buffer keeps the
+  block and declares no access.
 - Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth and a stencil attachment
   that are not one texture's same level and slice (`DepthStencilViews`: Vulkan's rendering takes
   one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`
@@ -3504,6 +3507,106 @@ or does not check is rebuilt from the generations' names, with young counted ful
   and 4,200.8 µs at 3648 × 2038, against 644.2 µs and 2,341.2 µs for the same pass reading
   another texture. At 3648 × 2038 a pass that reads its target after a barrier takes 4,836.4 µs,
   and one that loads its target and reads it at its first draw 3,849.6 µs.
+
+## Indirect command buffers
+
+`Device::new_indirect_command_buffer` (`newIndirectCommandBufferWithDescriptor:maxCommandCount:options:`)
+makes a buffer of indexed draw commands on a device that enables `VK_EXT_device_generated_commands`
+and `VK_KHR_maintenance5` (`floor::INDIRECT_COMMANDS`, in the Floor's extensions). The runtime builds
+the commands a kernel encodes: indexed triangle draws (`MTLIndirectCommandTypeDrawIndexed` alone)
+that inherit the executing encoder's pipeline state (`inheritPipelineState`) and bind their own
+vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
+
+- Its records are a Private block in the layout `metal2vulkan::pipeline::IndirectDrawLayout` names:
+  a 24-byte header (the capacity, the vertex and fragment slots a command holds, the stride, and
+  the index address a reset command binds), then one command a stride: an 8-byte word a slot, the
+  index buffer token's 16 bytes, 4 bytes for the sequence index and the indexed draw's 20 bytes
+  (152 bytes for 7 vertex and 7 fragment slots, 536 at most). `gpu_resource_id` is the header's
+  device address, which the consumer writes into an argument buffer's `command_buffer` member; a
+  kernel's `set_vertex_buffer`, `set_fragment_buffer`, `draw_indexed_primitives` and `reset` of a
+  `render_command` write the command's fields through it, under the identity domains. `size` is
+  the `maxCommandCount`.
+- A new buffer's commands are copies of the device's template of reset commands of its layout (up
+  to 64 KiB of commands, each drawing nothing with every slot the nil buffer's; 16 layouts kept, the
+  least recently used forgotten first), in the upload of the next commit.
+  `BlitCommandEncoder::reset_commands_in_buffer` copies the same commands over its range, and
+  `optimize_indirect_command_buffer` records nothing.
+- `RenderCommandEncoder::execute_commands_in_buffer` runs the range in parts of 64 commands, in
+  order, the last part the rest: one `vkCmdExecuteGeneratedCommandsEXT` a part, a sequence a
+  command, with the encoder's pipeline state and render state: a push constant token for each run
+  of slot words the state's functions read at consecutive push offsets, the index buffer token, a
+  sequence index token and the indexed draw token. Before each part the execution pushes the part's
+  first command, which the vertex function adds to the sequence index. The device keeps 64 command
+  layouts, one per shape of tokens, and 256 execution shapes of a part's 64 commands, one per
+  state, raster state (the depth clip and triangle fill modes, which choose the state's pipeline)
+  and layout. `execute_commands_in_buffer_with_range` reads the range
+  (`MTLIndirectCommandBufferExecutionRange`) where a buffer holds it when the command runs: the
+  execution runs every command of the buffer, and the vertex function returns before its body for
+  a command outside the range.
+- A state made with `supportIndirectCommandBuffers` pulls every vertex attribute its vertex function
+  reads, so a command binds no vertex buffer of its own, and its vertex function tests its command
+  against the execution's range; a direct draw of the state tests it against a range of every
+  command.
+- A command's buffer slots are not bounds-checked: an execution pushes their bounds as 2^31 - 1
+  bytes before the address and `u32::MAX` bytes after it. An access through one past the buffer's
+  end reaches the memory there, as an access through a pointer loaded from memory does. An access
+  at a negative offset that stays inside the buffer reads the buffer's own bytes.
+- After an execution the push bytes and the index buffer are undefined, as Vulkan leaves them, and
+  the next draw pushes and binds its own; the pipeline and the vertex buffers stay bound.
+- Each execution takes a preprocess region when it is recorded, an idle one of the device's pool
+  or one made then, its parts' preprocess one after another, each sized by
+  `vkGetGeneratedCommandsMemoryRequirementsEXT` with the inherited pipeline at 64 commands, and
+  gives it back when its command buffer completes. The pool
+  keeps at most 128 MiB of idle regions, the oldest freed past that; nothing waits and no execution
+  is refused for the pool's sake. The gauges `indirect_command_buffers`, `preprocess_used_bytes`
+  and `preprocess_idle_bytes` count them, each zero once the device is dropped.
+- Of `VK_KHR_maintenance5` the runtime uses one structure, `VkBufferUsageFlags2CreateInfoKHR`, for
+  the preprocess buffers' `VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT`.
+
+### Known gaps of indirect command buffers
+
+- An execution over a range a buffer holds processes the buffer's whole capacity: each command
+  outside the range, reset or not, costs its vertex work and draws nothing.
+- A state made with `supportIndirectCommandBuffers` pays one 8-byte load a vertex on its direct
+  draws too: its vertex function reads the execution range.
+- An execution over a range a buffer holds takes a preprocess region for the buffer's whole
+  capacity, whatever the range: up to 592 bytes a command on NVIDIA's driver and 360 on RADV, held
+  until the command buffer completes.
+- Every execution runs in parts of 64 commands, on every device. One execution of more did not draw
+  every command in order where it was measured: on RADV (Mesa 26.2.6, a Radeon RX 7900 XTX) an
+  execution of N commands whose generated commands pass about 4 MiB (296 bytes a command, 14,170
+  commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's driver (620.70.06, an RTX 2080) one of
+  more than 64 commands ended out of order, a cause not yet found. The parts cost, at 14,000
+  commands against one execution: 62% more GPU time on the XTX and 61 times as much on the 2080,
+  and 25 to 34 times the recording time.
+- On Mesa's CPU device (lavapipe, Mesa 26.2.6) an indirect command buffer of 5,792 commands or more
+  overruns the driver's preprocess buffer: its `vkGetGeneratedCommandsMemoryRequirementsEXT` size
+  for a draw layout is quadratic in the command count and wraps at 2^32, while its preprocessing
+  writes linearly (16 + 100 bytes a command for an index-buffer and indexed-draw layout); a driver
+  bug. Below that count the size covers the writes but grows quadratically (134 MB at 1,024
+  commands).
+- On the Iris Xe (ANV, Mesa 26.2.6), which does not list `VK_EXT_device_generated_commands`, an
+  indirect command buffer is refused (`Gap::IndirectCommandBuffers`,
+  `IndirectCommandsKind::Extension`).
+- On the UHD 630 (its Windows driver), which does not list `VK_EXT_device_generated_commands`, an
+  indirect command buffer is refused the same way.
+- On the Mac host (KosmicKrisp, Mesa 26.3.1, on an Apple M3 Max), which does not list
+  `VK_EXT_device_generated_commands`, an indirect command buffer is refused the same way.
+- Refused by `Gap::IndirectCommandBuffers`, naming its `IndirectCommandsKind`: command types other
+  than indexed draws alone (`CommandTypes`), commands that set their own pipeline state
+  (`CommandPipelines`, on every device), commands that inherit the encoder's buffers
+  (`InheritedBuffers`), more than 31 buffers of a stage (`BindCount`), a count of 0 or one past
+  `maxIndirectSequenceCount` (`Capacity`), a compute state for indirect command buffers
+  (`ComputeCommands`), an execution with a state made without `supportIndirectCommandBuffers`
+  (`UnflaggedState`), one whose slot runs take more tokens than `maxIndirectCommandsTokenCount`
+  (`Tokens`: 16 on lavapipe, 32 on NVIDIA's driver, 128 on RADV), and one whose functions read what
+  a command cannot carry: a slot the command holds outside the push bytes, a fixed-function vertex
+  binding, or a vertex layout that must draw from base instance 0 (`DrawInput`).
+- Commands draw with the executing encoder's render states whatever the descriptor's other
+  `inherit*` properties say. Not built: commands the CPU encodes (`indirectRenderCommandAtIndex:`),
+  `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:`, compute commands, and a
+  kernel's draws other than indexed triangles, which the translator refuses
+  (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
 
 ## Presenting
 
@@ -3654,6 +3757,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_device_fault` | device, where listed | a lost device's fault report, read once at its first loss (`DeviceLoss::fault`), through the fault-report feature below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
+| `VK_EXT_device_generated_commands` | device, with indirect command buffers | an indirect command buffer's execution, through `deviceGeneratedCommands`, enabled where the device reports it with the limits an execution needs (Indirect command buffers, above) |
+| `VK_KHR_maintenance5` | device, with indirect command buffers | the preprocess buffers' usage flag (`VkBufferUsageFlags2CreateInfoKHR`), through `maintenance5`, enabled with the extension above alone |
 | `VK_KHR_fragment_shader_barycentric` | device, where reported | a fragment function's `[[barycentric_coord]]`, through the barycentric feature below; `Device::extensions` names it only where that feature is enabled |
 
 ### Features

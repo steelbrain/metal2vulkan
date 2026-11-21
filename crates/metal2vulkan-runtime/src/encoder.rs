@@ -9,6 +9,7 @@ use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::floor;
 use crate::hazard::Access;
+use crate::indirect::IndirectCommandBuffer;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
@@ -89,6 +90,9 @@ pub enum Resource<'a> {
     Buffer(&'a Buffer),
     /// An `MTLTexture`.
     Texture(&'a Texture),
+    /// An `MTLIndirectCommandBuffer`: its records, which a function reaches through its
+    /// `gpuResourceID` ([`IndirectCommandBuffer::gpu_resource_id`]).
+    IndirectCommandBuffer(&'a IndirectCommandBuffer),
 }
 
 /// What a buffer slot holds.
@@ -720,6 +724,10 @@ impl ComputeCommandEncoder {
     /// writes such a texture there, and the runtime would drop the writes. A kernel with no such
     /// access dispatches. [`use_heap`](Self::use_heap) declares no write and finds nothing.
     ///
+    /// An indirect command buffer's records are kept and declare no access, as a heap's block
+    /// ([`use_heap`](Self::use_heap)): a kernel reaches them through an address outside its
+    /// slots, which orders against every write since the last barrier.
+    ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource.
     pub fn use_resource(
         &mut self,
@@ -757,6 +765,13 @@ impl ComputeCommandEncoder {
                     Some(lent),
                     None,
                 )
+            }
+            Resource::IndirectCommandBuffer(commands) => {
+                if !commands.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep_block(commands.records());
+                return Ok(());
             }
         };
         let Some(access) = usage.access() else {
@@ -1500,7 +1515,10 @@ impl Parameters {
                 | FieldValue::AlphaTestReference
                 | FieldValue::FetchedColor(_)
                 | FieldValue::RenderTargetArrayLength
-                | FieldValue::ViewportCount => {}
+                | FieldValue::ViewportCount
+                | FieldValue::IndirectRange
+                | FieldValue::IndirectSequence
+                | FieldValue::IndirectBase => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

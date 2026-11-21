@@ -23,6 +23,7 @@ mod counters;
 mod d3d11;
 mod depth_stencil;
 mod device;
+mod dgc;
 mod encoder;
 mod error;
 mod event;
@@ -35,6 +36,7 @@ pub mod floor;
 mod hazard;
 mod host_bytes;
 mod import;
+mod indirect;
 mod instance;
 mod kept;
 mod kernel_map;
@@ -74,8 +76,8 @@ pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, Dispatch, DispatchType, Resource, ResourceUsage};
 pub use error::{
-    DrawKind, Error, Gap, KernelInputKind, Limit, LinearPlanePassKind, Refusal, RenderPassKind,
-    RenderPipelineKind, TextureViewKind,
+    DrawKind, Error, Gap, IndirectCommandsKind, KernelInputKind, Limit, LinearPlanePassKind,
+    Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind,
 };
 pub use event::{Event, SharedEvent};
 pub use export::{Export, ExportHandle};
@@ -84,6 +86,7 @@ pub use fault::{DeviceFault, FaultAddress};
 pub use fence::Fence;
 pub use host_bytes::HostBytes;
 pub use import::ImportHandle;
+pub use indirect::{IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType};
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{AllocationId, AllocationInfo, BlockId, BlockInfo, BlockMappings, MemoryClass};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.

@@ -27,6 +27,12 @@
 //! Another, taken the same way, is the zero range ([`Ring::zero`]): zeros that no command and no
 //! buffer argument reaches, which a checked load of a buffer argument outside its buffer reads
 //! (the translator's `PushField::ZeroAddress`), so it reads zero.
+//!
+//! A third is the whole execution range ([`Ring::whole`]): Metal's
+//! `MTLIndirectCommandBufferExecutionRange` of every command, location 0 and length `u32::MAX`,
+//! which a direct draw of a state made for indirect command buffers, and an execution over a range
+//! the CPU gives, point the vertex function's range at (the translator's
+//! `PushField::IndirectRange`). Nothing writes it after its first ask.
 
 use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
@@ -54,6 +60,8 @@ pub(crate) struct Ring {
     nil: OnceLock<u64>,
     /// The zero range's address, once asked ([`Ring::zero`]), read with no lock.
     zero: OnceLock<u64>,
+    /// The whole execution range's address, once asked ([`Ring::whole`]), read with no lock.
+    whole: OnceLock<u64>,
     /// A block made, or chunks given back, while a block was being made.
     changed: Condvar,
     /// For the device tests: where set, the making of a block, the block-maker thread's or a
@@ -116,6 +124,7 @@ impl Ring {
             }),
             nil: OnceLock::new(),
             zero: OnceLock::new(),
+            whole: OnceLock::new(),
             changed: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park: Mutex::new(None),
@@ -193,26 +202,37 @@ impl Ring {
     /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
     /// first ask and never given back, so no command buffer writes it.
     pub(crate) fn nil(&self, core: &Core) -> Result<u64, Error> {
-        self.kept(core, &self.nil)
+        self.kept(core, &self.nil, &[])
     }
 
     /// The zero range's address (the module docs): a chunk of zeros taken as the nil buffer's
     /// is, which nothing is bound to, so nothing writes it. A multiple of 16.
     pub(crate) fn zero(&self, core: &Core) -> Result<u64, Error> {
-        self.kept(core, &self.zero)
+        self.kept(core, &self.zero, &[])
     }
 
-    /// The address of the chunk of zeros `which` holds, taken and zeroed at its first ask and
-    /// never given back. Every later ask reads it with no lock and no locked instruction: a draw
-    /// or a dispatch whose bindings changed asks again (the lock budget, `crate::tests::locks`).
-    fn kept(&self, core: &Core, which: &OnceLock<u64>) -> Result<u64, Error> {
+    /// The whole execution range's address (the module docs): a chunk taken as the nil buffer's
+    /// is, its first 8 bytes location 0 and length `u32::MAX`, the rest zeros.
+    pub(crate) fn whole(&self, core: &Core) -> Result<u64, Error> {
+        self.kept(core, &self.whole, &[0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff])
+    }
+
+    /// The address of the chunk `which` holds, taken at its first ask, its bytes `head` and zeros
+    /// after them, and never given back. Every later ask reads it with no lock and no locked
+    /// instruction: a draw or a dispatch whose bindings changed asks again (the lock budget,
+    /// `crate::tests::locks`).
+    fn kept(&self, core: &Core, which: &OnceLock<u64>, head: &[u8]) -> Result<u64, Error> {
         if let Some(&address) = which.get() {
             return Ok(address);
         }
         let chunk = self.take(core)?;
         // SAFETY: the chunk is out of every command buffer's hands and no pending work reads it:
-        // the host alone writes it, once.
-        unsafe { std::ptr::write_bytes(chunk.host.at(0).as_ptr(), 0, CHUNK as usize) };
+        // the host alone writes it, once; `head` is shorter than a chunk.
+        unsafe {
+            let at = chunk.host.at(0).as_ptr();
+            std::ptr::write_bytes(at, 0, CHUNK as usize);
+            std::ptr::copy_nonoverlapping(head.as_ptr(), at, head.len());
+        }
         let address = *which.get_or_init(|| chunk.address);
         if address != chunk.address {
             // Another thread's ask made it first: the chunk goes back.

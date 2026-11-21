@@ -112,6 +112,36 @@ pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[
 /// otherwise, so [`Device::extensions`](crate::Device::extensions) names it only with its feature.
 pub const BARYCENTRIC_EXTENSIONS: &[&CStr] = &[ash::khr::fragment_shader_barycentric::NAME];
 
+/// The device extensions of Metal's indirect command buffers of draws
+/// (`VK_EXT_device_generated_commands`) and of the one structure its preprocess memory takes
+/// beside it (`VkBufferUsageFlags2CreateInfoKHR`, for `VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT`),
+/// `VK_KHR_maintenance5`. Device creation enables both, with `deviceGeneratedCommands` and
+/// `maintenance5`, where the device lists both, reports both features and offers what
+/// [`IndirectCommandLimits`] needs at least; and neither otherwise, where an indirect command
+/// buffer is refused (`IndirectCommandsKind::Extension`). No other path reads either, so no form
+/// differs. Of what `maintenance5` changes, a core entry point past the asked Vulkan 1.3 answers
+/// null, and the runtime loads none.
+pub const INDIRECT_COMMANDS: &[&CStr] = &[crate::dgc::NAME, ash::khr::maintenance5::NAME];
+
+pub use crate::dgc::DgcFeatures;
+
+/// What a device with [`INDIRECT_COMMANDS`] offers an indirect command buffer's execution: the
+/// most commands one execution runs, tokens a command takes, bytes into a command a token reads,
+/// and bytes of a command (`VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT`'s
+/// `maxIndirectSequenceCount`, `maxIndirectCommandsTokenCount`,
+/// `maxIndirectCommandsTokenOffset` and `maxIndirectCommandsIndirectStride`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndirectCommandLimits {
+    /// `maxIndirectSequenceCount`.
+    pub sequences: u32,
+    /// `maxIndirectCommandsTokenCount`.
+    pub tokens: u32,
+    /// `maxIndirectCommandsTokenOffset`.
+    pub token_offset: u32,
+    /// `maxIndirectCommandsIndirectStride`.
+    pub stride: u32,
+}
+
 /// The translator's name for an extension device creation enables that its shaders may use, or
 /// that its description of the device must enable: the portability subset, where the device lists
 /// it.
@@ -287,6 +317,13 @@ pub struct Features {
     /// `VkPhysicalDeviceLineRasterizationFeaturesEXT`, of `VK_EXT_line_rasterization`:
     /// `bresenhamLines` is enabled, and none of the other line modes beside it.
     pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
+    /// `VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT`, of
+    /// `VK_EXT_device_generated_commands`: read where the device lists it, and
+    /// `deviceGeneratedCommands` enabled with [`INDIRECT_COMMANDS`] alone.
+    pub generated_commands: DgcFeatures,
+    /// `VkPhysicalDeviceMaintenance5FeaturesKHR`, of `VK_KHR_maintenance5`: read where the device
+    /// lists it, and `maintenance5` enabled with [`INDIRECT_COMMANDS`] alone.
+    pub maintenance5: vk::PhysicalDeviceMaintenance5FeaturesKHR<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -672,6 +709,9 @@ pub(crate) struct Queried {
     /// The time domains the device calibrates together, read where it lists
     /// `VK_EXT_calibrated_timestamps`.
     pub(crate) time_domains: Vec<vk::TimeDomainKHR>,
+    /// The generated commands' properties, read where the device lists
+    /// `VK_EXT_device_generated_commands`.
+    pub(crate) generated_commands: crate::dgc::DgcProperties,
 }
 
 /// One item of the floor that a device lacks.
@@ -825,6 +865,9 @@ pub struct Capabilities {
     pub queue_family: u32,
     /// The device's memory types and heaps, for device creation to choose from.
     pub memory: vk::PhysicalDeviceMemoryProperties,
+    /// What an indirect command buffer's execution may take, where device creation enables
+    /// [`INDIRECT_COMMANDS`]; `None` on a device without them.
+    pub indirect_commands: Option<IndirectCommandLimits>,
 }
 
 /// The memory types the runtime allocates its buffers from, each the first memory type with its
@@ -888,16 +931,11 @@ unsafe fn query(
             families: Vec::new(),
             memory: vk::PhysicalDeviceMemoryProperties::default(),
             time_domains: Vec::new(),
+            generated_commands: crate::dgc::DgcProperties::default(),
         };
         if version < VERSION {
             return queried;
         }
-        let mut properties =
-            vk::PhysicalDeviceProperties2::default().push_next(&mut queried.vulkan12);
-        instance.get_physical_device_properties2(physical, &mut properties);
-        queried.limits = properties.properties.limits;
-        queried.vulkan12.p_next = std::ptr::null_mut();
-
         // A device whose extensions cannot be listed offers none the floor can rely on.
         queried.extensions = instance
             .enumerate_device_extension_properties(physical)
@@ -906,6 +944,17 @@ unsafe fn query(
             .filter_map(|extension| extension.extension_name_as_c_str().ok())
             .map(CStr::to_owned)
             .collect();
+        let generated_listed =
+            (queried.extensions.iter()).any(|name| name.as_c_str() == crate::dgc::NAME);
+        let mut properties =
+            vk::PhysicalDeviceProperties2::default().push_next(&mut queried.vulkan12);
+        if generated_listed {
+            properties = properties.push_next(&mut queried.generated_commands);
+        }
+        instance.get_physical_device_properties2(physical, &mut properties);
+        queried.limits = properties.properties.limits;
+        queried.vulkan12.p_next = std::ptr::null_mut();
+        queried.generated_commands.p_next = std::ptr::null_mut();
         // An extension's feature structure may be read only from a device that lists the
         // extension; on another, its features stay false.
         let listed = |extension: &CStr| {
@@ -931,6 +980,7 @@ unsafe fn query(
         let linear_attachment_listed = listed(ash::nv::linear_color_attachment::NAME);
         let fault_listed = listed(ash::ext::device_fault::NAME);
         let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
+        let maintenance5_listed = listed(ash::khr::maintenance5::NAME);
 
         let Features {
             core,
@@ -951,6 +1001,8 @@ unsafe fn query(
             linear_attachment,
             fault,
             line_rasterization,
+            generated_commands,
+            maintenance5,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -998,6 +1050,12 @@ unsafe fn query(
         if line_rasterization_listed {
             features = features.push_next(&mut *line_rasterization);
         }
+        if generated_listed {
+            features = features.push_next(&mut *generated_commands);
+        }
+        if maintenance5_listed {
+            features = features.push_next(&mut *maintenance5);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -1017,6 +1075,8 @@ unsafe fn query(
         linear_attachment.p_next = std::ptr::null_mut();
         fault.p_next = std::ptr::null_mut();
         line_rasterization.p_next = std::ptr::null_mut();
+        generated_commands.p_next = std::ptr::null_mut();
+        maintenance5.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -1144,6 +1204,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
     }
+    let indirect_commands = indirect_commands(device, &mut features);
     Ok(Capabilities {
         float16: features.vulkan12.shader_float16 == vk::TRUE,
         storage_read_without_format: features.core.shader_storage_image_read_without_format
@@ -1170,10 +1231,47 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .chain(ATTACHMENT_READ_EXTENSIONS.iter().filter(|_| feedback_loop))
             .chain(BORDER_SWIZZLE_EXTENSIONS.iter().filter(|_| border_swizzle))
             .chain(BARYCENTRIC_EXTENSIONS.iter().filter(|_| barycentric))
+            .chain(
+                INDIRECT_COMMANDS
+                    .iter()
+                    .filter(|_| indirect_commands.is_some()),
+            )
             .copied()
             .collect(),
         queue_family,
         memory: device.memory,
+        indirect_commands,
+    })
+}
+
+/// The indirect commands' limits ([`INDIRECT_COMMANDS`]), their features set in `features`, where
+/// the device offers them: both extensions and their features, the Vulkan index buffer token's
+/// input mode, the vertex and fragment stages, and a command of the runtime's largest layout
+/// (`IndirectDrawLayout`'s stride of 536 bytes, and a token at most that far in).
+fn indirect_commands(device: &Queried, features: &mut Features) -> Option<IndirectCommandLimits> {
+    let listed = |name: &CStr| (device.extensions.iter()).any(|listed| listed.as_c_str() == name);
+    let reported = &device.features;
+    let p = &device.generated_commands;
+    let most = metal2vulkan::pipeline::IndirectDrawLayout::MAX_SLOTS;
+    let largest = metal2vulkan::pipeline::IndirectDrawLayout::new(most, most)
+        .map_or(u32::MAX, |layout| layout.stride());
+    let offered = INDIRECT_COMMANDS.iter().all(|&name| listed(name))
+        && reported.generated_commands.device_generated_commands == vk::TRUE
+        && reported.maintenance5.maintenance5 == vk::TRUE
+        && p.supported_input_modes & crate::dgc::INPUT_MODE_VULKAN != 0
+        && p.supported_shader_stages.contains(crate::dgc::STAGES)
+        && p.max_indirect_commands_indirect_stride >= largest
+        && p.max_indirect_commands_token_offset >= largest;
+    if !offered {
+        return None;
+    }
+    features.generated_commands.device_generated_commands = vk::TRUE;
+    features.maintenance5.maintenance5 = vk::TRUE;
+    Some(IndirectCommandLimits {
+        sequences: p.max_indirect_sequence_count,
+        tokens: p.max_indirect_commands_token_count,
+        token_offset: p.max_indirect_commands_token_offset,
+        stride: p.max_indirect_commands_indirect_stride,
     })
 }
 

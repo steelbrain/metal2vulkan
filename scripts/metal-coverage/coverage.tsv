@@ -743,8 +743,8 @@ MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineState:atIndex:		
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineStates:withRange:		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineState:atIndex:		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineStates:withRange:		M			argument encoders	M	argument-encoders
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffer:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffers:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffer:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffers:withRange:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setAccelerationStructure:atIndex:		O			ray tracing		
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	newArgumentEncoderForBufferAtIndex:		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setVisibleFunctionTable:atIndex:		M			argument encoders	M	argument-encoders
@@ -786,9 +786,9 @@ MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAcces
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:slice:level:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:slice:level:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetCommandsInBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeIndirectCommandBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetCommandsInBuffer:withRange:		I	runtime	BlitCommandEncoder::reset_commands_in_buffer			
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeIndirectCommandBuffer:withRange:		I	runtime	BlitCommandEncoder::optimize_indirect_command_buffer	records nothing		
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resolveCounters:inRange:destinationBuffer:destinationOffset:		M			counter sample buffers	M	counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTensor:sourceOrigin:sourceDimensions:toTensor:destinationOrigin:destinationDimensions:		M			tensors	L	tensor
@@ -944,8 +944,8 @@ MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useResource:usage:		I
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useResources:count:usage:		I	runtime	ComputeCommandEncoder::use_resource	a loop of it		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useHeap:		I	runtime	ComputeCommandEncoder::use_heap			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useHeaps:count:		I	runtime	ComputeCommandEncoder::use_heap	a loop of it		
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:withRange:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithScope:		I	runtime	ComputeCommandEncoder::memory_barrier	one global memory barrier		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithResources:count:		I	runtime	ComputeCommandEncoder::memory_barrier	one global memory barrier		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters
@@ -1123,7 +1123,7 @@ MTLDevice.h	MTLDevice	method	getDefaultSamplePositions:count:		M			the standard 
 MTLDevice.h	MTLDevice	method	newArgumentEncoderWithArguments:		M			argument encoders	M	argument-encoders
 MTLDevice.h	MTLDevice	method	supportsRasterizationRateMapWithLayerCount:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
 MTLDevice.h	MTLDevice	method	newRasterizationRateMapWithDescriptor:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
-MTLDevice.h	MTLDevice	method	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLDevice.h	MTLDevice	method	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:		I	runtime	Device::new_indirect_command_buffer	indexed triangle draws with an inherited pipeline state		
 MTLDevice.h	MTLDevice	method	newEvent		I	runtime	Device::new_event			
 MTLDevice.h	MTLDevice	method	newSharedEvent		I	runtime	Device::new_shared_event			
 MTLDevice.h	MTLDevice	method	newSharedEventWithHandle:		M			texture and event handles shared across processes	M	sharing
@@ -1343,68 +1343,68 @@ MTLIOCompressor.h		function	MTLIOCompressionContextDefaultChunkSize		M			fast re
 MTLIOCompressor.h		function	MTLIOCreateCompressionContext		M			fast resource loading (`MTLIOCommandQueue`)	L	io
 MTLIOCompressor.h		function	MTLIOCompressionContextAppendData		M			fast resource loading (`MTLIOCommandQueue`)	L	io
 MTLIOCompressor.h		function	MTLIOFlushAndDestroyCompressionContext		M			fast resource loading (`MTLIOCommandQueue`)	L	io
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	class	MTLIndirectCommandBufferDescriptor		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	commandTypes		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritPipelineState		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritBuffers		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthStencilState		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthBias		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthClipMode		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritCullMode		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritFrontFacingWinding		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritTriangleFillMode		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxVertexBufferBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxFragmentBufferBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelBufferBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelThreadgroupMemoryBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectBufferBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxMeshBufferBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectThreadgroupMemoryBindCount		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	class	MTLIndirectCommandBufferDescriptor		I	runtime	IndirectCommandBufferDescriptor			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	commandTypes		I	runtime	IndirectCommandBufferDescriptor.command_types			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritPipelineState		I	runtime	IndirectCommandBufferDescriptor.inherit_pipeline_state	true alone		
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritBuffers		I	runtime	IndirectCommandBufferDescriptor.inherit_buffers	false alone		
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthStencilState		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthBias		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthClipMode		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritCullMode		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritFrontFacingWinding		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritTriangleFillMode		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxVertexBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_vertex_buffer_bind_count			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxFragmentBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_fragment_buffer_bind_count			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_kernel_buffer_bind_count	read by no render command		
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelThreadgroupMemoryBindCount		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectBufferBindCount		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxMeshBufferBindCount		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectThreadgroupMemoryBindCount		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
 MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportRayTracing		O			ray tracing		
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportDynamicAttributeStride		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportColorAttachmentMapping		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	protocol	MTLIndirectCommandBuffer		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	size		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	gpuResourceID		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	resetWithRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectRenderCommandAtIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectComputeCommandAtIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandBuffer.h		function	MTLIndirectCommandBufferExecutionRangeMake		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	protocol	MTLIndirectRenderCommand		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setRenderPipelineState:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFragmentBuffer:offset:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:attributeStride:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectThreadgroupMemoryLength:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectBuffer:offset:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setMeshBuffer:offset:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setBarrier		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	clearBarrier		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthStencilState:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthBias:slopeScale:clamp:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthClipMode:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setCullMode:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFrontFacingWinding:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setTriangleFillMode:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	reset		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	protocol	MTLIndirectComputeCommand		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setComputePipelineState:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:attributeStride:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreadgroups:threadsPerThreadgroup:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreads:threadsPerThreadgroup:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setBarrier		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	clearBarrier		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setImageblockWidth:height:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	reset		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setThreadgroupMemoryLength:atIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setStageInRegion:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportDynamicAttributeStride		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportColorAttachmentMapping		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	protocol	MTLIndirectCommandBuffer		I	runtime	IndirectCommandBuffer			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	size		I	runtime	IndirectCommandBuffer::size			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	gpuResourceID		I	runtime	IndirectCommandBuffer::gpu_resource_id	the records' device address		
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	resetWithRange:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectRenderCommandAtIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectComputeCommandAtIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandBuffer.h		function	MTLIndirectCommandBufferExecutionRangeMake		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	protocol	MTLIndirectRenderCommand		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setRenderPipelineState:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFragmentBuffer:offset:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:attributeStride:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectThreadgroupMemoryLength:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectBuffer:offset:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setMeshBuffer:offset:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setBarrier		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	clearBarrier		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthStencilState:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthBias:slopeScale:clamp:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthClipMode:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setCullMode:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFrontFacingWinding:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setTriangleFillMode:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	reset		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	protocol	MTLIndirectComputeCommand		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setComputePipelineState:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:attributeStride:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreadgroups:threadsPerThreadgroup:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreads:threadsPerThreadgroup:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setBarrier		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	clearBarrier		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setImageblockWidth:height:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	reset		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setThreadgroupMemoryLength:atIndex:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setStageInRegion:		M			indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`)	L	icb
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	class	MTLIntersectionFunctionTableDescriptor		O			ray tracing		
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	class method	intersectionFunctionTableDescriptor		O			ray tracing		
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	property	functionCount		O			ray tracing		
@@ -1670,12 +1670,12 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	I	runtime	RenderCommandEncoder::use_resource	a loop of it		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:stages:		I	runtime	RenderCommandEncoder::use_resource	the stages are not read		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:stages:		I	runtime	RenderCommandEncoder::use_resource	a loop of it; the stages are not read		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:stages:		M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:stages:		M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:	yes	I	runtime	RenderCommandEncoder::use_heap			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:	yes	I	runtime	RenderCommandEncoder::use_heap	a loop of it		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:stages:		I	runtime	RenderCommandEncoder::use_heap	the stages are not read		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:stages:		I	runtime	RenderCommandEncoder::use_heap	a loop of it		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:withRange:		I	runtime	RenderCommandEncoder::execute_commands_in_buffer			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::execute_commands_in_buffer_with_range			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithScope:afterStages:beforeStages:		I	runtime	RenderCommandEncoder::memory_barrier	one global memory barrier		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithResources:count:afterStages:beforeStages:		I	runtime	RenderCommandEncoder::memory_barrier	one global memory barrier		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters

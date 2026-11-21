@@ -82,10 +82,12 @@ use crate::encoder::{
     check_alignment, merge, Declared, Resource, ResourceUsage, BUFFER_SLOTS, SAMPLER_SLOTS,
     TEXTURE_SLOTS,
 };
-use crate::error::{DrawKind, Error, Gap, Limit, Refusal, RenderPassKind};
+use crate::error::{DrawKind, Error, Gap, IndirectCommandsKind, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::indirect::{IndirectCommandBuffer, PART, UNCHECKED_BOUNDS};
 use crate::kept::{Handle, Lent, Uncounted};
+use crate::memory::BlockId;
 use crate::over::{self, Reached};
 use crate::pass::{
     layout_barrier, ops, resolving, LoadAction, Pass, RenderPassDescriptor, StoreAction, Target,
@@ -253,9 +255,10 @@ struct Facts {
     /// texture over one, or through an address outside the draw's resources.
     host: bool,
     /// The nil buffer's address where a buffer argument the draw reaches is bound to nothing
-    /// (`Ring::nil`), else 0, and the zero range's where the draw checks a load (`Ring::zero`),
-    /// else 0.
-    nil: (u64, u64),
+    /// (`Ring::nil`), else 0, the zero range's where the draw checks a load (`Ring::zero`), else
+    /// 0, and the whole execution range's where the vertex function reads an execution range
+    /// (`Ring::whole`), else 0.
+    nil: (u64, u64, u64),
 }
 
 impl Facts {
@@ -515,6 +518,16 @@ enum Call<'a> {
         indices: Option<IndexBuffer<'a>>,
         patches: bool,
     },
+    /// An execution of `sequences` commands of an indirect command buffer from command `first`
+    /// (`crate::indirect`), each a sequence of triangles: over the range the CPU gave, or, where
+    /// `range` holds a buffer and an offset, over the range that buffer holds there, from command
+    /// 0 through every command.
+    Commands {
+        buffer: &'a IndirectCommandBuffer,
+        first: u32,
+        sequences: u32,
+        range: Option<(&'a Buffer, u64)>,
+    },
 }
 
 /// The bytes of a draw's indirect arguments: `VkDrawIndexedIndirectCommand`'s 20 for an indexed
@@ -558,10 +571,11 @@ struct Declarations {
 /// blend color, the line width (lines drawn at 1 alone: a draw of lines at another width is
 /// [`DrawKind::LineWidth`]), the store actions an encoder sets for an attachment whose pass left
 /// them unknown, memory barriers, fences, draws of points, lines and triangles, indexed or not,
-/// draws of patches with a tessellation factor buffer, each direct or indirect, and the `Disabled`
-/// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
-/// built, and so not methods: the store action options setters, tile functions, the
-/// `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// draws of patches with a tessellation factor buffer, each direct or indirect, executions of an
+/// indirect command buffer's indexed triangle draws, `useResource:`, `useHeap:`, and the
+/// `Disabled` visibility result mode (`Boolean` and `Counting` are
+/// [`DrawKind::VisibilityResults`]). Not built, and so not methods: the store action options
+/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
 /// type, which is refused). A draw of what the runtime does not build is [`Gap::Draw`], naming
@@ -1706,6 +1720,9 @@ impl RenderCommandEncoder {
     /// there, and the runtime would drop the writes. A draw whose functions have no such access
     /// draws.
     ///
+    /// An indirect command buffer's records are kept and declare no access, as a heap's block
+    /// ([`use_heap`](Self::use_heap)).
+    ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource.
     pub fn use_resource(
         &mut self,
@@ -1738,6 +1755,13 @@ impl RenderCommandEncoder {
                     None,
                 )
             }
+            Resource::IndirectCommandBuffer(commands) => {
+                if !commands.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep_block(commands.records());
+                return Ok(());
+            }
         };
         let Some(access) = usage.access() else {
             return Ok(());
@@ -1755,6 +1779,22 @@ impl RenderCommandEncoder {
             }
         }
         self.changed();
+        Ok(())
+    }
+
+    /// `useHeap:stages:` (`useHeaps:count:stages:` is a loop of it, as is the deprecated form
+    /// without stages), for the heap whose memory is block `heap`: a
+    /// [`HeapRange`](crate::HeapRange)'s block, or the block a placement heap's buffers sit in.
+    /// The command buffer keeps the block until it retires, as
+    /// [`ComputeCommandEncoder::use_heap`](crate::ComputeCommandEncoder::use_heap) does. It
+    /// records nothing and declares no access, and the stages are not read: the pass's barriers
+    /// order its draws after every earlier command and before every later one.
+    ///
+    /// Err: [`Error::NoSuchBlock`] for a number no handle names.
+    pub fn use_heap(&mut self, heap: BlockId) -> Result<(), Error> {
+        let building = self.building();
+        let block = building.device.block(heap)?;
+        building.keep_block(&block);
         Ok(())
     }
 
@@ -2072,7 +2112,7 @@ impl RenderCommandEncoder {
         // draw's count is the GPU's, so its indices are checked to start inside the buffer: one
         // index there.
         let indexed = match call {
-            Call::Direct { .. } | Call::Patches { .. } => None,
+            Call::Direct { .. } | Call::Patches { .. } | Call::Commands { .. } => None,
             Call::Indexed {
                 index_count,
                 indices,
@@ -2143,7 +2183,7 @@ impl RenderCommandEncoder {
         if !self.facts.held {
             // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`), and a checked
             // load outside its buffer the zero range (`Ring::zero`).
-            let (mut nil, mut zero) = (0, 0);
+            let (mut nil, mut zero, mut whole) = (0, 0, 0);
             for &(_, table, value) in &draws.fields {
                 match value {
                     FieldValue::BufferAddress { slot, mask } => {
@@ -2156,10 +2196,11 @@ impl RenderCommandEncoder {
                         }
                     }
                     FieldValue::ZeroAddress => zero = self.core.ring.zero(&self.core)?,
+                    FieldValue::IndirectRange => whole = self.core.ring.whole(&self.core)?,
                     _ => {}
                 }
             }
-            self.facts.nil = (nil, zero);
+            self.facts.nil = (nil, zero, whole);
             self.facts.held = true;
         }
         let count = match call {
@@ -2167,6 +2208,7 @@ impl RenderCommandEncoder {
             Call::Indexed { index_count, .. } => Some(index_count),
             Call::Patches { patch_count, .. } => Some(patch_count),
             Call::Indirect { .. } => None,
+            Call::Commands { sequences, .. } => Some(sequences),
         };
         let [instance_count, base_instance] = instances.unwrap_or([1, 0]);
         if count == Some(0) || instance_count == 0 {
@@ -2190,21 +2232,47 @@ impl RenderCommandEncoder {
         let writes_memory = draws.writes_memory;
         let building = (self.building.as_ref())
             .expect("an encoder holds its command buffer's recording until it ends");
+        // An execution's shape and its preprocess region, before anything is recorded.
+        let execution = match call {
+            Call::Commands {
+                buffer, sequences, ..
+            } => {
+                let Some(indirect) = &self.core.indirect else {
+                    return Err(Error::Unsupported(Gap::IndirectCommandBuffers {
+                        kind: IndirectCommandsKind::Extension,
+                    }));
+                };
+                let shape = (indirect).shape(
+                    &self.core,
+                    (compiled, self.raster, pipeline),
+                    buffer.layout(),
+                    PART,
+                )?;
+                let parts = sequences.div_ceil(PART);
+                let (executed, preprocess) =
+                    indirect.executed(building.device.core(), &shape, parts)?;
+                Some((shape, executed, preprocess))
+            }
+            _ => None,
+        };
+        let commands = execution.is_some();
         // What a draw reaches that each draw looks at again: an attachment of its pass through a
         // texture, a Managed buffer's device copy or a texture over one, or, while a texture over
         // a buffer in an image of its own lives (`crate::over`), such a texture bound, memory
         // reached through an address outside its resources, or buffers read while such a texture
         // the segment used has its image ahead of its buffer.
         let index_buffer = index.map(|(buffer, ..)| buffer);
-        // An indirect draw's arguments, and a patch draw's factor buffer, are its reads as an
-        // index buffer is an indexed draw's.
+        // An indirect draw's arguments, an execution's range buffer and a patch draw's factor
+        // buffer are its reads as an index buffer is an indexed draw's.
         let arguments = match call {
             Call::Indirect { arguments, .. } => Some(arguments),
+            Call::Commands { range, .. } => range.map(|(buffer, _)| buffer),
             _ => None,
         };
         let factors = (self.factors.as_ref()).filter(|_| patches);
         let overs = building.copies_over()
             && (draws.reads_unbound
+                || commands
                 || draws.writes_unbound
                 || self.tables.iter().any(|tables| tables.copied > 0)
                 || self.declared.copied > 0
@@ -2216,14 +2284,14 @@ impl RenderCommandEncoder {
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
         match each {
-            true => self.draw_reaches(reads, [index_buffer, arguments], overs)?,
+            true => self.draw_reaches(reads, [index_buffer, arguments], overs, commands)?,
             false => {
                 if !self.shadow_slots.is_empty() {
                     self.shadow_slots.clear();
                     self.push_filled = false;
                 }
                 self.loop_reads(false);
-                self.overs_after();
+                self.overs_after(commands);
             }
         }
         let building = (self.building.as_mut())
@@ -2237,7 +2305,7 @@ impl RenderCommandEncoder {
         self.wrote |= writes_memory;
         (self.drew, self.pass_drew) = (true, true);
         let (bind, first) = building.bind_graphics(pipeline);
-        if !self.push_filled {
+        if !self.push_filled || commands {
             if let Some(state) = &self.pipeline {
                 let factors = (self.factors.as_ref()).map_or(0, |(buffer, offset)| {
                     buffer.gpu_address().wrapping_add(*offset)
@@ -2249,6 +2317,22 @@ impl RenderCommandEncoder {
                     (&self.moved, &self.shadow_slots, &self.pass),
                     state,
                 );
+                // An execution's commands bind their own slots, which go unchecked, and read their
+                // range where it lies.
+                if let Call::Commands {
+                    buffer,
+                    first,
+                    range,
+                    ..
+                } = call
+                {
+                    let range = range.map_or(self.facts.nil.2, |(buffer, offset)| {
+                        buffer.gpu_address().wrapping_add(offset)
+                    });
+                    let draws = &state.inner.compiled.draws;
+                    let places = (&mut self.push, &mut self.blocks);
+                    commands_push(places, draws, (buffer, first), range);
+                }
                 // Each spilled function's block into the ring, and its address into the range.
                 let made = &state.inner.compiled.draws.blocks;
                 for (block, made) in self.blocks.iter().zip(made) {
@@ -2259,7 +2343,8 @@ impl RenderCommandEncoder {
                     }
                 }
             }
-            self.push_filled = true;
+            // An execution's push bytes are its own: the next draw fills its own again.
+            self.push_filled = !commands;
         }
         let push = !self.push.is_empty() && building.push_needed(&self.push);
         let core = &*self.core;
@@ -2296,7 +2381,10 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends");
         // SAFETY: as above; the push bytes lie in the layout's one push range, of `PUSH_STAGES`;
         // every vertex binding the pipeline reads is bound inside its buffer, the ones the
-        // command buffer holds already as they are.
+        // command buffer holds already as they are. An execution's sequences lie in its records,
+        // at most the shape's capacity, and the command buffer keeps the records, the command
+        // layout and the preprocess region, which holds the shape's bytes at their alignment,
+        // until it retires (below).
         unsafe {
             for &(binding, buffer, offset) in &self.facts.vertex {
                 if building.vertex_needed(binding, buffer, offset) {
@@ -2373,10 +2461,142 @@ impl RenderCommandEncoder {
                         None => device.cmd_draw_indirect(command, reached, at + offset, 1, stride),
                     }
                 }
+                (
+                    Call::Commands {
+                        buffer,
+                        first,
+                        sequences,
+                        ..
+                    },
+                    _,
+                ) => {
+                    if let (Some(indirect), Some((shape, _, preprocess))) =
+                        (&core.indirect, &execution)
+                    {
+                        // One execution of each part, in order, each part's first command pushed
+                        // at the base field; the first part's push is the draw's own.
+                        let layout = buffer.layout();
+                        let info = crate::dgc::PipelineInfo::new(pipeline);
+                        let base = shape.base as usize;
+                        for (part, from) in (0..sequences).step_by(PART as usize).enumerate() {
+                            let count = (sequences - from).min(PART);
+                            if part > 0 {
+                                let command_index = first + from;
+                                self.push[base..base + 4]
+                                    .copy_from_slice(&command_index.to_le_bytes());
+                                device.cmd_push_constants(
+                                    command,
+                                    core.layout,
+                                    PUSH_STAGES,
+                                    0,
+                                    &self.push,
+                                );
+                            }
+                            let stream =
+                                buffer.records().memory.address + layout.command(first + from);
+                            let size = u64::from(count) * u64::from(layout.stride());
+                            let at = *preprocess + shape.part_stride() * part as u64;
+                            let generated = crate::dgc::CommandsInfo::new(
+                                &info,
+                                shape.layout.handle(),
+                                (stream, size),
+                                (at, shape.preprocess_size()),
+                                count,
+                            );
+                            (indirect.dgc.execute)(command, vk::FALSE, &generated);
+                        }
+                    }
+                }
                 (Call::Indexed { .. }, None) => {}
             }
         }
+        // An execution holds its records, layout and region until the command buffer retires,
+        // and leaves the push bytes undefined (and the index buffer, which every indexed draw
+        // binds again).
+        if let (Call::Commands { buffer, .. }, Some((_, executed, _))) = (call, execution) {
+            building.keep_block(buffer.records());
+            building.keep_executed(executed);
+            building.pushes_lost();
+        }
         Ok(())
+    }
+
+    /// `executeCommandsInBuffer:withRange:`: commands `range` of `buffer`, drawn as triangles with
+    /// the encoder's pipeline state and every render state it set, each command with the buffers
+    /// its encoding bound (the command buffer keeps `buffer`'s records until it retires): one
+    /// `vkCmdExecuteGeneratedCommandsEXT` for each part of 64 commands from the range's first, in
+    /// order, each command a sequence of the content's command layout ([`IndirectCommandBuffer`]),
+    /// each part its own preprocess in the execution's region and its first command pushed before
+    /// it. Metal runs one execution; the parts cost GPU and recording time (the README's known
+    /// gaps). A command's buffers are read through its vertex and fragment
+    /// slots unchecked: an access of one reads and writes at the address the kernel's encoding
+    /// wrote plus its offset, as an access through a pointer loaded from memory does
+    /// (`docs/API.md`, section 5). An execution leaves the encoder's state as it was: the next
+    /// draw pushes its own fields again. An empty range records nothing.
+    ///
+    /// Err: [`Refusal::NoPipeline`]; [`Refusal::OtherDevice`]; [`Refusal::CommandRange`] for a
+    /// range past the buffer's commands; [`Refusal::PatchDraw`] for a state whose vertex function
+    /// is post-tessellation; [`Gap::IndirectCommandBuffers`] of
+    /// [`IndirectCommandsKind::UnflaggedState`] for a state made without
+    /// `supportIndirectCommandBuffers`, of [`IndirectCommandsKind::Tokens`] for one whose slots
+    /// take more tokens than the device does, of [`IndirectCommandsKind::DrawInput`] for one that
+    /// reads what a command cannot carry; as [`draw_primitives`](Self::draw_primitives)
+    /// otherwise.
+    pub fn execute_commands_in_buffer(
+        &mut self,
+        buffer: &IndirectCommandBuffer,
+        range: std::ops::Range<u32>,
+    ) -> Result<(), Error> {
+        if !buffer.is_of(self.building().device.core()) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        if range.start > range.end || range.end > buffer.size() {
+            return Err(Error::Refused(Refusal::CommandRange));
+        }
+        let call = Call::Commands {
+            buffer,
+            first: range.start,
+            sequences: range.end - range.start,
+            range: None,
+        };
+        self.draw(primitives(PrimitiveType::Triangle), call, Some([1, 0]))
+    }
+
+    /// `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`: the commands of `buffer` in
+    /// the range (`MTLIndirectCommandBufferExecutionRange`: a `u32` location, then a `u32`
+    /// length) `range_buffer` holds at `offset` when the command runs, as
+    /// [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) draws them. The execution
+    /// runs every command of the buffer, and the vertex function of each command outside the
+    /// range returns before its body, drawing nothing; a command past the buffer's is none. The
+    /// range buffer counts as a read, and the command buffer keeps it until it retires.
+    ///
+    /// Err: as [`execute_commands_in_buffer`](Self::execute_commands_in_buffer);
+    /// [`Refusal::OtherDevice`] for another device's range buffer; [`Refusal::CommandRange`]
+    /// for an offset that is not a multiple of 4 or a range whose 8 bytes leave the buffer.
+    pub fn execute_commands_in_buffer_with_range(
+        &mut self,
+        buffer: &IndirectCommandBuffer,
+        range_buffer: &Buffer,
+        offset: u64,
+    ) -> Result<(), Error> {
+        let device = self.building().device.core();
+        if !buffer.is_of(device) || !range_buffer.is_of(device) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        if offset % 4 != 0
+            || offset
+                .checked_add(8)
+                .is_none_or(|end| end > range_buffer.length())
+        {
+            return Err(Error::Refused(Refusal::CommandRange));
+        }
+        let call = Call::Commands {
+            buffer,
+            first: 0,
+            sequences: buffer.size(),
+            range: Some((range_buffer, offset)),
+        };
+        self.draw(primitives(PrimitiveType::Triangle), call, Some([1, 0]))
     }
 
     /// What a draw of `draws` reads of its pass's attachments through textures. A texture whose
@@ -2529,13 +2749,16 @@ impl RenderCommandEncoder {
     /// hold copied; then the copies it needs first, its textures over a buffer in an image of
     /// their own (`crate::over`), where `overs`, and the textures over a Managed buffer's device
     /// copy it reaches (`crate::over::ManagedOvers`), each recorded between the rendering's end
-    /// and its new beginning. `index` is its index buffer and its indirect arguments' buffer; a
-    /// patch draw reads the tessellation factor buffer as such.
+    /// and its new beginning. `index` is its index buffer and its indirect arguments' buffer, an
+    /// execution's range buffer among them; a patch draw reads the tessellation factor buffer as
+    /// such. An execution's (`commands`) reaches memory outside its resources through its
+    /// commands' slots.
     fn draw_reaches(
         &mut self,
         reads: Option<AttachmentReads>,
         index: [Option<&Buffer>; 2],
         overs: bool,
+        commands: bool,
     ) -> Result<(), Error> {
         let reads_attachment = match reads {
             Some(found) => {
@@ -2584,7 +2807,7 @@ impl RenderCommandEncoder {
             true => {
                 // The buffers it reads owe copies back only where it reaches memory outside its
                 // resources or such an image is ahead of its buffer.
-                let unbound = draws.reads_unbound || draws.writes_unbound;
+                let unbound = draws.reads_unbound || draws.writes_unbound || commands;
                 let buffers = unbound || building.overs_ahead();
                 let vertex = (vertex_reads.clone())
                     .filter(|_| buffers)
@@ -2620,13 +2843,14 @@ impl RenderCommandEncoder {
                 building.managed_backs(backs)
             })?;
         }
-        self.overs_after();
+        self.overs_after(commands);
         Ok(())
     }
 
     /// After a draw of the pipeline state: what it wrote, for the textures over a buffer in an
-    /// image of their own (`crate::over`).
-    fn overs_after(&mut self) {
+    /// image of their own (`crate::over`). An execution's (`commands`) writes where its commands'
+    /// slots reach, outside its resources, where the state writes memory.
+    fn overs_after(&mut self, commands: bool) {
         let Some(state) = &self.pipeline else {
             return;
         };
@@ -2635,7 +2859,7 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends")
             .overs_after(
                 slots(draws, &self.tables, &self.declared.each, true, true),
-                draws.writes_unbound,
+                draws.writes_unbound || (commands && draws.writes_memory),
             );
     }
 
@@ -2942,7 +3166,7 @@ fn primitives(primitive_type: PrimitiveType) -> (vk::PrimitiveTopology, bool) {
 /// element; the alpha test's code and the encoder's viewport count are the encoder's.
 fn fill_push(
     (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
-    (tables, (nil, zero), factors): (&[Tables; 2], (u64, u64), u64),
+    (tables, (nil, zero, whole), factors): (&[Tables; 2], (u64, u64, u64), u64),
     [alpha_test, viewports]: [u32; 2],
     (moved, shadow_slots, pass): (&[Moved], &[(usize, u32)], &Pass),
     state: &RenderPipelineState,
@@ -3026,8 +3250,42 @@ fn fill_push(
             FieldValue::ViewportCount => {
                 bytes[at..at + 4].copy_from_slice(&viewports.to_le_bytes());
             }
+            // A direct draw is every command's: the whole range, and command 0.
+            FieldValue::IndirectRange => bytes[at..at + 8].copy_from_slice(&whole.to_le_bytes()),
+            FieldValue::IndirectSequence | FieldValue::IndirectBase => bytes[at..at + 4].fill(0),
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion | FieldValue::PrivateArena => {}
+        }
+    }
+}
+
+/// Patches `push` and `blocks`, as [`fill_push`] filled them for `draws`, for an execution of
+/// `buffer`'s commands from command `first`: the bounds of each slot a command holds are unchecked
+/// ([`UNCHECKED_BOUNDS`]), as its address is the command's own, the execution range is read at
+/// `range`, and the first part's first command is `first`.
+fn commands_push(
+    (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
+    draws: &Draws,
+    (buffer, first): (&IndirectCommandBuffer, u32),
+    range: u64,
+) {
+    let layout = buffer.layout();
+    for &(place, table, value) in &draws.fields {
+        let (bytes, at) = match place {
+            DrawPlace::Push(offset) => (&mut *push, offset as usize),
+            DrawPlace::Block(of, offset) => (&mut blocks[of], offset as usize),
+        };
+        let held = match table {
+            VERTEX => layout.vertex_slots(),
+            _ => layout.fragment_slots(),
+        };
+        match value {
+            FieldValue::BufferBounds(slot) if slot < held => {
+                bytes[at..at + 8].copy_from_slice(&UNCHECKED_BOUNDS);
+            }
+            FieldValue::IndirectRange => bytes[at..at + 8].copy_from_slice(&range.to_le_bytes()),
+            FieldValue::IndirectBase => bytes[at..at + 4].copy_from_slice(&first.to_le_bytes()),
+            _ => {}
         }
     }
 }

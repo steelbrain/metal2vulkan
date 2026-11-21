@@ -38,6 +38,7 @@ use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::indirect::{reset_regions, IndirectCommandBuffer};
 use crate::memory::Own;
 use crate::over::{self, Reached};
 use crate::record::{memory_barrier, Reach};
@@ -645,6 +646,80 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// `resetCommandsInBuffer:withRange:`: commands `range` of `buffer` reset, each drawing nothing
+    /// with every slot bound to nothing, by copies from the device's template of reset commands of
+    /// the buffer's layout (`crate::indirect`): one `vkCmdCopyBuffer`, a region for each run of
+    /// as many commands as the template holds, between a fill's two barriers. An empty range
+    /// records nothing. The command buffer keeps the buffer's records and the template until it
+    /// retires.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::CommandRange`] for a
+    /// range past the buffer's commands; what making the template returns
+    /// ([`Device::new_indirect_command_buffer`](crate::Device::new_indirect_command_buffer)'s);
+    /// [`Error::Vulkan`] where the command buffer cannot record.
+    pub fn reset_commands_in_buffer(
+        &mut self,
+        buffer: &IndirectCommandBuffer,
+        range: Range<u32>,
+    ) -> Result<(), Error> {
+        let (core, building) = self.parts();
+        if !buffer.is_of(core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        if range.start > range.end || range.end > buffer.size() {
+            return Err(Error::Refused(Refusal::CommandRange));
+        }
+        if range.is_empty() {
+            return Ok(());
+        }
+        let indirect = (core.indirect.as_ref())
+            .expect("a device that made an indirect command buffer enabled the extension");
+        let template = indirect.template(core, buffer.layout())?;
+        let (source, destination, regions) =
+            reset_regions(&template, buffer.layout(), buffer.records(), range);
+        building.keep_block(buffer.records());
+        building.keep_block(template.block());
+        let command = building.ordered_command()?;
+        let earlier = [memory_barrier(Reach::Commands)];
+        let written = [written()];
+        let device = &core.device;
+        // SAFETY: the command buffer records outside any render pass and keeps both blocks until
+        // it retires; each region lies in the template and in the records (`reset_regions`).
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&earlier),
+            );
+            device.cmd_copy_buffer(command, source, destination, &regions);
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&written),
+            );
+        }
+        building.count(Metric::Barriers);
+        building.count(Metric::Barriers);
+        Ok(())
+    }
+
+    /// `optimizeIndirectCommandBuffer:withRange:`: records nothing, the commands already in the
+    /// form an execution reads.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::CommandRange`] for a
+    /// range past the buffer's commands.
+    pub fn optimize_indirect_command_buffer(
+        &mut self,
+        buffer: &IndirectCommandBuffer,
+        range: Range<u32>,
+    ) -> Result<(), Error> {
+        if !buffer.is_of(&self.core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        if range.start > range.end || range.end > buffer.size() {
+            return Err(Error::Refused(Refusal::CommandRange));
+        }
+        Ok(())
+    }
+
     /// The static precision note of [`generate_mipmaps`](Self::generate_mipmaps): each level is
     /// the device's linear filter of the one above, where Apple states no filter.
     pub const GENERATE_MIPMAPS_NOTE: PrecisionNote = PrecisionNote::DeviceFilteredMipmaps;
@@ -821,7 +896,8 @@ impl BlitCommandEncoder {
     /// the segment so its end barrier reaches the host, and the command buffer keeps the resource
     /// until it retires. A buffer with no device copy is one the host reads where shaders write
     /// it, and a texture without named bytes has none the host reads apart from its image: the
-    /// call records nothing for either.
+    /// call records nothing for either, nor for an indirect command buffer, whose records the host
+    /// never reads.
     ///
     /// Metal's validation stops the call on a resource that is not Managed (probe
     /// `blit_synchronize_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
@@ -836,6 +912,7 @@ impl BlitCommandEncoder {
             Resource::Texture(texture) if texture.is_of(&self.core) => {
                 self.read_back_texture(texture)?
             }
+            Resource::IndirectCommandBuffer(commands) if commands.is_of(&self.core) => {}
             _ => return Err(Error::Refused(Refusal::OtherDevice)),
         }
         self.building().count(Metric::Synchronizations);

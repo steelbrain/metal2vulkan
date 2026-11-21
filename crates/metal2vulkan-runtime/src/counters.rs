@@ -439,6 +439,12 @@ pub(crate) enum Gauge {
     SurfaceImportBytes,
     /// [`Gauges::releases_waiting`].
     ReleasesWaiting,
+    /// [`Gauges::indirect_command_buffers`].
+    IndirectCommandBuffers,
+    /// [`Gauges::preprocess_used_bytes`].
+    PreprocessUsedBytes,
+    /// [`Gauges::preprocess_idle_bytes`].
+    PreprocessIdleBytes,
 }
 
 /// A site that allocates on the consumer's threads, inside its calls, counted on its own in
@@ -719,6 +725,9 @@ struct Atomics {
     import_bytes: AtomicU64,
     surface_import_bytes: AtomicU64,
     releases_waiting: AtomicU64,
+    indirect_command_buffers: AtomicU64,
+    preprocess_used_bytes: AtomicU64,
+    preprocess_idle_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -1397,6 +1406,9 @@ impl Counters {
             Gauge::ImportBytes => &a.import_bytes,
             Gauge::SurfaceImportBytes => &a.surface_import_bytes,
             Gauge::ReleasesWaiting => &a.releases_waiting,
+            Gauge::IndirectCommandBuffers => &a.indirect_command_buffers,
+            Gauge::PreprocessUsedBytes => &a.preprocess_used_bytes,
+            Gauge::PreprocessIdleBytes => &a.preprocess_idle_bytes,
         }
     }
 
@@ -1702,6 +1714,9 @@ impl Counters {
             import_bytes: a.import_bytes.load(Relaxed),
             surface_import_bytes: a.surface_import_bytes.load(Relaxed),
             releases_waiting: a.releases_waiting.load(Relaxed),
+            indirect_command_buffers: a.indirect_command_buffers.load(Relaxed),
+            preprocess_used_bytes: a.preprocess_used_bytes.load(Relaxed),
+            preprocess_idle_bytes: a.preprocess_idle_bytes.load(Relaxed),
         }
     }
 }
@@ -2776,4 +2791,13 @@ pub struct Gauges {
     /// block-maker thread has taken it: an index vacated, so its grant may be returned, an object
     /// handed to the reaper thread, which frees it next.
     pub releases_waiting: u64,
+    /// Indirect command buffers alive, each with its records' block
+    /// ([`Device::new_indirect_command_buffer`](crate::Device::new_indirect_command_buffer)).
+    pub indirect_command_buffers: u64,
+    /// Bytes of the preprocess regions executions of indirect command buffers hold: each taken
+    /// at an execution's record and given back when its command buffer completes.
+    pub preprocess_used_bytes: u64,
+    /// Bytes of the preprocess regions no execution holds, kept for the next ones, at most 128
+    /// MiB; zero once the device is dropped.
+    pub preprocess_idle_bytes: u64,
 }

@@ -240,19 +240,27 @@ pub(crate) struct RenderCompiled {
     imageblock_sample: Option<u32>,
     /// The descriptor's `rasterSampleCount`.
     samples: u32,
+    /// The descriptor's `supportIndirectCommandBuffers`.
+    indirect: bool,
+    /// The content's number, which no other content of the process takes: the key of its
+    /// executions' shapes (`crate::indirect`), which outlive no content they name.
+    pub(crate) id: u64,
 }
 
 /// What the render encoder sets that a `VkPipeline` bakes: `setDepthClipMode:` and
 /// `setTriangleFillMode:`, in `VkPipelineRasterizationStateCreateInfo`, which only
 /// `VK_EXT_extended_dynamic_state3` makes dynamic, and the floor does not require it. The default
 /// is Metal's, `Clip` and `Fill`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Raster {
     /// `MTLDepthClipModeClamp`: `depthClampEnable`.
     pub(crate) clamp: bool,
     /// `MTLTriangleFillModeLines`: `polygonMode` `LINE`.
     pub(crate) lines: bool,
 }
+
+/// The next content's [`RenderCompiled::id`].
+static CONTENT_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// One stage's shader module and what a `VkPipeline` of it takes.
 pub(crate) struct Module {
@@ -383,7 +391,7 @@ impl crate::Device {
     /// has at its index before the call returns, and every draw pushes the index.
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses,
-    /// naming the vertex and the fragment function; [`Gap::IndirectCommandBuffers`];
+    /// naming the vertex and the fragment function;
     /// [`Gap::RenderPipeline`] for what the runtime does not build, naming it;
     /// [`Refusal::PointSizeTopology`] for a vertex function that writes `[[point_size]]` under
     /// the line or the triangle class; [`Refusal::SamplerIds`] where `sampler_ids` answers another
@@ -696,6 +704,11 @@ fn draws(
                 // The encoder's viewport count, below which the vertex function's index selects
                 // its viewport.
                 PushField::ViewportCount if at == VERTEX => FieldValue::ViewportCount,
+                // The execution range and the command a vertex function of a state made for
+                // indirect command buffers reads (`crate::indirect`).
+                PushField::IndirectRange if at == VERTEX => FieldValue::IndirectRange,
+                PushField::IndirectSequence if at == VERTEX => FieldValue::IndirectSequence,
+                PushField::IndirectBase if at == VERTEX => FieldValue::IndirectBase,
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));
@@ -752,9 +765,7 @@ fn draws(
 /// among them: Metal reads it only for a post-tessellation vertex function, and ignores it for any
 /// other, as the translator does; the translation states such a function (`unbuilt`).
 fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
-    let kind = if d.support_indirect_command_buffers {
-        return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
-    } else if !(d.raster_sample_count.is_power_of_two() && d.raster_sample_count <= 64) {
+    let kind = if !(d.raster_sample_count.is_power_of_two() && d.raster_sample_count <= 64) {
         RenderPipelineKind::SampleCount
     } else if d.max_vertex_amplification_count != 1 {
         RenderPipelineKind::VertexAmplification
@@ -1090,6 +1101,8 @@ impl RenderCompiled {
             constexprs,
             imageblock_sample,
             samples,
+            indirect: lowered.support_indirect_command_buffers,
+            id: CONTENT_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         // Made whole before the `VkPipeline`, so dropping it releases what was made.
         let class = match compiled.draws.patches {
@@ -1385,11 +1398,12 @@ impl RenderPipelineState {
             .saturating_mul(samples))
     }
 
-    /// `supportIndirectCommandBuffers`: false on every state the runtime makes, as a descriptor
-    /// that asks for indirect command buffers is refused at the making
-    /// ([`Gap::IndirectCommandBuffers`]).
+    /// `supportIndirectCommandBuffers`: the descriptor's. A state made with it pulls every vertex
+    /// attribute its vertex function reads, and its vertex function tests its command against an
+    /// execution's range, which a direct draw pushes as every command
+    /// ([`RenderCommandEncoder::execute_commands_in_buffer`](crate::RenderCommandEncoder::execute_commands_in_buffer)).
     pub fn support_indirect_command_buffers(&self) -> bool {
-        false
+        self.inner.compiled.indirect
     }
 
     /// Whether two handles are one state.

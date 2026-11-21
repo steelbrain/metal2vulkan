@@ -292,6 +292,18 @@ pub enum Refusal {
     /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first, and a
     /// draw a render pipeline state).
     NoPipeline,
+    /// A range of an indirect command buffer's commands past them, in an execution
+    /// ([`RenderCommandEncoder::execute_commands_in_buffer`](crate::RenderCommandEncoder::execute_commands_in_buffer)),
+    /// a reset or an optimization
+    /// ([`BlitCommandEncoder::reset_commands_in_buffer`](crate::BlitCommandEncoder::reset_commands_in_buffer),
+    /// [`BlitCommandEncoder::optimize_indirect_command_buffer`](crate::BlitCommandEncoder::optimize_indirect_command_buffer)),
+    /// or an execution range a buffer holds at an offset that is not a multiple of 4 or whose 8
+    /// bytes leave the buffer
+    /// ([`RenderCommandEncoder::execute_commands_in_buffer_with_range`](crate::RenderCommandEncoder::execute_commands_in_buffer_with_range)).
+    ///
+    /// Basis: metal-documented (each call names commands of the buffer, and the offset of a range
+    /// a buffer holds must be a multiple of 4 bytes).
+    CommandRange,
     /// A draw of patches with a render pipeline state whose vertex function is not a
     /// post-tessellation one, or a draw of primitives with one whose vertex function is.
     ///
@@ -945,11 +957,16 @@ pub enum Refusal {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gap {
-    /// A compute pipeline state for indirect command buffers
-    /// (`supportIndirectCommandBuffers`): the runtime has no indirect command buffers yet.
+    /// An indirect command buffer, its execution, or a compute pipeline state for one, of what the
+    /// runtime does not build, `kind` naming it. Built: GPU-encoded indexed triangle draws with
+    /// the executing encoder's pipeline state, on a device with `VK_EXT_device_generated_commands`
+    /// (`floor::INDIRECT_COMMANDS`).
     ///
-    /// Basis: ours (indirect command buffers are not built).
-    IndirectCommandBuffers,
+    /// Basis: ours (the first cut of indirect command buffers builds that alone).
+    IndirectCommandBuffers {
+        /// What is not built.
+        kind: IndirectCommandsKind,
+    },
     /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
     /// a function table, a `[[stage_in]]` fetch, an explicit imageblock, a parameter the runtime
     /// does not fill, or a specialization the runtime does not set, among others. Buffers,
@@ -1343,6 +1360,45 @@ pub enum LinearPlanePassKind {
     Resolve,
 }
 
+/// What of an indirect command buffer the runtime does not build ([`Gap::IndirectCommandBuffers`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IndirectCommandsKind {
+    /// Any indirect command buffer, on a device without `VK_EXT_device_generated_commands` and
+    /// `VK_KHR_maintenance5` with their features (`floor::INDIRECT_COMMANDS`): an Intel Iris Xe,
+    /// the UHD 630 on Windows, and Mesa's Mac Vulkan driver among the venues.
+    Extension,
+    /// Command types other than indexed draws alone (`MTLIndirectCommandTypeDrawIndexed`): plain,
+    /// patch or mesh draws, or dispatches, which take other command layouts.
+    CommandTypes,
+    /// Commands that set their own pipeline state (`inheritPipelineState` false), which Vulkan
+    /// draws through an indirect execution set: a set of graphics pipelines is offered on none of
+    /// the AMD cards, and its pipelines must share every state.
+    CommandPipelines,
+    /// Commands that draw with the executing encoder's buffers (`inheritBuffers` true).
+    InheritedBuffers,
+    /// More than 31 vertex or fragment buffers a command binds (`maxVertexBufferBindCount` or
+    /// `maxFragmentBufferBindCount`).
+    BindCount,
+    /// A command count of 0, or past the device's most commands of one execution
+    /// (`maxIndirectSequenceCount`).
+    Capacity,
+    /// A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`):
+    /// compute commands are not built.
+    ComputeCommands,
+    /// An execution with a pipeline state made without `supportIndirectCommandBuffers`, whose
+    /// vertex function does not skip the commands outside the range.
+    UnflaggedState,
+    /// An execution whose pipeline state's buffer slots need more tokens than the device takes in
+    /// one command (`maxIndirectCommandsTokenCount`): one per run of slots its functions push
+    /// consecutively, the sequence index, the index buffer and the draw.
+    Tokens,
+    /// An execution whose pipeline state reads what a command cannot carry: a buffer slot the
+    /// command binds placed outside the push constants (in a parameter block), a fixed-function
+    /// vertex binding, or a draw that must be at base instance 0.
+    DrawInput,
+}
+
 /// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1401,11 +1457,6 @@ pub enum KernelInputKind {
     /// pushes each one's resource ID. Metal's counterpart is a texture or sampler the kernel
     /// reads, which Metal resolves by its `gpuResourceID`.
     HandleTranslation,
-    /// An indirect command buffer the kernel may reach
-    /// (`PipelineInterface::reaches_command_buffers`). Metal's counterpart is a `command_buffer`
-    /// the kernel takes, as an argument or a member of an argument buffer, of an
-    /// `MTLIndirectCommandBuffer` it can encode, reset or copy.
-    CommandBuffers,
     /// A `[[stage_in]]` argument, which fetches by the stage-in region
     /// (`PipelineInterface::stage_in`). Metal's counterpart is the descriptor's
     /// `stageInputDescriptor`.
@@ -2035,6 +2086,10 @@ impl fmt::Display for Refusal {
             }
             Refusal::EncoderOpen => f.write_str("an encoder of the command buffer is open"),
             Refusal::NoPipeline => f.write_str("no pipeline state is set"),
+            Refusal::CommandRange => f.write_str(
+                "the range lies past the indirect command buffer's commands, or the range \
+                 buffer's offset is not a multiple of 4 or leaves the buffer",
+            ),
             Refusal::PatchDraw => f.write_str(
                 "patches are drawn with a post-tessellation vertex function's pipeline state, and \
                  only with one",
@@ -2299,8 +2354,8 @@ impl fmt::Display for Refusal {
 impl fmt::Display for Gap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Gap::IndirectCommandBuffers => {
-                f.write_str("pipeline states for indirect command buffers are not built")
+            Gap::IndirectCommandBuffers { kind } => {
+                write!(f, "indirect command buffers of {kind:?} are not built")
             }
             Gap::KernelInput { kind } => write!(
                 f,

@@ -54,7 +54,7 @@ use crate::device::{lock, Core};
 use crate::encoder::{
     decide, size_checked, threadgroup_memory, Dispatch, Lengths, Module, BUFFER_SLOTS,
 };
-use crate::error::{Error, Gap, KernelInputKind, Refusal};
+use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::reaper::{Free, Job};
@@ -751,6 +751,18 @@ pub(crate) enum FieldValue {
     /// past which a vertex function's `[[viewport_array_index]]` stores `ViewportIndex` 0
     /// (`PushField::ViewportCount`).
     ViewportCount,
+    /// A `u64`: the address of the execution range the vertex function of a state made for
+    /// indirect command buffers tests its command against (`PushField::IndirectRange`): the
+    /// ring's range of every command (`Ring::whole`) for a direct draw and an execution over a
+    /// range the CPU gives, the range buffer's address plus its offset for an execution over a
+    /// range read from a buffer.
+    IndirectRange,
+    /// A `u32`: the command of an execution the draw is (`PushField::IndirectSequence`), 0 for a
+    /// direct draw; an execution's sequence index token pushes each command's own.
+    IndirectSequence,
+    /// A `u32`: the first command of the part of an execution the draw is
+    /// (`PushField::IndirectBase`), 0 for a direct draw; an execution pushes each part's own.
+    IndirectBase,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
@@ -822,7 +834,9 @@ impl crate::Device {
     /// answered, a failing call holds none of the indices.
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses,
-    /// naming the kernel; [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that
+    /// naming the kernel; [`Gap::IndirectCommandBuffers`] of
+    /// [`IndirectCommandsKind::ComputeCommands`] for a descriptor that sets
+    /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that
     /// reads what the compute encoder does not supply yet; [`Refusal::SamplerIds`] where
     /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
     /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
@@ -843,7 +857,9 @@ impl crate::Device {
         sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
     ) -> Result<ComputePipelineState, Error> {
         if descriptor.support_indirect_command_buffers {
-            return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
+            return Err(Error::Unsupported(Gap::IndirectCommandBuffers {
+                kind: IndirectCommandsKind::ComputeCommands,
+            }));
         }
         let core = self.core();
         let key = KernelKey {
@@ -1250,10 +1266,6 @@ fn interface(
         (
             translated.needs_handle_translation,
             KernelInputKind::HandleTranslation,
-        ),
-        (
-            translated.reaches_command_buffers,
-            KernelInputKind::CommandBuffers,
         ),
         (!translated.stage_in.is_empty(), KernelInputKind::StageIn),
         (
@@ -1729,7 +1741,7 @@ impl ComputePipelineState {
 
     /// `supportIndirectCommandBuffers`: false on every state the runtime makes, as a descriptor
     /// that asks for indirect command buffers is refused at the making
-    /// ([`Gap::IndirectCommandBuffers`]).
+    /// ([`Gap::IndirectCommandBuffers`] of [`IndirectCommandsKind::ComputeCommands`]).
     pub fn support_indirect_command_buffers(&self) -> bool {
         false
     }
