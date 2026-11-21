@@ -190,8 +190,7 @@
 //! result (`extended_range::Blend::half_float`, [`half_blended`]). Metal's compiler appends the
 //! blend to the function, in the output's type: a `half` output blends in `half` arithmetic, a
 //! `float` one in `float`, its result converted to `half` by the storage image's store, as Metal's
-//! write of a `float` converts it (toward zero) where the profile takes
-//! `DriverDeviation::MetalHalfStorageWrites` and as the device does elsewhere
+//! write of a `float` converts it toward zero, as the device does
 //! (`PrecisionNote::DeviceColorConversion`), and to nearest even in the shader under
 //! `TextureWriteRoundingMode::NearestEven`, which no measured store gives. An output of fewer
 //! than four lanes (Metal takes none with fewer than the format's channels, so it writes `R16Float`
@@ -2743,8 +2742,8 @@ fn logic_operated(
 /// arithmetic of the output over it in the output's type
 /// (`extended_range::blend::blend_half_float`; the blend color from `PushField::HalfBlendColor`
 /// where the blend reads it), a `float` result converted to `half` by the storage image's store,
-/// the device's conversion (Metal's blended write's, toward zero, the largest finite `half` past
-/// it, where the profile takes `DriverDeviation::MetalHalfStorageWrites`), or rounded to nearest
+/// the device's conversion (where Metal's blended write's is toward zero, the largest finite
+/// `half` past it), or rounded to nearest
 /// even under `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF_NEAREST`), which no
 /// measured device's store gives. A NaN of the blend is the device's arithmetic's, which the
 /// store converts (`PrecisionNote::DeviceNanEncoding`).
@@ -2793,8 +2792,8 @@ fn half_blended(
     let v = output_lanes(fb, form, v)?;
     if arith == extended_range::blend::BlendArith::Half || !sc.nearest_even {
         // The blend's result is the storage image's store's to convert, its NaN the device's
-        // (`PrecisionNote::DeviceNanEncoding`): a `float` result as Metal's blended write converts
-        // it toward zero where the profile takes `MetalHalfStorageWrites`.
+        // (`PrecisionNote::DeviceNanEncoding`), and a `float` result's rounding the device's
+        // (`PrecisionNote::DeviceColorConversion`).
         return Ok(v);
     }
     let rule = crate::pipeline::color_writes::HALF_NEAREST;

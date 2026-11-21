@@ -427,10 +427,9 @@ const OP_IS_NAN: u16 = 156;
 /// `DeviceNanEncoding`; bound in `RGBA16Float` it records the note too; bound in `RGBA8Unorm` it
 /// records none. Where the choice declares no format and no class, the write records the note
 /// under the format bound there. A choice declaring `RGBA16Float` records the note on every
-/// profile. No write requires `VkProperty::MetalHalfTexelWrites`.
+/// profile.
 #[test]
 fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_s() {
-    use crate::device::requirements::VkProperty;
     let Some(bc) = fixture("txt_level_write") else {
         return;
     };
@@ -453,10 +452,6 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
             }
         };
         let noted = |a: &FunctionArtifact| a.precision.contains(&PrecisionNote::DeviceNanEncoding);
-        let required = |a: &FunctionArtifact| {
-            let properties = &a.requirements.properties;
-            properties.contains(&VkProperty::MetalHalfTexelWrites)
-        };
         let tests = |a: &FunctionArtifact| opcodes(&a.module.words).contains(&OP_IS_NAN);
         for pf in [
             PixelFormat::RGBA8Unorm,
@@ -478,7 +473,6 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                 formatless += 1;
                 continue;
             }
-            assert!(!required(&a), "{what}");
             match pf {
                 PixelFormat::RGBA16Float | PixelFormat::RGBX16Float => {
                     assert!(noted(&a), "{what}");
@@ -504,7 +498,7 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                 Err(Error::NeedsInput(_) | Error::Unsupported(_)) => {}
                 a => {
                     let a = ok(a, &p, &what);
-                    assert!(noted(&a) && !required(&a), "{what}");
+                    assert!(noted(&a), "{what}");
                     device += 1;
                 }
             }

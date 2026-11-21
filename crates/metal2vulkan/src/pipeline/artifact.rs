@@ -848,10 +848,7 @@ pub enum PrecisionNote {
     /// plain color fill to a NaN of a half or small-float texture the device's clear writes: the
     /// device converts the NaN as it likes, where Metal's fill keeps a half NaN's sign and payload
     /// and makes a small float's all ones. Not recorded by a texture write of a constant texel none
-    /// of whose lanes is a NaN, nor where the write's stored NaN is measured to be Metal's: a
-    /// `float` or `half` texel's write to `RG11B10Float` on a profile that takes
-    /// `DriverDeviation::MetalSmallFloatNans` (that identity and lavapipe) (the module then
-    /// requires the matching `VkProperty`). Validation derives no tolerance and no explanation from
+    /// of whose lanes is a NaN. Validation derives no tolerance and no explanation from
     /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,
     /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
@@ -1046,20 +1043,17 @@ pub enum PrecisionNote {
     /// Metal's in the same suite.
     ///
     /// Also: a function writes a `float` (or `half`) texel to a storage texture that may hold a
-    /// normalized or half-float format, or `ARGB8Unorm`, which the device converts where it is not
-    /// measured to store Metal's codes (`DriverDeviation::MetalNormStorageWrites`,
-    /// `MetalHalfStorageWrites`; a 1-bit alpha on a device measured to store every other
-    /// normalized channel's): Metal stores each normalized channel's exact product rounded with a
-    /// tie away from zero (a 1-bit channel 1 only above one half) and a half rounded toward zero.
-    /// An integer texel a function writes to a storage texture of the float class that may hold a
-    /// half-float or small-float format (`RG11B10Float`), its lanes' bits as the `float` written,
-    /// records it on every device: Metal's integer store rounds such a channel to nearest even,
-    /// the device's store as it rounds a `float` write (toward zero on every measured driver:
-    /// within one unit in the last place of the channel's value, a finite value past 65504 stored
-    /// as 65504 where Metal's `half` is the infinity). So does a fragment function's `float` output
-    /// blended in the shader into a 16-bit float attachment it renders through a storage image (the
-    /// pixel interlock's fetch), whose `half` the store rounds, on a profile without
-    /// `DriverDeviation::MetalHalfStorageWrites`.
+    /// normalized or half-float format, or `ARGB8Unorm`, which the device converts: Metal stores
+    /// each normalized channel's exact product rounded with a tie away from zero (a 1-bit channel 1
+    /// only above one half) and a half rounded toward zero. An integer texel a function writes to a
+    /// storage texture of the float class that may hold a half-float or small-float format
+    /// (`RG11B10Float`), its lanes' bits as the `float` written, records it on every device:
+    /// Metal's integer store rounds such a channel to nearest even, the device's store as it rounds
+    /// a `float` write (toward zero on every measured driver: within one unit in the last place of
+    /// the channel's value, a finite value past 65504 stored as 65504 where Metal's `half` is the
+    /// infinity). So does a fragment function's `float` output blended in the shader into a 16-bit
+    /// float attachment it renders through a storage image (the pixel interlock's fetch), whose
+    /// `half` the store rounds.
     ///
     /// Also: a blend into a packed 16-bit unorm attachment (`B5G6R5Unorm`, `A1BGR5Unorm`,
     /// `ABGR4Unorm`, `BGR5A1Unorm`) reads what the device's attachment holds, its channels' codes,

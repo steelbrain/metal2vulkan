@@ -1146,13 +1146,11 @@ fn integer_writes_saturate_to_the_bound_formats_channels() {
 /// An `int` or `uint` write into a texture of the float class in a half-float or small-float
 /// format stores the `float` of each lane's bits as written: the device's store converts it, as
 /// it converts every `float` write, where Metal's integer store rounds to nearest even, so the
-/// module records `PrecisionNote::DeviceColorConversion` (and requires no
-/// `VkProperty::MetalHalfStorageWrites`, whose rounding is Metal's `float` write's). A 32-bit
+/// module records `PrecisionNote::DeviceColorConversion`. A 32-bit
 /// float format's needs no conversion, and records nothing. On the interpreter the image holds the
 /// written `f32` itself.
 #[test]
 fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
-    use crate::device::requirements::VkProperty;
     use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
     use crate::vk::Format as F;
     let cases = [
@@ -1192,12 +1190,6 @@ fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
                 narrow,
                 "{what}: {:?}",
                 a.precision
-            );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfStorageWrites),
-                "{what}"
             );
             let (plan, m) =
                 typed_module_with(&bc, "k", &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));

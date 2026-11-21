@@ -198,7 +198,7 @@ use crate::air::intrinsics::{
 };
 use crate::air::ir::{Callee, Const, Inst, InstId, InstKind, Value, ValueId};
 use crate::budget::Meter;
-use crate::error::{DriverDeviation, Error, Feature, LowerFamily, Unsupported};
+use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::sampler::Sampling;
@@ -998,13 +998,6 @@ pub struct TexturePlan {
     /// nil texture's arm), sorted (`absent_arm`), whose words the census counts under
     /// [`ABSENT_ARM`]: computed after the body's selection.
     pub absent_arm: Vec<ValueId>,
-    /// The measured driver deviations, as their properties, the function's storage writes rely
-    /// on (`select_write`): a `float` write to a half-float storage image, left to the device's
-    /// conversion because it stores Metal's half (`MetalHalfStorageWrites`) and its NaN
-    /// (`MetalHalfStorageNans`), a write that may reach a normalized format, because it stores
-    /// Metal's codes (`MetalNormStorageWrites`), and a `half` texel's NaN to a 16-bit float format
-    /// (`MetalHalfTexelWrites`). The module requires them.
-    pub storage_properties: BTreeSet<crate::device::requirements::VkProperty>,
 }
 
 impl TexturePlan {
@@ -1938,61 +1931,36 @@ pub fn routine_words(
 /// of the heap handles.
 pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 
-/// What a `float` write to texture `image` (of storage class `class`) relies on or records where it
-/// may reach a half-float image ([`may_store_half`]), which the device converts whole. Its rounding
-/// of each channel to `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is
-/// Metal's where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
-/// its property), else the device's (`PrecisionNote::DeviceColorConversion`). A write of an
-/// integer texel into a texture of the float class (`cross`, `emit::cross_write`), which Metal
-/// stores rounded to nearest even onto a half-float or small-float channel, records the note
-/// wherever it may reach one, the device's conversion rounding as it rounds a `float` write
-/// (toward zero on every measured driver: within one unit in the last place of the channel's
-/// Metal value, a finite value past 65504 stored as 65504 where Metal's `half` is the infinity).
-/// Its NaN is Metal's
-/// `0x7e00` where the profile takes `DriverDeviation::MetalHalfStorageNans` (the module requires its
-/// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`). A write that
-/// may reach a packed small float image ([`small_float_storage`]) stores its NaN as the device
-/// converts it too: Metal stores every NaN there as its canonical one, and RADV and NVIDIA keep
-/// another NaN's payload bits; a device of `DriverDeviation::MetalSmallFloatNans` stores Metal's
-/// (the module requires its property). A texel that holds no NaN (`nans` false: a constant none
-/// of whose lanes is one) records neither NaN's note. A slot declared without a format records each
-/// note under the format bound there, and a heap element under the families of the textures the
-/// stage's handles can name (`SpecKey::HeapNanFamilies`) (`m` charged for the clauses), which the
-/// runtime announces at a draw or dispatch that binds or makes resident such a texture.
+/// What a `float` write to texture `image` (of storage class `class`) records where it may reach a
+/// half-float image ([`may_store_half`]), which the device converts whole. Its rounding of each
+/// channel to `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is the device's
+/// (`PrecisionNote::DeviceColorConversion`). A write of an integer texel into a texture of the
+/// float class (`cross`, `emit::cross_write`), which Metal stores rounded to nearest even onto a
+/// half-float or small-float channel, records the note wherever it may reach one, the device's
+/// conversion rounding as it rounds a `float` write (toward zero on every measured driver: within
+/// one unit in the last place of the channel's Metal value, a finite value past 65504 stored as
+/// 65504 where Metal's `half` is the infinity). Its NaN is the device's encoding of it, where
+/// Metal's is `0x7e00` (`PrecisionNote::DeviceNanEncoding`). A write that may reach a packed small
+/// float image ([`small_float_storage`]) stores its NaN as the device converts it too: Metal stores
+/// every NaN there as its canonical one, and RADV and NVIDIA keep another NaN's payload bits. A
+/// texel that holds no NaN (`nans` false: a constant none of whose lanes is one) records neither
+/// NaN's note. A slot declared without a format records each note under the format bound there, and
+/// a heap element under the families of the textures the stage's handles can name
+/// (`SpecKey::HeapNanFamilies`) (`m` charged for the clauses), which the runtime announces at a
+/// draw or dispatch that binds or makes resident such a texture.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     (class, cross, nans): (StorageImageClass, bool, bool),
     m: &mut Meter,
 ) -> Result<(), Error> {
-    use crate::device::requirements::VkProperty;
     let half = match class {
         StorageImageClass::Identity => may_store_half(cx, image)?,
         _ => Vec::new(),
     };
     if !half.is_empty() {
-        if !cross
-            && cx
-                .profile
-                .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
-        {
-            cx.families
-                .texture
-                .storage_properties
-                .insert(VkProperty::MetalHalfStorageWrites);
-        } else {
-            cx.note_when(PrecisionNote::DeviceColorConversion, half.clone(), m)?;
-        }
-        if !nans {
-        } else if cx
-            .profile
-            .takes_driver_deviation(DriverDeviation::MetalHalfStorageNans)
-        {
-            cx.families
-                .texture
-                .storage_properties
-                .insert(VkProperty::MetalHalfStorageNans);
-        } else {
+        cx.note_when(PrecisionNote::DeviceColorConversion, half.clone(), m)?;
+        if nans {
             cx.note_when(PrecisionNote::DeviceNanEncoding, half, m)?;
         }
     }
@@ -2001,16 +1969,6 @@ pub(super) fn half_storage_facts(
         cx.note_when(PrecisionNote::DeviceColorConversion, small.clone(), m)?;
     }
     if small.is_empty() || !nans {
-        return Ok(());
-    }
-    if cx
-        .profile
-        .takes_driver_deviation(DriverDeviation::MetalSmallFloatNans)
-    {
-        cx.families
-            .texture
-            .storage_properties
-            .insert(VkProperty::MetalSmallFloatNans);
         return Ok(());
     }
     cx.note_when(PrecisionNote::DeviceNanEncoding, small, m)
@@ -2069,32 +2027,10 @@ fn stored_where(
 }
 
 /// Each family a written texture may be of, by its bit of `SpecKey::HeapNanFamilies`
-/// (`bind::heap::nan_family`), with the deviation and property under which its stored NaN is
-/// Metal's (none for `bind::heap::NAN_OTHER`).
-const NAN_FAMILIES: [(
-    u32,
-    Option<(DriverDeviation, crate::device::requirements::VkProperty)>,
-); 4] = {
+/// (`bind::heap::nan_family`).
+const NAN_FAMILIES: [u32; 4] = {
     use crate::bind::heap::{NAN_OTHER, NAN_SIXTEEN, NAN_SMALL, NAN_WIDE};
-    use crate::device::requirements::VkProperty;
-    [
-        (
-            NAN_SIXTEEN,
-            Some((
-                DriverDeviation::MetalHalfTexelWrites,
-                VkProperty::MetalHalfTexelWrites,
-            )),
-        ),
-        (NAN_WIDE, None),
-        (
-            NAN_SMALL,
-            Some((
-                DriverDeviation::MetalSmallFloatNans,
-                VkProperty::MetalSmallFloatNans,
-            )),
-        ),
-        (NAN_OTHER, None),
-    ]
+    [NAN_SIXTEEN, NAN_WIDE, NAN_SMALL, NAN_OTHER]
 };
 
 /// What a `half` texel's write to texture `image` records of its NaN. Metal stores a written
@@ -2102,69 +2038,47 @@ const NAN_FAMILIES: [(
 /// canonical `0x7fc00000` in any other (the M3 Max under macOS 26.7, measured by the consumer; the
 /// M4 under macOS 27.0.1: every NaN class, both signs, `write` and `read_write`, `Shared` and
 /// `Private`). The write stores the half widened, its NaN's payload in the significand's top bits,
-/// which the device converts: a 16-bit float channel's NaN is Metal's on a device of
-/// `DriverDeviation::MetalHalfTexelWrites` (the module requires its property); a 32-bit one's is
-/// the widened `float`'s bits as written, the device's widening's; a packed
-/// small float one's is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`, which
-/// stores every `float` NaN there as Metal does (the module requires its property); and every
-/// other float channel's is the device's.
+/// which the device converts: a 32-bit float channel's NaN is the widened `float`'s bits as
+/// written, the device's widening's, and every other float channel's (a 16-bit or packed small
+/// float one's included) is the device's conversion's.
 ///
-/// The write records `PrecisionNote::DeviceNanEncoding` where the stored NaN stays the device's:
-/// a 16-bit float channel's on a profile without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit
-/// one's, a packed small float one's without
-/// `DriverDeviation::MetalSmallFloatNans`, and a float channel's of none of those families (a
-/// format that may hold a NaN). A slot whose choice declares no format (or a variant that states
-/// none) records it under the format bound there (`m` charged for the clauses), and a heap
-/// element's under the families of the textures the stage's handles can name
-/// (`SpecKey::HeapNanFamilies`, `bind::heap::nan_family`), which the runtime announces at a draw or dispatch
-/// that binds or makes resident such a texture of a family whose stored NaN is the device's. A
-/// normalized or integer channel stores no NaN.
+/// The write records `PrecisionNote::DeviceNanEncoding` wherever the stored NaN is the device's:
+/// every float channel's (a format that may hold a NaN). A slot whose choice declares no format (or
+/// a variant that states none) records it under the format bound there (`m` charged for the
+/// clauses), and a heap element's under the families of the textures the stage's handles can name
+/// (`SpecKey::HeapNanFamilies`, `bind::heap::nan_family`), which the runtime announces at a draw or
+/// dispatch that binds or makes resident such a texture. A normalized or integer channel stores no
+/// NaN.
 pub(super) fn half_write_nans(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     m: &mut Meter,
 ) -> Result<(), Error> {
-    use crate::device::requirements::VkProperty;
     use crate::vk::NumericFormat as N;
-    // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`) or a packed
-    // small float one's (`Small`), each Metal's on its measured deviation, or the device's
-    // (`Device`).
+    // Whether the stored NaN is exact (`Exact`), the device's (`Device`), or the bound format's
+    // to decide (`Bound`).
     #[derive(PartialEq)]
     enum Stored {
         Exact,
-        Sixteen,
-        Small,
         Device,
         Bound(u32),
     }
     let declared = |f: crate::vk::Format| -> Stored {
         if f == crate::vk::Format::B10G11R11_UFLOAT_PACK32 {
-            return Stored::Small;
-        }
-        let Some(b) = f.block() else {
             return Stored::Device;
-        };
-        match (b.color, b.component_bits, b.packed_bits) {
-            (Some(N::Sfloat), Some(16), None) => Stored::Sixteen,
-            (Some(N::Sfloat | N::Ufloat), _, _) => Stored::Device,
-            _ => Stored::Exact,
+        }
+        match f.block() {
+            Some(b) if !matches!(b.color, Some(N::Sfloat | N::Ufloat)) => Stored::Exact,
+            _ => Stored::Device,
         }
     };
-    let takes = |d| cx.profile.takes_driver_deviation(d);
     let stored = match image {
-        // An element of any family the stage's handles can name: the note holds where they can
-        // name one whose deviation the profile lacks (`SpecKey::HeapNanFamilies`).
+        // An element of any family the stage's handles can name (`SpecKey::HeapNanFamilies`).
         ImageRef::Heap { .. } => {
-            let mut when: Vec<NoteClause> = Vec::new();
-            for (family, measured) in NAN_FAMILIES {
-                match measured {
-                    Some((deviation, property)) if takes(deviation) => {
-                        cx.families.texture.storage_properties.insert(property);
-                    }
-                    _ => when
-                        .push([NoteTest::equal(NoteOn::HeapNan(cx.stage), family, family)].into()),
-                }
-            }
+            let when: Vec<NoteClause> = NAN_FAMILIES
+                .iter()
+                .map(|&family| [NoteTest::equal(NoteOn::HeapNan(cx.stage), family, family)].into())
+                .collect();
             return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
         }
         ImageRef::Slot(index) => {
@@ -2187,56 +2101,18 @@ pub(super) fn half_write_nans(
         let family = B::LINEAR | B::HALF | TexelFormat::NAN_FREE;
         let packed = TexelFormat::PACKED_MASK;
         let bound = |mask, bits| NoteTest::equal(NoteOn::Bound(index), mask, bits);
-        // Each family the bound class may name, its deviation and its property; and a class of no
-        // family, which may hold a NaN the device stores as it likes.
-        let families = [
-            (
-                [bound(family, B::HALF), bound(packed, 0)].into(),
-                Some((
-                    DriverDeviation::MetalHalfTexelWrites,
-                    VkProperty::MetalHalfTexelWrites,
-                )),
-            ),
-            ([bound(family, B::LINEAR), bound(packed, 0)].into(), None),
-            (
-                [bound(packed, PackedTexels::SmallFloat.class().0)].into(),
-                Some((
-                    DriverDeviation::MetalSmallFloatNans,
-                    VkProperty::MetalSmallFloatNans,
-                )),
-            ),
-            ([bound(family, 0), bound(packed, 0)].into(), None),
+        // Each family the bound class may name, and a class of no family, which may hold a NaN the
+        // device stores as it likes.
+        let when: Vec<NoteClause> = vec![
+            [bound(family, B::HALF), bound(packed, 0)].into(),
+            [bound(family, B::LINEAR), bound(packed, 0)].into(),
+            [bound(packed, PackedTexels::SmallFloat.class().0)].into(),
+            [bound(family, 0), bound(packed, 0)].into(),
         ];
-        let mut when = Vec::new();
-        for (clause, measured) in families {
-            match measured {
-                Some((deviation, property)) if takes(deviation) => {
-                    cx.families.texture.storage_properties.insert(property);
-                }
-                _ => when.push(clause),
-            }
-        }
         return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
     }
-    let measured = match stored {
-        Stored::Sixteen => Some((
-            DriverDeviation::MetalHalfTexelWrites,
-            VkProperty::MetalHalfTexelWrites,
-        )),
-        Stored::Small => Some((
-            DriverDeviation::MetalSmallFloatNans,
-            VkProperty::MetalSmallFloatNans,
-        )),
-        Stored::Exact | Stored::Device | Stored::Bound(_) => None,
-    };
-    match measured {
-        Some((deviation, property)) if takes(deviation) => {
-            cx.families.texture.storage_properties.insert(property);
-        }
-        _ if stored == Stored::Exact => {}
-        _ => {
-            cx.precision.insert(PrecisionNote::DeviceNanEncoding);
-        }
+    if stored == Stored::Device {
+        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
     }
     Ok(())
 }
@@ -2387,35 +2263,23 @@ pub(super) fn heap_storage_conversions(
     out
 }
 
-/// What a `float` (or `half`, held widened) texel's write in form `texel` to texture `image` of
-/// shape `shape` relies on or records where the texture's format may be a normalized one, whose
-/// conversion the device makes: Metal stores each channel's value clamped to its range (a NaN 0)
-/// times its maximum code exactly, rounded to nearest with a tie away from zero, a 1-bit channel 1
-/// only above one half. A device measured to store those codes
-/// (`DriverDeviation::MetalNormStorageWrites`, whose property the module then requires) stores
-/// them, but for a 1-bit channel, which it rounds otherwise (RADV rounds its half up): a write of
-/// four lanes that may reach a texture of a 1-bit alpha (a heap element, or a slot whose storage
-/// choice declares no format, where the device stores such a texture) records
-/// `PrecisionNote::DeviceColorConversion`. Elsewhere every such write records it (ANV and
-/// lavapipe round the `f32` product with ties to even). A slot whose storage choice declares a
+/// What a `float` (or `half`, held widened) texel's write to texture `image` records where the
+/// texture's format may be a normalized one, whose conversion the device makes: Metal stores each
+/// channel's value clamped to its range (a NaN 0) times its maximum code exactly, rounded to
+/// nearest with a tie away from zero, a 1-bit channel 1 only above one half, and every such write
+/// records `PrecisionNote::DeviceColorConversion` (ANV and lavapipe round the `f32` product with
+/// ties to even, and RADV rounds a 1-bit channel's half up). A slot whose storage choice declares a
 /// format that is not normalized, or encodes it by its class (sRGB, a YCbCr write, the half and
 /// small floats), records nothing.
-pub(super) fn norm_storage_facts(
-    cx: &mut SelectCx<'_>,
-    image: ImageRef,
-    shape: ImageShape,
-    texel: TexelForm,
-) -> Result<(), Error> {
-    use crate::device::requirements::VkProperty;
-    use crate::metal::format::{one_bit_storage, StorageUse};
+pub(super) fn norm_storage_facts(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<(), Error> {
     use crate::vk::NumericFormat as N;
-    // Whether the write may reach a normalized format, and whether the bound texture decides it.
-    let (reached, bound) = match image {
-        ImageRef::Heap { .. } => (true, true),
+    // Whether the write may reach a normalized format.
+    let reached = match image {
+        ImageRef::Heap { .. } => true,
         ImageRef::Slot(index) => {
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
-                None => (true, true),
+                None => true,
                 Some(c) => {
                     let formatless = c.vk_format == crate::vk::Format::UNDEFINED;
                     let normalized = formatless
@@ -2429,30 +2293,12 @@ pub(super) fn norm_storage_facts(
                             | StorageImageClass::AlphaInRed
                             | StorageImageClass::RotateArgb
                     );
-                    (normalized && converted, formatless)
+                    normalized && converted
                 }
             }
         }
     };
-    if !reached {
-        return Ok(());
-    }
-    if !cx
-        .profile
-        .takes_driver_deviation(DriverDeviation::MetalNormStorageWrites)
-    {
-        cx.precision.insert(PrecisionNote::DeviceColorConversion);
-        return Ok(());
-    }
-    cx.families
-        .texture
-        .storage_properties
-        .insert(VkProperty::MetalNormStorageWrites);
-    let use_ = match shape.dim == ImageDim::Buffer {
-        true => StorageUse::texel_buffer(false, true),
-        false => StorageUse::texture(false, true),
-    };
-    if bound && texel.lanes == 4 && one_bit_storage(use_, cx.profile) {
+    if reached {
         cx.precision.insert(PrecisionNote::DeviceColorConversion);
     }
     Ok(())
@@ -3520,7 +3366,7 @@ fn select_write(
     }
     // A `half` texel's too, held widened: Metal stores its value by the same rule.
     if matches!(texel.conv, TexelConv::F32 | TexelConv::F16) && extended.is_none() {
-        norm_storage_facts(cx, image, shape, texel)?;
+        norm_storage_facts(cx, image)?;
     }
     // A storage slot bound to a swizzled texture stores each channel from the lane the swizzle
     // takes it to, under its variant, as plain Metal writes it. A `ulong` texel's is not measured.

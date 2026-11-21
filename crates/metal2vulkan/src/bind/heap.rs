@@ -434,10 +434,8 @@ pub(crate) const HELD: u32 = 1;
 /// bfloat one, whose sample reads the nearest texel under either filter.
 pub(crate) const FILTERED: u32 = 2;
 
-/// The bit of `SpecKey::HeapNanFamilies` of a 16-bit float format: its written `half` NaN is
-/// Metal's on a device of `DriverDeviation::MetalHalfTexelWrites`, a written `float`'s NaN on one of
-/// `DriverDeviation::MetalHalfStorageNans` and its rounding on one of
-/// `DriverDeviation::MetalHalfStorageWrites`.
+/// The bit of `SpecKey::HeapNanFamilies` of a 16-bit float format: its written NaN, a `half`'s or
+/// a `float`'s, is the device's conversion's.
 pub(crate) const NAN_SIXTEEN: u32 = 1;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is the
@@ -445,7 +443,7 @@ pub(crate) const NAN_SIXTEEN: u32 = 1;
 pub(crate) const NAN_WIDE: u32 = 2;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a packed small float format (`RG11B10Float`,
-/// `RGB9E5Float`): its written NaN is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`.
+/// `RGB9E5Float`): its written NaN is the device's conversion's.
 pub(crate) const NAN_SMALL: u32 = 4;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a float format of none of those families whose texels

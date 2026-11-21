@@ -643,15 +643,13 @@ fn argb8_storage_slots_rotate_their_bytes() {
 /// A half-float storage slot (formatless, and declared `Rgba16f`) writes each `float` channel as
 /// computed, the device's conversion rounding it and storing its NaN, on every profile: the
 /// rounding is the device's own (`PrecisionNote::DeviceColorConversion`) and so is the NaN
-/// (`PrecisionNote::DeviceNanEncoding`), and the module requires no `VkProperty::MetalHalfStorage*`
-/// or `MetalSmallFloatNans`; a formatless slot's notes hold under the format bound there
-/// (`tests::engine_half_storage_notes`). A formatless slot may also reach a packed small float
-/// image, whose NaN is the device's (noted too), or a normalized one, whose conversion is the
+/// (`PrecisionNote::DeviceNanEncoding`); a formatless slot's notes hold under the format bound
+/// there (`tests::engine_half_storage_notes`). A formatless slot may also reach a packed small
+/// float image, whose NaN is the device's (noted too), or a normalized one, whose conversion is the
 /// device's (noted too). The held lanes cover every tie between neighbouring halves and its
 /// neighbours, past the largest, the infinities and NaNs.
 #[test]
 fn half_float_storage_slots_leave_their_writes_to_the_device() {
-    use crate::device::requirements::VkProperty;
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("halves", &kernel(Source::ReadWrite, false, 0)) else {
         return;
@@ -731,14 +729,6 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
                 SPIRV_WORDS,
             )
             .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let relied = &a.requirements.properties;
-            for property in [
-                VkProperty::MetalHalfStorageWrites,
-                VkProperty::MetalHalfStorageNans,
-                VkProperty::MetalSmallFloatNans,
-            ] {
-                assert!(!relied.contains(&property), "{what}: {property:?}");
-            }
             for note in [
                 PrecisionNote::DeviceColorConversion,
                 PrecisionNote::DeviceNanEncoding,

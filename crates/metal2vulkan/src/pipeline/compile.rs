@@ -3378,15 +3378,6 @@ fn lower_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::MetalFirstVertexIndices);
     }
-    // Color channels written as computed, because the device converts them as Metal does.
-    requirements
-        .properties
-        .extend(plan.families.stage_io.color_properties.iter().copied());
-    // Storage writes left to the device's conversion with no note, because the device stores
-    // Metal's codes or NaN there.
-    requirements
-        .properties
-        .extend(plan.families.texture.storage_properties.iter().copied());
     // The set-1 heap's binding flags need their features beside the module's.
     requirements
         .features

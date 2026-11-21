@@ -454,9 +454,7 @@ pub struct DepthBias {
 /// constant `c` (finite) or the slope factor is nonzero, by `c + 1` units of 1/65535 for `c` of 0
 /// or more and `c - 1` below, as `float` (so a slope alone brings one unit), added to the depth
 /// rounded toward zero, and the sum stored rounded to nearest. The runtime announces the device's
-/// bias there (`unorm-depth-bias`) where the profile does not take
-/// [`DriverDeviation::MetalDepth16BiasedStores`](crate::error::DriverDeviation::MetalDepth16BiasedStores)
-/// (MoltenVK, which hands Metal its constant).
+/// bias there (`unorm-depth-bias`).
 pub fn depth_bias(
     topology: vk::PrimitiveTopology,
     depth_bias: f32,

@@ -500,62 +500,6 @@ pub enum DriverDeviation {
     /// that reads from the center (`VkProperty::InterpolateAtOffsetCentered`), and a function that
     /// runs per sample is refused elsewhere.
     MetalCenterVaryings,
-    /// The device stores every `float` but a NaN that a shader writes to a half-float storage
-    /// image (`R16Float`, `RG16Float`, `RGBA16Float`; a storage texel buffer of one too) as Metal
-    /// stores a kernel's write (`VkProperty::MetalHalfStorageWrites`): rounded toward zero, a
-    /// finite value past 65504 stored as 65504, an infinity as itself. The shader writes the
-    /// value as computed either way (`StorageImageClass::Identity`), its NaN as
-    /// [`MetalHalfStorageNans`] states: a fragment function's `float` blend into a 16-bit float
-    /// attachment in the storage form among them, which Metal's blended write rounds so too.
-    /// Where the profile takes it the module requires the property; unmeasured, such a write
-    /// records `PrecisionNote::DeviceColorConversion`. An integer texel written into a half-float
-    /// image (its bits as the `float`), which Metal's integer store rounds to nearest even, is the
-    /// store's to convert either way, and records the note.
-    ///
-    /// [`MetalHalfStorageNans`]: DriverDeviation::MetalHalfStorageNans
-    MetalHalfStorageWrites,
-    /// The device stores every NaN a shader writes to a half-float storage image as Metal stores
-    /// a kernel's, `0x7e00` (`VkProperty::MetalHalfStorageNans`). The shader writes the NaN as
-    /// computed either way; where the profile takes it the module requires the property, and
-    /// unmeasured such a write records `PrecisionNote::DeviceNanEncoding`.
-    MetalHalfStorageNans,
-    /// The device stores a `half` texel's write as Metal stores it once the shader hands it the
-    /// half widened to `float` in a 16-bit float storage image, and the NaN `0x7fc00000` in a
-    /// packed small float one (`VkProperty::MetalHalfTexelWrites`): the half's own bits, a
-    /// signalling NaN's unquieted, in the first, and the format's canonical NaN in the second.
-    /// Where the profile takes it, a write to a slot whose storage choice declares a 16-bit float
-    /// format records no `PrecisionNote::DeviceNanEncoding` and the module requires the property.
-    /// Unmeasured, such a write records the note, which the runtime announces at the bind of such
-    /// a texture to a slot whose storage choice declares no format. A packed small float channel's NaN, the half widened, records
-    /// the note on every device.
-    MetalHalfTexelWrites,
-    /// The device stores a `float` texel a shader writes to a unorm or snorm storage image (not
-    /// an sRGB one; a `half` texel's, widened, alike) as Metal's code
-    /// (`VkProperty::MetalNormStorageWrites`): each channel's value clamped to its range (a NaN 0)
-    /// times its maximum code exactly, rounded to nearest with a tie away from zero, a packed
-    /// 16-bit format's channel likewise and its 1-bit channel 1 only above one half. The shader
-    /// writes the value as computed either way. Where the profile takes it the module requires
-    /// the property, and a write that may reach a 1-bit alpha records
-    /// `PrecisionNote::DeviceColorConversion`; unmeasured, every write that may reach such a format
-    /// records it.
-    MetalNormStorageWrites,
-    /// The device stores every depth a draw writes to a `Depth16Unorm` attachment, unbiased, as
-    /// Metal's code: the depth scaled by 65535 exactly and rounded to nearest, a tie up
-    /// (`VkProperty::MetalDepth16Stores`; Metal stored 32768 for 0.5 and 6554 for 0.1's
-    /// `0x3dcccccd`). Vulkan leaves the conversion's rounding to the device. Every depth is the
-    /// device's own conversion; no module reads the deviation. Unmeasured, the runtime announces
-    /// `unorm-depth-rounding` at a draw that tests or writes such a depth.
-    MetalDepth16Stores,
-    /// The device stores every depth a draw biases on a `Depth16Unorm` attachment as Metal's code,
-    /// Metal's constant recorded in the device's unit as [`depth_bias`](crate::metal::state::depth_bias)
-    /// records it (`VkProperty::MetalDepth16BiasedStores`): Metal biases by `c ± 1` units of
-    /// 1/65535 as `float` (one unit for a slope alone), adds the bias to the depth rounding toward
-    /// zero, and stores the sum rounded to nearest, a tie up. Vulkan leaves the unit (at most twice
-    /// 2^-16) and the sum's rounding to the device. Every biased depth is the device's own, the
-    /// attachment's fixed-function bias applied; no module reads the deviation. Unmeasured, the
-    /// runtime announces `unorm-depth-bias` at a draw that biases such a depth by a constant, or
-    /// by a slope alone.
-    MetalDepth16BiasedStores,
     /// The device interpolates a varying as Metal does, bit for bit
     /// (`VkProperty::MetalInterpolation`): the driver hands the varying and its qualifiers to
     /// Metal, whose rasterizer interpolates it. Vulkan states no precision for interpolation, and
@@ -594,13 +538,6 @@ pub enum DriverDeviation {
     /// alpha records no `PrecisionNote::DeviceAlphaCoverage` and requires the property.
     /// Unmeasured, such a pipeline's fragment stage records the note.
     MetalAlphaCoverage,
-    /// The device stores the NaN a shader writes to a packed small float storage image
-    /// (`B10G11R11_UFLOAT_PACK32`, Metal's `RG11B10Float`) as Metal stores the same write: a
-    /// `float` texel's NaN, whatever its sign and payload, and a `half` texel's, handed to the
-    /// device widened (`VkProperty::MetalSmallFloatNans`). Where the profile takes it, a write that
-    /// may reach such an image records no `PrecisionNote::DeviceNanEncoding` for it and the module
-    /// requires the property. Unmeasured, the write records the note.
-    MetalSmallFloatNans,
 }
 
 /// One device capability a refusal can name.

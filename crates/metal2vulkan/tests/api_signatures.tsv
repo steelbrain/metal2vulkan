@@ -10258,16 +10258,9 @@ variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	Interpolat
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetFromSevenSixteenths	InterpolateAtOffsetFromSevenSixteenths
 variant	metal2vulkan::device::VkProperty::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::device::VkProperty::MetalCenterVaryings	MetalCenterVaryings
-variant	metal2vulkan::device::VkProperty::MetalDepth16BiasedStores	MetalDepth16BiasedStores
-variant	metal2vulkan::device::VkProperty::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::device::VkProperty::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::device::VkProperty::MetalHalfStorageNans	MetalHalfStorageNans
-variant	metal2vulkan::device::VkProperty::MetalHalfStorageWrites	MetalHalfStorageWrites
-variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::device::VkProperty::MetalInterpolation	MetalInterpolation
-variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::device::VkProperty::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
 variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubgroupSizeStage(Stage)
 variant	metal2vulkan::device::VkProperty::Rgba4OpaqueBlackSwizzled	Rgba4OpaqueBlackSwizzled
@@ -10415,16 +10408,9 @@ variant	metal2vulkan::error::DescriptorError::VertexLayout	VertexLayout { layout
 variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { step_rate: u32 }
 variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
-variant	metal2vulkan::error::DriverDeviation::MetalDepth16BiasedStores	MetalDepth16BiasedStores
-variant	metal2vulkan::error::DriverDeviation::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::error::DriverDeviation::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageNans	MetalHalfStorageNans
-variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageWrites	MetalHalfStorageWrites
-variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::error::DriverDeviation::MetalInterpolation	MetalInterpolation
-variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::error::DynamicLibraryProblem::FunctionConstants	FunctionConstants
 variant	metal2vulkan::error::DynamicLibraryProblem::NoInstallName	NoInstallName
 variant	metal2vulkan::error::DynamicLibraryProblem::NotDynamic	NotDynamic

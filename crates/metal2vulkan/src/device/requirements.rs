@@ -633,54 +633,11 @@ pub enum VkProperty {
     /// pixel form, requires it; without it, their pixel form is `InterpolateAtOffset` at offset
     /// 0, which requires [`VkProperty::InterpolateAtOffsetCentered`].
     MetalCenterVaryings,
-    /// The device stores every `float` but a NaN that a shader writes to a half-float storage
-    /// image as Metal stores a kernel's write, rounded toward zero (the driver's measured
-    /// deviation
-    /// [`DriverDeviation::MetalHalfStorageWrites`](crate::error::DriverDeviation::MetalHalfStorageWrites)).
-    /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. A module
-    /// that writes such a `float` requires it; without it, the module records
-    /// `PrecisionNote::DeviceColorConversion`.
-    MetalHalfStorageWrites,
-    /// The device stores every NaN a shader writes to a half-float storage image as Metal's
-    /// `0x7e00` (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfStorageNans`](crate::error::DriverDeviation::MetalHalfStorageNans)).
-    /// No Vulkan query reports it. A module that writes such a NaN requires it; without it, the
-    /// module records `PrecisionNote::DeviceNanEncoding`.
-    MetalHalfStorageNans,
-    /// The device stores the widened `half` a shader writes to a 16-bit float storage image as
-    /// the half's own bits, a signalling NaN's unquieted, and the NaN `0x7fc00000` written to a
-    /// packed small float one as the format's canonical NaN (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfTexelWrites`](crate::error::DriverDeviation::MetalHalfTexelWrites)).
-    /// No Vulkan query reports it. A module whose `half` texel write to a 16-bit float format
-    /// leaves its NaN to the device requires it; without it, the write records
-    /// `PrecisionNote::DeviceNanEncoding`.
-    MetalHalfTexelWrites,
-    /// The device stores a `float` texel a shader writes to a unorm or snorm storage image as
-    /// Metal's code, the exact product rounded to nearest with a tie away from zero (the driver's
-    /// measured deviation
-    /// [`DriverDeviation::MetalNormStorageWrites`](crate::error::DriverDeviation::MetalNormStorageWrites)).
-    /// No Vulkan query reports it. A module whose `float` texel write may reach a normalized
-    /// format requires it; without it, the module records `PrecisionNote::DeviceColorConversion`.
-    MetalNormStorageWrites,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
     /// device's own sampler. No Vulkan query reports it: every profile takes it. A module that
     /// leaves a sample to the device's sampler requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,
-    /// The device stores every unbiased depth a draw writes to a `Depth16Unorm` attachment as
-    /// Metal's code (the driver's measured deviation
-    /// [`DriverDeviation::MetalDepth16Stores`](crate::error::DriverDeviation::MetalDepth16Stores)).
-    /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. No module
-    /// requires it: every depth is the device's own conversion, and where the profile lacks it the
-    /// runtime announces `unorm-depth-rounding`.
-    MetalDepth16Stores,
-    /// The device stores every depth a draw biases on a `Depth16Unorm` attachment as Metal's code
-    /// (the driver's measured deviation
-    /// [`DriverDeviation::MetalDepth16BiasedStores`](crate::error::DriverDeviation::MetalDepth16BiasedStores)).
-    /// No Vulkan query reports it: Vulkan leaves the bias's unit and the biased sum's rounding to
-    /// the device. No module requires it: every biased depth is the device's own, and where the
-    /// profile lacks it the runtime announces `unorm-depth-bias`.
-    MetalDepth16BiasedStores,
     /// The device interpolates a varying as Metal does, bit for bit (the driver's measured
     /// deviation
     /// [`DriverDeviation::MetalInterpolation`](crate::error::DriverDeviation::MetalInterpolation)).
@@ -724,14 +681,6 @@ pub enum VkProperty {
     /// requires it, where no module does (the coverage is the pipeline's multisample state);
     /// without it, the pipeline's fragment stage records that note.
     MetalAlphaCoverage,
-    /// The device stores a NaN a shader writes to a packed small float storage image
-    /// (`B10G11R11_UFLOAT_PACK32`) as Metal stores it, a `float`'s or a `half`'s widened (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalSmallFloatNans`](crate::error::DriverDeviation::MetalSmallFloatNans)).
-    /// Vulkan states no encoding for it. A module whose write may reach such an image records no
-    /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding)
-    /// for it and requires it.
-    MetalSmallFloatNans,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

@@ -38,8 +38,6 @@
 //! (Metal stores every NaN of the blend as `0x7e00`). An attachment a lane of
 //! which rounds is listed as rounded (`rounded_colors`), and takes no Vulkan blend of one and zero.
 
-use crate::device::requirements::VkProperty;
-use crate::error::DriverDeviation;
 use crate::lower::arith::color_write;
 use crate::lower::arith::{FloatFmt, Form};
 use crate::lower::emit::EmitCx;
@@ -51,7 +49,6 @@ use crate::pipeline::sym::Stage;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
-use std::collections::BTreeSet;
 
 /// Plan the write of a fragment function's output of form `f` to color attachment `color`
 /// (dual-source index 0), through an output variable or in the storage form (see the module
@@ -71,9 +68,8 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
         .insert(color, rules);
     // A storage write the shader blends into a 16-bit float attachment stores the blend's result:
     // a `half` output's `half` in every channel, which the device converts exactly, and a `float`
-    // output's `float`, which the storage image's store rounds to `half` as Metal's blended write
-    // does where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
-    // its property), else as the device rounds it (`PrecisionNote::DeviceColorConversion`). No
+    // output's `float`, which the storage image's store rounds to `half` as the device rounds it
+    // (`PrecisionNote::DeviceColorConversion`). No
     // conversion of an output variable's bears on it, and its NaN is the device's arithmetic's,
     // which the storage image's store converts (`PrecisionNote::DeviceNanEncoding`).
     // One the shader blends into an 8-bit unorm attachment stores the blend's result, which the
@@ -84,20 +80,11 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
     let mut device = false;
     let mut blended = false;
     let mut nans = false;
-    let mut relied = BTreeSet::new();
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
         nans |= !shader_blended && !nan_free && color_writes::half_float(rule) && !nan_kept(f);
         if sixteen_blended && f.float_fmt() == Some(FloatFmt::F32) {
-            match cx
-                .profile
-                .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
-            {
-                true => {
-                    relied.insert(VkProperty::MetalHalfStorageWrites);
-                }
-                false => device = true,
-            }
+            device = true;
             continue;
         }
         match (rule, f.float_fmt()) {
@@ -130,7 +117,6 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
     if nans {
         cx.precision.insert(PrecisionNote::DeviceNanEncoding);
     }
-    cx.families.stage_io.color_properties.extend(relied);
     if !lanes.iter().any(Option::is_some) {
         return;
     }

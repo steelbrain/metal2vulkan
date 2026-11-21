@@ -1932,8 +1932,7 @@ fn the_word_cap_holds_on_the_emitted_words() {
     let Some(bc) = assemble_file("storage_texture_write") else {
         return;
     };
-    // (`DriverDeviation::MetalNormStorageWrites`): on an unmeasured device the write's rounding
-    // routine, counted whole, lifts the estimate past the emitted words.
+    // The write's rounding routine, counted whole, lifts the estimate past the emitted words.
     let p = profile_with("moltenvk-m3", true, true);
     let entry = EntryRef::Name("storage_texture_write");
     let consts = FunctionConstantValues::defaults();

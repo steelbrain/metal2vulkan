@@ -439,10 +439,6 @@ pub struct StageIoPlan {
     /// (`color_write`), through an output variable or in the storage form: each by its rule, a
     /// half-float channel's under `TextureWriteRoundingMode::NearestEven`.
     pub rounded: BTreeMap<u32, [Option<crate::pipeline::lower_inputs::ChannelWrite>; 4]>,
-    /// The measured driver deviations, as their properties, a fragment function's color writes
-    /// rely on: channels that record no device conversion because the device converts them as
-    /// Metal does (`color_write`). The module requires them.
-    pub color_properties: BTreeSet<crate::device::requirements::VkProperty>,
     /// The extended-range color attachments whose `float` or `half` output each return stores
     /// as the raw texel Metal stores (`extended_color::encode`), with the form each is held in
     /// (and, a bfloat one's rounding).

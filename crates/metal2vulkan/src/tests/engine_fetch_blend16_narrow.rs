@@ -29,9 +29,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::budget::Budget;
-use crate::device::requirements::VkProperty;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::DriverDeviation;
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::PrecisionNote;
@@ -285,20 +283,11 @@ fn a_narrow_output_blends_a_fetched_sixteen_bit_float_attachment() {
                 );
                 assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
                 // A `float2` output's blend result is the storage image's store's to round to
-                // `half`: Metal's where the profile takes `MetalHalfStorageWrites`, whose property
-                // the module requires, else the device's, noted. A `half2` output's is a `half`.
+                // `half`, the device's, noted. A `half2` output's is a `half`.
                 let float = entry == "fbl_narrow_float2";
-                let metal = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
-                assert_eq!(
-                    a.requirements
-                        .properties
-                        .contains(&VkProperty::MetalHalfStorageWrites),
-                    float && metal,
-                    "{what}"
-                );
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::DeviceColorConversion),
-                    float && !metal,
+                    float,
                     "{what}: {:?}",
                     a.precision
                 );

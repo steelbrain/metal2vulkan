@@ -769,14 +769,13 @@ declare void @air.write_texture_2d.v4f16(ptr addrspace(1), <2 x i32>, <4 x half>
 /// A `half` write through an argument buffer records `PrecisionNote::DeviceNanEncoding` under the
 /// families of the textures its handles can name (`SpecKey::HeapNanFamilies`): on every committed
 /// profile with a heap, one clause for each family, as each stores the device's NaN (a 16-bit
-/// float format, a 32-bit one, a packed small float one, and a float format of none of those),
-/// and no `VkProperty::MetalHalfTexelWrites` or `MetalSmallFloatNans` is required. A plan gives the key from the command's resident textures (`R16Float` 1,
+/// float format, a 32-bit one, a packed small float one, and a float format of none of those). A
+/// plan gives the key from the command's resident textures (`R16Float` 1,
 /// `RGBA32Float` 2, `RG11B10Float` 4, `RGBA8Unorm` and `R32Uint` 0), and the note holds under the
 /// plan's values exactly where a resident texture is of a family of a clause.
 #[test]
 fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
     use crate::bind::{ResourceClass, UsedResource};
-    use crate::device::requirements::VkProperty;
     use crate::pipeline::{PrecisionNote, SpecClause};
     let note = PrecisionNote::DeviceNanEncoding;
     let key = SpecKey::HeapNanFamilies(Stage::Kernel);
@@ -816,15 +815,6 @@ fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
             Err(e) => panic!("{stem}: {e}"),
         };
         assert_eq!(noted(&a.specialized), 15, "{stem}: every family");
-        for property in [
-            VkProperty::MetalHalfTexelWrites,
-            VkProperty::MetalSmallFloatNans,
-        ] {
-            assert!(
-                !a.requirements.properties.contains(&property),
-                "{stem}: {property:?}"
-            );
-        }
         assert!(a.precision.contains(&note), "{stem}");
         compiled += 1;
     }

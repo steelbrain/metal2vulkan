@@ -302,7 +302,7 @@ pub(super) fn select(
         super::half_storage_facts(cx, image, (class, false, true), m)?;
     }
     if matches!(conv, TexelConv::F32 | TexelConv::F16) {
-        super::norm_storage_facts(cx, image, t.image, TexelForm { conv, lanes })?;
+        super::norm_storage_facts(cx, image)?;
     }
     if conv == TexelConv::F16 {
         super::half_write_nans(cx, image, m)?;

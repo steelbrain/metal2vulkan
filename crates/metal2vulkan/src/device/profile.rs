@@ -220,30 +220,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalCenterVaryings),
-            DriverDeviation::MetalHalfStorageWrites => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfStorageWrites),
-            DriverDeviation::MetalHalfStorageNans => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfStorageNans),
-            DriverDeviation::MetalHalfTexelWrites => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfTexelWrites),
-            DriverDeviation::MetalNormStorageWrites => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalNormStorageWrites),
-            DriverDeviation::MetalDepth16Stores => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalDepth16Stores),
-            DriverDeviation::MetalDepth16BiasedStores => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalDepth16BiasedStores),
             DriverDeviation::MetalInterpolation => f
                 .enabled
                 .properties
@@ -260,10 +236,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalAlphaCoverage),
-            DriverDeviation::MetalSmallFloatNans => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalSmallFloatNans),
         }
     }
 

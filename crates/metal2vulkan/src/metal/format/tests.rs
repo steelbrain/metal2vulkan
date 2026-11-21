@@ -1781,8 +1781,7 @@ fn a_red_blue_exchange_is_a_blue_first_format_s() {
 
 /// A half-float storage texture takes `Identity` on every committed profile, for every use, written
 /// or read, image or texel buffer: the device converts each value and NaN (`lower::texture`'s
-/// `half_storage_facts` and `half_write_nans` record what it relies on or notes). So does another
-/// float format.
+/// `half_storage_facts` and `half_write_nans` record what they note). So does another float format.
 #[test]
 fn half_float_storage_takes_its_own_format() {
     let mut seen = 0;

@@ -1668,19 +1668,10 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // words) and its read of the table's length are emitted once. The module was
                 // about 3,500 words with a search per load; it is within 1,700 with `u64` ids
                 // (1,678 on MoltenVK) and 2,300 with word ids, the bounds below.
-                // The write's normalized channels are the device's conversion: noted where the
-                // profile is not measured to store Metal's codes, or where it stores a texture
-                // of a 1-bit alpha, which it rounds otherwise.
-                let measured =
-                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalNormStorageWrites);
-                let one_bit = crate::metal::format::one_bit_storage(
-                    crate::metal::format::StorageUse::texture(false, true),
-                    &p,
-                );
-                assert_eq!(
+                // The write's normalized channels are the device's conversion, noted.
+                assert!(
                     a.precision
                         .contains(&crate::pipeline::PrecisionNote::DeviceColorConversion),
-                    !measured || one_bit,
                     "{stem}"
                 );
                 assert_eq!(count(&a, OP_FUNCTION), 2, "{stem}");
@@ -1775,15 +1766,10 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
 /// A `half` (or `float`) texel written through an argument buffer's texture is the device's write
 /// on every committed profile: the module declares the one formatless float storage class, and
 /// records `PrecisionNote::DeviceNanEncoding`, since the heap may hold a half-float, 32-bit or
-/// packed small float texture, whose stored NaN is the device's; but for a `float` texel on a
-/// profile whose stores of a `float` NaN into the half-float and the packed small float formats
-/// are measured to be Metal's (`DriverDeviation::MetalHalfStorageNans` and
-/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity). Either texel's note
-/// holds under the families the heap can name (`SpecKey::HeapNanFamilies`; a `half` texel's held
-/// in `tests::engine_extended_range::heap`), never whatever the heap holds: a `float` texel's under
-/// a 16-bit float texture's where the profile lacks `MetalHalfStorageNans` and a packed small
-/// float one's where it lacks `MetalSmallFloatNans`. Either texel requires
-/// `VkProperty::MetalSmallFloatNans` where the profile takes `DriverDeviation::MetalSmallFloatNans`.
+/// packed small float texture, whose stored NaN is the device's. Either texel's note holds under
+/// the families the heap can name (`SpecKey::HeapNanFamilies`; a `half` texel's held in
+/// `tests::engine_extended_range::heap`), never whatever the heap holds: a `float` texel's under a
+/// 16-bit float texture's and a packed small float one's.
 #[test]
 fn a_heap_texel_write_is_the_devices_write() {
     for float in [false, true] {
@@ -1807,19 +1793,13 @@ fn a_heap_texel_write_is_the_devices_write() {
             assert_eq!(classes.len(), 1, "{what}: {classes:?}");
             assert_eq!(classes[0].access, ImageAccess::Storage, "{what}");
             assert_eq!(classes[0].sampled_type, SampledType::Float, "{what}");
-            let takes = |d| p.takes_driver_deviation(d);
-            let small = takes(crate::error::DriverDeviation::MetalSmallFloatNans);
-            let metal_s =
-                float && small && takes(crate::error::DriverDeviation::MetalHalfStorageNans);
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                !metal_s,
                 "{what}: {:?}",
                 a.precision
             );
-            if float && !metal_s {
+            if float {
                 use crate::bind::heap::{NAN_SIXTEEN, NAN_SMALL};
-                let halves = !takes(crate::error::DriverDeviation::MetalHalfStorageNans);
                 let mut families: Vec<u32> = a
                     .specialized
                     .iter()
@@ -1837,19 +1817,13 @@ fn a_heap_texel_write_is_the_devices_write() {
                     })
                     .collect();
                 families.sort_unstable();
-                let mut want = Vec::new();
-                want.extend(halves.then_some(NAN_SIXTEEN));
-                want.extend((!small).then_some(NAN_SMALL));
-                want.sort_unstable();
-                assert_eq!(families, want, "{what}: {:?}", a.specialized);
+                assert_eq!(
+                    families,
+                    [NAN_SIXTEEN, NAN_SMALL],
+                    "{what}: {:?}",
+                    a.specialized
+                );
             }
-            assert_eq!(
-                a.requirements
-                    .properties
-                    .contains(&crate::device::requirements::VkProperty::MetalSmallFloatNans),
-                small,
-                "{what}"
-            );
             compiled += 1;
         }
         assert!(compiled > 0, "no committed profile writes through a heap");

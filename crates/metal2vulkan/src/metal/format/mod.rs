@@ -2916,26 +2916,6 @@ pub(crate) fn fetch_view_alias(format: vk::Format, profile: &DeviceProfile) -> O
     }
 }
 
-/// Whether `pf`'s alpha is a 1-bit unorm channel (`crate::metal::texel_format::PackedTexels::Rgb5A1`:
-/// `A1BGR5Unorm`, `BGR5A1Unorm`), whose `float` write Metal stores as 1 only above one half, where
-/// a device measured to store every other normalized channel as Metal does rounds the half up
-/// (RADV): the device's conversion of such a write is noted (`lower::texture`'s
-/// `norm_storage_facts`).
-pub(crate) fn one_bit_alpha(pf: PixelFormat) -> bool {
-    crate::metal::texel_format::PackedTexels::of(pf)
-        == Some(crate::metal::texel_format::PackedTexels::Rgb5A1)
-}
-
-/// Whether `profile` stores a texture (or texture buffer) of a format with a 1-bit alpha
-/// ([`one_bit_alpha`]) for `use_`: a write whose bound texture may be one notes the device's
-/// conversion.
-pub(crate) fn one_bit_storage(use_: StorageUse, profile: &DeviceProfile) -> bool {
-    PixelFormat::ALL
-        .iter()
-        .filter(|&&pf| one_bit_alpha(pf))
-        .any(|&pf| storage_choice(pf, use_, profile).is_ok())
-}
-
 /// The SPIR-V `Image Format` a storage image of Vulkan format `format` is declared with (Vulkan
 /// spec "Compatibility Between SPIR-V Image Formats and Vulkan Formats"); `None` for formats only
 /// a formatless (`Unknown`) declaration can access. Crate-private: only the lowering and the
