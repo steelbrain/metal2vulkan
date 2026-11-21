@@ -7,6 +7,8 @@
 //! once the copy has run, and holds one global memory barrier beside the image barriers, so the
 //! copy's writes are visible to every later command through any resource over the same bytes (a
 //! heap's aliases), not through the image alone. Nothing is copied but the region Metal names.
+//! Overlapping regions of one level and slice are the one exception to one command: slabs, one
+//! `vkCmdCopyImage` each, an execution barrier between two ([`Slabs`]).
 //!
 //! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
 //! `vkCmdCopyImageToBuffer` against the bytes shaders reach (the buffer's range of its block, or a
@@ -165,13 +167,18 @@ impl BlitCommandEncoder {
     /// nothing, as plain Metal does where its validation stops the call. Within one level and
     /// slice of one image (the texture into itself, or a texture and its view), regions apart
     /// copy with that subresource in the general layout, and the same region copies nothing and
-    /// records no command, every texel already its own; Metal leaves overlapping regions
-    /// undefined. The command buffer keeps both textures until it retires.
+    /// records no command, every texel already its own. Overlapping regions there, which Metal
+    /// leaves undefined, copy as if the source were read whole before any texel is written, the
+    /// answer an Apple M3 Max gives: in slabs across one axis, each no thicker than the shift
+    /// between the regions there, so that its two regions lie apart, one `vkCmdCopyImage` a slab
+    /// and the far end of the shift first, an execution barrier between two slabs. The axis is the
+    /// one of fewest slabs; a shift of one texel takes one slab a texel. The command buffer keeps
+    /// both textures until it retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::TextureRegion`] for
     /// a level, slice or region outside either texture or off its format's block grid;
-    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`], overlapping regions of one
-    /// subresource among it; [`Error::Vulkan`] where the command buffer cannot record.
+    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`]; [`Error::Vulkan`] where the command
+    /// buffer cannot record.
     pub fn copy_from_texture(
         &mut self,
         source: &Texture,
@@ -234,19 +241,17 @@ impl BlitCommandEncoder {
                 (&away_one, &back_one)
             }
         };
-        let regions = [vk::ImageCopy {
-            src_subresource: copy.from.layers(copy.aspect),
-            src_offset: copy.from.offset(),
-            dst_subresource: copy.to.layers(copy.aspect),
-            dst_offset: copy.to.offset(),
-            extent: copy.from.extent(),
-        }];
+        // Between two slabs, every hazard is a write after a read: no slab reads a texel an
+        // earlier one wrote (`Slabs`), so an execution dependency orders them.
+        let between = [vk::MemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)];
         let device = &core.device;
         let (named_read, named_write) = (source.copy_layout(read), destination.copy_layout(write));
         // SAFETY: the command buffer records outside any render pass and keeps both images until
         // it retires; each subresource is in its home layout between commands, and in its copy
         // layout between the barriers: two subresources, or one in the general layout whose two
-        // regions lie apart (`texture_copy`); the region lies in both.
+        // regions lie apart in each slab (`texture_copy`); each slab's regions lie in both.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
@@ -254,14 +259,21 @@ impl BlitCommandEncoder {
                     .memory_barriers(&earlier)
                     .image_memory_barriers(away),
             );
-            device.cmd_copy_image(
-                command,
-                source.image(),
-                named_read,
-                destination.image(),
-                named_write,
-                &regions,
-            );
+            for (n, region) in copy.regions().enumerate() {
+                if n > 0 {
+                    let dependency = vk::DependencyInfo::default().memory_barriers(&between);
+                    device.cmd_pipeline_barrier2(command, &dependency);
+                    building.count(Metric::Barriers);
+                }
+                device.cmd_copy_image(
+                    command,
+                    source.image(),
+                    named_read,
+                    destination.image(),
+                    named_write,
+                    &[region],
+                );
+            }
             close(core, command, back);
         }
         building.count(Metric::Barriers);
@@ -1264,14 +1276,64 @@ impl<'a> Side<'a> {
     }
 }
 
-/// A copy between two textures, checked: the region in each, the aspect it copies, and whether
-/// the two regions lie apart in one subresource of one image, which the copy takes in the
-/// general layout.
+/// A copy between two textures, checked: the region in each, the aspect it copies, whether the
+/// two regions lie in one subresource of one image, which the copy takes in the general layout,
+/// and the slabs it copies in.
 pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,
     pub(crate) shared: bool,
+    pub(crate) slabs: Slabs,
+}
+
+impl ImageCopy {
+    /// Its copy commands' regions, in the order they run: one a slab.
+    pub(crate) fn regions(&self) -> impl Iterator<Item = vk::ImageCopy> + '_ {
+        let Slabs {
+            axis,
+            thickness,
+            reversed,
+        } = self.slabs;
+        let extent = self.from.size[axis];
+        let count = extent.div_ceil(thickness);
+        (0..count).map(move |n| {
+            let start = thickness
+                * match reversed {
+                    true => count - 1 - n,
+                    false => n,
+                };
+            let slab = |placed: &Placed| {
+                let mut slab = *placed;
+                slab.origin[axis] += start;
+                slab.size[axis] = thickness.min(extent - start);
+                slab
+            };
+            let (from, to) = (slab(&self.from), slab(&self.to));
+            vk::ImageCopy {
+                src_subresource: from.layers(self.aspect),
+                src_offset: from.offset(),
+                dst_subresource: to.layers(self.aspect),
+                dst_offset: to.offset(),
+                extent: from.extent(),
+            }
+        })
+    }
+}
+
+/// The slabs a copy between textures runs as, one copy command each: the region cut across
+/// `axis` into slabs `thickness` texels thick (the last what is left), from the far end of the
+/// axis first where `reversed`. Regions apart copy as one slab. Overlapping regions of one
+/// subresource are cut no thicker than the shift between them along an axis they are shifted
+/// along, so that each slab's two regions lie apart, on the axis of fewest slabs; and the slab
+/// at the end the shift points to goes first, so that no slab reads a texel an earlier one
+/// wrote. The copy so gives what reading its source whole before writing gives, as `memmove`
+/// does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slabs {
+    pub(crate) axis: usize,
+    pub(crate) thickness: u32,
+    pub(crate) reversed: bool,
 }
 
 /// Checks a fill of `range` of a buffer at `base` in its block, `len` bytes long: its offset in
@@ -1595,26 +1657,43 @@ pub(crate) fn texture_copy(
     let (Some(from), Some(to)) = placed else {
         return Ok(None);
     };
-    // One subresource of one image, the textures one or a texture and its view: Metal leaves a
-    // copy whose regions overlap undefined (Apple's `copy(from:...to:...)` page: "unexpected
-    // behavior"). The same region copies nothing, every texel already its own; disjoint regions
-    // copy in the general layout (`VUID-vkCmdCopyImage-srcImage-09460`, `-pRegions-00124`).
+    // One subresource of one image, the textures one or a texture and its view, copies in the
+    // general layout (`VUID-vkCmdCopyImage-srcImage-09460`), and no command's source and
+    // destination share a texel (`-pRegions-00124`). The same region copies nothing, every texel
+    // already its own. Metal leaves a copy whose regions overlap undefined (Apple's
+    // `copy(from:...to:...)` page: "unexpected behavior"); an Apple M3 Max reads the source whole
+    // before it writes, which slabs give (`Slabs`).
     let shared = same && from.level == to.level && from.layer == to.layer;
-    if shared && from.origin == to.origin {
-        return Ok(None);
-    }
     let apart = (0..3).any(|axis| {
         let (a, b, extent) = (from.origin[axis], to.origin[axis], from.size[axis]);
         a + extent <= b || b + extent <= a
     });
-    if shared && !apart {
-        return Err(gap());
-    }
+    let slabs = match shared && !apart {
+        false => Slabs {
+            axis: 0,
+            thickness: from.size[0],
+            reversed: false,
+        },
+        true => {
+            let shifted = (0..3).filter(|&axis| from.origin[axis] != to.origin[axis]);
+            let thickness = |axis: usize| from.origin[axis].abs_diff(to.origin[axis]);
+            let fewest = shifted.min_by_key(|&axis| from.size[axis].div_ceil(thickness(axis)));
+            let Some(axis) = fewest else {
+                return Ok(None);
+            };
+            Slabs {
+                axis,
+                thickness: thickness(axis),
+                reversed: to.origin[axis] > from.origin[axis],
+            }
+        }
+    };
     Ok(Some(ImageCopy {
         from,
         to,
         aspect: unit.aspect,
         shared,
+        slabs,
     }))
 }
 

@@ -2177,13 +2177,18 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
   (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
   floor does not make (a multisample texture, a format of depth and stencil both, one pixel format
-  held in two Vulkan formats by the textures' usages, a 1D texture with another type), and
-  overlapping regions of one level and slice of one image, which Metal leaves undefined (Apple's
-  `copy(from:...to:...)` page: "unexpected behavior").
+  held in two Vulkan formats by the textures' usages, a 1D texture with another type).
 - Within one level and slice of one image (a texture into itself, or a texture and its view,
   which shares its image), regions apart copy with one `vkCmdCopyImage`, that subresource in the
   general layout: one barrier moves it there and one home, the same three barriers as any copy.
   The same region copies nothing and records no command, every texel already its own.
+- Overlapping regions there, which Metal leaves undefined (Apple's `copy(from:...to:...)` page:
+  "unexpected behavior"), copy as if the source were read whole before any texel is written,
+  which is what an Apple M3 Max gives. No `vkCmdCopyImage` reads a texel it writes, so the region
+  is cut into slabs along one axis it is shifted on, the axis that takes the fewest. Each slab is
+  no thicker than the shift there, and the slab at the far end of the shift goes first. Each slab
+  is one `vkCmdCopyImage`, with an execution barrier between two slabs. A shift of one texel takes
+  one slab and one barrier per texel of the region's extent on that axis.
 - `copy_from_buffer` is `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`
   `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
   `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`

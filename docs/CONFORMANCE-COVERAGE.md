@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 806 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7354 |
+| ledger rows (a case whose gap is recorded) | 7353 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2301,7 +2301,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `buffer-tails-blits` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-kernels` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-texture-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `buffer-texture-blits-overlapping` | Known gap (rt README, blit encoder): a copy between overlapping regions of one level and slice of one image is Gap::TextureCopy, not built. Metal leaves such a … |
 | `compressed-views-bc4-r-snorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc4-r-unorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc5-rg-snorm` | An accepted difference: Metal documents no BC5 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |

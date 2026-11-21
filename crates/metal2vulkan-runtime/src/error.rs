@@ -1113,13 +1113,10 @@ pub enum Gap {
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// that no single `vkCmdCopyImage` in the floor makes: a multisample texture; a format of
     /// depth and stencil both; one pixel format held in two Vulkan formats, which the two
-    /// textures' usages chose; a 1D texture with one of another type; or overlapping regions of
-    /// one level and slice of one image (one texture, or a texture and its view), which Metal
-    /// leaves undefined. Regions apart there copy, and the same region copies nothing.
+    /// textures' usages chose; or a 1D texture with one of another type.
     ///
     /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a replay
-    /// stream makes one; Apple's `copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:`
-    /// page calls a copy between overlapping regions of one texture "unexpected behavior").
+    /// stream makes one).
     TextureCopy {
         /// The source texture's pixel format.
         source: PixelFormat,

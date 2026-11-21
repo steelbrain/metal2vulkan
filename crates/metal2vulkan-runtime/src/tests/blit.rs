@@ -5,11 +5,11 @@
 //!   what one copy command in the floor does not make, one pixel format held in two Vulkan formats
 //!   among it, is `Gap::TextureCopy`; within one level and slice of one image (one texture, or a
 //!   texture and its view), regions apart copy in the general layout, the same region copies
-//!   nothing, and overlapping regions, which Metal leaves undefined, are `Gap::TextureCopy`; a
-//!   level, slice or region outside a texture or
-//!   off its block grid is `Refusal::TextureRegion`; a size of 0 on an axis a texture lacks copies
-//!   one texel there, and on another copies nothing; a 3D texture's image copies to and from a 2D
-//!   slice.
+//!   nothing, and overlapping regions, which Metal leaves undefined, copy in slabs across the
+//!   axis of fewest, each no thicker than the shift there, the far end of the shift first; a
+//!   level, slice or region outside a texture or off its block grid is `Refusal::TextureRegion`;
+//!   a size of 0 on an axis a texture lacks copies one texel there, and on another copies
+//!   nothing; a 3D texture's image copies to and from a 2D slice.
 //! - Under a device cfg, on every device of the cfg's kind: the bytes of a level of a 2D texture
 //!   land in a slice of a 2D array, a cube's face in an
 //!   image of a 3D texture, an image of a 3D texture in a 2D texture, a slice of an array in
@@ -20,7 +20,9 @@
 //!   by the copy's first. Every gauge comes back to zero with the device. The bytes each copy
 //!   must leave are plain Metal's: their FNV-1a 64 hashes are those of probe `blit_copy_layouts.m`
 //!   in the conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-43464, plain and under
-//!   the validation layer).
+//!   the validation layer). Overlapping regions of one level and slice leave the source's bytes
+//!   from before the copy, toward higher and lower coordinates on each axis, through a view, and
+//!   in BC1 blocks where the device makes them, at one barrier more a slab after the first.
 //! - Between a buffer and a texture: each image of the region lies at its own offset, its rows a
 //!   count of texels apart; what Metal's validation stops is `Refusal::BufferCopyLayout`, and an
 //!   offset or row stride a copy command cannot address `Gap::BufferCopyAlignment`. Under a device
@@ -53,7 +55,7 @@
 
 use crate::blit::{
     buffer_copy, buffer_to_buffer, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy,
-    Lies, Side, Span, TexturePlace,
+    Lies, Side, Slabs, Span, TexturePlace,
 };
 use crate::error::{Error, Gap, Refusal};
 use crate::texture::{CopyUnit, Placed};
@@ -234,7 +236,7 @@ fn a_3d_image_copies_to_and_from_a_2d_slice_and_a_cube_face_is_its_slice() {
         Refusal::TextureRegion { .. }
     ));
     // One texture's two slices copy; within one slice, regions apart copy in the general layout,
-    // the same region copies nothing, and overlapping regions are not built.
+    // the same region copies nothing, and overlapping regions copy in slabs.
     let mut array = descriptor(TextureType::Type2DArray, PixelFormat::R8Unorm, [4, 4, 1]);
     array.array_length = 2;
     let a = side(&array, vk::Format::R8_UNORM, color(1));
@@ -251,20 +253,92 @@ fn a_3d_image_copies_to_and_from_a_2d_slice_and_a_cube_face_is_its_slice() {
         assert_eq!(apart.to, placed(0, 0, to, size));
     }
     assert!(matches!(within(at(0, 0, [0; 3]), [3, 3, 1]), Ok(None)));
-    for (to, size) in [
-        ([1, 1, 0], [2, 2, 1]),
-        ([1, 0, 0], [2, 1, 1]),
-        ([0, 1, 0], [4, 2, 1]),
+    // Overlapping regions copy in slabs, each one's regions apart.
+    for (to, size, slabs) in [
+        ([1, 1, 0], [2, 2, 1], (0, 1, true)),
+        ([1, 0, 0], [2, 1, 1], (0, 1, true)),
+        ([0, 1, 0], [4, 2, 1], (1, 1, true)),
     ] {
+        let copy = copied(within(at(0, 0, to), size));
+        assert!(copy.shared, "{to:?} {size:?}");
+        let (axis, thickness, reversed) = slabs;
         assert_eq!(
-            gap(within(at(0, 0, to), size)),
-            Gap::TextureCopy {
-                source: PixelFormat::R8Unorm,
-                destination: PixelFormat::R8Unorm
+            copy.slabs,
+            Slabs {
+                axis,
+                thickness,
+                reversed
             },
             "{to:?} {size:?}"
         );
     }
+}
+
+/// The regions of `copy`'s commands, in order: each one's source and destination origins and its
+/// extent.
+fn slab_regions(copy: &ImageCopy) -> Vec<([i32; 2], [i32; 2], [u32; 2])> {
+    (copy.regions())
+        .map(|r| {
+            (
+                [r.src_offset.x, r.src_offset.y],
+                [r.dst_offset.x, r.dst_offset.y],
+                [r.extent.width, r.extent.height],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn overlapping_regions_copy_in_slabs_the_far_end_of_the_shift_first() {
+    let d = descriptor(TextureType::Type2D, PixelFormat::RG8Unorm, [256, 352, 1]);
+    let s = side(&d, vk::Format::R8G8_UNORM, color(2));
+    let within = |from, size, to| {
+        copied(texture_copy(
+            &s,
+            at(0, 0, from),
+            size,
+            &s,
+            at(0, 0, to),
+            true,
+        ))
+    };
+    // Columns 0 to 20 of a row onto columns 20 to 40: the last column first, then the rest.
+    assert_eq!(
+        slab_regions(&within([0, 0, 0], [21, 1, 0], [20, 0, 0])),
+        [([20, 0], [40, 0], [1, 1]), ([0, 0], [20, 0], [20, 1])]
+    );
+    // Toward lower coordinates, the first slab first; the last slab what is left.
+    assert_eq!(
+        slab_regions(&within([0, 5, 0], [3, 5, 1], [0, 3, 0])),
+        [
+            ([0, 5], [0, 3], [3, 2]),
+            ([0, 7], [0, 5], [3, 2]),
+            ([0, 9], [0, 7], [3, 1]),
+        ]
+    );
+    // Shifted along both axes, the axis of fewer slabs: three across y against eight across x.
+    let both = within([4, 4, 0], [8, 6, 1], [5, 2, 0]);
+    assert_eq!(
+        both.slabs,
+        Slabs {
+            axis: 1,
+            thickness: 2,
+            reversed: false
+        }
+    );
+    assert_eq!(
+        slab_regions(&both),
+        [
+            ([4, 4], [5, 2], [8, 2]),
+            ([4, 6], [5, 4], [8, 2]),
+            ([4, 8], [5, 6], [8, 2]),
+        ]
+    );
+    // Regions apart are one slab, the whole region.
+    assert_eq!(
+        slab_regions(&within([0, 0, 0], [4, 4, 1], [4, 0, 0])),
+        [([0, 0], [4, 0], [4, 4])]
+    );
 }
 
 #[test]
@@ -1330,7 +1404,7 @@ pub(crate) mod on_device {
     /// A copy within one subresource of one image, from a texture's view or from the texture
     /// itself into the texture: disjoint regions copy, one submission and three barriers as any
     /// copy, everything around the region kept; the same region copies nothing and records no
-    /// command; overlapping regions, which Metal leaves undefined, are `Gap::TextureCopy`.
+    /// command.
     #[test]
     fn every_device_copies_within_one_subresource_of_a_texture_and_its_view() {
         each_device("blit_within", |name, _, device| {
@@ -1416,20 +1490,6 @@ pub(crate) mod on_device {
             };
             (encoder.copy_from_texture(&view, at([2, 1, 0]), [3, 3, 1], &texture, at([2, 1, 0])))
                 .unwrap_or_else(|error| panic!("{name}: the same region: {error}"));
-            // Overlapping regions are not built.
-            assert!(
-                matches!(
-                    encoder.copy_from_texture(
-                        &view,
-                        at([0, 0, 0]),
-                        [4, 4, 1],
-                        &texture,
-                        at([2, 2, 0])
-                    ),
-                    Err(Error::Unsupported(Gap::TextureCopy { .. }))
-                ),
-                "{name}: overlapping regions"
-            );
             encoder.end_encoding();
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
@@ -1449,6 +1509,170 @@ pub(crate) mod on_device {
                 "{name}: the same region keeps every byte"
             );
             println!("{name}: copies within one subresource, through a view and of itself");
+        });
+    }
+
+    /// Overlapping regions of one level and slice, which Metal leaves undefined, leave each
+    /// destination texel holding what the source held before the copy, the answer an Apple M3
+    /// Max gives (the conformance crate's `buffer_texture_blits.rs`), everything around them
+    /// kept: shifted toward higher and toward lower coordinates along x and along y, from a
+    /// texture's view into the texture, along the depth of a 3D texture, and by whole blocks of
+    /// BC1 where the device makes it. Each copy is one submission and copies no byte of the
+    /// runtime's own; each slab after the first costs one barrier more than a copy's three.
+    #[test]
+    fn every_device_copies_overlapping_regions_from_the_source_before_the_copy() {
+        each_device("blit_overlapping", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 4)
+                .expect("a grant");
+            let made = |texture_type, format, extent, index| {
+                let read = TextureUsage::SHADER_READ;
+                texture(&device, texture_type, format, extent, read, index)
+            };
+            let plane = (made(
+                TextureType::Type2D,
+                PixelFormat::RGBA8Unorm,
+                [8, 8, 1],
+                4096,
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let view = (plane.new_texture_view(
+                PixelFormat::RGBA8Unorm,
+                TextureType::Type2D,
+                0..1,
+                0..1,
+                Some(4097),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: the view: {error}"));
+            let volume = (made(TextureType::Type3D, PixelFormat::R8Unorm, [4, 4, 4], 4098))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let blocks = made(TextureType::Type2D, PixelFormat::BC1RGBA, [16, 16, 1], 4099);
+            let level = |texture, unit, block| Level {
+                texture,
+                slice: 0,
+                level: 0,
+                unit,
+                block,
+            };
+            let (whole, through_view) = (level(&plane, 4, 1), level(&view, 4, 1));
+            let images = level(&volume, 1, 1);
+            let bc1 = match &blocks {
+                Ok(texture) => Some(level(texture, 8, 4)),
+                Err(Error::Unsupported(Gap::TextureFormat { .. })) => {
+                    println!("{name}: no BC1 texture on this device");
+                    None
+                }
+                Err(error) => panic!("{name}: BC1: {error}"),
+            };
+            // Each case: the source and where in it, the destination and where in it, the size
+            // in elements, and the slabs the copy takes.
+            let mut cases = vec![
+                (
+                    "toward higher x",
+                    &whole,
+                    [0, 1, 0],
+                    &whole,
+                    [3, 1, 0],
+                    [5, 2, 1],
+                    2,
+                ),
+                (
+                    "toward lower x",
+                    &whole,
+                    [2, 0, 0],
+                    &whole,
+                    [0, 0, 0],
+                    [6, 3, 1],
+                    3,
+                ),
+                (
+                    "toward higher y",
+                    &whole,
+                    [1, 0, 0],
+                    &whole,
+                    [1, 1, 0],
+                    [3, 6, 1],
+                    6,
+                ),
+                (
+                    "toward lower y",
+                    &whole,
+                    [0, 3, 0],
+                    &whole,
+                    [0, 1, 0],
+                    [8, 5, 1],
+                    3,
+                ),
+                (
+                    "from the view",
+                    &through_view,
+                    [0; 3],
+                    &whole,
+                    [2, 2, 0],
+                    [4, 4, 1],
+                    2,
+                ),
+                (
+                    "along the depth",
+                    &images,
+                    [0; 3],
+                    &images,
+                    [0, 0, 1],
+                    [4, 4, 3],
+                    3,
+                ),
+            ];
+            if let Some(bc1) = &bc1 {
+                cases.push((
+                    "by whole BC1 blocks",
+                    bc1,
+                    [0; 3],
+                    bc1,
+                    [1, 0, 0],
+                    [3, 2, 1],
+                    3,
+                ));
+            }
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            for (seed, (case, from, at, to, to_at, size, slabs)) in (1..).zip(cases) {
+                let source = to.write(seed);
+                // The upload goes with a command buffer of its own, one with commands.
+                let upload = queue.command_buffer().expect("a command buffer");
+                upload
+                    .record_for_test(&[], |_, _| {})
+                    .expect("a command buffer's commands");
+                upload.commit().expect("a commit");
+                finished(name, &upload);
+                let copy = Expect {
+                    from,
+                    source: &source,
+                    at,
+                    to,
+                    before: source.clone(),
+                    to_at,
+                    size,
+                };
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                copy.record(name, &command_buffer);
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: {case}");
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.submissions - before.submissions,
+                        after.barriers - before.barriers,
+                        after.bytes_copied - before.bytes_copied,
+                    ),
+                    (1, 2 + slabs, 0),
+                    "{name}: {case}: submissions, barriers, bytes copied"
+                );
+                assert_eq!(to.read(), copy.after(), "{name}: {case}");
+            }
+            println!("{name}: overlapping copies, each from the source before the copy");
         });
     }
 
