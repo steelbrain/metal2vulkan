@@ -197,8 +197,13 @@ pub(crate) mod on_device {
 
     impl Buffers {
         pub(crate) fn new(device: &Device) -> Buffers {
+            Buffers::sized(device, 65536)
+        }
+
+        /// Buffers from a block of `bytes`.
+        pub(crate) fn sized(device: &Device, bytes: u64) -> Buffers {
             Buffers {
-                block: (device.take_block(MemoryClass::Shared, 65536)).expect("a block"),
+                block: (device.take_block(MemoryClass::Shared, bytes)).expect("a block"),
                 next: 0,
             }
         }

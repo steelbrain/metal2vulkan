@@ -18,9 +18,11 @@
 //!     after an execution as it does alone. A range past the commands and a range buffer's offset
 //!     off a multiple of 4 are refused.
 //!   - an execution of three parts and eight commands (a part the most commands whose preprocess
-//!     bytes the device puts at or under 2 MiB) draws as its draws direct: all of it, a CPU range
-//!     across three parts, and ranges a buffer holds, which the count kernel reads: at location 0
-//!     across two parts, from inside the second part, and past the commands, clamped to them.
+//!     bytes the device puts at or under 2 MiB), its scene in a block sized from the part, draws
+//!     as its draws direct, each arm printed as it passes: a CPU range across three parts; ranges
+//!     a buffer holds, which the count kernel reads: at location 0 through all but the last
+//!     command (every part's count above 0) and across two parts (later parts' counts 0); all of
+//!     it; from inside the second part; past the commands, clamped to them; and of length 0.
 //!   - at the widest layout the device can take, the part of an execution of the most commands it
 //!     takes has queried preprocess bytes at or under 2 MiB.
 //!   - an execution over a range a buffer holds runs as a `Boolean` visibility mode's first draw,
@@ -513,10 +515,13 @@ mod on_device {
     }
 
     /// An execution of more commands than one part holds runs its parts in order, each command
-    /// tested against the range as its own, against the same draws direct: whole, over a CPU range
-    /// across three parts, and over ranges a buffer holds, which the count kernel reads: one at
-    /// location 0 across two parts, one from a location inside a part (the part's commands before
-    /// it run and draw nothing), and one past the commands, clamped to them.
+    /// tested against the range as its own, against the same draws direct, at the device's own
+    /// part, in this order, each arm printed as it passes: (a) over a CPU range across three parts;
+    /// over ranges a buffer holds, which the count kernel reads, (b) at location 0 through all but
+    /// the last command, every part's count above 0, and (c) at location 0 across two parts, the
+    /// last two parts' counts 0; then whole, from a location inside the second part (the part's commands
+    /// before it run and draw nothing, the first part's count 0), past the commands, clamped to
+    /// them, and of length 0, every part's count 0. The scene's block is sized from the part.
     #[test]
     fn every_device_draws_an_execution_of_several_parts_as_its_draws_direct() {
         let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
@@ -541,9 +546,15 @@ mod on_device {
             });
             drop(sized);
             let many = (3 * part + 8).min(most.min(1 << 16));
+            let parts = many.div_ceil(part);
+            println!("{name}: a part of {part} commands: {many} commands in {parts} parts");
             let commands = commands(name, &device, &descriptor(3, 1), many).expect("a buffer");
             let kernel = kernel(name, &device, &indexed, "icb_indexed_16");
-            let mut buffers = Buffers::new(&device);
+            // The scene's 60 bytes a command and its few small buffers, each at a multiple of 256.
+            let mut buffers = Buffers::sized(
+                &device,
+                (64 * u64::from(many)).next_multiple_of(1 << 16) + (1 << 16),
+            );
             let s = Scene::of(&device, &mut buffers, &commands, many);
             let at = (&s, &s.xy, 0);
             encode(name, &device, &kernel, &commands, at, many);
@@ -571,10 +582,11 @@ mod on_device {
                 assert_eq!(texels, direct_of(range.clone()), "{name}: {what}");
                 assert_eq!(marks(name, &texels), last(range), "{name}: {what}");
             };
-            let all = drawn(name, &device, &state, |e| {
-                ok(name, e.execute_commands_in_buffer(&commands, 0..many))
-            });
-            check("all", all, 0..many);
+            // Each arm printed as it passes, so a run that ends early shows the arms before it.
+            let arm = |what: &str, texels: Vec<u8>, range: std::ops::Range<u32>| {
+                check(what, texels, range);
+                println!("{name}: {what}: ran, and drew as its draws direct");
+            };
             let across = part / 2..(2 * part + part / 2).min(many);
             let cpu = drawn(name, &device, &state, |e| {
                 ok(
@@ -582,7 +594,7 @@ mod on_device {
                     e.execute_commands_in_buffer(&commands, across.clone()),
                 )
             });
-            check("a CPU range across three parts", cpu, across);
+            arm("(a) a CPU range across three parts", cpu, across);
             let mut held = |location: u32, length: u32| {
                 let range = buffers.of(&device, &words(&[location, length]));
                 drawn(name, &device, &state, |e| {
@@ -592,26 +604,35 @@ mod on_device {
                     )
                 })
             };
-            check(
-                "a held range at location 0 across two parts",
+            arm(
+                "(b) a held range at location 0 through all but the last command, every part's count above 0",
+                held(0, many - 1),
+                0..many - 1,
+            );
+            arm(
+                "(c) a held range at location 0 across two parts, the parts after them at count 0",
                 held(0, part + 5),
                 0..part + 5,
             );
+            let all = drawn(name, &device, &state, |e| {
+                ok(name, e.execute_commands_in_buffer(&commands, 0..many))
+            });
+            arm("all", all, 0..many);
             let inside = part + part / 2;
-            check(
-                "a held range from inside the second part",
+            arm(
+                "a held range from inside the second part, the first part at count 0",
                 held(inside, part),
                 inside..(inside + part).min(many),
             );
-            check(
+            arm(
                 "a held range past the commands",
                 held(many - 6, 100),
                 many - 6..many,
             );
-            println!(
-                "{name}: {many} encoded commands in parts of {part}: all, a CPU range across three \
-                 parts and ranges a buffer holds (at 0, inside the second part, past the \
-                 commands) each draw as their draws direct"
+            arm(
+                "a held range of length 0, every part at count 0",
+                held(0, 0),
+                0..0,
             );
         });
     }
