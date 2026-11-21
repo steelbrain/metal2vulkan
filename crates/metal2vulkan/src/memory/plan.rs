@@ -160,6 +160,10 @@ pub struct ArenaLayout {
     /// bytes hold. The private arena keeps it when some pointer into it may be null
     /// (`lower::access::local`).
     pub null_word: bool,
+    /// The private arena lives in device memory the runtime owns, one slot a thread
+    /// (`RuntimeFact::PrivateArena`), not in the driver's scratch: a kernel's private memory past
+    /// the floor ([`Planner::private_memory`]).
+    pub device: bool,
 }
 
 impl ArenaLayout {
@@ -356,7 +360,8 @@ pub struct MemoryPlan {
     pub typed_allocas: Vec<AllocaPlan>,
     /// The bytes of private memory a thread holds where a driver backs it with scratch memory,
     /// which selection holds to the device's Function storage: the private arena (its pointers
-    /// merge, escape, or reinterpret its bytes), and each typed alloca (a recursion's call stacks
+    /// merge, escape, or reinterpret its bytes) unless it lives in device memory
+    /// ([`ArenaLayout::device`]), and each typed alloca (a recursion's call stacks
     /// among them) and each constant held as a `Private` variable that some access indexes at run
     /// time, each at its allocation size, and under the identity domains the constant blob, the
     /// module's `Private` words (`memory::blob`), where some access reaches it at an offset only
@@ -778,15 +783,11 @@ impl Planner<'_> {
         let mut room = super::alloca::MAX_UNSHARED;
         let (const_globals, blob) = self.const_globals(&mut room, m)?;
         let tg_arena = self.threadgroup_arena(&[], m)?;
-        let (priv_arena, typed_allocas, fragment_values) = self.allocas(&mut room, m)?;
+        let consts = (&const_globals[..], blob.as_ref());
+        let (priv_arena, typed_allocas, fragment_values, private_bytes) =
+            self.private_memory(&mut room, consts, m)?;
         let tg_metal_static = tg_arena.static_size;
         let (tg_arena, typed_shared) = self.typed_threadgroup(tg_arena, &mut room, m)?;
-        let private_bytes = self.private_bytes(
-            &priv_arena,
-            &typed_allocas,
-            (&const_globals, blob.as_ref()),
-            m,
-        )?;
         let Reprs {
             repr,
             offsets,
@@ -826,8 +827,37 @@ impl Planner<'_> {
         })
     }
 
+    /// The private arena, the typed allocas, the `<64 x T>` instructions that are fragments
+    /// ([`Planner::allocas`]) and the private bytes ([`Planner::private_bytes`]). A kernel without
+    /// a call stack whose private bytes pass the floor every device holds
+    /// (`device::function_storage::FLOOR`) keeps its private memory in device memory instead: every
+    /// alloca an access indexes at run time goes in the arena, which lives in the runtime's memory
+    /// ([`ArenaLayout::device`]) and leaves the private bytes. The kernel's own bytes decide, never
+    /// a device fact; the bytes left are held to the floor as before.
+    fn private_memory(
+        &self,
+        room: &mut u64,
+        consts: (&[ConstGlobalPlan], Option<&ConstantBlob>),
+        m: &mut Meter,
+    ) -> Result<(ArenaLayout, Vec<AllocaPlan>, Vec<InstId>, u64), Error> {
+        let start = *room;
+        let (arena, typed, values) = self.allocas(room, false, m)?;
+        let bytes = self.private_bytes(&arena, &typed, consts, m)?;
+        let kernel = super::static_root::stage_of(self.e) == crate::pipeline::sym::Stage::Kernel;
+        if !kernel || self.e.call_stack.is_some() || bytes <= crate::device::function_storage::FLOOR
+        {
+            return Ok((arena, typed, values, bytes));
+        }
+        *room = start;
+        let (mut arena, typed, values) = self.allocas(room, true, m)?;
+        arena.device = true;
+        let bytes = self.private_bytes(&arena, &typed, consts, m)?;
+        Ok((arena, typed, values, bytes))
+    }
+
     /// The bytes of private memory a thread holds where a driver backs it with scratch memory
-    /// ([`MemoryPlan::private_bytes`]): the private arena's size, and the allocation size of each
+    /// ([`MemoryPlan::private_bytes`]): the private arena's size where it is not in device memory,
+    /// and the allocation size of each
     /// typed alloca and each `Private` constant some access indexes at run time, the blob among
     /// them under the identity domains, where it is the module's `Private` words
     /// (`memory::blob`), at their size. An alloca that holds simdgroup matrices as fragments
@@ -839,7 +869,7 @@ impl Planner<'_> {
         (consts, blob): (&[ConstGlobalPlan], Option<&ConstantBlob>),
         m: &mut Meter,
     ) -> Result<u64, Error> {
-        let mut bytes = arena.static_size;
+        let mut bytes = if arena.device { 0 } else { arena.static_size };
         for a in typed
             .iter()
             .filter(|a| self.uses(Root::Alloca(a.inst)).indexed)
@@ -1982,7 +2012,8 @@ impl Planner<'_> {
     }
 
     /// The private arena and the typed allocas, in instruction order. An alloca a typed object
-    /// cannot hold, or one past `room`, has its place in the arena.
+    /// cannot hold, or one past `room`, has its place in the arena; so, where `device`, does one an
+    /// access indexes at run time ([`Planner::private_memory`]).
     ///
     /// An alloca that holds simdgroup matrices is typed only when they hold fragments
     /// (`memory::fragment`): the candidates are found in a first pass over the room, and the held
@@ -1992,6 +2023,7 @@ impl Planner<'_> {
     fn allocas(
         &self,
         room: &mut u64,
+        device: bool,
         m: &mut Meter,
     ) -> Result<(ArenaLayout, Vec<AllocaPlan>, Vec<InstId>), Error> {
         let body = self
@@ -2001,7 +2033,7 @@ impl Planner<'_> {
             .and_then(|f| f.body.as_ref())
             .ok_or_else(|| invariant("the entry function has no body"))?;
         let mut charged = 0;
-        let placed = self.place_allocas(body, room, &mut charged, m);
+        let placed = self.place_allocas(body, (room, device), &mut charged, m);
         m.release(charged);
         placed
     }
@@ -2009,7 +2041,7 @@ impl Planner<'_> {
     fn place_allocas(
         &self,
         body: &crate::air::ir::Body,
-        room: &mut u64,
+        (room, device): (&mut u64, bool),
         charged: &mut usize,
         m: &mut Meter,
     ) -> Result<(ArenaLayout, Vec<AllocaPlan>, Vec<InstId>), Error> {
@@ -2048,6 +2080,7 @@ impl Planner<'_> {
             let fragments = held.contains(&id);
             let typed_here = match shape {
                 Some(_) if fragments => true,
+                Some(_) if device && self.uses(Root::Alloca(id)).indexed => false,
                 Some((_, size, false)) => match room.checked_sub(size) {
                     Some(left) => {
                         *room = left;

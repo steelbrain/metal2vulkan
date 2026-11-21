@@ -908,6 +908,7 @@ codec_enum! {
         ArgumentTableAddress,
         ConstexprSampler(f0),
         TessellationFactorAddress,
+        PrivateArenaAddress,
         SlotBounds(f0),
         ZeroAddress,
         FetchedColor { color, texels },
@@ -1309,6 +1310,7 @@ codec_enum! {
         TexelBufferParts { slot },
         AddressAlignment { slot, align },
         GridTiles,
+        PrivateArena { slot_bytes },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

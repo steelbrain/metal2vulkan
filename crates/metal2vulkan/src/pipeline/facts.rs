@@ -841,6 +841,14 @@ pub enum RuntimeFact {
     /// body; an unflagged region runs no test of the grid's edge. Its plans run a `dispatchThreads`
     /// grid in such tiles, flagged where the tile does not divide it.
     GridTiles,
+    /// The kernel's private memory past the floor every device holds
+    /// (`device::function_storage::FLOOR`) lives in memory the runtime owns: a slot of
+    /// `slot_bytes` (a multiple of 16) for each invocation of a dispatch, at the address it pushes
+    /// (`PushField::PrivateArenaAddress`, which says which slot an invocation takes). A dispatch
+    /// whose invocations' slots pass what the runtime keeps runs as several dispatches, each of
+    /// them in its own slots' memory or ordered after the last one that used it. The kernel's own
+    /// bytes decide it, never a device fact.
+    PrivateArena { slot_bytes: u32 },
 }
 
 impl RuntimeFact {
@@ -951,6 +959,7 @@ impl RuntimeFact {
             RuntimeFact::TexelBufferParts { .. } => "TexelBufferParts",
             RuntimeFact::AddressAlignment { .. } => "AddressAlignment",
             RuntimeFact::GridTiles => "GridTiles",
+            RuntimeFact::PrivateArena { .. } => "PrivateArena",
         }
     }
 }

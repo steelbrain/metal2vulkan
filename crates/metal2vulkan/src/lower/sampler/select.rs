@@ -570,6 +570,10 @@ fn select_heap_array(
     m: &mut Meter,
 ) -> Result<Option<TextureStrategy>, Error> {
     use super::heap_raw::State;
+    eprintln!("probe-heap-array-candidates {}", cands.len());
+    if std::env::var_os("M2V_PROBE_SWITCH").is_some() && crate::lower::access::identity(cx.profile) {
+        return Ok(None);
+    }
     if cands.len() < 2 || !cx.profile.fields().descriptors.non_uniform_sampled_image {
         return Ok(None);
     }

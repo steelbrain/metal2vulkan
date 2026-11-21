@@ -1194,6 +1194,15 @@ pub enum PushField {
     /// pipeline's interface states it in a vertex-stage placement of its own, at the
     /// `TessellationState::push_offset`.
     TessellationFactorAddress,
+    /// The device address (`u64`, a multiple of 16) of the runtime's memory that holds a kernel's
+    /// private arena past the floor (`RuntimeFact::PrivateArena`): one slot of the fact's
+    /// `slot_bytes` for each invocation of the dispatch, the invocation's slot its index in its
+    /// dispatch, `((wz · ny + wy) · nx + wx) · n + LocalInvocationIndex` with `(wx, wy, wz)` its
+    /// `WorkgroupId`, `(nx, ny, nz)` the dispatch's `NumWorkgroups` and `n` its workgroup's
+    /// invocations. The memory holds a slot for every invocation of the dispatch, and no other
+    /// dispatch that may run beside it reaches those slots. Nothing is zeroed: the arena's bytes
+    /// are undefined until the thread writes them, as Metal's private memory is.
+    PrivateArenaAddress,
     // The check's fields come last in the order: what every access reads is placed ahead of what
     // only a checked access reads, so where a function's fields spill into its parameter block
     // they are the first to go.

@@ -453,6 +453,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             PushField::ZeroAddress | PushField::BicubicTexels(_) => {
                 return Err(not_implemented(Feature::IdentityDomains))
             }
+            // A private arena past the floor is the runtime's own memory, one slot an invocation.
+            PushField::PrivateArenaAddress => return Err(not_implemented(Feature::PrivateMemory)),
             PushField::SlotBindOffset(SlotRef {
                 class: SlotClass::Texture,
                 ..

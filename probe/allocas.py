@@ -7,7 +7,7 @@ import sys
 
 text = open(sys.argv[1]).read()
 structs = {}
-for m in re.finditer(r"^(%[\w.$\"-]+) = type (.*)$", text, re.M):
+for m in re.finditer(r"^(%(?:\"[^\"]*\"|[\w.$-]+)) = type (.*)$", text, re.M):
     structs[m.group(1)] = m.group(2).strip()
 
 
@@ -68,7 +68,7 @@ class P:
             es, ea = self.ty()
             self.take("]")
             return n * es, ea
-        m = re.compile(r"(%[\w.$\"-]+|ptr( addrspace\(\d+\))?|i\d+|half|bfloat|float|double)").match(s, self.i)
+        m = re.compile(r"(%(?:\"[^\"]*\"|[\w.$-]+)|ptr( addrspace\(\d+\))?|i\d+|half|bfloat|float|double)").match(s, self.i)
         assert m, (s, self.i)
         self.i = m.end()
         t = m.group(1)
@@ -123,7 +123,7 @@ for body in functions:
     body = body[:end]
     sizes = {}
     order = []
-    for m in re.finditer(r"^\s*(%[\w.$\"-]+) = alloca (.*?)(?:, i(?:32|64) (\d+))?(?:, align \d+)?(?:, addrspace\(\d+\))?\s*(?:,.*)?$", body, re.M):
+    for m in re.finditer(r"^\s*(%(?:\"[^\"]*\"|[\w.$-]+)) = alloca (.*?)(?:, i(?:32|64) (\d+))?(?:, align \d+)?(?:, addrspace\(\d+\))?\s*(?:,.*)?$", body, re.M):
         t = m.group(2)
         count = int(m.group(3) or 1)
         size = alloc_size(t) * count
@@ -131,7 +131,7 @@ for body in functions:
         order.append(m.group(1))
     marked = set()
     events = []
-    for m in re.finditer(r"@llvm\.lifetime\.(start|end)[\w.]*\((?:i64 (-?\d+), )?ptr(?: nonnull)? (%[\w.$\"-]+)\)", body):
+    for m in re.finditer(r"@llvm\.lifetime\.(start|end)[\w.]*\((?:i64 (-?\d+), )?ptr(?: nonnull)? (%(?:\"[^\"]*\"|[\w.$-]+))\)", body):
         kind, size, name = m.group(1), m.group(2), m.group(3)
         if name in sizes:
             marked.add(name)

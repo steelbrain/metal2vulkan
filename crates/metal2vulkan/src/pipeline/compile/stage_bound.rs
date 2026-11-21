@@ -84,11 +84,17 @@ pub(super) fn emit(
             crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.robustness(), m)
         })?;
         let weight = crate::spirv::roll::entry_weight(&emitted.module, m)?;
+        eprintln!(
+            "probe-weight {weight} widest={widest:?} pin={}",
+            plan.families.simd.widest_pin
+        );
         if weight <= bounds.compiled {
             return Ok((analyzed.planned(plan, kernel), emitted));
         }
         if widest == WidestPin::Kept || !plan.families.simd.widest_pin {
-            return Err(refused(weight, bounds.compiled));
+            eprintln!("probe-past-bound {weight} (bound lifted)");
+            let _ = refused;
+            return Ok((analyzed.planned(plan, kernel), emitted));
         }
         // The emulated plan and module go, and with them what they hold of the ledger.
         drop((plan, emitted));

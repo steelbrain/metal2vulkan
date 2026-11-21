@@ -179,6 +179,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::PartialThreadgroups => Mechanism::Variant,
         // The binder's regions carry the tile as the nominal size, under `MultiRegion` 1.
         RuntimeFact::GridTiles => Mechanism::RegionSelected,
+        // The runtime pushes its arena's address, and sizes and orders the arena's slots by the
+        // slot's bytes.
+        RuntimeFact::PrivateArena { .. } => Mechanism::PushConstant,
         // Keyed by the slots bound to a texture whose planes are read in place, on a profile that
         // reads them so (`ProfileFields::ycbcr_in_place`).
         RuntimeFact::YCbCrInPlace { .. } => Mechanism::Variant,

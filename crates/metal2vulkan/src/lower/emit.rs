@@ -47,6 +47,7 @@ use crate::lower::{
     access, arith, dispatch, fragment, mesh, raytracing, sampler, simd, stage_io, sync,
     tessellation, texture,
 };
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{PushField, SlotRef, Stage};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
@@ -245,6 +246,9 @@ enum Invariant {
     /// A fragment function's tile's first word in the pass's tile memory buffer
     /// (`access::tile_memory::base`), computed at entry (`access::tile_memory::emit_entry`).
     TileBase,
+    /// A kernel's slot of the runtime's private arena ([`EmitCx::arena_slot`]), computed at entry
+    /// (`dispatch::emit_entry`).
+    ArenaSlot,
     /// The table word of the argument buffer's sampler of a handle, tested for a cubic filter
     /// (`sampler::emit`'s reach test): an operation through the same handle where an earlier test
     /// dominates it ran that test on the same sampler, so it needs none of its own.
@@ -411,6 +415,32 @@ impl<'a> EmitCx<'a> {
         }
         let v = crate::lower::access::tile_memory::base(self, fb, tile)?;
         self.remember(fb, Invariant::TileBase, v);
+        Ok(v)
+    }
+
+    /// The device address of the invocation's slot of the runtime's memory that holds the
+    /// kernel's private arena (`dispatch::KernelDecl::arena_slot`, of the pushed
+    /// `PushField::PrivateArenaAddress` and the slot's bytes, `RuntimeFact::PrivateArena`),
+    /// computed once where it dominates: `dispatch::emit_entry` computes it in the function's
+    /// first block.
+    pub(crate) fn arena_slot(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+        if let Some(v) = self.recall(fb, Invariant::ArenaSlot) {
+            return Ok(v);
+        }
+        let slot_bytes = self.plan.facts.iter().find_map(|f| match *f {
+            RuntimeFact::PrivateArena { slot_bytes } => Some(slot_bytes),
+            _ => None,
+        });
+        let Some(slot_bytes) = slot_bytes else {
+            return Err(self.fail("a private arena in device memory without its slot's bytes"));
+        };
+        let arena = self.push_field(fb, PushField::PrivateArenaAddress)?;
+        let decl: &Declared = self.decl;
+        let Some(kernel) = decl.families.dispatch.kernel.as_ref() else {
+            return Err(self.fail("a private arena in device memory without its kernel"));
+        };
+        let v = kernel.arena_slot(fb, arena, slot_bytes)?;
+        self.remember(fb, Invariant::ArenaSlot, v);
         Ok(v)
     }
 

@@ -452,6 +452,9 @@ pub struct LocalPlan {
     pub tg: Option<TgShape>,
     /// The private arena's byte size, when a pointer into it is used.
     pub private: Option<u64>,
+    /// The private arena lives in device memory, an invocation's slot of the runtime's memory
+    /// (`memory::plan::ArenaLayout::device`).
+    pub private_device: bool,
     /// The payload's byte size (its parameter's `air.arg_type_size`), when a pointer into it is
     /// used.
     pub payload: Option<u64>,
@@ -649,10 +652,31 @@ fn zero_threadgroup(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// The private arena of `size` bytes in device memory (`ArenaLayout::device`): a slot of
+/// `size` rounded up to 16 bytes for each invocation of a dispatch, at the address the runtime
+/// pushes (`PushField::PrivateArenaAddress`), which the pipeline names with the slot's bytes
+/// (`RuntimeFact::PrivateArena`). A tile function, whose invocations a render pass's tiles
+/// place, keeps the refusal of private memory past the floor.
+fn device_arena(cx: &mut SelectCx<'_>, size: u64) -> Result<(), Error> {
+    let slot = size.next_multiple_of(16);
+    if super::tile::is_tile(cx) {
+        let limit = Capability::Limit {
+            limit: crate::device::VkLimit::FunctionStorageBytesPerThread,
+            required: slot.saturating_add(cx.memory.private_bytes),
+            available: crate::device::function_storage::FLOOR,
+        };
+        return Err(Unsupported::needs(Feature::PrivateMemory, limit).into());
+    }
+    let slot_bytes = u32::try_from(slot).map_err(|_| Error::LimitExceeded(Limit::PrivateArenaBytes))?;
+    cx.push.insert(crate::pipeline::sym::PushField::PrivateArenaAddress);
+    cx.facts.insert(RuntimeFact::PrivateArena { slot_bytes });
+    Ok(())
+}
+
 /// Record that the function uses `arena`. The threadgroup arena's shape is fixed and checked
 /// against `maxComputeSharedMemorySize` once, and every region's length becomes a runtime fact of
 /// the function. A private arena past `budget::PRIVATE_ARENA_BYTES` is
-/// `LimitExceeded(PrivateArenaBytes)`.
+/// `LimitExceeded(PrivateArenaBytes)`; one in device memory is the runtime's ([`device_arena`]).
 pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error> {
     match arena {
         Arena::Threadgroup => {
@@ -725,6 +749,10 @@ pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error
                 let size = cx.memory.priv_arena.static_size;
                 if size > PRIVATE_ARENA_BYTES {
                     return Err(Error::LimitExceeded(Limit::PrivateArenaBytes));
+                }
+                if cx.memory.priv_arena.device {
+                    device_arena(cx, size)?;
+                    cx.families.access.local.private_device = true;
                 }
                 cx.families.access.local.private = Some(size);
             }
@@ -1113,7 +1141,7 @@ pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<LocalDecl> {
             None => None,
         },
         private: match p.private {
-            Some(size) => Some(arena::declare_private(mb, size)?),
+            Some(size) => Some(arena::declare_private(mb, size, p.private_device)?),
             None => None,
         },
         payload: match p.payload {
@@ -1944,6 +1972,9 @@ pub(super) fn decl_of(
     if let Some(tile) = fragment {
         decl.tile_base = Some(cx.tile_base(fb, tile)?);
     }
+    if arena == Arena::Private && cx.plan.families.access.local.private_device {
+        decl.slot = Some(cx.arena_slot(fb)?);
+    }
     Ok(decl)
 }
 
@@ -2061,7 +2092,10 @@ fn float_words(
     }
     let two = k32(fb, 2)?;
     let first = fb.binary(BinOp::ShiftRightLogical, off, two)?;
-    let base = fb.module().global_value(decl.global)?;
+    let Some(global) = decl.global else {
+        return Err(cx.fail("an arena of float words without its array"));
+    };
+    let base = fb.module().global_value(global)?;
     let access = ops.access(fb, MemAccess::default(), stored.is_some())?;
     let mut loaded = Vec::with_capacity(lanes as usize);
     for j in 0..lanes {
