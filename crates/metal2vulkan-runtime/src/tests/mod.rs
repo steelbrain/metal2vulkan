@@ -29,6 +29,7 @@ mod fence;
 mod fetch;
 mod first_use_sites;
 mod floor;
+mod gpu_span;
 mod hazard;
 mod heap;
 mod image_reads;
