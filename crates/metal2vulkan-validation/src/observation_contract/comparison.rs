@@ -226,9 +226,9 @@ impl UlpTable {
 /// - `DeviceAlphaCoverage`: unbounded: the device's alpha to coverage may cover other samples
 ///   than Metal's, a whole fragment stored or dropped at one sample, which moves every channel a
 ///   resolve or a later blend reads there.
-/// - `RotatedBlendRounding`: unbounded: an `ARGB8Unorm` attachment blended in none of the measured
-///   forms may store a channel one code apart from Metal's, which moves every later word that reads
-///   it.
+/// - `RotatedBlendRounding`: unbounded: an `ARGB8Unorm` attachment whose blend is not exact by
+///   construction may store a channel one code apart from Metal's, which moves every later word
+///   that reads it.
 /// - `DeviceDenormals`, `DeviceNanEncoding`: [`Allowance::Recorded`]. Metal flushes `float`
 ///   denormals and canonicalizes NaNs, a device need not, and every `float` operation the device
 ///   performs is exposed to both; a `half` texel's NaN is the device's decode where Metal hands

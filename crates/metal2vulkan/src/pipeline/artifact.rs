@@ -1265,12 +1265,12 @@ pub enum PrecisionNote {
     /// mismatch for review, deferred in C3 until an exact path exists.
     BlendedWriteRounding,
     /// A fragment function writes an attachment held with its channels rotated (`ARGB8Unorm`)
-    /// whose blend is none of the measured forms (`LoweringInputs::rotated_blends`): Apple's blend
-    /// computes a factor pair apart in its color and alpha arithmetic, and the rotation moves
-    /// Metal's blue into the image's alpha and Metal's alpha into its red, so a channel may store
-    /// one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels over 440 swept blend
-    /// states on an M4). The exact path for a blend state is its measured form
-    /// (`pipeline::rotated_blend`'s table).
+    /// whose blend is not exact by construction (`LoweringInputs::rotated_blends`): every blend but
+    /// a minimum, a maximum, and one whose Vulkan factors are all `ZERO` or `ONE`. A blend may
+    /// compute a factor pair apart in its color and alpha arithmetic, as Apple's does, and the
+    /// rotation moves Metal's blue into the image's alpha and Metal's alpha into its red, so a
+    /// channel may store one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels over
+    /// 440 swept blend states on an M4). No query states how a device's blend rounds.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, deferred in C3 until an exact path exists.

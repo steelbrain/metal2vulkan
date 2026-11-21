@@ -715,12 +715,12 @@ pub struct LoweringInputs {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub cubic_samplers: BTreeMap<SlotRef, u32>,
-    /// The attachments of `rotated_colors` blended in none of the measured forms, by color index
-    /// (`pipeline::rotated_blend`): Vulkan's factors store Metal's channels rotated, which Apple's
-    /// blend may round one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels in our
-    /// probe's sweep), and the function records `PrecisionNote::RotatedBlendRounding`. An
-    /// attachment blended in a measured form, under a minimum or a maximum, or not blended, is not
-    /// listed. `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
+    /// The attachments of `rotated_colors` whose blend is not exact by construction, by color
+    /// index (`pipeline::rotated_blend`): Vulkan's factors store Metal's channels rotated, which a
+    /// blend may round one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels on
+    /// Apple's in our probe's sweep), and the function records
+    /// `PrecisionNote::RotatedBlendRounding`. An attachment blended under a minimum or a maximum, or
+    /// by Vulkan factors that are all `ZERO` or `ONE`, or not blended, is not listed. `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
     /// pipeline's color attachments, and link refuses a fragment compiled under another set as
     /// `NeedsInput(ColorWrites)`. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]

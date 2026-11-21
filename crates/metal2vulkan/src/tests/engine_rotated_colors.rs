@@ -16,7 +16,7 @@
 //!   `RotatedInputBlend`), noting the device's conversion, and a device that orders it in neither
 //!   form refuses naming both orderings; alpha to coverage over the image is refused
 //!   `NotImplemented(Format)` at the attachment;
-//! - a blend in none of the measured forms records `PrecisionNote::RotatedBlendRounding`.
+//! - a blend not exact by construction records `PrecisionNote::RotatedBlendRounding`.
 //!
 //! No GPU is used. `llvm-as` assembles the fixture; a missing tool skips visibly.
 
@@ -229,9 +229,10 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
                     let blend = p.graphics.color_attachments[0].and_then(|s| s.blend);
                     assert!(blend.is_some_and(|b| !b.reads_second_output()), "{stem}");
                     assert!(!second_output(&p), "{stem}: {c:?}");
-                    // In none of the measured forms but a minimum's: announced.
-                    let unmeasured = c.rgb_blend_operation != O::Min;
-                    assert_eq!(announces_rounding(&p), unmeasured, "{stem}: {c:?}");
+                    // A product is announced; a minimum, and a difference by factors of one,
+                    // are exact by construction.
+                    let inexact = c.source_rgb_blend_factor == F::SourceColor;
+                    assert_eq!(announces_rounding(&p), inexact, "{stem}: {c:?}");
                 }
                 Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => {}
                 Err(e) => panic!("{stem}: {c:?}: {e}"),
@@ -249,9 +250,9 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
                     let blend = p.graphics.color_attachments[0].and_then(|s| s.blend);
                     assert!(blend.is_some_and(|b| b.reads_second_output()), "{stem}");
                     assert!(second_output(&p) && rotates(&p), "{stem}: {c:?}");
-                    // Copies of Metal's source alpha. Measured: no notice.
+                    // Copies of Metal's source alpha, under factors that round: announced.
                     assert!(shuffles(&p, [3, 3, 3, 3]), "{stem}: {c:?}");
-                    assert!(!announces_rounding(&p), "{stem}: {c:?}");
+                    assert!(announces_rounding(&p), "{stem}: {c:?}");
                 }
                 Err(Error::Unsupported(u)) if !dual => {
                     assert_eq!(u.feature, Feature::DualSourceBlending, "{stem}");

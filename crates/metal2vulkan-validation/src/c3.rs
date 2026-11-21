@@ -747,10 +747,11 @@ pub struct SlotRow {
 ///   another sample, and the stored samples are ordinary data later words use. Open until Metal's
 ///   coverage pattern is computed in the function, on a device whose coverage is Metal's
 ///   (elsewhere the device's coverage is its native answer, `DeviceAlphaCoverage`).
-/// - An `ARGB8Unorm` attachment blended in none of the measured forms
-///   (`RotatedBlendRounding`): Apple's blend computes a factor pair apart in its color and alpha
-///   arithmetic, which the rotation swaps for Metal's alpha and blue, and the stored code is
-///   ordinary data later words use. Open until the blend state has a measured form.
+/// - An `ARGB8Unorm` attachment whose blend is not exact by construction
+///   (`RotatedBlendRounding`): a blend may compute a factor pair apart in its color and alpha
+///   arithmetic, as Apple's does, which the rotation swaps for Metal's alpha and blue, and the
+///   stored code is ordinary data later words use. Open: no query states how a device's blend
+///   rounds.
 ///
 /// A varying the device interpolates (`DeviceInterpolation`) is not deferred: every fragment
 /// function that reads one records it on every device but MoltenVK's, so a row-level deferral
@@ -875,11 +876,12 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              where the device covers as Metal does"
         }
         PrecisionNote::RotatedBlendRounding => {
-            "an ARGB8Unorm attachment blended in none of the measured forms may store a channel \
-             one code apart from Metal's: Apple's blend computes a factor pair apart in its color \
-             and alpha arithmetic, and the rotation moves Metal's blue into the image's alpha \
-             and Metal's alpha into its red (up to 1,767 of 65,536 tie-heavy texels over 440 \
-             swept states); exact path: a measured form for the state"
+            "an ARGB8Unorm attachment whose blend is not exact by construction (all but a \
+             minimum, a maximum, and Vulkan factors of zero and one) may store a channel one code \
+             apart from Metal's: a blend may compute a factor pair apart in its color and alpha \
+             arithmetic, as Apple's does, and the rotation moves Metal's blue into the image's \
+             alpha and Metal's alpha into its red (up to 1,767 of 65,536 tie-heavy texels over \
+             440 swept states); no exact path: no query states how a device's blend rounds"
         }
         _ => "unbounded",
     }

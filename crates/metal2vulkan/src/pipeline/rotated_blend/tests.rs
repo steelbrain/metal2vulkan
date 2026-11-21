@@ -414,29 +414,105 @@ fn a_second_output_needs_dual_source_blending() {
     ));
 }
 
-/// Every measured blend state is admitted on MoltenVK and on lavapipe and stores Metal's blend
-/// rotated; it takes the search's form, alike on both devices, unannounced.
+/// The rotated-targets lane's blended states, and one over zero and one over one: Metal's color
+/// source and destination factors, its alpha source and destination factors, and its one
+/// operation.
+const LANE: [([BlendFactor; 4], BlendOperation); 11] = {
+    use BlendFactor as F;
+    use BlendOperation as O;
+    [
+        ([F::One, F::Zero, F::One, F::Zero], O::Add),
+        ([F::One, F::One, F::One, F::One], O::Add),
+        (
+            [F::DestinationColor, F::Zero, F::DestinationAlpha, F::Zero],
+            O::Add,
+        ),
+        (
+            [
+                F::SourceColor,
+                F::OneMinusSourceColor,
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        (
+            [
+                F::BlendAlpha,
+                F::OneMinusBlendAlpha,
+                F::BlendAlpha,
+                F::OneMinusBlendAlpha,
+            ],
+            O::Add,
+        ),
+        (
+            [
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        (
+            [
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+                F::One,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        (
+            [
+                F::One,
+                F::OneMinusSourceAlpha,
+                F::One,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        ([F::SourceAlpha, F::One, F::Zero, F::One], O::Add),
+        (
+            [F::SourceAlpha, F::One, F::SourceAlpha, F::One],
+            O::ReverseSubtract,
+        ),
+        (
+            [
+                F::One,
+                F::OneMinusSourceAlpha,
+                F::One,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Subtract,
+        ),
+    ]
+};
+
+/// Every state of the rotated-targets lane is admitted on MoltenVK and on lavapipe and stores
+/// Metal's blend rotated, alike on both devices; all but one over zero and one over one, exact by
+/// construction, are announced, the straight-alpha pairs included.
 #[test]
-fn measured_blends_take_their_measured_forms() {
+fn the_lane_s_blends_store_metal_s_rotated() {
     let mvk = moltenvk();
     let lvp = profile("lavapipe", DevicePolicy::default()).expect("profile");
-    for &([sr, dr, sa, da], op) in &MEASURED {
+    for (i, &([sr, dr, sa, da], op)) in LANE.iter().enumerate() {
         let a = attachment((sr, dr, op), (sa, da, op));
         let on_mvk = rotated_blend(&a, &mvk).expect("admitted").expect("blended");
         let on_lvp = rotated_blend(&a, &lvp).expect("admitted").expect("blended");
         check(&a, &on_mvk);
         check(&a, &on_lvp);
-        assert!(!unmeasured(&a, &lvp), "{a:?}");
-        assert!(!unmeasured(&a, &mvk), "{a:?}");
+        assert_eq!(inexact(&a, &lvp), i > 1, "{a:?}");
+        assert_eq!(inexact(&a, &mvk), i > 1, "{a:?}");
         assert_eq!(on_mvk, on_lvp, "{a:?}");
     }
 }
 
-/// A blend admitted in none of the measured forms is announced on every device; a minimum or
-/// maximum (which takes no factor), a blend that is off, and a blend no Vulkan state gives are
-/// not.
+/// A blend admitted that is not exact by construction is announced on every device; a minimum or
+/// maximum (which takes no factor), a blend by Vulkan factors of zero and one, a blend that is
+/// off, and a blend no Vulkan state gives are not.
 #[test]
-fn unmeasured_blends_are_announced() {
+fn inexact_blends_are_announced() {
     use BlendFactor as F;
     use BlendOperation as O;
     let mvk = moltenvk();
@@ -449,16 +525,25 @@ fn unmeasured_blends_are_announced() {
     off.blending_enabled = false;
     for p in [&mvk, &lvp] {
         assert!(matches!(rotated_blend(&kept, p), Ok(Some(_))));
-        assert!(unmeasured(&kept, p), "{p:?}");
+        assert!(inexact(&kept, p), "{p:?}");
         let max = attachment((F::One, F::One, O::Max), (F::One, F::One, O::Max));
         assert!(matches!(rotated_blend(&max, p), Ok(Some(_))));
-        assert!(!unmeasured(&max, p));
-        assert!(!unmeasured(&off, p));
+        assert!(!inexact(&max, p));
+        let difference = attachment(
+            (F::One, F::One, O::ReverseSubtract),
+            (F::One, F::One, O::ReverseSubtract),
+        );
+        let held = attachment((F::Zero, F::One, O::Add), (F::Zero, F::One, O::Add));
+        for exact in [difference, held] {
+            assert!(matches!(rotated_blend(&exact, p), Ok(Some(_))));
+            assert!(!inexact(&exact, p), "{exact:?}");
+        }
+        assert!(!inexact(&off, p));
         let refused = attachment(
             (F::DestinationAlpha, F::OneMinusDestinationAlpha, O::Add),
             (F::One, F::Zero, O::Add),
         );
-        assert!(!unmeasured(&refused, p));
+        assert!(!inexact(&refused, p));
     }
 }
 

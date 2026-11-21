@@ -2510,7 +2510,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 if let (0, Some(&lanes)) = (index, cx.inputs.rotated_factors.get(&attachment)) {
                     seconds.push((attachment, o.field, link.form, lanes));
                 }
-                // A blend in none of the measured forms may round apart from Apple's
+                // A blend not exact by construction may round apart from Metal's
                 // (`LoweringInputs::rotated_blends`).
                 if index == 0 && cx.inputs.rotated_blends.contains(&attachment) {
                     cx.precision.insert(PrecisionNote::RotatedBlendRounding);

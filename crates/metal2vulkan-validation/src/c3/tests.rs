@@ -1470,8 +1470,8 @@ fn a_coverage_reads_rounded_alpha_row_is_deferred_and_never_a_reviewed_reading()
     );
 }
 
-/// An `ARGB8Unorm` attachment blended in none of the measured forms (`RotatedBlendRounding`) is
-/// deferred the same way.
+/// An `ARGB8Unorm` attachment whose blend is not exact by construction (`RotatedBlendRounding`)
+/// is deferred the same way.
 #[test]
 fn a_rotated_blend_rounding_row_is_deferred_and_never_a_reviewed_reading() {
     deferred_and_never_reviewed(

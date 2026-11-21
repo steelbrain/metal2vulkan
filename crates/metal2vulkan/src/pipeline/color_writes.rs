@@ -58,7 +58,7 @@ use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::ColorAttachmentState;
 use crate::pipeline::lower_inputs::{ChannelWrite, ExtendedRangeColor, FactorLane};
-use crate::pipeline::rotated_blend::{rotated_blend, unmeasured, RotatedBlend};
+use crate::pipeline::rotated_blend::{inexact, rotated_blend, RotatedBlend};
 use crate::pipeline::stage_io::IoRole;
 
 /// The color writes of a fragment function writing the attachments `written` (dual-source index
@@ -271,7 +271,8 @@ fn nearest_even(
 /// ([`wanted_extended_range`]), and every color it stores nowhere (`StageIo::unattached_colors`)
 /// has no attachment and is not color 0 under alpha to coverage, and the second outputs it writes
 /// for rotated attachments are the pipeline's ([`wanted_rotated_factors`]), and so are those of
-/// their blends in none of the measured forms ([`wanted_rotated_blends`]), and the attachments holding Metal's alpha in red it
+/// their blends not exact by construction ([`wanted_rotated_blends`]), and the attachments holding
+/// Metal's alpha in red it
 /// writes or reads are the pipeline's ([`wanted_alpha_in_red`]), and its texture writes
 /// that Metal's mode 2 stores otherwise compiled under the pipeline's `textureWriteRoundingMode`
 /// (`StageIo::texture_write_rounding`), else `NeedsInput(ColorWrites)`.
@@ -710,8 +711,8 @@ pub(crate) fn wanted_rotated_factors(
     out
 }
 
-/// The attachments of `colors` held with their channels rotated whose blend is in none of the
-/// measured forms on `p` (`LoweringInputs::rotated_blends`, `rotated_blend::unmeasured`).
+/// The attachments of `colors` held with their channels rotated whose blend is not exact by
+/// construction on `p` (`LoweringInputs::rotated_blends`, `rotated_blend::inexact`).
 pub(crate) fn rotated_blends(
     colors: &[Option<ColorAttachmentDescriptor>],
     p: &DeviceProfile,
@@ -722,13 +723,13 @@ pub(crate) fn rotated_blends(
         .filter_map(|(i, c)| {
             let c = c.as_ref()?;
             let rotated = metal::format::rotated_channels(c.pixel_format);
-            (rotated && unmeasured(c, p)).then_some(i as u32)
+            (rotated && inexact(c, p)).then_some(i as u32)
         })
         .collect()
 }
 
-/// The attachments held with their channels rotated whose blends in none of the measured forms
-/// the fragment stage `fragment` compiles under in a render pipeline whose color attachments are
+/// The attachments held with their channels rotated whose blends not exact by construction the
+/// fragment stage `fragment` compiles under in a render pipeline whose color attachments are
 /// `colors` on `p`: [`rotated_blends`]'s, for the attachments it writes through a first
 /// (dual-source index 0) output.
 pub(crate) fn wanted_rotated_blends(

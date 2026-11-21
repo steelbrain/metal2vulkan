@@ -35,17 +35,17 @@
 //!   `NotImplemented(Format)`. A one minus a value the function would compute is not offered
 //!   among Vulkan's factors: it would round apart from the blend's own.
 //!
-//! **Measured forms.** Apple's blend does not compute every factor pair alike in its color and
-//! alpha arithmetic, and the rotation moves Metal's blue into the image's alpha and Metal's alpha
-//! into its red: under `SourceAlpha` over `OneMinusSourceAlpha` Metal's color is `fma(d, 1 - a, s *
+//! **Rounding.** Apple's blend does not compute every factor pair alike in its color and alpha
+//! arithmetic, and the rotation moves Metal's blue into the image's alpha and Metal's alpha into
+//! its red: under `SourceAlpha` over `OneMinusSourceAlpha` Metal's color is `fma(d, 1 - a, s *
 //! a)`, where the image's alpha blends a factor and one minus it as `fma(f, s - d, d)`, which
 //! rounds one code apart near half-code ties. A swept 440 blend states held 1 to 1,767 differing
-//! texels of 65,536 in 40 of them. The blend states [`MEASURED`] lists store Metal's bytes rotated
-//! in the forms this module gives them on every lane device at the rotated-targets lane's texels,
-//! and all but the two straight-alpha pairs (`SourceAlpha` over `OneMinusSourceAlpha` for color)
-//! on the M4 and the M3 Max at 65,536 tie-heavy texels: under Apple's own blend those two may round
-//! as above, unannounced. Every other blend state is the search's, announced
-//! (`LoweringInputs::rotated_blends`, `PrecisionNote::RotatedBlendRounding`).
+//! texels of 65,536 in 40 of them, and no query states how a device's blend rounds. So every blend
+//! the rotation gives is announced (`LoweringInputs::rotated_blends`,
+//! `PrecisionNote::RotatedBlendRounding`) but one exact by construction ([`inexact`]): a minimum
+//! or a maximum, which takes no factor, and a blend whose Vulkan factors are all `ZERO` or `ONE`,
+//! whose result is the source, the destination, zero, or their sum or difference, a whole code
+//! half a code from any tie.
 
 use crate::device::requirements::VkFeature;
 use crate::device::DeviceProfile;
@@ -71,112 +71,30 @@ pub(crate) enum RotatedBlend {
     Synthesized(BlendState, [FactorLane; 4]),
 }
 
-/// The measured blend states (the module docs): the rotated-targets lane's blended cases, and
-/// one over zero and one over one, whose arithmetic is the one channel's or one sum: Metal's
-/// color source and destination factors, its alpha source and destination factors, and its one
-/// operation.
-const MEASURED: [([BlendFactor; 4], BlendOperation); 11] = {
-    use BlendFactor as F;
-    use BlendOperation as O;
-    [
-        ([F::One, F::Zero, F::One, F::Zero], O::Add),
-        ([F::One, F::One, F::One, F::One], O::Add),
-        (
-            [F::DestinationColor, F::Zero, F::DestinationAlpha, F::Zero],
-            O::Add,
-        ),
-        (
-            [
-                F::SourceColor,
-                F::OneMinusSourceColor,
-                F::SourceAlpha,
-                F::OneMinusSourceAlpha,
-            ],
-            O::Add,
-        ),
-        (
-            [
-                F::BlendAlpha,
-                F::OneMinusBlendAlpha,
-                F::BlendAlpha,
-                F::OneMinusBlendAlpha,
-            ],
-            O::Add,
-        ),
-        // Straight alpha.
-        (
-            [
-                F::SourceAlpha,
-                F::OneMinusSourceAlpha,
-                F::SourceAlpha,
-                F::OneMinusSourceAlpha,
-            ],
-            O::Add,
-        ),
-        // Straight alpha, Metal's alpha accumulated.
-        (
-            [
-                F::SourceAlpha,
-                F::OneMinusSourceAlpha,
-                F::One,
-                F::OneMinusSourceAlpha,
-            ],
-            O::Add,
-        ),
-        (
-            [
-                F::One,
-                F::OneMinusSourceAlpha,
-                F::One,
-                F::OneMinusSourceAlpha,
-            ],
-            O::Add,
-        ),
-        ([F::SourceAlpha, F::One, F::Zero, F::One], O::Add),
-        (
-            [F::SourceAlpha, F::One, F::SourceAlpha, F::One],
-            O::ReverseSubtract,
-        ),
-        (
-            [
-                F::One,
-                F::OneMinusSourceAlpha,
-                F::One,
-                F::OneMinusSourceAlpha,
-            ],
-            O::Subtract,
-        ),
-    ]
-};
-
-/// Whether `a` blends by a measured blend state ([`MEASURED`]).
-fn measured(a: &ColorAttachmentDescriptor) -> bool {
-    let factors = [
-        a.source_rgb_blend_factor,
-        a.destination_rgb_blend_factor,
-        a.source_alpha_blend_factor,
-        a.destination_alpha_blend_factor,
-    ];
-    a.rgb_blend_operation == a.alpha_blend_operation
-        && MEASURED.contains(&(factors, a.rgb_blend_operation))
-}
-
-/// Whether the blend of attachment `a`, held with its channels rotated, on `p` is in none of the
-/// measured forms (`LoweringInputs::rotated_blends`, the module docs): a blend [`rotated_blend`]
-/// admits, under neither a minimum nor a maximum (which takes no factor), that [`MEASURED`] does
-/// not list. A blend that is off, and one no Vulkan state gives (which link refuses), is not.
-pub(crate) fn unmeasured(a: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
-    if !matches!(rotated_blend(a, p), Ok(Some(_))) {
-        return false;
-    }
-    // The same resolution [`rotated_blend`] makes, so the form of a blend holding a placeholder is
-    // the form of the blend Metal draws with.
-    let a = &a.specialized();
+/// Whether the blend of attachment `a`, held with its channels rotated, on `p` is not exact by
+/// construction (`LoweringInputs::rotated_blends`, the module docs): a blend [`rotated_blend`]
+/// admits but a minimum or a maximum, which takes no factor, and one whose Vulkan factors are all
+/// `ZERO` or `ONE`. A blend that is off, and one no Vulkan state gives (which link refuses), is not.
+pub(crate) fn inexact(a: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
+    use vk::BlendFactor as B;
+    let state = match rotated_blend(a, p) {
+        Ok(Some(RotatedBlend::Direct(state))) => state,
+        Ok(Some(RotatedBlend::Synthesized(..))) => return true,
+        _ => return false,
+    };
+    // The same resolution [`rotated_blend`] makes, so a blend holding a placeholder is the blend
+    // Metal draws with.
     let factorless = matches!(
-        a.rgb_blend_operation,
+        a.specialized().rgb_blend_operation,
         BlendOperation::Min | BlendOperation::Max
     );
-    !factorless && !measured(a)
+    let factors = [
+        state.src_color,
+        state.dst_color,
+        state.src_alpha,
+        state.dst_alpha,
+    ];
+    !factorless && !factors.iter().all(|f| matches!(*f, B::ZERO | B::ONE))
 }
 
 /// The value a blend factor takes at one channel, in Metal's channels (0 to 3).

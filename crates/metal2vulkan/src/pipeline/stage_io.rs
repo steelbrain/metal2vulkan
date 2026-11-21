@@ -252,8 +252,8 @@ pub struct StageIo {
     /// for another map than the pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_factors: BTreeMap<u32, [crate::pipeline::lower_inputs::FactorLane; 4]>,
-    /// The attachments held with their channels rotated whose blends in none of the measured
-    /// forms the function compiled under (`LoweringInputs::rotated_blends`), by color index: those
+    /// The attachments held with their channels rotated whose blends not exact by construction
+    /// the function compiled under (`LoweringInputs::rotated_blends`), by color index: those
     /// of the attachments it writes through a first output. Link refuses a stage compiled for
     /// another set than the pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]

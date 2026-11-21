@@ -2316,9 +2316,11 @@ bound.
   every other device and count is unmeasured.
 - `metal2vulkan-degrade-rotated-blend-rounding` (precision). `PrecisionNote::RotatedBlendRounding`:
   A fragment function writes an attachment held with its channels rotated (`ARGB8Unorm`) whose blend
-  is none of the measured forms (`LoweringInputs::rotated_blends`): Apple's blend computes a factor pair apart in its color
-  and alpha arithmetic, and the rotation moves Metal's blue into the image's alpha and Metal's alpha
-  into its red, so a channel may store one code apart from Metal's.
+  is not exact by construction (`LoweringInputs::rotated_blends`): every blend but a minimum, a
+  maximum, and one whose Vulkan factors are all `ZERO` or `ONE`. A blend may compute a factor pair
+  apart in its color and alpha arithmetic, as Apple's does, and the rotation moves Metal's blue into
+  the image's alpha and Metal's alpha into its red, so a channel may store one code apart from
+  Metal's.
 - `metal2vulkan-degrade-linked-sampler-numbering` (precision).
   `PrecisionNote::LinkedSamplerNumbering`: The sampler resource IDs a pipeline state takes for the
   constexpr samplers of the visible functions its stage links may be other than Metal's: two or more
