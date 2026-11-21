@@ -75,7 +75,10 @@ pub enum CommandBufferStatus {
     /// reaches a given value", so execution pauses after scheduling. What differs: the M3 Max
     /// holds a command buffer that waits for a shared event's value not yet reached at
     /// `Committed`, with no scheduled handler run, and its queue's next one with it; it does not
-    /// for an `MTLEvent`. Documented Metal states no such hold, and rt keeps none.
+    /// for an `MTLEvent`. Documented Metal states no such hold, and rt keeps none but one: a wait
+    /// for a signal its queue holds for room is met once that signal is staged, so the waiter
+    /// reads `Committed` for as long as the signaller's queue takes to reach it, as the M3 Max
+    /// holds one until the value is reached.
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
     Completed,

@@ -2954,8 +2954,10 @@ named states the rule in full.
   value not yet reached at `Committed`, with no scheduled handler run, and its queue's next
   command buffer with it, until the value lands, and holds none for an `MTLEvent` (the
   conformance case `event-wait-behind-a-running-signal`). No documented Metal states that hold,
-  so the runtime keeps none. The GPU's order and when each command buffer completes are the same
-  either way; what moves is when the program's threads and handlers see `Scheduled`.
+  so the runtime keeps none but while the signal's own queue holds it for room: its waiter reads
+  `Committed` until the signal is staged, which the M3 Max's hold covers. The GPU's order and
+  when each command buffer completes are the same either way; what moves is when the program's
+  threads and handlers see `Scheduled`.
 
 **Command queues**
 

@@ -98,7 +98,8 @@ impl Device {
     /// What differs: the M3 Max (`event-wait-behind-a-running-signal`) holds a command buffer that
     /// waits for a shared event's value not yet reached at `Committed`, with no scheduled handler
     /// run, and its queue's next one with it, and holds none for an `MTLEvent`. Documented Metal
-    /// states no such hold, and rt keeps none (docs/API.md, accepted differences).
+    /// states no such hold, and rt keeps none (docs/API.md, accepted differences) but for a
+    /// signal its queue holds for room ([`CommandBufferStatus::Scheduled`](crate::CommandBufferStatus::Scheduled)).
     ///
     /// Err: [`Error::Vulkan`] where the semaphore cannot be made.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
