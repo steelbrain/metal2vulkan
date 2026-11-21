@@ -20,7 +20,7 @@ profile	moltenvk-m3	634ae0d75db91413
 profile	nvidia-pascal-linux	c0431c4df2d61355
 profile	nvidia-rtx50-linux	0d4a6429ce888664
 profile	nvidia-rtx5080-laptop	9c9b7c7dee18fb5b
-profile	runtime-floor	42f0aaf70682836e
+profile	runtime-floor	cb1326eae1b08f5f
 fixture	source	subject	amd-780m-hawkpoint-radv	amd-780m-radv	amd-rdna2-apu-radv	amd-rdna3-radv	gate-lavapipe	gate-lavapipe-x86_64	intel-arl-anv	intel-irisxe-anv	intel-irisxe-rplp-anv	intel-uhd770-rpls-anv	lavapipe	moltenvk-m3	nvidia-pascal-linux	nvidia-rtx50-linux	nvidia-rtx5080-laptop	runtime-floor
 engine/a1_bool_from_float.air.ll	67a41b1383f5ed2f	a1_bool_from_float	5260d2d068752404	5260d2d068752404	5260d2d068752404	5260d2d068752404	e4c854a86a1a38f9	e4c854a86a1a38f9	77d84a2477f4f906	77d84a2477f4f906	77d84a2477f4f906	77d84a2477f4f906	e4c854a86a1a38f9	e4c854a86a1a38f9	e249110fe7161c68	02860d9adbb2f7ee	02860d9adbb2f7ee	e249110fe7161c68
 engine/a1_bool_from_float.ll	965508e37289a775	a1_bool_from_float	5260d2d068752404	5260d2d068752404	5260d2d068752404	5260d2d068752404	e4c854a86a1a38f9	e4c854a86a1a38f9	77d84a2477f4f906	77d84a2477f4f906	77d84a2477f4f906	77d84a2477f4f906	e4c854a86a1a38f9	e4c854a86a1a38f9	e249110fe7161c68	02860d9adbb2f7ee	02860d9adbb2f7ee	e249110fe7161c68
