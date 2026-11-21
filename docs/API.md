@@ -1616,7 +1616,10 @@ assert_eq!(linked, pipeline);
   compile a missing stage under. So does a compute pipeline's kernel:
   `kernel_inputs_read(&kernel, &inputs, &budget, &entries)` narrows the stage-input descriptor to
   the attributes its entry reads, and the kernel keys and compiles under those, so states that
-  differ only in an attribute it never reads share one compiled function. What a creation reads of
+  differ only in an attribute it never reads share one compiled function. Those are the plain
+  module's inputs; `inputs.kernel_variant(variant)` gives each `KernelVariant`'s (`Plain`,
+  `PartialThreadgroups`, `EmulatedSimdgroups`), so consumers that lower a kernel's variants on one
+  device lower one module per variant. What a creation reads of
   the descriptor past the fetch -- its layout agreement, its reflection, and `compute_pipeline_key`
   -- reads it whole.
 - A key names an artifact by its inputs and versions; a content digest names it by what it says.

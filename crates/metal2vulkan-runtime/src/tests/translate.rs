@@ -34,7 +34,7 @@ mod on_device {
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, Gauges, Library, Limit,
         MemoryClass, PrecisionNote, Refusal, Region, StageSource, MAX_BUFFER_LENGTH,
     };
-    use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
+    use metal2vulkan::pipeline::{KernelVariant, RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
     use std::path::{Path, PathBuf};
@@ -91,8 +91,8 @@ mod on_device {
                     translator.compile_compute_pipeline(descriptor, &budget),
                 )];
                 if let StageSource::Function(function) = &descriptor.kernel {
-                    let mut inputs = descriptor.lowering_inputs();
-                    inputs.partial_threadgroups = true;
+                    let inputs = (descriptor.lowering_inputs())
+                        .kernel_variant(KernelVariant::PartialThreadgroups);
                     let variant = translator
                         .compile_function(function, &inputs, &budget)
                         .and_then(|compiled| {
@@ -133,14 +133,13 @@ mod on_device {
         let StageSource::Function(function) = &descriptor.kernel else {
             unreachable!("a fixture's kernel is a function");
         };
-        let translator = &device.core().translator;
+        let translator = device.translator();
         let budget = Budget::standard();
         let entries = StageEntries::new();
         let plain = translator
             .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let mut emulated = plain.clone();
-        emulated.emulated_simdgroups = true;
+        let emulated = plain.kernel_variant(KernelVariant::EmulatedSimdgroups);
         [plain, emulated].map(|inputs| {
             let compiled = translator
                 .compile_function_from_entries(function, &inputs, &budget, &entries)
@@ -163,6 +162,19 @@ mod on_device {
 
         (state.inner.compiled.emulated.as_ref())
             .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
+    }
+
+    /// How many modules `state`'s make made: its whole one, and each variant it lowered with it.
+    fn modules_made(state: &ComputePipelineState) -> usize {
+        use crate::pipeline::{Form, Lowered};
+
+        let partial = match &state.inner.compiled.form {
+            Form::Sized {
+                partial: Some(lowered),
+            } => matches!(**lowered, Lowered::Made(..)),
+            _ => false,
+        };
+        1 + usize::from(partial) + usize::from(emulated_made(state))
     }
 
     /// Zeroed Shared buffers in one block, each at a 256-byte boundary.
@@ -1726,6 +1738,106 @@ mod on_device {
             }
             let _ = std::fs::remove_dir_all(&dir);
             println!("{name}: 3 lowerings and the blob written, nothing by a second device");
+        }
+    }
+
+    /// Each module a kernel's state lowers is the translator's public lowering of its variant on
+    /// the device's translator (`Device::translator`), under `LoweringInputs::kernel_variant` of
+    /// the inputs `kernel_inputs_read` gives: for the observing kernel, whose plain module checks
+    /// its one store at a computed index against its buffer (`PushField::SlotBounds` of buffer 1)
+    /// and leaves its two loads at constant offsets unchecked (none of buffer 0), and for a kernel
+    /// of SIMD-group products. Each lowering a first device kept in its cache directory is found
+    /// under the key of one variant's inputs, its artifact the public compile's byte for byte, and
+    /// as many are found as the states made modules.
+    #[test]
+    fn every_device_s_kernel_modules_are_the_translator_s_lowerings_of_their_variants() {
+        use metal2vulkan::pipeline::{PushField, SlotClass, SlotRef};
+
+        let (Some(observing), Some(products)) = (
+            descriptor("icb_replay_grid_template"),
+            descriptor_of("gsm2_simd_products", "simd_float_products"),
+        ) else {
+            return;
+        };
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-variants-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let first = on_directory(name, physical, &dir);
+            let counters = first.counters();
+            let states = [
+                state(name, &first, &observing),
+                state(name, &first, &products),
+            ];
+            let made: usize = states.iter().map(modules_made).sum();
+            drop(states);
+            drop(first);
+            // The teardown ends once the reaper wrote what it was given.
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let second = on_directory(name, physical, &dir);
+            let translator = second.translator();
+            let budget = Budget::standard();
+            let entries = StageEntries::new();
+            let mut found = 0;
+            for descriptor in [&observing, &products] {
+                let StageSource::Function(function) = &descriptor.kernel else {
+                    unreachable!("a fixture's kernel is a function");
+                };
+                let plain = translator
+                    .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                for variant in KernelVariant::ALL {
+                    let inputs = plain.kernel_variant(variant);
+                    let key = translator.function_compile_key(function, &inputs);
+                    let Some(kept) = crate::pipeline::loaded(second.core(), key.digest()) else {
+                        continue;
+                    };
+                    let public = translator
+                        .compile_function(function, &inputs, &budget)
+                        .unwrap_or_else(|error| panic!("{name}: {variant:?}: {error}"));
+                    assert!(
+                        kept.to_bytes() == public.to_bytes(),
+                        "{name}: the state's {variant:?} module is the public lowering"
+                    );
+                    found += 1;
+                }
+            }
+            assert!(
+                found >= made,
+                "{name}: {found} lowerings found of the {made} modules the states made"
+            );
+            let StageSource::Function(function) = &observing.kernel else {
+                unreachable!("a fixture's kernel is a function");
+            };
+            let mut plain = observing.clone();
+            plain.kernel = StageSource::Compiled(
+                translator
+                    .compile_function(function, &observing.lowering_inputs(), &budget)
+                    .unwrap_or_else(|error| panic!("{name}: {error}")),
+            );
+            let pipeline = translator
+                .compile_compute_pipeline(&plain, &budget)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let checked: Vec<u32> = (pipeline.interface.push.iter())
+                .filter_map(|placement| match placement.field {
+                    PushField::SlotBounds(SlotRef {
+                        class: SlotClass::Buffer,
+                        index,
+                        ..
+                    }) => Some(index),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                checked,
+                [1],
+                "{name}: the buffers whose accesses are checked"
+            );
+            drop(second);
+            let _ = std::fs::remove_dir_all(&dir);
+            println!("{name}: {found} modules, each a variant's public lowering");
         }
     }
 

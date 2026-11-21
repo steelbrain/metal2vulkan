@@ -2186,6 +2186,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   reflection from the library's AIR. The options it leaves to the consumer are
   `MTLPipelineOptionFailOnBinaryArchiveMiss`, `MTLPipelineOptionArgumentInfo`,
   `MTLPipelineOptionBufferTypeInfo` and `MTLPipelineOptionBindingInfo`.
+- `Device::translator` (no Metal counterpart) is the translator device creation built. A state of
+  a kernel function lowers each module, the plain one and its variants, on it under
+  `LoweringInputs::kernel_variant` of the inputs its `kernel_inputs_read` gives the descriptor's,
+  so a consumer that lowers a variant there gets the module the state runs.
 - What a state compiles is its content, never the state: its descriptor's kernel with its
   constant values, linked functions and dynamic libraries, the descriptor's fields that change
   the compile (the translator's `Device::compute_pipeline_key`), and its

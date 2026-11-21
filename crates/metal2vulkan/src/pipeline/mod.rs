@@ -132,7 +132,7 @@ pub use layout::{
 pub use link::{heap_sampler_capacity, heap_unused_while_pending};
 pub use lower_inputs::{
     AliasView, AmplificationDraws, BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane,
-    FetchedAttachment, FramebufferFetchInputs, LoweringInputs, RotatedBlendForm,
+    FetchedAttachment, FramebufferFetchInputs, KernelVariant, LoweringInputs, RotatedBlendForm,
     StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
 };
 pub use table::FunctionHandle;

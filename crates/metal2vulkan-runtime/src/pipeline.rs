@@ -68,9 +68,9 @@ use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
     arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
-    ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
-    NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef, SlotClass,
-    SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
+    ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, KernelVariant,
+    LoweringInputs, NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef,
+    SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
     DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
 use metal2vulkan::Budget;
@@ -867,11 +867,11 @@ impl Compiled {
                     )
                 })
                 .map_err(Error::Translation)?;
-                let mut emulated = plain.clone();
-                emulated.emulated_simdgroups = true;
-                let source = (function, emulated);
-                let mut inputs = plain.clone();
-                inputs.partial_threadgroups = true;
+                let source = (
+                    function,
+                    plain.kernel_variant(KernelVariant::EmulatedSimdgroups),
+                );
+                let inputs = plain.kernel_variant(KernelVariant::PartialThreadgroups);
                 let lower =
                     |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, entries);
                 // The partial-threadgroups variant: what the cache directory holds, else lowered

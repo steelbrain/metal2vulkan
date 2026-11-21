@@ -1214,6 +1214,54 @@ impl LoweringInputs {
     pub fn new() -> LoweringInputs {
         LoweringInputs::default()
     }
+
+    /// The inputs of a kernel's `variant`, where these are its plain module's: a compute
+    /// pipeline's [`lowering_inputs`](crate::pipeline::ComputePipelineDescriptor::lowering_inputs)
+    /// narrowed to the attributes its kernel reads
+    /// ([`Device::kernel_inputs_read`](crate::device::Device::kernel_inputs_read)). These inputs
+    /// as they are for [`KernelVariant::Plain`]; with
+    /// [`partial_threadgroups`](Self::partial_threadgroups) for
+    /// [`KernelVariant::PartialThreadgroups`], and with
+    /// [`emulated_simdgroups`](Self::emulated_simdgroups) for
+    /// [`KernelVariant::EmulatedSimdgroups`]. A consumer that lowers a kernel's variants itself
+    /// builds each one's inputs here, so two consumers of one device lower one module per variant.
+    pub fn kernel_variant(&self, variant: KernelVariant) -> LoweringInputs {
+        let mut inputs = self.clone();
+        match variant {
+            KernelVariant::Plain => {}
+            KernelVariant::PartialThreadgroups => inputs.partial_threadgroups = true,
+            KernelVariant::EmulatedSimdgroups => inputs.emulated_simdgroups = true,
+        }
+        inputs
+    }
+}
+
+/// One of the modules a compute pipeline's kernel is lowered to
+/// ([`LoweringInputs::kernel_variant`]): its plain module, and the variants a dispatch that the
+/// plain module does not run as Metal runs it takes instead.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum KernelVariant {
+    /// The plain module: a whole number of threadgroups, each of whole SIMD groups where the
+    /// profile's subgroups give them.
+    Plain,
+    /// The partial-threadgroups variant ([`LoweringInputs::partial_threadgroups`]): a
+    /// `dispatchThreads` grid that is not a whole number of threadgroups, or a kernel that does
+    /// not observe its threadgroup partition in tiles of its grid.
+    PartialThreadgroups,
+    /// The emulated-SIMD-group variant ([`LoweringInputs::emulated_simdgroups`]): a threadgroup
+    /// that ends in a partial SIMD group.
+    EmulatedSimdgroups,
+}
+
+impl KernelVariant {
+    /// Every variant, the plain module first.
+    pub const ALL: [KernelVariant; 3] = [
+        KernelVariant::Plain,
+        KernelVariant::PartialThreadgroups,
+        KernelVariant::EmulatedSimdgroups,
+    ];
 }
 
 /// How a storage image is declared and viewed for one bound pixel format.

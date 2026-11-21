@@ -405,6 +405,7 @@ surface! {
         enum FactorLane N;
         struct FetchedAttachment N;
         struct FramebufferFetchInputs N;
+        enum KernelVariant N;
         struct LoweringInputs N;
         enum RotatedBlendForm N;
         struct StorageImageChoice N;

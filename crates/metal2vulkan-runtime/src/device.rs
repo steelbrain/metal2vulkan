@@ -847,6 +847,15 @@ impl Device {
         self.shared.core.memory_types
     }
 
+    /// No Metal counterpart: the translator device creation built, which every pipeline state of
+    /// the device lowers its functions on: the physical device's queries with what creation
+    /// enables, under the identity domains. The modules of a state of a kernel function
+    /// (`StageSource::Function`) are this device's lowerings of the kernel's variants, each under
+    /// `LoweringInputs::kernel_variant` of the inputs `kernel_inputs_read` gives the descriptor's.
+    pub fn translator(&self) -> &metal2vulkan::device::Device {
+        &self.shared.core.translator
+    }
+
     /// No Metal counterpart: the Vulkan handles, for the consumer's swapchain and presents. The
     /// runtime keeps owning them; the consumer destroys none of them, and destroys whatever it
     /// makes with them before the device is torn down.
