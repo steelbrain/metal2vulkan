@@ -1069,7 +1069,7 @@ fn signed_remainder_kernels() -> Vec<Kernel> {
             }
             let ty = format!("i{bits}");
             let mut results = Vec::new();
-            let mut k = 0;
+            let mut folds = 0;
             if vector {
                 for (n, pair) in pairs.chunks(2).enumerate() {
                     let lanes: Vec<&(String, String, i64, i64)> =
@@ -1094,8 +1094,8 @@ fn signed_remainder_kernels() -> Vec<Kernel> {
                     for (l, lane) in lanes.iter().enumerate() {
                         let r = format!("q{n}.{l}");
                         body.push_str(&format!("  %{r} = extractelement {v} %q{n}, i32 {l}\n"));
-                        k += 1;
-                        body.push_str(&fold_ir(bits, &r, k));
+                        folds += 1;
+                        body.push_str(&fold_ir(bits, &r, folds));
                         results.push(srem(bits, lane.2, lane.3));
                     }
                 }
@@ -1103,12 +1103,12 @@ fn signed_remainder_kernels() -> Vec<Kernel> {
                 for (n, (a, b, x, y)) in pairs.iter().enumerate() {
                     let r = format!("q{n}");
                     body.push_str(&format!("  %{r} = srem {ty} {a}, {b}\n"));
-                    k += 1;
-                    body.push_str(&fold_ir(bits, &r, k));
+                    folds += 1;
+                    body.push_str(&fold_ir(bits, &r, folds));
                     results.push(srem(bits, *x, *y));
                 }
             }
-            body.push_str(&format!("  %r = add i32 %acc{k}, 0\n"));
+            body.push_str(&format!("  %r = add i32 %acc{folds}, 0\n"));
             k(name, body, remainder_fold(bits, &results))
         })
         .collect()
