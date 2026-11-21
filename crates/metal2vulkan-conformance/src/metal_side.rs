@@ -4581,7 +4581,10 @@ impl Side for MetalSide {
 
     fn encoded_range(&mut self, run: &EncodedRange<'_>) -> Answer<FragmentFilled> {
         let format = MTLPixelFormat(run.format.as_raw() as usize);
-        let function = |side: &Self, library: Handle, name: &str| {
+        let function = |side: &Self,
+                        library: Handle,
+                        name: &str|
+         -> Answer<Retained<ProtocolObject<dyn MTLFunction>>> {
             let library = side
                 .libraries
                 .get(library.0 as usize)
@@ -4608,21 +4611,24 @@ impl Side for MetalSide {
                     .newRenderPipelineStateWithDescriptor_error(&descriptor)
                     .map_err(|error| Failure::named("NewRenderPipelineState", error.to_string()))
             };
+        let kernel_function = function(self, run.library, run.kernel)?;
+        let vertex_function = function(self, run.library, run.vertex)?;
+        let fragment_function = function(self, run.library, run.fragment)?;
         let kernel = self
             .device
-            .newComputePipelineStateWithFunction_error(&function(self, run.library, run.kernel)?)
+            .newComputePipelineStateWithFunction_error(&kernel_function)
             .map_err(|error| Failure::named("NewComputePipelineState", error.to_string()))?;
-        let state = render_state(
-            &function(self, run.library, run.vertex)?,
-            Some(&function(self, run.library, run.fragment)?),
-        )?;
+        let state = render_state(&vertex_function, Some(&*fragment_function))?;
         let writer = match run.written {
             RangeWrite::Copied { .. } => None,
             RangeWrite::Drawn {
                 library,
                 function: name,
                 ..
-            } => Some(render_state(&function(self, library, name)?, None)?),
+            } => {
+                let writer_function = function(self, library, name)?;
+                Some(render_state(&writer_function, None)?)
+            }
         };
         let descriptor = MTLIndirectCommandBufferDescriptor::new();
         descriptor.setCommandTypes(MTLIndirectCommandType::DrawIndexed);
