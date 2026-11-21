@@ -4575,6 +4575,34 @@ zero source and staging memory, which only copies reach, are not placed.
 |---|---|---|
 | `deviceFault` | `VkPhysicalDeviceFaultFeaturesEXT` | the fault report of a lost device |
 
+### Not enabled
+
+The translator's profile reads each feature below where a device enables it, and device creation
+never enables it, so the translator takes the form without it on every device: one form, or a
+typed refusal. Every other feature the profile reads is enabled where the device reports it, and
+the translator's description of the device states every feature and extension device creation
+enables that the translator names.
+
+| Feature | Structure | Without it |
+|---|---|---|
+| `shaderBufferFloat32AtomicAdd` | `VkPhysicalDeviceShaderAtomicFloatFeaturesEXT` | a `float` atomic add or subtract on device memory is a compare-and-swap loop |
+| `shaderFmaFloat32` | `VkPhysicalDeviceShaderFmaFeaturesKHR` | a `float` `fma` is the device's `Fma`, within Vulkan's precision rather than rounded once (`PrecisionNote::NativeFma`) |
+| `shaderFloat8` | `VkPhysicalDeviceShaderFloat8FeaturesEXT` | an 8-bit float converts in the translator's arithmetic, not through the device's own type |
+| `rasterizationOrderColorAttachmentAccess` | `VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT` | a blend into an extended-range attachment, which the function would compute over its own read of the attachment, is refused (`FramebufferFetch`) |
+| `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |
+| `vertexAttributeInstanceRateZeroDivisor` | `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR` | a constant step function reads its binding at a stride of 0 |
+| `shaderImageInt64Atomics` | `VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT` | an atomic on a `ulong` texture is refused (`ImageAtomics`) |
+| `shaderStorageImageMultisample` | `VkPhysicalDeviceFeatures` | a multisampled texture read or written as a storage image is refused (`StorageImageMultisample`) |
+| `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
+| `fragmentShaderSampleInterlock` | `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT` | a raster order group of a function run per sample takes the pixel interlock (Pixel interlock), and is refused where the device has none (`RasterOrderGroups`); taking the sample interlock where a device has it would be a second form chosen by a query, outside the nine the runtime allows |
+| `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |
+| `shaderStorageBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | as `descriptorBindingStorageBufferUpdateAfterBind` |
+
+The test `tests::feature_enables` holds this to the code: on every committed device profile, and
+under `--cfg m2v_cpu_icd` on the machine's CPU device, it derives the translator's profile with and
+without each feature the device reports that creation does not enable, and fails on one that
+changes the profile and is not in this table, and on a row whose feature creation enables.
+
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's
 Vulkan loader lists.

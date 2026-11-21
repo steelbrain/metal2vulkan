@@ -25,6 +25,7 @@ mod dma_bufs;
 mod draw;
 mod export;
 mod fault;
+mod feature_enables;
 mod fence;
 mod fetch;
 mod filter_nest;

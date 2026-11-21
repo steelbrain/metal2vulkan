@@ -195,7 +195,7 @@ pub struct IndirectCommandLimits {
 }
 
 /// The translator's name for an extension device creation enables, where the translator names it.
-fn shader_extension(name: &CStr) -> Option<VkExtension> {
+pub(crate) fn shader_extension(name: &CStr) -> Option<VkExtension> {
     if name == ash::khr::shader_maximal_reconvergence::NAME {
         Some(VkExtension::KhrShaderMaximalReconvergence)
     } else if name == ash::khr::shader_subgroup_uniform_control_flow::NAME {

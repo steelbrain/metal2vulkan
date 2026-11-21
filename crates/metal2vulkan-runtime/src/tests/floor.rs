@@ -33,7 +33,7 @@ const DEVICE_LOCAL: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::DEVICE_LO
 /// A device with exactly the floor: Vulkan 1.3.0, the floor's extensions, every required feature,
 /// every limit at its minimum, one queue family with graphics, compute and 36-bit timestamps, the
 /// two memory types the runtime allocates from after a device-local one, and no optional feature.
-fn at_the_floor() -> Queried {
+pub(super) fn at_the_floor() -> Queried {
     let mut features = Features::default();
     features.vulkan12.buffer_device_address = vk::TRUE;
     features.core.shader_int64 = vk::TRUE;
@@ -1798,7 +1798,7 @@ fn cells(line: &str) -> Vec<String> {
 }
 
 /// The data rows of the section's table whose header row is `header`.
-fn table(section: &[&str], header: &[&str]) -> Vec<Vec<String>> {
+pub(super) fn table(section: &[&str], header: &[&str]) -> Vec<Vec<String>> {
     let start = section
         .iter()
         .position(|&line| line.starts_with('|') && cells(line) == header)
