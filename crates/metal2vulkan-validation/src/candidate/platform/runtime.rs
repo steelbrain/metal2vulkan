@@ -426,7 +426,7 @@ fn run(
         .buffers
         .keys()
         .map(|&index| {
-            let bytes = argument_buffers::owner_bytes(&kernel.buffers, index, &words)
+            let bytes = argument_buffers::owner_bytes(kernel.buffers, index, &words)
                 .map_err(ExecutorError::Failed)?;
             Ok((
                 index,
