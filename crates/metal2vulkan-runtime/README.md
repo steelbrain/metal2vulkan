@@ -328,6 +328,9 @@ in its memory.
   retired. Memory a command buffer reaches by address alone (a heap's buffers through an argument
   buffer, with no handle of them) is so never freed while work committed before its release is
   unretired; a range of it taken again meanwhile still gives such a reader the new block's bytes.
+  "Committed before" is the order the runtime is handed: a consumer that forwards a guest's
+  releases (of memory, textures or samplers) hands each one over after every commit the guest made
+  before it, or the guest's earlier work can meet memory and objects already freed.
   So a program that keeps committing gives back what it stopped using within 250 ms plus the
   frees ahead of it and the work in flight at its release. A command buffer that waits at an event
   (`CommandBuffer::encode_wait_for_event`) holds every such free released after its commit until
