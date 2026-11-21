@@ -62,9 +62,9 @@ pub(crate) mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::texture::TextureObject;
     use crate::{
-        BufferLayout, Device, DeviceOptions, Error, ImportHandle, IndexClass, Limit, MemoryClass,
-        PixelFormat, Region, StorageMode, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        BufferLayout, Counters, Device, DeviceOptions, Error, ImportHandle, IndexClass, Limit,
+        MemoryClass, Metrics, PixelFormat, Region, StorageMode, TextureDescriptor, TexturePlace,
+        TextureType, TextureUsage,
     };
     use std::alloc::Layout;
     use std::ptr::NonNull;
@@ -77,10 +77,46 @@ pub(crate) mod on_device {
     /// its first work: the zero source, the parameter ring's first block and the staging region.
     const INTERNALS: u32 = 3;
 
-    pub(crate) fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(120);
+    /// Waits up to 120 s for `done`. A timeout's message says what the device did during the
+    /// wait: its submissions, the command buffers that completed with GPU times, whether one
+    /// completed in the wait's last 10 s, and the releases still waiting. So a stall tells the
+    /// GPU's completions stopping apart from a release that did not follow completions that came.
+    pub(crate) fn wait_until(counters: &Counters, what: &str, mut done: impl FnMut() -> bool) {
+        let completed = |metrics: &Metrics| metrics.gpu_run.iter().sum::<u64>();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(120);
+        let first = counters.metrics();
+        let (mut seen, mut sampled, mut last) = (completed(&first), start, None);
         while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            let now = Instant::now();
+            // Read every 100 ms, not at each poll: the read takes the sites' locks.
+            if now >= sampled + Duration::from_millis(100) || now >= deadline {
+                sampled = now;
+                let count = completed(&counters.metrics());
+                if count != seen {
+                    (seen, last) = (count, Some(now));
+                }
+            }
+            if now >= deadline {
+                let (metrics, gauges) = (counters.metrics(), counters.gauges());
+                let recent = last.is_some_and(|at| now - at <= Duration::from_secs(10));
+                let at = last.map_or_else(
+                    || "none".to_owned(),
+                    |at| format!("{:.1} s into it", (at - start).as_secs_f64()),
+                );
+                panic!(
+                    "timed out waiting for {what}: in the {} s of the wait, {} submissions, {} \
+                     command buffers completed with GPU times ({} recorded untimed), the last \
+                     completion seen {at}, one in its last 10 s: {recent}; releases_waiting {}, \
+                     imports {}",
+                    (now - start).as_secs(),
+                    metrics.submissions - first.submissions,
+                    completed(&metrics) - completed(&first),
+                    metrics.untimed_command_buffers - first.untimed_command_buffers,
+                    gauges.releases_waiting,
+                    gauges.imports,
+                );
+            }
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -182,7 +218,9 @@ pub(crate) mod on_device {
             let device_local = block.device_local;
             let held = counters.gauges().blocks;
             drop(block);
-            wait_until("the release", || released.load(Ordering::SeqCst));
+            wait_until(&device.counters(), "the release", || {
+                released.load(Ordering::SeqCst)
+            });
             let after = counters.gauges();
             assert_eq!((after.imports, after.blocks), (0, held - 1), "{name}");
             free(mapping);
@@ -404,7 +442,9 @@ pub(crate) mod on_device {
                 buffer,
                 block,
             ));
-            wait_until("the release", || released.load(Ordering::SeqCst));
+            wait_until(&device.counters(), "the release", || {
+                released.load(Ordering::SeqCst)
+            });
             free(mapping);
             println!(
                 "import: {name}: a texture over imported host memory (type {memory_type}), \
@@ -451,7 +491,9 @@ pub(crate) mod on_device {
             let answered = match answer {
                 Ok((block, _)) => {
                     drop(block);
-                    wait_until("the release", || released.load(Ordering::SeqCst));
+                    wait_until(&device.counters(), "the release", || {
+                        released.load(Ordering::SeqCst)
+                    });
                     "imported".to_string()
                 }
                 Err(Error::Vulkan { call, result }) => {
@@ -542,7 +584,9 @@ pub(crate) mod on_device {
             }
             assert_eq!(counters.gauges().blocks, u64::from(MAX), "{name}");
             drop(block);
-            wait_until("the release", || first_released.load(Ordering::SeqCst));
+            wait_until(&device.counters(), "the release", || {
+                first_released.load(Ordering::SeqCst)
+            });
             assert!(!second_released.load(Ordering::SeqCst), "{name}");
             drop(device);
             free(first_mapping);
@@ -680,7 +724,9 @@ pub(crate) mod on_device {
                     read.expect("the memfd's bytes");
                     assert!(pages.iter().all(|&byte| byte == 0x3c), "{name}: the pages");
                     drop((command_buffer, queue, buffer, block));
-                    wait_until("the release", || released.load(Ordering::SeqCst));
+                    wait_until(&device.counters(), "the release", || {
+                        released.load(Ordering::SeqCst)
+                    });
                     assert_eq!(counters.gauges().imports, 0, "{name}");
                     println!(
                         "import: {name}: a dma-buf imported into its first offered type, \
@@ -708,7 +754,9 @@ pub(crate) mod on_device {
                             unsafe { device.import_host_memory(pointer, len, release) }
                                 .unwrap_or_else(|error| panic!("{name}: host memory: {error}"));
                         drop(block);
-                        wait_until("the release", || host_released.load(Ordering::SeqCst));
+                        wait_until(&device.counters(), "the release", || {
+                            host_released.load(Ordering::SeqCst)
+                        });
                         free(mapping);
                     }
                     println!(
