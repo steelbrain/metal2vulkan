@@ -2581,19 +2581,47 @@ or does not check is rebuilt from the generations' names, with young counted ful
   that driver on that architecture. The other form, `OpBitFieldUExtract(x, 0, N)`, loses the
   device on Intel's Windows driver 101.2145 (UHD 630) at a desktop's first pipelines, so it is not
   used. Test: `tests::narrow`'s `every_device_zero_extends_a_narrow_clamped_sum`.
-- Some forms argument buffers take under `MTLArgumentBuffersTier1` or `MTLArgumentBuffersTier2`,
-  which `Device::argument_buffers_support` answers, are not lowered by the translator's identity
-  domains, which every state is translated under: a state over a function that holds one is
-  `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
-  first form it holds. By form:
+- Some forms are not lowered by the translator's identity domains, which every state is translated
+  under, among them forms argument buffers take under `MTLArgumentBuffersTier1` or
+  `MTLArgumentBuffersTier2`, which `Device::argument_buffers_support` answers: a state over a
+  function that holds one is `Error::Translation` of `Unsupported{IdentityDomains}`, not
+  implemented, whose symbol names the first form it holds. By form:
+  - an object or mesh function ("a function of a stage other than a kernel, vertex or fragment
+    function"): no test yet;
+  - a value from the encoder that the function reads and the identity domains do not source ("an
+    encoder value the function reads as F", `F` the `PushField`: a texture buffer's bind offset,
+    `SlotBindOffset`; a texture's level count, `TextureLevels`; the draw's `InstanceCount` or
+    `BaseVertexInstance`; a stage-in stride, `StageInStride`; a two-plane texture read in place,
+    `YCbCrInPlace`, which `tests::engine_ycbcr_in_place` asserts; and the others the translator
+    pushes beside the identity fields): no other test yet;
+  - a buffer argument not reached through its device address ("a buffer argument not reached
+    through its device address"): no test yet;
+  - a texture argument of a type the identity arrays hold no element of, or whose bound texture's
+    state beyond its resource ID the function reads ("texture argument S: a type the identity
+    arrays hold no element of, or state of the bound texture beyond its resource ID"): no test
+    yet;
+  - a texture argument sampled through a sampler the identity sampling does not take ("a texture
+    argument sampled through a sampler the identity sampling does not take"), and a sampler
+    argument whose minimum level or emulated filter the function specializes ("a sampler argument
+    whose minimum level or emulated filter the function specializes"): no test yet;
+  - other state of a bound texture or sampler beyond its resource ID ("state of a bound texture
+    or sampler beyond its resource ID (F)", `F` the `RuntimeFact`): no test yet;
+  - program-scope constant data past 64 KiB read through memory ("constant data of N bytes read
+    through memory"): `tests::engine_identity`'s
+    `a_constant_blob_past_the_modules_bound_is_refused_naming_its_size` asserts the text;
+  - a resource bound through a descriptor ("a resource bound through a descriptor"): no test yet;
+  - with no symbol, a storage texture access without a format that the device's
+    `shaderStorageImageReadWithoutFormat` or `shaderStorageImageWriteWithoutFormat` does not take
+    and the formats' own bits do not grant: no test yet;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;
   - an argument buffer's texture of a type the identity arrays hold no element of (a texture
     buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
     form, or a storage texture with a format), one read through another numeric type than its
-    own or as the raw texels of an extended-range member, and a handle that reads its table
-    entry beyond its element: no test yet;
+    own or as the raw texels of an extended-range member, a read of one that decodes an
+    extended-range member, and a handle that reads its table entry beyond its element: no test
+    yet;
   - a sequentially consistent fence (`atomic_thread_fence` of `memory_order_seq_cst` beyond the
     thread, or a `seq_cst` barrier whose memory scope is the device), which the translator
     orders through a word the identity domains do not reach ("a sequentially consistent
