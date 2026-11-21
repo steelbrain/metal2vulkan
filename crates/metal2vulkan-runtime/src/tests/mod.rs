@@ -86,6 +86,7 @@ mod take_split;
 mod texture;
 mod texture_accesses;
 mod translate;
+mod translator_fields;
 mod upload;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod validation;
