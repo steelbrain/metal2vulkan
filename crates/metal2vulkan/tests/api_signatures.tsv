@@ -788,6 +788,7 @@ enum	metal2vulkan-runtime::NumberedSampler	#[cfg_attr(feature = "serde", derive(
 enum	metal2vulkan-runtime::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan-runtime::RangeKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RangeKind
 enum	metal2vulkan-runtime::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
+enum	metal2vulkan-runtime::RefusalBasis	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RefusalBasis
 enum	metal2vulkan-runtime::RenderPassKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPassKind
 enum	metal2vulkan-runtime::RenderPipelineKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPipelineKind
 enum	metal2vulkan-runtime::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
@@ -6630,12 +6631,14 @@ method	metal2vulkan-runtime::Device::zero_block_range	pub fn zero_block_range(&s
 method	metal2vulkan-runtime::DeviceExtension::name	pub fn name(&self) -> &CStr
 method	metal2vulkan-runtime::DeviceExtension::new	pub fn new(name: &CStr) -> DeviceExtension
 method	metal2vulkan-runtime::DeviceExtension::with_features	pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension where T: vk::ExtendsPhysicalDeviceFeatures2 + vk::ExtendsDeviceCreateInfo + Copy + Default + Send + Sync + 'static,
+method	metal2vulkan-runtime::Error::basis	pub fn basis(&self) -> Option<RefusalBasis>
 method	metal2vulkan-runtime::Event::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::FunctionDescriptor::needs_specialization	pub fn needs_specialization(&self, budget: &Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan-runtime::FunctionDescriptor::new	pub fn new(function: Function) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionDescriptor::with_libraries	pub fn with_libraries(mut self, libraries: DynamicLibraries) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionDescriptor::with_linked	pub fn with_linked(mut self, linked: LinkedFunctions) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionDescriptor::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> FunctionDescriptor
+method	metal2vulkan-runtime::Gap::basis	pub fn basis(self) -> RefusalBasis
 method	metal2vulkan-runtime::HostBytes::from_raw	pub unsafe fn from_raw(start: *const u8, len: usize) -> HostBytes<'a>
 method	metal2vulkan-runtime::HostBytes::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan-runtime::HostBytes::len	pub fn len(&self) -> usize
@@ -6664,12 +6667,14 @@ method	metal2vulkan-runtime::Library::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan-runtime::Library::len	pub fn len(&self) -> u32
 method	metal2vulkan-runtime::Library::library_type	pub fn library_type(&self) -> LibraryType
 method	metal2vulkan-runtime::Library::parse	pub fn parse(bytes: &[u8]) -> Result<Library, Error>
+method	metal2vulkan-runtime::Limit::basis	pub fn basis(self) -> RefusalBasis
 method	metal2vulkan-runtime::MemoryClass::block_len	pub const fn block_len(self) -> u64
 method	metal2vulkan-runtime::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-runtime::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-runtime::PixelFormatInfo::describes_a_format	pub fn describes_a_format(&self) -> bool
 method	metal2vulkan-runtime::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-runtime::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-runtime::Refusal::basis	pub fn basis(self) -> RefusalBasis
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_indexed_primitives	pub fn draw_indexed_primitives(&mut self, primitive_type: PrimitiveType, index_count: u32, indices: IndexBuffer<'_>, instance_count: u32, base_vertex: i32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_indexed_primitives_indirect	pub fn draw_indexed_primitives_indirect(&mut self, primitive_type: PrimitiveType, indices: IndexBuffer<'_>, indirect_buffer: &Buffer, indirect_buffer_offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_patches	pub fn draw_patches(&mut self, number_of_patch_control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: Option<(&Buffer, u64)>, instance_count: u32, base_instance: u32) -> Result<(), Error>
@@ -9526,6 +9531,10 @@ variant	metal2vulkan-runtime::Refusal::VisibilityResultOffsetTaken	VisibilityRes
 variant	metal2vulkan-runtime::Refusal::WaitOnOwnThread	WaitOnOwnThread
 variant	metal2vulkan-runtime::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-runtime::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
+variant	metal2vulkan-runtime::RefusalBasis::Device	Device
+variant	metal2vulkan-runtime::RefusalBasis::MetalDocumented	MetalDocumented
+variant	metal2vulkan-runtime::RefusalBasis::MetalMeasured	MetalMeasured
+variant	metal2vulkan-runtime::RefusalBasis::Ours	Ours
 variant	metal2vulkan-runtime::RenderPassKind::ArrayLength	ArrayLength
 variant	metal2vulkan-runtime::RenderPassKind::ClearDepth	ClearDepth
 variant	metal2vulkan-runtime::RenderPassKind::ClearFormat	ClearFormat

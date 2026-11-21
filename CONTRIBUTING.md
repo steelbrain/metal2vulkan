@@ -167,7 +167,7 @@ Edit the source, then regenerate:
 
 | Doc | Generator | Source |
 |---|---|---|
-| `docs/REFUSALS.md` | `python3 scripts/refusal-surface/refusal_surface.py` (`--check` to verify, `--missing-basis` and `--missing-reach` to list the gaps, `--selftest` for the basis parse's own cases) | the code's refusal types, the `Basis:` line each refusal's doc comment ends with; `reach.tsv` beside the script |
+| `docs/REFUSALS.md`, `crates/metal2vulkan-runtime/src/error/basis.rs` | `python3 scripts/refusal-surface/refusal_surface.py` (`--check` to verify, `--missing-basis` and `--missing-reach` to list the gaps, `--selftest` for the basis parse's and the generator's own cases) | the code's refusal types, the `Basis:` line each refusal's doc comment ends with; `reach.tsv` beside the script |
 | `docs/METAL-COVERAGE.md` | `python3 scripts/metal-coverage/coverage.py` (`--check` to verify) | `scripts/metal-coverage/coverage.tsv` |
 | `docs/CONFORMANCE-COVERAGE.md` | `python3 scripts/conformance-coverage/coverage.py` (`--check` to verify, `--selftest` for the option-space axis's own tests) | the suite's sources, its committed recordings, `scripts/metal-coverage/coverage.tsv`, `objc2_metal.tsv`, and the generated Metal enum tables |
 | `crates/metal2vulkan/src/spv.rs`, `crates/metal2vulkan/src/spirv_binary/table.rs` | `scripts/regen-spirv-grammar/regen-spirv-grammar.sh` | Khronos SPIRV-Headers' grammar JSON, and `items.txt` beside the script |

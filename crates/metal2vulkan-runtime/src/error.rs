@@ -10,6 +10,8 @@ use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, TextureType};
 use metal2vulkan::pipeline::StageSource;
 use std::{fmt, io};
 
+mod basis;
+
 /// What a failing call returns.
 ///
 /// Metal's counterpart is the `NSError` a creation call fills in, or the nil it returns. Here each
@@ -83,6 +85,27 @@ pub enum Error {
     /// A call that needs one of the runtime's threads, after
     /// [`Device::quiesce`](crate::Device::quiesce) stopped them. Metal has no counterpart.
     Quiesced,
+}
+
+/// Where the belief that a call must be refused comes from ([`Error::basis`]).
+///
+/// Metal has no counterpart: Metal's `NSError` carries no basis. Each variant of [`Refusal`],
+/// [`Limit`] and [`Gap`] declares its own as the last line of its doc comment, `Basis:` and the
+/// evidence, which `docs/REFUSALS.md` lists.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RefusalBasis {
+    /// Metal itself refuses it, and Apple's own words say so: a quoted assertion, `NSError` or
+    /// validation message, a header, or Apple's documentation.
+    MetalDocumented,
+    /// Metal itself refuses the input, and a run of ours on a named device or release says so.
+    MetalMeasured,
+    /// This crate's own gap, cap or deadline, or the misuse of a runtime extension Metal has no
+    /// counterpart for.
+    Ours,
+    /// The mechanism is absent: from this Vulkan device, from its driver, or from every Vulkan
+    /// device.
+    Device,
 }
 
 /// A call Metal refuses, with what it was asked.
@@ -2071,6 +2094,32 @@ pub enum Limit {
 }
 
 impl Error {
+    /// Where the belief that this call must be refused comes from, by which a consumer's census
+    /// of the refusals its guests meet tells Metal's own refusals from this crate's gaps. Metal has
+    /// no counterpart: Metal's `NSError` carries no basis.
+    ///
+    /// - [`Error::Refused`], [`Error::Limit`] and [`Error::Unsupported`]: the one its variant
+    ///   declares.
+    /// - [`Error::BelowFloor`] and [`Error::NoDirectDriverLoading`]: [`RefusalBasis::Device`], as
+    ///   the device lacks what the floor needs, or the loader the extension that loads drivers.
+    /// - [`Error::Translation`]: `None`, as a translator refusal's basis follows from where it is
+    ///   built, not from its type.
+    /// - [`Error::Loader`], [`Error::Vulkan`], [`Error::Thread`] and [`Error::Fd`]: `None`, as
+    ///   the platform or a Vulkan call failed, which refuses no Metal input.
+    /// - [`Error::NoSuchBlock`], [`Error::StageUnfilled`] and [`Error::Quiesced`]: `None`, as the
+    ///   consumer's own block, stage or quiesce stops the call, which refuses no Metal input.
+    pub fn basis(&self) -> Option<RefusalBasis> {
+        match self {
+            Error::Refused(refusal) => Some(refusal.basis()),
+            Error::Limit(limit) => Some(limit.basis()),
+            Error::Unsupported(gap) => Some(gap.basis()),
+            Error::BelowFloor(_) | Error::NoDirectDriverLoading => Some(RefusalBasis::Device),
+            Error::Translation { .. } => None,
+            Error::Loader(_) | Error::Vulkan { .. } | Error::Thread(_) | Error::Fd(_) => None,
+            Error::NoSuchBlock(_) | Error::StageUnfilled(_) | Error::Quiesced => None,
+        }
+    }
+
     /// The translator's `error` ([`Error::Translation`]), naming no function, for `map_err`.
     pub(crate) fn translation(error: metal2vulkan::error::Error) -> Error {
         Error::Translation {

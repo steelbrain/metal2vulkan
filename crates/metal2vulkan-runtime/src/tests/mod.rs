@@ -79,6 +79,7 @@ mod quad_control;
 mod raster;
 mod read_write_tier;
 mod readback;
+mod refusal_basis;
 mod render;
 mod resolve;
 mod ring;

@@ -1,6 +1,6 @@
 # The refusal surface
 
-Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Section 6 is the runtime's floor: a device below it is refused when the device is made, with every item it lacks named. The sections after it are the runtime's own typed refusals, one for each enum its `Error` carries, every row with its declared basis. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
+Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Section 6 is the runtime's floor: a device below it is refused when the device is made, with every item it lacks named. The sections after it are the runtime's own typed refusals, one for each enum its `Error` carries, every row with its declared basis, which the runtime answers at run time too, by `Error::basis`. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
 
 Columns:
 

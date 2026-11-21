@@ -77,7 +77,8 @@ fn every_metal_refusal_states_its_basis() {
     );
 }
 
-/// `docs/REFUSALS.md` is the surface the sources state, row for row, basis included.
+/// `docs/REFUSALS.md` is the surface the sources state, row for row, basis included, and the
+/// runtime's generated `error/basis.rs` answers each refusal's basis from the same lines.
 ///
 /// Regenerate it with `python3 scripts/refusal-surface/refusal_surface.py`; never edit the tables.
 #[test]

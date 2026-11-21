@@ -8,6 +8,9 @@ drawables' textures and their presents, sampler states, command queues, command 
 events, compute and blit encoders, the device's counters, and `floor`, the check of a Vulkan
 device against the floor below.
 
+Every fallible call returns an `Error`, and `Error::basis` says where a refusal's belief comes from:
+Metal's own refusal, measured or in Apple's words, the device's lack, or this crate's own gap or cap.
+
 ## What the consumer implements
 
 Ten of Metal's objects and getters have no counterpart here by design. The consumer implements
