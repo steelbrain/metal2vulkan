@@ -2,7 +2,7 @@
 //! the runtime's, on a generated module.
 //!
 //! Each shape is two kernels: one that makes the access once and one that makes it twice, at
-//! another offset, everything else equal. The second's entry weight (`ModuleStats::entry_weight`)
+//! another offset, everything else equal. The second's entry weight (`spirv::roll::entry_weight`)
 //! less the first's is what one access costs, its address arithmetic (a `getelementptr` and its
 //! index's add) and the add that keeps its value live included; its device-address loads and
 //! stores less the first's are the SPIR-V accesses it makes. The shapes: through a pointer loaded
@@ -22,7 +22,10 @@
 use std::fmt::Write as _;
 
 use super::engine_word_phases::{device_alignments, identity_profiles};
-use crate::pipeline::testing::{compile_kept, link_and_validate, llvm_assemble, AssembleError};
+use crate::pipeline::testing::{
+    compile_kept, link_and_validate, llvm_assemble, meter, AssembleError,
+};
+use crate::spirv::roll::entry_weight;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -228,11 +231,12 @@ fn measure(
         .iter()
         .map(|(one, two)| {
             let [a, b] = [one, two].map(|n| {
-                let (a, _, _) =
+                let (a, _, module) =
                     compile_kept(bc, n, p).unwrap_or_else(|e| panic!("{stem} {n}: {e}"));
                 link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem} {n}: L3: {e}"));
                 let accesses = u32::try_from(device_alignments(&a.module.words).len());
-                (a.module.stats.entry_weight, accesses.expect("a count"))
+                let weight = entry_weight(&module, &mut meter()).expect("a weight");
+                (weight, accesses.expect("a count"))
             });
             (b.0.saturating_sub(a.0), b.1.saturating_sub(a.1))
         })
