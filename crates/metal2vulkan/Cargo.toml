@@ -42,6 +42,11 @@ required-features = ["cli"]
 name = "api_preview"
 path = "examples/api_preview.rs"
 
+[[example]]
+name = "libprobe"
+path = "examples/libprobe.rs"
+required-features = ["cli"]
+
 [lib]
 name = "metal2vulkan"
 path = "src/lib.rs"
