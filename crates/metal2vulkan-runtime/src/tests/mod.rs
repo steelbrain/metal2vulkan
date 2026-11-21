@@ -52,6 +52,7 @@ mod lowered;
 mod maker_yield;
 mod managed;
 mod memory;
+mod min_lod;
 mod mipmaps;
 mod narrow;
 mod nil_slots;

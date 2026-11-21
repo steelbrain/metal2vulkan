@@ -2869,6 +2869,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix function (each library whose
   bytes name one disassembled with `llvm-dis`, jobs m3-max-52530, 52531, 52532, 52557 and 52604).
   Their libraries that call quad functions, 2 to 5 a stream, call them from no fragment function.
+- On a device without `shaderResourceMinLod` (Min-LOD clamps, under Floor), a function that samples
+  with a `min_lod_clamp` other than 0 is refused at creation, an `Error::Translation` naming
+  `MinLodClamp` and `shaderResourceMinLod`. Of the venues dumped, the UHD 630's Windows driver
+  alone does not report it (`vulkaninfo`, job m3-max-48736); RADV on the RX 7900 XTX, the 780Ms
+  and the RX 550, NVIDIA's driver on the RTX 2080, RTX 3090 and RTX 5080 Laptop, ANV on the Iris
+  Xe, lavapipe and KosmicKrisp on the M3 Max report it (m3-max-48727 to 48731, 48737 and 61508).
 - On a device without `fragmentShaderBarycentric` (Barycentrics, under Floor), a fragment function
   that reads `[[barycentric_coord]]` is refused at creation, an `Error::Translation` naming
   `Barycentrics`: the translator's other form, weights a generated geometry stage writes, needs
@@ -3596,6 +3602,17 @@ changes.
 | Step-rate feature | Structure | Used for |
 |---|---|---|
 | `vertexAttributeInstanceRateDivisor` | `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR` | a vertex binding's divisor other than 1 |
+
+### Min-LOD clamps
+
+A sample's `min_lod_clamp` other than 0 has one form, SPIR-V's `MinLod` image operand. Where the
+device reports the feature below, device creation enables it, and the translator builds the
+sample; elsewhere it refuses the function at creation, an `Error::Translation` naming
+`MinLodClamp` and `shaderResourceMinLod` (Known gaps of render pipeline states).
+
+| Min-LOD feature | Structure | Used for |
+|---|---|---|
+| `shaderResourceMinLod` | `VkPhysicalDeviceFeatures` | a sample's `min_lod_clamp`, the device's own level-of-detail clamp |
 
 ### Quad control
 

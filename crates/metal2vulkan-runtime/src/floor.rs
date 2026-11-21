@@ -526,6 +526,13 @@ pub(crate) const STEP_RATES: &[Feature] = &[feature!(
     divisor.vertex_attribute_instance_rate_divisor => VertexAttributeInstanceRateDivisor
 )];
 
+/// The feature device creation enables where the device reports it, for a sample's
+/// `min_lod_clamp` other than 0, which the translator builds in one form, SPIR-V's `MinLod` image
+/// operand, and refuses on a device without it (`Feature::MinLodClamp`). No answer chooses a
+/// second form.
+pub(crate) const MIN_LOD_CLAMPS: &[Feature] =
+    &[feature!(core.shader_resource_min_lod => ShaderResourceMinLod)];
+
 /// The feature of `VK_KHR_shader_quad_control` (one of [`OPTIONAL_EXTENSIONS`]), which device
 /// creation enables where the device lists the extension and reports it: a fragment function whose
 /// group operations read, combine or count other lanes runs its quads whole
@@ -582,6 +589,7 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     for feature in (REQUIRED.iter().chain(OPTIONAL))
         .chain(PORTABILITY)
         .chain(STEP_RATES)
+        .chain(MIN_LOD_CLAMPS)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
         .chain(BARYCENTRICS)
@@ -1047,6 +1055,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
         return Err(BelowFloor { missing });
     };
     for feature in (OPTIONAL.iter().chain(STEP_RATES))
+        .chain(MIN_LOD_CLAMPS)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
     {

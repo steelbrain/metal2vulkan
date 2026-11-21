@@ -6,7 +6,7 @@ use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS, BARYCENTRIC_EXTENSIONS,
     BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS,
-    LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS,
+    LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL, OPTIONAL_EXTENSIONS,
     OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL,
     REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
@@ -331,6 +331,7 @@ fn a_device_at_the_floor_is_above_it() {
         );
     }
     for optional in (OPTIONAL.iter().chain(STEP_RATES))
+        .chain(MIN_LOD_CLAMPS)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
         .chain(BARYCENTRICS)
@@ -1191,6 +1192,27 @@ fn the_pixel_interlock_is_enabled_where_reported() {
         .contains(&VkExtension::ExtFragmentShaderInterlock));
 }
 
+/// A device that reports `shaderResourceMinLod` is given it, and the translator sees it; one that
+/// does not is given neither.
+#[test]
+fn the_min_lod_clamp_is_enabled_where_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::VkFeature;
+    let mut device = at_the_floor();
+    let unreported = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(unreported.features.core.shader_resource_min_lod, vk::FALSE);
+    assert!(!shader_enables(&unreported)
+        .features
+        .contains(&VkFeature::ShaderResourceMinLod));
+
+    device.features.core.shader_resource_min_lod = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(capabilities.features.core.shader_resource_min_lod, vk::TRUE);
+    assert!(shader_enables(&capabilities)
+        .features
+        .contains(&VkFeature::ShaderResourceMinLod));
+}
+
 /// A device that lists `VK_KHR_shader_quad_control` and reports `shaderQuadControl` is given both,
 /// and the translator sees both; one that lists the extension without the feature is given the
 /// extension alone.
@@ -1589,6 +1611,7 @@ fn the_readme_states_the_floor() {
             ATTACHMENT_READS,
         ),
         (["Step-rate feature", "Structure", "Used for"], STEP_RATES),
+        (["Min-LOD feature", "Structure", "Used for"], MIN_LOD_CLAMPS),
         (
             ["Quad-control feature", "Structure", "Used for"],
             QUAD_CONTROL,
