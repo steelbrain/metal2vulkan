@@ -2035,9 +2035,10 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
     // an argument buffer's texture through an argument buffer's sampler (its resource ID the
     // handle, `access::handle::emit_identity_sampler`), a runtime sampler's word read from its
     // resource ID, and a 2D texture slot's bicubic sample at normalized coordinates, the bound
-    // format's treatment read from its push field (`PushField::BicubicTexels`): no array of
-    // samplers, bicubic sample at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or
-    // specialization of a slot's state. A two-plane texture's sample read in place
+    // format's treatment read from its push field (`PushField::BicubicTexels`): no bicubic sample
+    // at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or specialization of
+    // a slot's state. Constexpr samplers a lane chooses among are a switch over them, never an
+    // array of their samplers (`sampler::select::select_heap_array`). A two-plane texture's sample read in place
     // (`Routine::Quad`) never reaches here: its slot's `PushField::YCbCrInPlace` is refused first,
     // as an encoder value the identity domains do not source.
     use crate::lower::sampler::bicubic::routines::Routine;
@@ -2047,10 +2048,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             !(sampled.combined.iter()).all(|k| sampled.identity.contains_key(k))
                 || !sampled.decls.is_empty(),
             "a texture argument sampled through a sampler the identity sampling does not take",
-        ),
-        (
-            !sampled.arrays.is_empty() || !sampled.heap_arrays.is_empty(),
-            "an array of samplers",
         ),
         (sampled.bicubic_pixel, BICUBIC_PIXEL_FORM),
         (

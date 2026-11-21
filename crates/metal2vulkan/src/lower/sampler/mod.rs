@@ -19,13 +19,15 @@
 //! sampler, is one sampling through a set-0 array of their samplers (`ResourceKind::SamplerArray`,
 //! one immutable sampler per candidate, its element `NonUniform` and at the handle's distance from
 //! the first candidate's; a handle outside it reads zero), where the device indexes a sampler array
-//! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`).
-//! Any other sampler of several static candidates beside a heap image is a switch-at-use over
-//! them, one arm per candidate, each the heap element through that candidate's heap sampler.
-//! Under the identity domains a heap image has no heap sampler binding: its runtime or constexpr
-//! sampler is the element of the set-1 sampler array of its use that a texture slot's sampling
-//! reads there ([`IdentitySampling`]), at the index the sampler slot's pushed resource ID holds or
-//! at the constexpr sampler's pushed index (`PushField::ConstexprSampler`).
+//! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`),
+//! outside the identity domains. Any other sampler of several static candidates beside a heap
+//! image is a switch-at-use over them, one arm per candidate, each the heap element through that
+//! candidate's heap sampler. Under the identity domains a heap image has no heap sampler binding:
+//! its runtime or constexpr sampler is the element of the set-1 sampler array of its use that a
+//! texture slot's sampling reads there ([`IdentitySampling`]), at the index the sampler slot's
+//! pushed resource ID holds or at the constexpr sampler's pushed index
+//! (`PushField::ConstexprSampler`), and a sampler of several constexpr candidates is the switch
+//! over them.
 //!
 //! **Argument buffers' samplers** (the sampler half). A heap image sampled through a sampler loaded
 //! from an argument buffer reads `OpSampledImage` of its heap element and of the heap sampler's

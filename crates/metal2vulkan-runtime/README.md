@@ -2517,11 +2517,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
   domains, which every state is translated under: a state over a function that holds one is
   `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
   first form it holds. By form:
-  - an array of samplers (constexpr samplers a lane chooses among beside an argument buffer's
-    texture, on a device that indexes a sampler array by a value that may differ between
-    invocations): the translator test
-    `an_argument_buffer_textures_sample_in_a_form_not_lowered_is_refused_naming_it` asserts the
-    text;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;

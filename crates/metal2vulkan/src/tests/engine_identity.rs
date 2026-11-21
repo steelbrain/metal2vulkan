@@ -1020,14 +1020,13 @@ fn an_argument_buffer_textures_sample_takes_its_sampler_from_the_identity_arrays
 }
 
 /// Under the identity domains constexpr samplers a lane chooses among beside an argument buffer's
-/// texture (`engine_handles::chosen_sampler_kernel`) are refused as `Unsupported{IdentityDomains}`,
-/// not implemented, naming the array of samplers they are on a profile that indexes a sampler
-/// array by a value that may differ between invocations, where the default domains compile them;
-/// elsewhere they are a switch over the candidates, each arm sampling as through that sampler
-/// alone, which compiles and passes L3.
+/// texture (`engine_handles::chosen_sampler_kernel`) are a switch over the candidates on every
+/// profile, each arm sampling as through that sampler alone at its pushed index
+/// (`PushField::ConstexprSampler`, one for each candidate), never an array of their samplers: each
+/// compiles and passes L3, and the default domains compile them as before.
 #[test]
-fn an_argument_buffer_textures_sample_in_a_form_not_lowered_is_refused_naming_it() {
-    use super::engine_handles::chosen_sampler_kernel;
+fn an_argument_buffer_texture_through_chosen_constexpr_samplers_is_a_switch_over_them() {
+    use super::engine_handles::{chosen_sampler_kernel, CHOSEN_SAMPLERS};
     let chosen = format!(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
@@ -1039,31 +1038,16 @@ target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
     for stem in PROFILES {
         let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let array = p.fields().descriptors.non_uniform_sampled_image;
-        let form = array.then_some("an array of samplers");
-        {
-            let what = format!("{stem}: chosen");
-            compile(&chosen, "chosen", &default)
-                .unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
-            match (compile(&chosen, "chosen", &p), form) {
-                (Err(Error::Unsupported(u)), Some(form)) => {
-                    assert_eq!(
-                        (u.feature, u.needs),
-                        (Feature::IdentityDomains, Needs::NotImplemented),
-                        "{what}"
-                    );
-                    assert_eq!(
-                        u.symbol.map(|f| f.to_string()).as_deref(),
-                        Some(form),
-                        "{what}"
-                    );
-                }
-                (Ok(a), None) => {
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                }
-                (other, _) => panic!("{what}: {other:?}"),
-            }
-        }
+        let what = format!("{stem}: chosen");
+        compile(&chosen, "chosen", &default)
+            .unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+        let (a, plan, _) =
+            compile_kept(&chosen, "chosen", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let pushed = (plan.push.fields.iter())
+            .filter(|f| matches!(f.field, PushField::ConstexprSampler(_)))
+            .count();
+        assert_eq!(pushed, CHOSEN_SAMPLERS.len(), "{what}");
     }
 }
 

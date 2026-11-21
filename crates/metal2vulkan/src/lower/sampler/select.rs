@@ -556,7 +556,9 @@ fn select_heap_switch(
 /// value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which
 /// the heap's own image array already needs); the use is not tangled; and each candidate's
 /// sampling is the same but for its sampler and the state its raw emulation follows. `None`
-/// otherwise, and the switch over the candidates stays.
+/// otherwise, and under the identity domains, whose constexpr sampler is the set-1 sampler array's
+/// element at its pushed index (`PushField::ConstexprSampler`) and no set-0 array holds: the
+/// switch over the candidates stays, each arm through its own.
 fn select_heap_array(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
@@ -566,7 +568,10 @@ fn select_heap_array(
     m: &mut Meter,
 ) -> Result<Option<TextureStrategy>, Error> {
     use super::heap_raw::State;
-    if cands.len() < 2 || !cx.profile.fields().descriptors.non_uniform_sampled_image {
+    if cands.len() < 2
+        || !cx.profile.fields().descriptors.non_uniform_sampled_image
+        || crate::lower::access::identity(cx.profile)
+    {
         return Ok(None);
     }
     if !cands
