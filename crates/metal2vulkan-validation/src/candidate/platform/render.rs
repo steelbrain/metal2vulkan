@@ -1458,12 +1458,6 @@ impl<'a> Targets<'a> {
         if let Some([width, height]) = extent {
             targets.extent = vk::Extent2D { width, height };
         }
-        // A multisampled subpass without attachments.
-        let attached = graphics.color_attachments.iter().any(Option::is_some)
-            || targets.depth_stencil.is_some();
-        if let (AttachmentTransfer::PerSample { samples }, false) = (transfer, attached) {
-            multisampled::attachmentless_support(context, samples)?;
-        }
         Ok(targets)
     }
 

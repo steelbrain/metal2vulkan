@@ -663,31 +663,6 @@ fn clear_stencil(
     recorded
 }
 
-/// Whether the device rasterizes `samples` samples in a pass without attachments
-/// (`framebufferNoAttachmentsSampleCounts`).
-pub(super) fn attachmentless_support(
-    context: &VulkanContext,
-    samples: u32,
-) -> Result<(), ExecutorError> {
-    // SAFETY: the physical device belongs to the live instance.
-    let counts = unsafe {
-        context
-            .instance
-            .get_physical_device_properties(context.physical)
-    }
-    .limits
-    .framebuffer_no_attachments_sample_counts;
-    if counts.contains(sample_flags(samples)?) {
-        Ok(())
-    } else {
-        Err(NotSupported::NotEnabled(vec![format!(
-            "framebufferNoAttachmentsSampleCounts with {samples} samples (the device's: {:#b})",
-            counts.as_raw()
-        )])
-        .into())
-    }
-}
-
 /// One multisampled attachment image's moves around the pass: every aspect of its format (a
 /// depth/stencil image's layout covers both), the writes that filled it, and the access and
 /// layout the pass keeps it in.

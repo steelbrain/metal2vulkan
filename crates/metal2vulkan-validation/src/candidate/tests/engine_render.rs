@@ -563,6 +563,76 @@ fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
     assert_eq!(run.output, expected, "on the executor's own context");
 }
 
+/// A fragment case of no attachment draws into the oracle's 1x1 pass at its samples:
+/// `nat_sample` ORs each run's coverage, marked by 0x100, into its sample's word and counts the
+/// run 8 words on, so at 1 and at 4 samples each sample runs once and reads its own bit. Through
+/// the runtime the pass is `renderTargetWidth` by `renderTargetHeight` at
+/// `defaultRasterSampleCount`, and its words are the executor's own.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_fragment_pass_of_no_attachment_runs_each_sample_once() {
+    let fragment = public("engine/coverage_natural.ll");
+    for samples in [1u32, 4] {
+        let mut authored = crate::companion::tests::case(
+            Stage::Fragment,
+            "nat_sample",
+            TextureFormat::Rgba32Float,
+        );
+        authored.render_targets.clear();
+        authored.raster_sample_count = (samples > 1).then_some(samples);
+        authored.buffers.push(crate::case::BufferResource {
+            binding: 0,
+            role: crate::case::ResourceRole::InOut,
+            bytes_b64: None,
+            initial_bytes_b64: Some(b64(&[0; 64])),
+            rasterization_rate_map: None,
+        });
+        authored.output = OutputSelection::Buffer {
+            binding: 0,
+            offset: 0,
+            length: 64,
+        };
+        let (case, companion) = with_companion(&authored, &fragment);
+        let drawn = run(
+            &case,
+            RenderLibraries {
+                vertex: &companion,
+                fragment: Some(&fragment),
+            },
+        )
+        .unwrap();
+        let words: Vec<u32> = drawn
+            .output
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect();
+        for sample in 0..8 {
+            let ran = sample < samples;
+            let own = 0x100 | (1 << sample);
+            let word = words[sample as usize];
+            assert_eq!(word & own, if ran { own } else { 0 }, "{samples}: {sample}");
+            assert_eq!(
+                words[8 + sample as usize],
+                u32::from(ran),
+                "{samples}: {sample}"
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(crate::candidate::engine::runs_render_through_runtime(
+                &authored, &case
+            ));
+            let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+            assert_eq!(
+                through.output, drawn.output,
+                "{samples} through the runtime"
+            );
+        }
+    }
+}
+
 /// A tessellation case drawn through the render executor's patch path: the factor buffer bound
 /// where the plan's factor write names it, the probe as the evaluation stage, and the case's cull
 /// mode. `k7_tess_quad_probe` draws patch 0 over the target's left half and patch 1, its mirror

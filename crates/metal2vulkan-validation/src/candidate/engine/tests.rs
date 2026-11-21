@@ -2255,12 +2255,12 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
 /// textures and samplers, static vertex strides, color targets, and one direct or indexed draw
 /// of primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
 /// target or nothing; and a rasterization-disabled vertex case, which renders into the oracle's
-/// sink; a depth/stencil attachment of one aspect, of one sample or more, observed or not; and
-/// an attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil
-/// attachment of both aspects, layered rendering, a dynamic vertex stride, an argument-buffer
-/// member, an explicit imageblock, a fragment pass with no attachment, which the runtime makes no
-/// pass of, a patch draw through a patch index buffer, or an index buffer's out-of-bounds target)
-/// stays on the executor's own context.
+/// sink; a depth/stencil attachment of one aspect, of one sample or more, observed or not; a
+/// fragment pass with no attachment, of one sample or more; and an attribute buffer's
+/// out-of-bounds target. A case with anything else (a depth/stencil attachment of both aspects,
+/// layered rendering, a dynamic vertex stride, an argument-buffer member, an explicit imageblock,
+/// a patch draw through a patch index buffer, or an index buffer's out-of-bounds target) stays on
+/// the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -2421,6 +2421,16 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         ..plain.clone()
     };
     assert!(runs_render_through_runtime(&authored, &multisampled));
+    // A fragment pass of no attachment, of one sample or more.
+    for raster_sample_count in [None, Some(4)] {
+        let attachmentless = RenderCase {
+            color_targets: BTreeMap::new(),
+            output: RenderOutput::None,
+            raster_sample_count,
+            ..plain.clone()
+        };
+        assert!(runs_render_through_runtime(&authored, &attachmentless));
+    }
     let others = [
         RenderCase {
             depth_stencil: Some(LiteralDepthStencil {
@@ -2444,11 +2454,6 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
                 cell_bytes: 4,
                 bytes: vec![0; 16],
             }),
-            ..plain.clone()
-        },
-        RenderCase {
-            color_targets: BTreeMap::new(),
-            output: RenderOutput::None,
             ..plain.clone()
         },
         bounded(

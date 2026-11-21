@@ -505,9 +505,10 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
-  into the oracle's 1x1 `R8Unorm` attachment. Layered rendering, an argument-buffer member, a
-  patch index buffer, an out-of-bounds target other than an attribute buffer or a fragment pass
-  with no attachment (the runtime makes no pass without one) keeps the case on the executor's own
+  into the oracle's 1x1 `R8Unorm` attachment, and a fragment case of no attachment into the
+  oracle's pass of none: `renderTargetWidth` and `renderTargetHeight` 1, `defaultRasterSampleCount`
+  the case's samples. Layered rendering, an argument-buffer member, a patch index buffer or an
+  out-of-bounds target other than an attribute buffer keeps the case on the executor's own
   context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
   function's imageblock `fragment_imageblock`, each the runtime's limit. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does

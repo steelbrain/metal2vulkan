@@ -14,7 +14,8 @@
 //! (`runtime_depth`, as the runtime takes no upload of one) or a Shared `Stencil8` written from its
 //! bytes, loaded and stored by the pass; in a pass of more samples, each attachment a Private
 //! multisampled texture of the pass's samples, filled and read back sample by sample
-//! (`runtime_multisample`), a stencil aspect cleared by the pass to its one value; the oracle's
+//! (`runtime_multisample`), a stencil aspect cleared by the pass to its one value; a fragment
+//! case of no attachment the oracle's pass of none, 1x1 at the case's samples; the oracle's
 //! depth-stencil state, stencil
 //! references, cull mode and winding; one draw, direct, indexed or of patches (its factors a Shared
 //! buffer bound as the tessellation factor buffer, as the oracle binds them), in one command
@@ -143,7 +144,7 @@ fn run(
             |command_buffer| {
                 let fail = |what: &'static str| move |error: rt::Error| runtime_error(what, error);
                 let mut encoder = command_buffer
-                    .render_command_encoder(&targets.pass())
+                    .render_command_encoder(&targets.pass(case))
                     .map_err(fail("the render encoder"))?;
                 encoder
                     .set_render_pipeline_state(&state)
@@ -527,10 +528,16 @@ impl Targets {
         })
     }
 
-    /// The pass: each attachment loaded and stored, a multisampled stencil aspect cleared to its
-    /// one value.
-    fn pass(&self) -> rt::RenderPassDescriptor {
+    /// The pass of `case`: each attachment loaded and stored, a multisampled stencil aspect
+    /// cleared to its one value; with no attachment, the oracle's (`metal::platform`) 1x1 area at
+    /// the case's samples (`renderTargetWidth`, `renderTargetHeight`, `defaultRasterSampleCount`).
+    fn pass(&self, case: &RenderCase) -> rt::RenderPassDescriptor {
         let mut pass = rt::RenderPassDescriptor::default();
+        if self.textures.is_empty() && self.depth_stencil.is_none() {
+            pass.render_target_width = 1;
+            pass.render_target_height = 1;
+            pass.default_raster_sample_count = case.raster_sample_count.unwrap_or(1);
+        }
         for (&index, texture) in &self.textures {
             let attachment = &mut pass.color_attachments[index as usize];
             attachment.texture = Some(texture.clone());

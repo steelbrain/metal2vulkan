@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v202";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v203";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1393,8 +1393,8 @@ pub struct RuntimeKernel<'a> {
 /// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
 /// buffers, bound textures the runtime makes (`runtime_texture`) and bound samplers, function
 /// constants and linked functions, its vertex buffers at static strides, its color targets and a
-/// depth/stencil attachment of one aspect (a fragment case renders into at least one attachment:
-/// the runtime makes no pass without one, `Gap::RenderPass`), the encoder's depth-stencil state, cull mode and winding, and
+/// depth/stencil attachment of one aspect, or none (a fragment case's pass of no attachment is
+/// the oracle's 1x1 at its samples), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
 /// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
 /// buffer), observing a buffer, a texture, a color target, the depth/stencil attachment's aspect
@@ -1406,7 +1406,7 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         vertex,
         fragment,
         vertex_buffers,
-        color_targets,
+        color_targets: _,
         depth_stencil,
         depth_stencil_state: _,
         render_target_array_length,
@@ -1448,7 +1448,6 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
     };
     bound(vertex)
         && fragment.as_ref().is_none_or(bound)
-        && (fragment.is_none() || !color_targets.is_empty() || depth_stencil.is_some())
         && vertex_buffers.iter().all(|buffer| !buffer.dynamic)
         && depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
