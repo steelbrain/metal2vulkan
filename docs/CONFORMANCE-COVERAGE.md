@@ -9664,7 +9664,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-usage-crossings` | rt has no usage getter; the site reads descriptor().usage, the descriptor as given; rt takes no bits as every usage wherever it acts. |
 | `texture-pairs-usage-crossings` | rt has no usage getter; the site reads descriptor().usage, the descriptor as given; rt takes no bits as every usage wherever it acts. |
 | `texture-pairs-usage-crossings` | rt has no usage getter; the site reads descriptor().usage, the descriptor as given; rt takes no bits as every usage wherever it acts. |
-| `bicubic-texel-classes` | Known gap (the rt README, Known gaps of textures): a kernel's bicubic constexpr sample of a texture of 8-bit sRGB codes is `Gap::BicubicTexels`, naming the slot… |
+| `bicubic-texel-classes` | Known gap (the rt README, Known gaps of textures): a function's bicubic constexpr sample of a texture of 8-bit sRGB codes is `Gap::BicubicTexels`, naming the sl… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
 | `bicubic-texel-classes` | The device's arithmetic under the static note `bicubic-filter-arithmetic` (rule 1), within its stated bound. Metal's results lie on the format's grid: a sixteen… |
