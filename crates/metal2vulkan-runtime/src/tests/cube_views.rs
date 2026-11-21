@@ -12,7 +12,13 @@
 //! level counts, have the memory requirements with the flag that they have without it, wherever
 //! the device makes both.
 //!
-//! `llvm-as` assembles the fixture; without it the sampling test skips visibly.
+//! A cube array texture (`imageCubeArray`, in the floor) is sampled as one, and Metal's cast of its
+//! first six faces as a cube is a cube view of its image: the owned fixture `unk_cube_grad_lod`
+//! samples the cube view and the array's second cube at two directions on each face, and over a
+//! cube array of two cubes whose slice `s` holds `s` in every texel, each lane reads its face from
+//! the view and six past it from the array.
+//!
+//! `llvm-as` assembles the fixtures; without it the sampling tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -24,6 +30,7 @@ mod on_device {
         TextureType, TextureUsage, TextureViewKind,
     };
     use ash::vk;
+    use metal2vulkan::device::VkFeature;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     /// The array's side, and its slices.
@@ -34,15 +41,15 @@ mod on_device {
     /// The constexpr sampler's index the test gives `tvc_cube`.
     const CONSTEXPR: u32 = 1;
 
-    /// The fixture's library, or None where `llvm-as` is missing.
-    fn library() -> Option<Library> {
-        match llvm_assemble(&engine_dir().join("tvc_samples.ll")) {
+    /// The engine fixture `file`'s library, or None where `llvm-as` is missing.
+    fn library(file: &str) -> Option<Library> {
+        match llvm_assemble(&engine_dir().join(file)) {
             Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
             Err(AssembleError::Missing(why)) => {
                 eprintln!("SKIPPED: {why}");
                 None
             }
-            Err(error) => panic!("tvc_samples.ll: {error:?}"),
+            Err(error) => panic!("{file}: {error:?}"),
         }
     }
 
@@ -58,7 +65,7 @@ mod on_device {
 
     #[test]
     fn every_device_samples_a_cube_view_of_six_slices_of_a_2d_array_as_its_faces() {
-        let Some(library) = library() else {
+        let Some(library) = library("tvc_samples.ll") else {
             return;
         };
         each_device("cube view of a 2D array", |name, _, device| {
@@ -200,6 +207,152 @@ mod on_device {
                  face; a non-square array's cube view is CubeOfArray",
                 FIRST + 5,
                 points.len()
+            );
+        });
+    }
+
+    /// The two directions `unk_cube_grad_lod` samples on each face, `in[face]` and `in[6 + face]`
+    /// (faces +x, -x, +y, -y, +z, -z), each with the face's axis its major one.
+    const DIRECTIONS: [[f32; 3]; 12] = [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+        [1.0, 0.25, -0.5],
+        [-1.0, -0.5, 0.25],
+        [0.25, 1.0, -0.5],
+        [-0.5, -1.0, 0.25],
+        [0.25, -0.5, 1.0],
+        [-0.5, 0.25, -1.0],
+    ];
+
+    #[test]
+    fn every_device_samples_a_cube_array_and_a_cube_view_of_its_first_cube() {
+        let Some(library) = library("unk_cube_grad_lod.ll") else {
+            return;
+        };
+        each_device("cube array", |name, _, device| {
+            let enabled = &device.core().translator.profile().enabled().features;
+            assert!(
+                enabled.contains(&VkFeature::ImageCubeArray),
+                "{name}: imageCubeArray, which the floor requires"
+            );
+            let function = library.function("unk_cube_grad_lod").expect("the kernel");
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            let _samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let _textures = (device.grant_indices(IndexClass::Texture, 1, 2))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
+                assert!(
+                    matches!(samplers, [NumberedSampler::Constexpr(_)]),
+                    "{name}: {samplers:?}"
+                );
+                Ok(vec![CONSTEXPR])
+            }))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut d = TextureDescriptor::new(
+                TextureType::CubeArray,
+                PixelFormat::RGBA32Float,
+                SIDE,
+                SIDE,
+            );
+            d.array_length = 2;
+            d.usage = TextureUsage::SHADER_READ;
+            d.storage_mode = StorageMode::Shared;
+            let cubes = (device.new_texture(&d, Some(1)))
+                .unwrap_or_else(|error| panic!("{name}: the cube array: {error}"));
+            let region = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let row = u64::from(SIDE * 16);
+            for slice in 0..12 {
+                let texels: Vec<f32> = (0..SIDE * SIDE)
+                    .flat_map(|_| [slice as f32, 0.0, 0.0, 1.0])
+                    .collect();
+                let bytes = floats(&texels);
+                (cubes.replace_region(
+                    region,
+                    0,
+                    slice,
+                    crate::HostBytes::from(&bytes[..]),
+                    row,
+                    row * u64::from(SIDE),
+                ))
+                .unwrap_or_else(|error| panic!("{name}: slice {slice}: {error}"));
+            }
+            let cube = (cubes.new_texture_view(
+                PixelFormat::RGBA32Float,
+                TextureType::Cube,
+                0..1,
+                0..6,
+                Some(2),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: the cube view: {error}"));
+            assert_eq!(
+                (
+                    cubes.descriptor().array_length,
+                    cube.descriptor().texture_type
+                ),
+                (2, TextureType::Cube),
+                "{name}: the descriptors"
+            );
+            // The directions, then the six gradient axes, then the gradient's magnitude: 0, so
+            // every lane samples level 0.
+            let mut input: Vec<f32> = (DIRECTIONS.iter())
+                .flat_map(|&[x, y, z]| [x, y, z, 0.0])
+                .collect();
+            for axis in 0..6 {
+                let mut g = [0.0; 4];
+                g[axis / 2] = if axis % 2 == 0 { 1.0 } else { -1.0 };
+                input.extend(g);
+            }
+            input.extend([0.0; 4]);
+            const LANES: usize = 72;
+            let mut buffers = Buffers::new(&device);
+            let at = buffers.of(&device, &floats(&input));
+            let out = buffers.of(&device, &vec![0; LANES * 16]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder
+                .set_compute_pipeline_state(&state)
+                .expect("the state");
+            encoder.set_texture(Some(&cube), 0).expect("the cube view");
+            encoder
+                .set_texture(Some(&cubes), 1)
+                .expect("the cube array");
+            encoder.set_buffer(Some(&at), 0, 0).expect("in");
+            encoder.set_buffer(Some(&out), 0, 1).expect("out");
+            (encoder.dispatch_threadgroups([3, 1, 1], [24, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the dispatch that wrote the buffer completed, and its writes reach the host.
+            let samples =
+                unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<[f32; 4]>(), LANES) };
+            for (lane, sample) in samples.iter().enumerate() {
+                let face = (lane % 6) as f32;
+                assert_eq!(
+                    *sample,
+                    [face, 6.0 + face, face, 6.0 + face],
+                    "{name}: lane {lane}: the view's face, then the second cube's"
+                );
+            }
+            drop((cube, cubes, command_buffer));
+            println!(
+                "{name}: imageCubeArray enabled; {LANES} lanes sampled a cube array of two \
+                 {SIDE} x {SIDE} cubes at its second cube and a cube view of its first, each \
+                 the face's slice"
             );
         });
     }

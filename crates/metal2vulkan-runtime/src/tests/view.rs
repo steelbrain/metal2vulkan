@@ -154,11 +154,11 @@ mod on_device {
 
     /// Metal's casts of a cube over the same image (Apple's
     /// `makeTextureView(pixelFormat:textureType:levels:slices:)`), each over a level and face
-    /// range inside the cube: a 2D array of some faces, of every level and face, and a 2D texture
-    /// of one face. Each reports Metal's type, extent, levels and array length, and a blit copy
-    /// out of its level 0 and slice 0 reads the cube's level and face under them. A view costs no
-    /// submission, block or copied byte. A view as a cube array is `Gap::CubeArrayTexture`, as a
-    /// cube array texture is.
+    /// range inside the cube: a 2D array of some faces, of every level and face, a 2D texture of
+    /// one face, and a cube array of its one cube. Each reports Metal's type, extent, levels and
+    /// array length (a cube array's is its count of cubes), and a blit copy out of its level 0 and
+    /// slice 0 reads the cube's level and face under them. A view costs no submission, block or
+    /// copied byte.
     #[test]
     fn every_device_views_a_cube_s_faces_as_metal_casts_them() {
         each_device("texture_views_of_cubes", |name, _, device| {
@@ -176,6 +176,7 @@ mod on_device {
                 ("faces", Type2DArray, 1..2, 2..5, [4, 1, 3], [1, 2]),
                 ("every-face", Type2DArray, 0..2, 0..6, [8, 2, 6], [0, 0]),
                 ("face", Type2D, 1..2, 4..5, [4, 1, 1], [1, 4]),
+                ("as-a-cube-array", CubeArray, 0..1, 0..6, [8, 1, 1], [0, 0]),
             ];
             let counters = device.counters();
             for (at, (case, texture_type, levels, faces, reports, under)) in (4100..).zip(cases) {
@@ -215,12 +216,6 @@ mod on_device {
                     "{name}: {case}: the bytes"
                 );
             }
-            let as_array =
-                cube.new_texture_view(PixelFormat::RGBA8Unorm, CubeArray, 0..1, 0..6, Some(4110));
-            assert!(
-                matches!(as_array, Err(Error::Unsupported(Gap::CubeArrayTexture))),
-                "{name}: a cube array view of a cube"
-            );
         });
     }
 

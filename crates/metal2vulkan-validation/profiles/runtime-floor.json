@@ -1139,6 +1139,7 @@
           "alphaToOne": true,
           "logicOp": true,
           "fullDrawIndexUint32": true,
+          "imageCubeArray": true,
           "depthBiasClamp": true,
           "drawIndirectFirstInstance": true,
           "depthClamp": true,

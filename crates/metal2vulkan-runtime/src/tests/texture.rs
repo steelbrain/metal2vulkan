@@ -485,7 +485,8 @@ mod on_device {
             }
             .run(&name, &volume, 3);
 
-            // A slice of an array, and a cube's last face.
+            // A slice of an array, a cube's last face, and a cube array's last face (its second
+            // cube's), the cube array dropped at once.
             let mut d = descriptor(TextureType::Type2DArray, PixelFormat::R8Unorm, [4, 4, 1]);
             d.array_length = 3;
             let array = make(&d, Some(4098));
@@ -507,6 +508,9 @@ mod on_device {
             let d = descriptor(TextureType::Cube, PixelFormat::R8Unorm, [4, 4, 1]);
             let cube = make(&d, Some(4099));
             trip(5).run(&name, &cube, 5);
+            let mut d = descriptor(TextureType::CubeArray, PixelFormat::R8Unorm, [4, 4, 1]);
+            d.array_length = 2;
+            trip(11).run(&name, &make(&d, Some(4103)), 8);
 
             // A 32-bit float depth texture: its bytes come out, and none go in.
             let d = descriptor(TextureType::Type2D, PixelFormat::Depth32Float, [8, 8, 1]);
@@ -551,17 +555,6 @@ mod on_device {
                 }
                 Err(error) => panic!("{name}: BC1: {error}"),
             }
-
-            // A cube array texture is not built: its view would need `imageCubeArray`.
-            let mut cubes = descriptor(TextureType::CubeArray, PixelFormat::RGBA8Unorm, [4, 4, 1]);
-            cubes.array_length = 2;
-            assert!(
-                matches!(
-                    device.new_texture(&cubes, Some(4103)),
-                    Err(Error::Unsupported(Gap::CubeArrayTexture))
-                ),
-                "{name}: a cube array texture"
-            );
 
             // A Private texture's bytes are the GPU's alone.
             let mut d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [4, 4, 1]);

@@ -10,10 +10,10 @@
 //! | `texture-view-casts-2d-as-2d-array` | a 2D texture | a 2D array of levels 1 and 2, its one slice |
 //! | `texture-view-casts-2d-array-as-cube` | a 2D array of eight slices | a cube of levels 1 and 2, slices 1 to 6 |
 //!
-//! These are the casts of Apple's table (`makeTextureView(pixelFormat:textureType:levels:slices:)`)
-//! that metal2vulkan-runtime builds of another type than the parent's: those a cube or a 2D texture
-//! makes with nothing new at its make, and a square 2D array's cube of six slices, whose image rt
-//! makes cube-compatible; a cube array, and a view as one, is a gap of its own there.
+//! These are casts of Apple's table (`makeTextureView(pixelFormat:textureType:levels:slices:)`) of
+//! another type than the parent's: those a cube or a 2D texture makes with nothing new at its make,
+//! and a square 2D array's cube of six slices, whose image metal2vulkan-runtime makes
+//! cube-compatible. No case here casts a cube array or views a texture as one.
 //!
 //! Every parent is `RGBA16Float`, 8 by 8 texels at level 0, of three levels, `Private`, of
 //! render-target and shader-read usage; a cube's slices are its faces, as Metal counts a view's

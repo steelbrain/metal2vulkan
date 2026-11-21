@@ -63,6 +63,7 @@ fn at_the_floor() -> Queried {
     features.core.alpha_to_one = vk::TRUE;
     features.core.logic_op = vk::TRUE;
     features.core.full_draw_index_uint32 = vk::TRUE;
+    features.core.image_cube_array = vk::TRUE;
     features.core.depth_bias_clamp = vk::TRUE;
     features.core.draw_indirect_first_instance = vk::TRUE;
     features.core.depth_clamp = vk::TRUE;
@@ -373,7 +374,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 56] = [
+    let cases: [(Clear, Missing); 57] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -568,6 +569,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.full_draw_index_uint32 = vk::FALSE,
             feature(CORE, "fullDrawIndexUint32"),
+        ),
+        (
+            |f| f.core.image_cube_array = vk::FALSE,
+            feature(CORE, "imageCubeArray"),
         ),
         (
             |f| f.core.depth_bias_clamp = vk::FALSE,

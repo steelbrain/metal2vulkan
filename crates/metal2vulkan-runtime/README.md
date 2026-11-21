@@ -1180,10 +1180,10 @@ made, with no lock, and never rewritten for layouts.
   sample counts it is `Limit::TextureSize` or `Limit::TextureSamples`.
 - Refused as Metal refuses each descriptor (`Refusal::TextureZeroExtent`,
   `TextureExtentForType`, `TextureCubeNotSquare`, `TextureArrayLength`, `TextureLevelCount`,
-  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`),
-  cube array textures (`Gap::CubeArrayTexture`: their view needs Vulkan's `imageCubeArray`, which
-  the floor does not require, and no replay stream makes one) and Memoryless storage
-  (`Gap::MemorylessTexture`) are not built.
+  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`)
+  and Memoryless storage (`Gap::MemorylessTexture`) are not built. A cube array texture's image
+  is cube-compatible with six layers a cube, and its view is a cube array view (`imageCubeArray`,
+  in the floor).
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
   its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself.
 - `Texture::replace_region` and `Texture::get_bytes` take a Shared or Managed texture
@@ -1344,10 +1344,11 @@ made, with no lock, and never rewritten for layouts.
   `replace_region` and `get_bytes` through it reach the parent's levels and slices under it, and a
   view of a Managed texture names the parent's bytes of them; its hazards are its parent's. Built:
   the parent's own pixel format, over every slice in the parent's type, a slice subrange of a 1D
-  or 2D array, a 2D texture as a 2D array of its one slice, one slice of a 2D array as a 2D
-  texture, and a cube's faces as a 2D texture (one face) or a 2D array (any faces), each over any
-  level subrange; a view of a view is a view of the first parent. A view as a cube array is
-  `Gap::CubeArrayTexture`, as a cube array texture is. Refused, as Metal's validation
+  or 2D array or of a cube array's cubes, a 2D texture as a 2D array of its one slice, one slice
+  of a 2D array as a 2D texture, a cube's or a cube array's faces as a 2D texture (one face) or a
+  2D array (any faces), six of a cube array's faces as a cube, and a cube as a cube array of one
+  cube, each over any level subrange; a view of a view is a view of the first parent. Refused, as
+  Metal's validation
   stops them: an empty range of levels or slices, or one past the parent's
   (`Refusal::TextureViewRange`), a slice count the view's type does not take
   (`Refusal::TextureViewSlices`), and another pixel format of a texture made without
@@ -1468,9 +1469,9 @@ made, with no lock, and never rewritten for layouts.
   another texture type than the casts built above, some of a 2D multisample array's slices, and a
   cube view of a 2D array whose image is not cube-compatible (`TextureViewKind::CubeOfArray`): a
   square 2D array of six slices or more is made cube-compatible where the device's image format
-  query takes the flag for its format and usage, and its cube views of six slices are built; a
-  non-square array's image is not. A view as a cube array stays `Gap::CubeArrayTexture`, as its
-  view needs `imageCubeArray`, which the floor does not require. A view of a pixel format Metal does not
+  query takes the flag for its format and usage, and its cube views of six slices and cube array
+  views of a multiple of six are built; a non-square array's image is not. A view of a pixel
+  format Metal does not
   view the texture as is `Refusal::TextureViewFormat`.
 - A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
@@ -3030,14 +3031,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `independentResolve` and `independentResolveNone` allow. The resolve texture takes the
   attachment's pixel format and one sample, and its level the attachment level's width and
   height. Metal resolves into a texture of any usage, and so does the runtime into a one-sample
-  colour texture, 2D, a 2D array or a cube, whose image is optimal: such a texture takes the
-  attachment usage on every device where its format renders, whatever Metal's usage. A resolve
-  into a texture made without `RenderTarget` usage whose image has no attachment usage is a known
-  gap (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of another
-  type or of a format the device's optimal image does not render, and a texture over a buffer in
-  place, whose linear image takes no attachment usage for a resolve alone. Refused as Metal
-  refuses it: a resolving action with no resolve texture (`Refusal::ResolveTexture`, also where an
-  encoder sets it later) and an integer format's resolve (`Refusal::ResolveFormat`).
+  colour texture, 2D, a 2D array, a cube or a cube array, whose image is optimal: such a texture
+  takes the attachment usage on every device where its format renders, whatever Metal's usage. A
+  resolve into a texture made without `RenderTarget` usage whose image has no attachment usage is a
+  known gap (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of
+  another type or of a format the device's optimal image does not render, and a texture over a
+  buffer in place, whose linear image takes no attachment usage for a resolve alone. Refused as
+  Metal refuses it: a resolving action with no resolve texture (`Refusal::ResolveTexture`, also
+  where an encoder sets it later) and an integer format's resolve (`Refusal::ResolveFormat`).
   `Metrics::resolves` counts the attachments passes resolved.
 - A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
   `float`: an optimal image in its real layout, of the Vulkan format the translator's format table
@@ -3632,6 +3633,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which needs fragment interlock or raster-order attachment access |
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
+| `imageCubeArray` | `VkPhysicalDeviceFeatures` | a cube array texture and a view as one, a cube array image view; Vulkan 1.4 and Roadmap 2022 require it |
 | `depthBiasClamp` | `VkPhysicalDeviceFeatures` | a depth bias's clamp (`set_depth_bias`), the device's own; Vulkan 1.4 and Roadmap 2022 require it |
 | `drawIndirectFirstInstance` | `VkPhysicalDeviceFeatures` | an indirect draw's base instance, which the GPU reads from Metal's arguments; Vulkan 1.4 requires it |
 | `depthClamp` | `VkPhysicalDeviceFeatures` | the depth clip mode `Clamp` (`set_depth_clip_mode`), a pipeline's depth clamp, the device's own; Vulkan 1.4 and Roadmap 2022 require it |

@@ -3,7 +3,8 @@
 //! `[[render_target_array_index]]` `i` renders slice `slice + i` of a layered pass, an index at or
 //! past the pass's length renders its first slice, the pass's clear covers every layer, a pass of
 //! one layer renders its slice whatever index the vertex function writes, and the fragment
-//! function reads the index as written, in each. A vertex function whose index may differ among a
+//! function reads the index as written, in each, over a 2D array, a cube and a cube array (its
+//! faces counted across its cubes). A vertex function whose index may differ among a
 //! primitive's vertices is refused at creation, naming `LayeredRendering`.
 //!
 //! `rt6_layered_vertex` (engine `rt6_layered`) draws the fullscreen triangle once per instance,
@@ -49,7 +50,7 @@ mod on_device {
         expect: &'static [u32],
     }
 
-    const PASSES: [Layered; 4] = [
+    const PASSES: [Layered; 5] = [
         // Slices 1 to 3 of four: instance 0 renders layer 1 (slice 2), instance 1 layer 0
         // (slice 1), and instance 2's index 5, past the length, layer 0 too, over instance 1;
         // layer 2 (slice 3) keeps the clear, slice 0 its prior.
@@ -71,6 +72,31 @@ mod on_device {
             length: 6,
             layers: &[5, 2],
             expect: &[CLEAR, CLEAR, word(1, 2), CLEAR, CLEAR, word(0, 5)],
+        },
+        // Six faces of a cube array of two cubes, slices 4 to 9, across both cubes: index 5
+        // renders slice 9 (the second cube's face 3), index 0 slice 4 (the first cube's face 4);
+        // slices 5 to 8 keep the clear, the four outside the pass their prior.
+        Layered {
+            what: "a cube array's slices 4 to 9",
+            texture_type: TextureType::CubeArray,
+            slices: 12,
+            slice: 4,
+            length: 6,
+            layers: &[5, 0],
+            expect: &[
+                PRIOR,
+                PRIOR,
+                PRIOR,
+                PRIOR,
+                word(1, 0),
+                CLEAR,
+                CLEAR,
+                CLEAR,
+                CLEAR,
+                word(0, 5),
+                PRIOR,
+                PRIOR,
+            ],
         },
         // Passes of one layer, of Metal's default length 0 and of length 1: index 3 renders the
         // attachment's slice, and the fragment reads 3.
@@ -97,8 +123,10 @@ mod on_device {
     /// A Shared render target of `R32Uint`, `SIDE` a side, every slice primed to [`PRIOR`].
     fn target(device: &Device, texture_type: TextureType, slices: u32) -> Texture {
         let mut d = TextureDescriptor::new(texture_type, PixelFormat::R32Uint, SIDE, SIDE);
-        if texture_type == TextureType::Type2DArray {
-            d.array_length = slices;
+        match texture_type {
+            TextureType::Type2DArray => d.array_length = slices,
+            TextureType::CubeArray => d.array_length = slices / 6,
+            _ => {}
         }
         d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Shared;

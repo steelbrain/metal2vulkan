@@ -9170,7 +9170,6 @@ variant	metal2vulkan-runtime::ExportHandle::OpaqueFd	OpaqueFd
 variant	metal2vulkan-runtime::ExportHandle::OpaqueWin32	OpaqueWin32
 variant	metal2vulkan-runtime::Gap::BicubicTexels	BicubicTexels { slot: u32, pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
-variant	metal2vulkan-runtime::Gap::CubeArrayTexture	CubeArrayTexture
 variant	metal2vulkan-runtime::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-runtime::Gap::D3d11SurfaceBuffer	D3d11SurfaceBuffer
 variant	metal2vulkan-runtime::Gap::Draw	Draw { kind: DrawKind }

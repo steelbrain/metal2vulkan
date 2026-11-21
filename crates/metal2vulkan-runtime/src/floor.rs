@@ -436,6 +436,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // An indexed draw's 32-bit indices past `2^24 - 1`, which Metal draws. Vulkan 1.4 and
     // Roadmap 2022 require it of every device.
     feature!(core.full_draw_index_uint32 => FullDrawIndexUint32),
+    // A cube array texture (`MTLTextureTypeCubeArray`) and a view as one, whose image view is
+    // `VK_IMAGE_VIEW_TYPE_CUBE_ARRAY`, sampled and read by the translator's shaders. Vulkan 1.4 and
+    // Roadmap 2022 require it of every device.
+    feature!(core.image_cube_array => ImageCubeArray),
     // A depth bias's clamp (`setDepthBias:slopeScale:clamp:`), the device's own, set as dynamic
     // state. Vulkan 1.4 and Roadmap 2022 require it of every device.
     feature!(core.depth_bias_clamp),

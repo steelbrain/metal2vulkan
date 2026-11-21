@@ -86,8 +86,7 @@ pub enum StorageMode {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextureDescriptor {
-    /// `textureType`. `TextureBuffer` is refused, [`Gap::TextureBuffer`], and `CubeArray`,
-    /// [`Gap::CubeArrayTexture`].
+    /// `textureType`. `TextureBuffer` is refused, [`Gap::TextureBuffer`].
     pub texture_type: TextureType,
     /// `pixelFormat`.
     pub pixel_format: PixelFormat,
@@ -947,8 +946,7 @@ impl Device {
     /// [`Refusal::TextureLevelCount`], [`Refusal::TextureSampleCount`],
     /// [`Refusal::TextureSwizzleWithWrites`]); [`Refusal::TextureIndex`];
     /// [`Refusal::IndicesNotGranted`] for an index not granted; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
-    /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`], [`Gap::CubeArrayTexture`] and
-    /// [`Gap::MemorylessTexture`];
+    /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`] and [`Gap::MemorylessTexture`];
     /// [`Limit::MemoryAllocations`] where its memory would take the device past its count;
     /// [`Error::Vulkan`] where the image or its memory cannot be made; [`Error::Quiesced`].
     pub fn new_texture(
@@ -1635,13 +1633,13 @@ struct Plan {
     /// multisample, which `VUID-VkImageCreateInfo-samples-02257` bars. A cube's own image is
     /// cube-compatible through its shape's flags.
     cube: bool,
-    /// The optimal image takes the colour attachment usage beside `usage`, so that a pass
-    /// resolves into it as Metal resolves into a texture of any usage
-    /// ([`RenderPassKind::ResolveUsage`]): a one-sample colour texture, 2D, a 2D array or a cube,
-    /// made without `RenderTarget` usage, where the format's features hold the attachment and the
-    /// device's image format query makes the image with it at the texture's extent ([`plan`]).
-    /// A linear image in place over a buffer, of `linear_usage`, takes no attachment usage for a
-    /// resolve alone, so it stays in place.
+    /// The optimal image takes the colour attachment usage beside `usage`, so that a pass resolves
+    /// into it as Metal resolves into a texture of any usage ([`RenderPassKind::ResolveUsage`]): a
+    /// one-sample colour texture, 2D, a 2D array, a cube or a cube array, made without
+    /// `RenderTarget` usage, where the format's features hold the attachment and the device's image
+    /// format query makes the image with it at the texture's extent ([`plan`]). A linear image in
+    /// place over a buffer, of `linear_usage`, takes no attachment usage for a resolve alone, so it
+    /// stays in place.
     resolves: bool,
 }
 
@@ -2083,9 +2081,6 @@ fn checked(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
     if d.storage_mode == StorageMode::Memoryless {
         return Err(Error::Unsupported(Gap::MemorylessTexture));
     }
-    if d.texture_type == TextureType::CubeArray {
-        return Err(Error::Unsupported(Gap::CubeArrayTexture));
-    }
     let usage = match d.usage.is_empty() {
         true => {
             TextureUsage::SHADER_READ
@@ -2243,7 +2238,10 @@ fn plan(
             .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         && matches!(
             d.texture_type,
-            TextureType::Type2D | TextureType::Type2DArray | TextureType::Cube
+            TextureType::Type2D
+                | TextureType::Type2DArray
+                | TextureType::Cube
+                | TextureType::CubeArray
         );
     let resolve_usage = match resolves {
         true => vk::ImageUsageFlags::COLOR_ATTACHMENT,
@@ -3531,12 +3529,13 @@ impl Texture {
     /// and writes through either reach the same bytes, as Metal's do.
     ///
     /// Built: the texture's own pixel format or another its image lists, over every slice in the
-    /// texture's own type, a slice subrange of a 1D or 2D array, a 2D texture as a 2D array of its
-    /// one slice, one slice of a 2D array as a 2D texture, a cube's faces as a 2D texture (one
-    /// face) or a 2D array (any faces), and six slices of a square 2D array as a cube, its image
-    /// made cube-compatible where the device's format query takes the flag, each over any level
-    /// subrange. A view as a cube array is
-    /// [`Gap::CubeArrayTexture`], as a cube array texture is. A texture's image lists the formats Metal views
+    /// texture's own type, a slice subrange of a 1D or 2D array or of a cube array's cubes, a 2D
+    /// texture as a 2D array of its one slice, one slice of a 2D array as a 2D texture, a cube's or
+    /// a cube array's faces as a 2D texture (one face) or a 2D array (any faces), six of a cube
+    /// array's faces as a cube, a cube as a cube array of one cube, and six slices of a square 2D
+    /// array as a cube, or a multiple of six as a cube array, its image made cube-compatible where
+    /// the device's format query takes the flag, each over any level subrange. A texture's image
+    /// lists the formats Metal views
     /// it as that the device holds in a viewed form of the image format's compatibility class: its
     /// sRGB sibling whatever its usage, and with `PixelFormatView` usage, or an empty usage
     /// (Metal's `MTLTextureUsageUnknown`, which the runtime takes as every usage), every
@@ -3660,20 +3659,21 @@ impl Texture {
         }
         // Metal's casts (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`): 1D to
         // 1D, 2D to 2D or a 2D array, a 2D array, a cube or a cube array to any of those four, and
-        // 3D to 3D. Vulkan views a cube's image, which is cube-compatible, as a 2D texture or a 2D
-        // array of its layers, and any image as a 2D array of one layer, with no query, so each is
-        // one form on every device. A cube array is not built, nor a view as one.
+        // 3D to 3D. Vulkan views a cube's or a cube array's image, which is cube-compatible, as a
+        // 2D texture, a 2D array of its layers, a cube of six of them or a cube array of a multiple
+        // of six (`imageCubeArray`, in the floor), and any image as a 2D array of one layer, with
+        // no query, so each is one form on every device.
         match (p.texture_type, texture_type) {
-            (_, T::CubeArray) => return Err(Error::Unsupported(Gap::CubeArrayTexture)),
             (from, to) if from == to => {
-                if !every_slice && !matches!(to, T::Type1DArray | T::Type2DArray) {
+                let subrange = matches!(to, T::Type1DArray | T::Type2DArray | T::CubeArray);
+                if !every_slice && !subrange {
                     return gap(TextureViewKind::Slices);
                 }
             }
             (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
-            (T::Cube, T::Type2D | T::Type2DArray) => {}
-            (T::Type2DArray, T::Cube) if inner.image.cube => {}
-            (T::Type2DArray, T::Cube) => return gap(TextureViewKind::CubeOfArray),
+            (T::Cube | T::CubeArray, T::Type2D | T::Type2DArray | T::Cube | T::CubeArray) => {}
+            (T::Type2DArray, T::Cube | T::CubeArray) if inner.image.cube => {}
+            (T::Type2DArray, T::Cube | T::CubeArray) => return gap(TextureViewKind::CubeOfArray),
             _ => return gap(TextureViewKind::TextureType),
         }
         let mut d = *p;
@@ -4393,9 +4393,9 @@ pub(crate) trait TextureObject {
     ///
     /// Err: [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a texture whose image has
     /// none: a depth or stencil texture made without `RenderTarget` usage, a colour texture of a
-    /// type but 2D, a 2D array or a cube or whose format the device's optimal image does not
-    /// render, and a texture over a buffer whose linear image lies in place; as [`attachment`]
-    /// for the rest.
+    /// type but 2D, a 2D array, a cube or a cube array or whose format the device's optimal image
+    /// does not render, and a texture over a buffer whose linear image lies in place; as
+    /// [`attachment`] for the rest.
     ///
     /// [`attachment`]: TextureObject::attachment
     fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {

@@ -1020,11 +1020,6 @@ pub enum Gap {
     /// guest render functions declare one in an argument buffer, validation's
     /// texture_buffer_member).
     TextureBuffer,
-    /// A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one: its image view
-    /// needs Vulkan's `imageCubeArray`, which the floor does not require.
-    ///
-    /// Basis: ours (no replay stream makes a cube array texture or view; built when one does).
-    CubeArrayTexture,
     /// A texture of a pixel format the runtime makes no image of on this device for the
     /// descriptor's usage: the device's format query lacks the format or one of the usages, or
     /// the format's texels need a conversion in the shader that the translator's identity domains
@@ -1535,26 +1530,26 @@ pub enum RenderPassKind {
     Resolve,
     /// A resolve into a texture made without `RenderTarget` usage (and not of Metal's unknown
     /// usage) whose image has no attachment usage: a depth or stencil texture; a colour texture of
-    /// a type but 2D, a 2D array or a cube, or whose format the device's optimal image does not
-    /// render, by its format features or its image format query at the texture's extent; or a
-    /// texture over a buffer whose linear image lies in place, which takes no attachment usage for
-    /// a resolve alone, so it stays in place and is never copied to gain one. Metal resolves into a
-    /// texture of any usage: probe `resolve_texture_usage.m` in the conformance crate (an Apple M3
-    /// Max, macOS 27.0.1, job m3-max-59768) resolved a 4-sample `BGRA8Unorm_sRGB` attachment into a
-    /// texture of `ShaderRead` usage and of `ShaderRead | ShaderWrite` usage, plain and under
-    /// Metal's validation layer, each reading the texels of a `RenderTarget` one. Vulkan resolves
-    /// only into a view with the attachment usage
+    /// a type but 2D, a 2D array, a cube or a cube array, or whose format the device's optimal
+    /// image does not render, by its format features or its image format query at the texture's
+    /// extent; or a texture over a buffer whose linear image lies in place, which takes no
+    /// attachment usage for a resolve alone, so it stays in place and is never copied to gain one.
+    /// Metal resolves into a texture of any usage: probe `resolve_texture_usage.m` in the
+    /// conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-59768) resolved a 4-sample
+    /// `BGRA8Unorm_sRGB` attachment into a texture of `ShaderRead` usage and of `ShaderRead |
+    /// ShaderWrite` usage, plain and under Metal's validation layer, each reading the texels of a
+    /// `RenderTarget` one. Vulkan resolves only into a view with the attachment usage
     /// (VUID-VkRenderingInfo-colorAttachmentCount-09476), so every one-sample colour texture of an
-    /// optimal image, 2D, a 2D array or a cube, takes that usage on every device where its format
-    /// renders, whatever Metal's usage. It grows memory on RADV: of optimal `RGBA8Unorm`,
-    /// `BGRA8Unorm_sRGB`, `RGBA16Float`, `R32Float` and `RG11B10Float` images of 256 x 256 and 1920
-    /// x 1080, one level and a full chain, with `ShaderRead` and `ShaderRead | ShaderWrite` usage,
-    /// adding the attachment usage grows the size of 18 of 36 on the Radeon 780M (every 1920 x 1080
-    /// one; `RGBA8Unorm` of one level from 8,847,360 to 8,896,512 bytes, 1.0056 times) and 14 of 36
-    /// on the RX 550 (8,847,360 to 8,882,200), alignments equal, and none on the Iris Xe, the RTX
-    /// 3090, llvmpipe or KosmicKrisp (jobs m3-max-59774, m3-max-59775 and m3-max-59776). No depth
-    /// format was measured, so a depth or stencil texture takes no attachment usage for a resolve
-    /// alone.
+    /// optimal image, 2D, a 2D array, a cube or a cube array, takes that usage on every device
+    /// where its format renders, whatever Metal's usage. It grows memory on RADV: of optimal
+    /// `RGBA8Unorm`, `BGRA8Unorm_sRGB`, `RGBA16Float`, `R32Float` and `RG11B10Float` images of 256
+    /// x 256 and 1920 x 1080, one level and a full chain, with `ShaderRead` and `ShaderRead |
+    /// ShaderWrite` usage, adding the attachment usage grows the size of 18 of 36 on the Radeon
+    /// 780M (every 1920 x 1080 one; `RGBA8Unorm` of one level from 8,847,360 to 8,896,512 bytes,
+    /// 1.0056 times) and 14 of 36 on the RX 550 (8,847,360 to 8,882,200), alignments equal, and
+    /// none on the Iris Xe, the RTX 3090, llvmpipe or KosmicKrisp (jobs m3-max-59774, m3-max-59775
+    /// and m3-max-59776). No depth format was measured, so a depth or stencil texture takes no
+    /// attachment usage for a resolve alone.
     ResolveUsage,
     /// A depth or stencil resolve the device's resolve modes do not offer
     /// (`VkPhysicalDeviceDepthStencilResolveProperties`): a depth attachment's `Min` or `Max`
@@ -2308,7 +2303,6 @@ impl fmt::Display for Gap {
                 "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
             ),
             Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
-            Gap::CubeArrayTexture => f.write_str("cube array textures are not built"),
             Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
             Gap::LodClamps => f.write_str(
                 "a sampler state's bind-time LOD clamps that read otherwise than its own are not built",

@@ -115,9 +115,9 @@ RUNTIME_FLOOR = {
             "shaderStorageImageExtendedFormats", "samplerAnisotropy",
             "shaderImageGatherExtended", "shaderInt16", "independentBlend",
             "fragmentStoresAndAtomics", "alphaToOne", "logicOp", "fullDrawIndexUint32",
-            "depthBiasClamp", "drawIndirectFirstInstance", "depthClamp", "shaderClipDistance",
-            "tessellationShader", "shaderTessellationAndGeometryPointSize", "largePoints",
-            "dualSrcBlend", "sampleRateShading", "vertexPipelineStoresAndAtomics")},
+            "imageCubeArray", "depthBiasClamp", "drawIndirectFirstInstance", "depthClamp",
+            "shaderClipDistance", "tessellationShader", "shaderTessellationAndGeometryPointSize",
+            "largePoints", "dualSrcBlend", "sampleRateShading", "vertexPipelineStoresAndAtomics")},
         "VkPhysicalDeviceVulkan11Features": {member: True for member in (
             "storageBuffer16BitAccess", "multiview", "shaderDrawParameters")},
         "VkPhysicalDeviceVulkan12Features": {member: True for member in (

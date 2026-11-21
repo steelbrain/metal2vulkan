@@ -34,7 +34,7 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 76 | 76 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -48,7 +48,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 21 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 2 | 29 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -368,7 +368,6 @@ Columns:
 | `IndirectPrivateArena` | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` of a kernel whose private memory lives in the runtime's... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel indirectly | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-runtime/src/texture.rs (checked)` | `-` |
 | `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream or live session has used one; harvested guest render functions declare one in an argument buffer, validation's texture_buffer_member | 2: `crates/metal2vulkan-runtime/src/texture.rs (shape, 2 sites)` | `-` |
-| `CubeArrayTexture` | A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one | every device (a public call's own check of its arguments) | `ours`: no replay stream makes a cube array texture or view; built when one does | 2: `crates/metal2vulkan-runtime/src/texture.rs (checked)`, `crates/metal2vulkan-runtime/src/texture.rs (view)` | `-` |
 | `TextureFormat` | A texture of a pixel format the runtime makes no image of on this device for the descriptor's usage | every device (a public call's own check of its arguments) | `ours`: the device's format query, or the identity domains' shaders read every texture through its view alone | 3: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view)`, `crates/metal2vulkan-runtime/src/texture.rs (form)` (+1) | `-` |
 | `MipmapFilter` | `BlitCommandEncoder::generate_mipmaps` of a texture whose image the device's blits do not filter | every device (a public call's own check of its arguments) | `ours`: the device's format query; the levels are the device's blit chain alone | 1: `crates/metal2vulkan-runtime/src/blit.rs (generate_mipmaps)` | `-` |
 | `CubicSampler` | A sampler state whose minification or magnification filter is cubic (`Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: the translator's identity domains do not filter bicubically, and Vulkan's cubic filter is not Metal's | 1: `crates/metal2vulkan-runtime/src/sampler.rs (new_sampler_state)` | `-` |
@@ -654,7 +653,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::IndirectPrivateArena`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-runtime/src/texture.rs (checked)`
 - `rt:Gap::TextureBuffer`: `crates/metal2vulkan-runtime/src/texture.rs (shape, 2 sites)`
-- `rt:Gap::CubeArrayTexture`: `crates/metal2vulkan-runtime/src/texture.rs (checked)`; `crates/metal2vulkan-runtime/src/texture.rs (view)`
 - `rt:Gap::TextureFormat`: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view)`; `crates/metal2vulkan-runtime/src/texture.rs (form)`; `crates/metal2vulkan-runtime/src/texture.rs (plan)`
 - `rt:Gap::MipmapFilter`: `crates/metal2vulkan-runtime/src/blit.rs (generate_mipmaps)`
 - `rt:Gap::CubicSampler`: `crates/metal2vulkan-runtime/src/sampler.rs (new_sampler_state)`
