@@ -3281,21 +3281,24 @@ or does not check is rebuilt from the generations' names, with young counted ful
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
   `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.
-- Layered rendering (`renderTargetArrayLength` 2 or more) is refused: for an attachment or a
+- Layered rendering refuses: in a pass of `renderTargetArrayLength` 2 or more, an attachment or a
   resolve texture with fewer slices from its own `slice` than the pass's length
-  (`Refusal::AttachmentPlace`, naming the last slice the pass would render); for a 3D texture's
+  (`Refusal::AttachmentPlace`, naming the last slice the pass would render), a 3D texture's
   depth planes, which are no attachment's layers (`Gap::RenderPass`, `TextureType`, as for any 3D
-  attachment); for a draw that reads one of its pass's attachments through a texture on a device
+  attachment), and a draw that reads one of its pass's attachments through a texture on a device
   without the attachment feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow
-  holds one layer); and, at creation on every device, for a vertex function whose
-  `[[render_target_array_index]]` the translator cannot show the same at every vertex of a
-  primitive, an `Error::Translation` naming `LayeredRendering` and `geometryShader`. Vulkan
+  holds one layer); and, at creation on every device, whatever pass it would draw in, a vertex
+  function whose `[[render_target_array_index]]` the translator cannot show the same at every
+  vertex of a primitive, an `Error::Translation` naming `LayeredRendering` and `geometryShader`. Vulkan
   requires one `Layer` at every vertex of a primitive
   (`VUID-VkPipelineShaderStageCreateInfo-stage-02596`), so such a function cannot store its index
   as written; the translator's other form, a generated geometry stage that selects the layer,
   needs `geometryShader`, which device creation does not enable; and Metal documents a differing
-  index as undefined (the Metal Shading Language specification). An index read from a buffer at
-  the vertex's `[[instance_id]]` is the same at every vertex of a primitive.
+  index as undefined (the Metal Shading Language specification). The translator shows an index
+  the same where it is computed from constants, `constant` memory, the draw's instance, base
+  vertex and base instance, and attributes fetched per instance, never from `[[vertex_id]]` or
+  another per-vertex input (`StageIo::uniform_outputs`): `constant uint *layers` read at
+  `[[instance_id]]` is, a `device` buffer read at `[[vertex_id]]` is not.
 - A `Clear` pass of one layer that encodes no draw clears Metal's render area rounded up to 32
   pixels a side, where a Mac clears the whole level and slice of a texture it keeps losslessly
   compressed, which no Vulkan query tells. A pass whose attachments differ in size reaches the
