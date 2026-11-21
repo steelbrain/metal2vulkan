@@ -477,7 +477,7 @@ impl Case for ProgramCase {
 /// second direction at all.
 #[test]
 fn a_refusal_at_a_step_of_a_program_is_refused_and_the_ledger_holds_it() {
-    use crate::known_gaps::{against, Expectation, Expects, KnownGap, EVERY_VENUE};
+    use crate::known_gaps::{against, Expectation, Expects, KnownGap, Now, EVERY_VENUE};
     let case = ProgramCase::new("program-step-refusal");
     let recording = recording_of(&case, case.metal(), 3);
     // The failure a work interpreter gives: the runtime's typed error, said to have happened at
@@ -514,6 +514,7 @@ fn a_refusal_at_a_step_of_a_program_is_refused_and_the_ledger_holds_it() {
         panic!("{found:?}");
     };
     assert_eq!(*expects, Expects::Refused);
+    assert_eq!(unlisted.class(), "no row for this card", "{unlisted}");
     let row = unlisted.row().expect("a row to paste");
     let fields: Vec<&str> = row.split('\t').collect();
     assert_eq!(fields.len(), 6, "{row}");
@@ -540,13 +541,28 @@ fn a_refusal_at_a_step_of_a_program_is_refused_and_the_ledger_holds_it() {
     let passed = replay_against(&case, &mut ran, &recording).unwrap();
     assert_eq!(passed.verdict.word(), "exact", "{}", passed.verdict);
     let found = against(std::slice::from_ref(&passed), &listed);
-    let [gone @ Expectation::NoLongerHeld { gap, .. }] = found.as_slice() else {
+    let [gone @ Expectation::NoLongerHeld { gap, now, .. }] = found.as_slice() else {
         panic!("{found:?}");
     };
     assert_eq!(gap.case, "program-step-refusal");
+    assert_eq!(*now, Now::Matches);
     let printed = gone.to_string();
     assert!(printed.contains("no longer refuses"), "{printed}");
+    assert!(printed.contains("now matches"), "{printed}");
     assert!(printed.contains("drop the row"), "{printed}");
+
+    // A venue that lacks a feature the case needs ran nothing of it: the row no longer holds, and
+    // the report says why apart from a row that now matches.
+    let mut lacking = passed.clone();
+    lacking.verdict = Verdict::LacksFeature {
+        needs: "a feature the venue lacks".to_owned(),
+    };
+    let found = against(std::slice::from_ref(&lacking), &listed);
+    let [lacks @ Expectation::NoLongerHeld { now, .. }] = found.as_slice() else {
+        panic!("{found:?}");
+    };
+    assert_eq!(*now, Now::LacksFeature);
+    assert_eq!(lacks.class(), "now lacks the feature");
 
     // And the row's identity is the step as well as the site: the same program refusing at
     // another step is another gap, so the listed row no longer holds and the new one is unlisted.
@@ -560,16 +576,26 @@ fn a_refusal_at_a_step_of_a_program_is_refused_and_the_ledger_holds_it() {
     assert_eq!(moved.verdict.word(), "refused");
     let found = against(std::slice::from_ref(&moved), &listed);
     assert_eq!(found.len(), 2, "{found:?}");
+    // The new answer is the site's row for this card, differing; the row is held no longer
+    // because the site answers otherwise.
     assert!(
-        found
-            .iter()
-            .any(|why| matches!(why, Expectation::Unlisted { .. })),
+        found.iter().any(|why| matches!(
+            why,
+            Expectation::Unlisted {
+                listed: Some((Expects::Refused, was)),
+                ..
+            } if *was == answer
+        ) && why.class() == "row differs"),
         "{found:?}"
     );
     assert!(
-        found
-            .iter()
-            .any(|why| matches!(why, Expectation::NoLongerHeld { .. })),
+        found.iter().any(|why| matches!(
+            why,
+            Expectation::NoLongerHeld {
+                now: Now::Differs,
+                ..
+            }
+        )),
         "{found:?}"
     );
 }
@@ -4009,7 +4035,7 @@ fn a_venue_scoped_row_is_held_on_its_venue_and_nowhere_else() {
     let now_exact = replay_against(&case, &mut fixed, &recording).unwrap();
     assert_eq!(now_exact.verdict.word(), "exact");
     let found = against(std::slice::from_ref(&now_exact), &listed);
-    let [Expectation::NoLongerHeld { gap, venue }] = found.as_slice() else {
+    let [Expectation::NoLongerHeld { gap, venue, .. }] = found.as_slice() else {
         panic!("{found:?}");
     };
     assert_eq!(gap.venue, "woven");

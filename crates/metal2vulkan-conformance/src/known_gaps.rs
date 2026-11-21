@@ -397,6 +397,10 @@ pub enum Expectation {
         expects: Expects,
         site: String,
         answer: String,
+        /// The verdict and answer of a row the ledger holds for this venue at the same case and
+        /// site, which the run did not answer: the row differs. None where no row covers this
+        /// venue there.
+        listed: Option<(Expects, String)>,
     },
     /// A listed row the run no longer holds on a venue it names: the gap looks fixed, and the row
     /// must go.
@@ -404,10 +408,50 @@ pub enum Expectation {
         gap: KnownGap,
         /// The venue it was held against.
         venue: String,
+        /// What the venue answers at the row's site now.
+        now: Now,
     },
     /// A failure the ledger has no business covering. A refusal and a divergence are the only
     /// expected gaps; an unrecorded case and a stale recording are never written down.
     NotLedgerable { case: String, why: String },
+}
+
+/// What a venue answers now at the site of a row it no longer holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Now {
+    /// The case read as lacking a device feature on the venue: it ran nothing there, so nothing of
+    /// the row can hold, and no row is written for a feature the venue lacks.
+    LacksFeature,
+    /// The site holds no gap: our answer is Metal's there.
+    Matches,
+    /// The site holds another gap, which the run lists as unlisted beside this.
+    Differs,
+}
+
+impl Now {
+    /// The words a report states it in.
+    pub fn words(self) -> &'static str {
+        match self {
+            Now::LacksFeature => "now lacks the feature",
+            Now::Matches => "now matches",
+            Now::Differs => "now answers otherwise",
+        }
+    }
+}
+
+impl Expectation {
+    /// The class a summary groups this under: an unlisted gap with no row for its venue, one whose
+    /// venue's row differs, a row the venue no longer holds by what it answers now, or neither.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Expectation::Unlisted { listed: None, .. } => "no row for this card",
+            Expectation::Unlisted {
+                listed: Some(_), ..
+            } => "row differs",
+            Expectation::NoLongerHeld { now, .. } => now.words(),
+            Expectation::NotLedgerable { .. } => "not ledgerable",
+        }
+    }
 }
 
 impl std::fmt::Display for Expectation {
@@ -419,21 +463,36 @@ impl std::fmt::Display for Expectation {
                 expects,
                 site,
                 answer,
-            } => write!(
+                listed,
+            } => {
+                write!(
+                    out,
+                    "{case} on {venue} is {expects} at {site} and the known-gaps ledger does not \
+                     list it: {answer}\n  "
+                )?;
+                match listed {
+                    None => write!(out, "no row for this card")?,
+                    Some((listed, was)) => write!(
+                        out,
+                        "the row for this card differs: it expects {listed} with {was}"
+                    )?,
+                }
+                write!(
+                    out,
+                    ". A new gap: fix it, or add a row to known-gaps-rt.tsv naming the gap it \
+                     waits on"
+                )
+            }
+            Expectation::NoLongerHeld { gap, venue, now } => write!(
                 out,
-                "{case} on {venue} is {expects} at {site} and the known-gaps ledger does not list \
-                 it: {answer}\n  a new gap. Fix it, or add a row to known-gaps-rt.tsv naming the \
-                 gap it waits on"
-            ),
-            Expectation::NoLongerHeld { gap, venue } => write!(
-                out,
-                "{} on {venue} no longer {} {}, and the known-gaps ledger still lists it\n  the \
-                 gap looks fixed: drop the row from known-gaps-rt.tsv, or scope its venue field if \
-                 it is another venue's. The ledger must not outlive the bug it stands for.\n  the \
-                 row was waiting on: {}",
+                "{} on {venue} no longer {} {}, and the known-gaps ledger still lists it: it {}\n  \
+                 the gap looks fixed: drop the row from known-gaps-rt.tsv, or scope its venue \
+                 field if it is another venue's. The ledger must not outlive the bug it stands \
+                 for.\n  the row was waiting on: {}",
                 gap.case,
                 gap.expects.verb(),
                 gap.site,
+                now.words(),
                 gap.waiting_on
             ),
             Expectation::NotLedgerable { case, why } => write!(
@@ -466,6 +525,7 @@ impl Expectation {
                 expects,
                 site,
                 answer,
+                ..
             } => Some(format!(
                 "{case}\t{venue}\t{expects}\t{site}\t{answer}\t{UNWRITTEN}"
             )),
@@ -566,12 +626,19 @@ pub fn against(rows: &[Replayed], ledger: &[KnownGap]) -> Vec<Expectation> {
                     && gap.key() == (case, *expects, site.as_str(), answer.as_str())
             });
             if !listed {
+                let listed = ledger
+                    .iter()
+                    .find(|gap| {
+                        gap.covers_venue(&row.venue) && gap.case == *case && gap.site == *site
+                    })
+                    .map(|gap| (gap.expects, gap.answer.clone()));
                 found.push(Expectation::Unlisted {
                     case: row.case.clone(),
                     venue: row.venue.label(),
                     expects: *expects,
                     site: site.clone(),
                     answer: answer.clone(),
+                    listed,
                 });
             }
         }
@@ -590,9 +657,17 @@ pub fn against(rows: &[Replayed], ledger: &[KnownGap]) -> Vec<Expectation> {
                 (*case, *expects, site.as_str(), answer.as_str()) == gap.key()
             });
             if !still {
+                let now = if matches!(row.verdict, Verdict::LacksFeature { .. }) {
+                    Now::LacksFeature
+                } else if gaps.iter().any(|(_, _, site, _)| *site == gap.site) {
+                    Now::Differs
+                } else {
+                    Now::Matches
+                };
                 found.push(Expectation::NoLongerHeld {
                     gap: gap.clone(),
                     venue: row.venue.label(),
+                    now,
                 });
             }
         }

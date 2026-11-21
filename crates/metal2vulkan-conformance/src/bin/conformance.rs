@@ -168,9 +168,23 @@ fn command() -> Result<bool, String> {
                 }
                 return Ok(true);
             }
-            println!();
+            // Grouped by what each is, each group under its count: a gap with no row for this
+            // card apart from one whose row differs, and a row the card no longer holds by what it
+            // answers now (it lacks the feature, it matches, or it answers otherwise).
+            let mut classes: Vec<&str> = Vec::new();
             for why in &unexpected {
-                println!("not what {file} expects: {why}");
+                if !classes.contains(&why.class()) {
+                    classes.push(why.class());
+                }
+            }
+            for class in classes {
+                let of: Vec<&Expectation> = (unexpected.iter())
+                    .filter(|why| why.class() == class)
+                    .collect();
+                println!("\n{class}: {}", of.len());
+                for why in of {
+                    println!("not what {file} expects: {why}");
+                }
             }
             // The rows to add, in the ledger's own format, each on one line and all of them under
             // one unambiguous heading. The report above is prose for a person; this is for
