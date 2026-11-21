@@ -213,22 +213,23 @@ pub fn on_runtime_device<T>(
     }
 }
 
-/// The make of `entry`'s compute pipeline state from `bitcode` on `device`, as a run makes it
-/// ([`make`]) with no constant and no linked function: the runtime's typed refusal as the
-/// product's ([`product_refusal`]).
+/// The make of `entry`'s compute pipeline state from `bitcode` on `device`, with no constant, no
+/// linked function and no sampler it numbers: the runtime's own answer, a device test's to judge.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 pub fn make_kernel(
     device: &rt::Device,
     bitcode: &[u8],
     entry: &str,
-) -> Result<rt::ComputePipelineState, ExecutorError> {
+) -> Result<rt::ComputePipelineState, rt::Error> {
     let function = Library::from_air(bitcode)
         .and_then(|library| library.function(entry))
-        .map_err(|error| product_refusal(&error))?;
+        .map_err(rt::Error::Translation)?;
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
         FunctionDescriptor::new(function).with_specialized(true),
     ));
-    make(device, &descriptor)
+    device.new_compute_pipeline_state(&descriptor, |samplers: &[NumberedSampler]| {
+        Ok(vec![0; samplers.len()])
+    })
 }
 
 /// What a row records of the device that ran it.

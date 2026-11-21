@@ -89,9 +89,11 @@ pub enum ToolingRequirement {
     /// element of a texture-handle array (`executor_contract`). The engine's candidate runs
     /// neither. The runtime makes no texture buffer (`metal2vulkan_runtime::Gap::TextureBuffer`
     /// at `new_texture`), and its identity domains hold no texture buffer among an argument
-    /// buffer's textures, so it refuses such a function's pipeline at its make
-    /// (`Unsupported{IdentityDomains}`): the limit is the runtime's ([`Limit::Runtime`]), held
-    /// both ways by the device tests
+    /// buffer's textures, so it refuses such a function's pipeline at its make, typed
+    /// (`Unsupported{IdentityDomains}`, or, on a device whose answer lacks the features an
+    /// argument buffer's texel buffers are read through, `Feature::ArgumentBufferTextures` at
+    /// that query first): the limit is the runtime's ([`Limit::Runtime`]), held both ways by the
+    /// device tests
     /// `candidate::tests::engine_compute::a_texture_buffer_is_refused_where_a_2d_texture_is_made`
     /// and `..::a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made`. The
     /// Metal oracle makes and binds both, so a case of either stays Metal-qualified

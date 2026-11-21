@@ -675,10 +675,14 @@ fn a_fence_of_another_order_is_made_through_the_runtime() {
 fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {
     use metal2vulkan_runtime as rt;
     platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
+        let index = rt::IndexClass::Texture.range().start;
+        let _grant = device
+            .grant_indices(rt::IndexClass::Texture, index, 1)
+            .unwrap();
         let made = |texture_type| {
             let descriptor =
                 rt::TextureDescriptor::new(texture_type, rt::PixelFormat::RGBA32Float, 16, 1);
-            device.new_texture(&descriptor, None).map(drop)
+            device.new_texture(&descriptor, Some(index)).map(drop)
         };
         let refused = made(rt::TextureType::TextureBuffer);
         assert!(
@@ -690,26 +694,31 @@ fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {
     .unwrap();
 }
 
-/// `ToolingRequirement::TextureBufferMember`'s limit at the pipeline, both ways: the runtime's
-/// identity domains hold no texture buffer among an argument buffer's textures, so the make of
-/// `rlm_runtime_limits`'s `rlm_member_texture_buffer`, which reads one, is refused, typed
-/// (`Unsupported{IdentityDomains}`), where the same read of a 2D texture the argument buffer holds,
-/// `rlm_member_texture`, is made. The day the runtime makes the first, this fails.
+/// `ToolingRequirement::TextureBufferMember`'s limit at the pipeline, both ways: the make of
+/// `rlm_runtime_limits`'s `rlm_member_texture_buffer`, which reads a texture buffer an argument
+/// buffer holds, is refused, typed, where the same read of a 2D texture the argument buffer holds,
+/// `rlm_member_texture`, is made. The refusal is the translator's: the runtime's identity domains
+/// hold no texture buffer among an argument buffer's textures (`Unsupported{IdentityDomains}`),
+/// and a device whose answer lacks the features an argument buffer's texel buffers are read
+/// through is refused at that query first (`Feature::ArgumentBufferTextures`), as lavapipe's is
+/// under the runtime. The day the runtime makes the first, this fails.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made() {
-    use crate::check::admission::NotSupported;
-    use metal2vulkan::error::{Feature, Unsupported};
+    use metal2vulkan::error::Feature;
     let bitcode = llvm_assemble(&engine_dir().join("rlm_runtime_limits.ll")).unwrap();
-    let identity_domains = crate::engine::Outcome::from(&metal2vulkan::error::Error::from(
-        Unsupported::not_implemented(Feature::IdentityDomains),
-    ));
     platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
         match platform::make_kernel(device, &bitcode, "rlm_member_texture_buffer") {
-            Err(ExecutorError::NotSupported(NotSupported::Product { outcome, .. })) => {
-                assert_eq!(outcome, identity_domains)
-            }
-            Err(error) => panic!("not the identity domains' refusal: {error}"),
+            Err(metal2vulkan_runtime::Error::Translation(
+                metal2vulkan::error::Error::Unsupported(refused),
+            )) => assert!(
+                matches!(
+                    refused.feature,
+                    Feature::IdentityDomains | Feature::ArgumentBufferTextures
+                ),
+                "{refused:?}"
+            ),
+            Err(error) => panic!("not the translator's typed refusal: {error}"),
             Ok(_) => panic!("the runtime made a texture buffer member's pipeline"),
         }
         platform::make_kernel(device, &bitcode, "rlm_member_texture").unwrap();
