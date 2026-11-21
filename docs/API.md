@@ -2120,7 +2120,8 @@ bound.
   samples or gathers a texture whose residency it observes (`sparse_color::resident`) through the
   slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:
   the word is the device's `OpImageSparse*` residency, whose footprint may count a texel of zero
-  weight Metal does not, and an unmapped texel's lanes the device's non-resident value. Where the
+  weight Metal does not or call a footprint of the border alone not resident where Metal answers
+  resident, and an unmapped texel's lanes the device's non-resident value. Where the
   device has no residency of its own, the slot's tile map answers Metal's footprint rule exactly,
   unrecorded.
 - `metal2vulkan-degrade-device-nan-encoding` (precision). `PrecisionNote::DeviceNanEncoding`: A

@@ -809,7 +809,11 @@ pub enum PrecisionNote {
     /// lacks, through the texture's swizzle) are set after every access (`SpecKey::ConstantLanes`);
     /// none of them is noted. A sample's or gather's residency is the device's, noted: the word is
     /// the device's `OpImageSparse*` residency, whose footprint may count a texel of zero weight
-    /// Metal does not (Vulkan's linear 2x2 footprint does, measured on lavapipe), and its lanes
+    /// Metal does not (Vulkan's linear 2x2 footprint does, measured on lavapipe), and may call a
+    /// footprint of the border alone (a `clamp_to_border` access wholly outside the texture)
+    /// not resident where Metal answers resident (lavapipe does, by nearest, linear and gather
+    /// sampling, beside a mapped edge too; Vulkan states only whether a texel accessed is a sparse
+    /// unbound texel), and its lanes
     /// that are no constants over a texel in a block of a sparse image that holds no mapped tile
     /// are the device's non-resident value (zero on a device with `residencyNonResidentStrict`;
     /// any value elsewhere, which the runtime announces as `non-strict-residency`). Where the
