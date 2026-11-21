@@ -432,6 +432,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // An indexed draw's 32-bit indices past `2^24 - 1`, which Metal draws. Vulkan 1.4 and
     // Roadmap 2022 require it of every device.
     feature!(core.full_draw_index_uint32 => FullDrawIndexUint32),
+    // A depth bias's clamp (`setDepthBias:slopeScale:clamp:`), the device's own, set as dynamic
+    // state. Vulkan 1.4 and Roadmap 2022 require it of every device.
+    feature!(core.depth_bias_clamp),
     // A vertex or post-tessellation vertex function's `[[clip_distance]]`, the device's own
     // clipping. Every floor driver reports it.
     feature!(core.shader_clip_distance => ShaderClipDistance),

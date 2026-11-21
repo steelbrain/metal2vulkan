@@ -3004,9 +3004,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   one a GPU write gives as a zero. A negative or NaN depth, which Metal's test compares by its
   magnitude, takes none: no clear, viewport or upload gives one, and Vulkan leaves a depth past
   the viewport's range undefined. In a pass without a depth attachment Vulkan skips the depth
-  test, where Metal's documentation states no answer. `set_depth_bias` takes the bias and slope
-  scale as given; a draw of triangles is biased where either is not zero and a draw of lines
-  never, as Metal biases triangles alone, under the static note `PrecisionNote::DeviceDepthBias`
+  test, where Metal's documentation states no answer. `set_depth_bias` takes the bias, slope
+  scale and clamp as given; a draw of triangles is biased where the bias or the slope scale is not
+  zero and a draw of lines never, as Metal biases triangles alone, and the clamp bounds the bias as
+  Metal's does (a positive clamp from above, a negative one from below, 0 not at all), under the
+  static note `PrecisionNote::DeviceDepthBias`
   (`RenderCommandEncoder::DEPTH_BIAS_NOTE`): the slope measure, and a fixed-point attachment's
   unit, are the device's; Apple states neither. Where a pass
   has both a depth and a stencil attachment they are one texture's same level and slice, a
@@ -3171,8 +3173,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render encoders
 
-- Refused by `Gap::Draw`, naming its `DrawKind`: a depth bias clamp other
-  than 0 (`DepthBiasClamp`, set by `set_depth_bias`), a triangle fill mode but `Fill`
+- Refused by `Gap::Draw`, naming its `DrawKind`: a triangle fill mode but `Fill`
   (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
   `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
   `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
@@ -3196,8 +3197,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw, whose
   base instance the CPU does not see, is not built. A patch draw through a patch index buffer is
   `PatchIndexBuffer`: the control stage takes each patch's index from its position, and no replay
-  stream's patch draw names one. The replay streams draw lines and triangles
-  under depth biases with no clamp; every attachment they read through a texture is
+  stream's patch draw names one. Every attachment the replay streams read through a texture is
   a colour render target of `Private` storage, read from the fragment function; and
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
   A draw that reads its own target over a buffer in place, a linear image on the buffer's memory
@@ -3550,6 +3550,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which needs fragment interlock or raster-order attachment access |
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
+| `depthBiasClamp` | `VkPhysicalDeviceFeatures` | a depth bias's clamp (`set_depth_bias`), the device's own; Vulkan 1.4 and Roadmap 2022 require it |
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |

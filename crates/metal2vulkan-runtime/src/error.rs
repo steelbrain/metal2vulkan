@@ -1255,8 +1255,8 @@ pub enum Gap {
     /// ([`RenderCommandEncoder`](crate::RenderCommandEncoder)): what `kind` names.
     ///
     /// Basis: ours (the replay streams draw lines and triangles through one viewport Vulkan's is,
-    /// with pipeline states of their pass's formats, under depth biases with no clamp, filled and
-    /// clipped; each other kind is built when a replay stream draws one), and device for
+    /// with pipeline states of their pass's formats, filled and clipped; each other kind is built
+    /// when a replay stream draws one), and device for
     /// [`DrawKind::DividedBaseInstance`] (a device that does not report
     /// `supportsNonZeroFirstInstance`).
     Draw {
@@ -1432,9 +1432,6 @@ pub enum KernelInputKind {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DrawKind {
-    /// A depth bias clamp other than 0 (`setDepthBias:slopeScale:clamp:`'s `clamp`), which no
-    /// replay stream sets.
-    DepthBiasClamp,
     /// A triangle fill mode but `Fill` (`setTriangleFillMode:`), which no replay stream sets.
     FillMode,
     /// The depth clip mode `Clamp` (`setDepthClipMode:`), which no replay stream sets.

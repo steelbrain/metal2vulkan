@@ -916,7 +916,8 @@ impl NewRuntime {
                     None => Err(refuse(call, format!("argument {at} is no float"))),
                 };
                 let [bias, slope, clamp] = [float(0)?, float(1)?, float(2)?];
-                self.render(id).encoder.set_depth_bias(bias, slope, clamp)
+                self.render(id).encoder.set_depth_bias(bias, slope, clamp);
+                Ok(())
             }
             "setColorStoreAction:atIndex:" => {
                 let (action, at) = (store_action(call, uint(call, 0)?)?, uint(call, 1)?);

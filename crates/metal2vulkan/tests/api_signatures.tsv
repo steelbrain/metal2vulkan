@@ -6662,7 +6662,7 @@ method	metal2vulkan-runtime::RenderCommandEncoder::set_alpha_test_reference_valu
 method	metal2vulkan-runtime::RenderCommandEncoder::set_blend_color	pub fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32)
 method	metal2vulkan-runtime::RenderCommandEncoder::set_color_store_action	pub fn set_color_store_action(&mut self, action: StoreAction, index: usize) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_cull_mode	pub fn set_cull_mode(&mut self, mode: CullMode)
-method	metal2vulkan-runtime::RenderCommandEncoder::set_depth_bias	pub fn set_depth_bias(&mut self, depth_bias: f32, slope_scale: f32, clamp: f32) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::set_depth_bias	pub fn set_depth_bias(&mut self, depth_bias: f32, slope_scale: f32, clamp: f32)
 method	metal2vulkan-runtime::RenderCommandEncoder::set_depth_clip_mode	pub fn set_depth_clip_mode(&mut self, mode: DepthClipMode) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_depth_stencil_state	pub fn set_depth_stencil_state(&mut self, state: Option<&DepthStencilState>) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_depth_store_action	pub fn set_depth_store_action(&mut self, action: StoreAction) -> Result<(), Error>
@@ -9185,7 +9185,6 @@ variant	metal2vulkan-runtime::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-runtime::DispatchType::Serial	Serial
 variant	metal2vulkan-runtime::DrawKind::AttachmentFormats	AttachmentFormats
 variant	metal2vulkan-runtime::DrawKind::AttachmentRead	AttachmentRead
-variant	metal2vulkan-runtime::DrawKind::DepthBiasClamp	DepthBiasClamp
 variant	metal2vulkan-runtime::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-runtime::DrawKind::DividedBaseInstance	DividedBaseInstance
 variant	metal2vulkan-runtime::DrawKind::FetchedAttachment	FetchedAttachment

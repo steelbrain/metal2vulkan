@@ -1286,10 +1286,11 @@ pub(crate) mod on_device {
     /// pipeline is made by a change of depth-stencil state or bias, and the pass is one
     /// submission, the barriers of a shader-read depth texture's pass, and one pass. Cleared to
     /// 0.5 with its store action left unknown and set by the encoder: a draw at depth 0.25 under
-    /// `Less` with writes passes and writes 0.25; one at 0.375 then fails; one at 0.25 under
-    /// `Greater`, without writes, passes only by its bias (a constant of 2^23, which Vulkan's unit
-    /// for a `float` depth of exponent -2 makes 0.25, or 0.125 where the device counts 24 mantissa
-    /// bits). The setters that take Metal's defaults as nothing refuse every other value.
+    /// `Less` with writes, biased by a constant of 2^23 (which Vulkan's unit for a `float` depth of
+    /// exponent -2 makes 0.25, or 0.125 where the device counts 24 mantissa bits) clamped to
+    /// 0.0625, passes and writes 0.3125 on every device; one at 0.375 with no bias then fails; one
+    /// at 0.25 under `Greater`, without writes, passes only by its unclamped bias of 2^23. The
+    /// setters that take Metal's defaults as nothing refuse every other value.
     #[test]
     fn every_device_tests_writes_and_biases_a_depth_attachment() {
         let Some(library) = examples() else {
@@ -1359,23 +1360,21 @@ pub(crate) mod on_device {
             draw(encoder.set_render_pipeline_state(&depth_state));
             draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
             draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
-            // Blue at 0.25 passes `Less` against 0.5 and writes 0.25.
+            // Blue at 0.25, biased by 0.25 or 0.125 clamped to 0.0625, passes `Less` against 0.5
+            // and writes 0.3125.
             draw(encoder.set_depth_stencil_state(Some(&less)));
             draw(encoder.set_viewport(at(0.25)));
+            encoder.set_depth_bias(8_388_608.0, 0.0, 0.0625);
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
-            // White at 0.375 fails `Less` against 0.25.
+            // White at 0.375 with no bias fails `Less` against 0.3125.
+            encoder.set_depth_bias(0.0, 0.0, 0.0);
             draw(encoder.set_viewport(at(0.375)));
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
-            // White at 0.25 passes `Greater` against 0.25 by its bias alone.
+            // White at 0.25 passes `Greater` against 0.3125 by its bias alone.
             draw(encoder.set_depth_stencil_state(Some(&greater)));
             draw(encoder.set_viewport(at(0.25)));
-            draw(encoder.set_depth_bias(8_388_608.0, 0.0, 0.0));
+            encoder.set_depth_bias(8_388_608.0, 0.0, 0.0);
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
-            same(
-                encoder.set_depth_bias(1.0, 0.0, 0.5),
-                gap(DrawKind::DepthBiasClamp),
-                "a depth bias clamp",
-            );
             draw(encoder.set_triangle_fill_mode(crate::TriangleFillMode::Fill));
             same(
                 encoder.set_triangle_fill_mode(crate::TriangleFillMode::Lines),
@@ -1419,13 +1418,13 @@ pub(crate) mod on_device {
                 "{name}: submissions, passes, pipelines made, bytes copied"
             );
             println!(
-                "{name}: {} barriers, {} pipelines made by three depth-stencil states and a bias",
+                "{name}: {} barriers, {} pipelines made by three depth-stencil states and biases",
                 after.barriers - before.barriers,
                 after.pipelines_created - before.pipelines_created
             );
             assert_eq!(read(&color, 4), texels(|_, _| WHITE), "{name}: the colour");
             if depth.unit().is_some() {
-                let want = floats(&[0.25; (SIDE * SIDE) as usize]);
+                let want = floats(&[0.3125; (SIDE * SIDE) as usize]);
                 assert_eq!(read(&depth, 4), want, "{name}: the depth written");
             } else {
                 println!("{name}: the depth's bytes are not copied on this device");
@@ -1520,12 +1519,12 @@ pub(crate) mod on_device {
                     for at in 0..DRAWS {
                         if setting == again {
                             draw(encoder.set_depth_stencil_state(Some(&states[0])));
-                            draw(encoder.set_depth_bias(0.0, 0.0, 0.0));
+                            encoder.set_depth_bias(0.0, 0.0, 0.0);
                         }
                         if setting == change {
                             let state = &states[at as usize % 2];
                             draw(encoder.set_depth_stencil_state(Some(state)));
-                            draw(encoder.set_depth_bias(at as f32, 0.0, 0.0));
+                            encoder.set_depth_bias(at as f32, 0.0, 0.0);
                         }
                         if drawn {
                             draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));

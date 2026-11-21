@@ -462,7 +462,8 @@ impl RtSide<'_> {
                 Ok(())
             }
             RenderStep::DepthBias(v) => {
-                (encoder.set_depth_bias(v.bias, v.slope_scale, v.clamp)).map_err(of_rt)
+                encoder.set_depth_bias(v.bias, v.slope_scale, v.clamp);
+                Ok(())
             }
             RenderStep::FillMode(mode) => encoder.set_triangle_fill_mode(*mode).map_err(of_rt),
             RenderStep::VisibilityResultMode { mode, offset } => {

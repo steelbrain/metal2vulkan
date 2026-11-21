@@ -538,8 +538,9 @@ pub struct RenderCommandEncoder {
     alpha_test: u32,
     /// The line width `set_line_width` set last, Metal's 1 until set.
     line_width: f32,
-    /// The depth bias's constant and slope scale, Metal's `depthBias` and `slopeScale`.
-    depth_bias: [f32; 2],
+    /// The depth bias's constant, slope scale and clamp, Metal's `depthBias`, `slopeScale` and
+    /// `clamp`.
+    depth_bias: [f32; 3],
     /// Whether the last draw recorded the depth bias enabled.
     biased: bool,
     /// Whether the last draw recorded an empty scissor, for points it does not rasterize
@@ -628,7 +629,7 @@ impl CommandBuffer {
                     blend_color: [0.0; 4],
                     alpha_test: alpha_test_code(1.0),
                     line_width: 1.0,
-                    depth_bias: [0.0; 2],
+                    depth_bias: [0.0; 3],
                     biased: false,
                     hidden: false,
                     recorded: None,
@@ -1203,33 +1204,21 @@ impl RenderCommandEncoder {
     /// ([`set_depth_bias`](Self::set_depth_bias)).
     pub const DEPTH_BIAS_NOTE: PrecisionNote = PrecisionNote::DeviceDepthBias;
 
-    /// `setDepthBias:slopeScale:clamp:`: the constant bias and the slope scale, as given. A draw of
-    /// triangles is biased where either is not zero, and a draw of lines never, as Metal biases
-    /// triangles alone. Metal's default is no bias. The slope measure, and a fixed-point
-    /// attachment's unit, are the device's; Apple states neither
+    /// `setDepthBias:slopeScale:clamp:`: the constant bias, the slope scale and the clamp, as
+    /// given. A draw of triangles is biased where the bias or the slope scale is not zero, and a
+    /// draw of lines never, as Metal biases triangles alone. Metal's default is no bias. A positive
+    /// clamp bounds the bias from above and a negative one from below, and a clamp of 0 bounds
+    /// nothing, as Metal's and Vulkan's `depthBiasClamp` alike. The slope measure, and a
+    /// fixed-point attachment's unit, are the device's; Apple states neither
     /// ([`DEPTH_BIAS_NOTE`](Self::DEPTH_BIAS_NOTE)). A biased depth past the viewport's depth
     /// range is undefined in Vulkan.
     ///
     /// A bias equal to the one set already records nothing.
-    ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::DepthBiasClamp`] for a clamp other than 0; the encoder's
-    /// bias is unchanged.
-    pub fn set_depth_bias(
-        &mut self,
-        depth_bias: f32,
-        slope_scale: f32,
-        clamp: f32,
-    ) -> Result<(), Error> {
-        if clamp != 0.0 {
-            return Err(Error::Unsupported(Gap::Draw {
-                kind: DrawKind::DepthBiasClamp,
-            }));
-        }
-        if [depth_bias, slope_scale] != self.depth_bias {
-            self.depth_bias = [depth_bias, slope_scale];
+    pub fn set_depth_bias(&mut self, depth_bias: f32, slope_scale: f32, clamp: f32) {
+        if [depth_bias, slope_scale, clamp] != self.depth_bias {
+            self.depth_bias = [depth_bias, slope_scale, clamp];
             self.dirty |= BIAS;
         }
-        Ok(())
     }
 
     /// `setTriangleFillMode:`: `Fill`, Metal's default, is every draw's; another mode is not
@@ -2411,7 +2400,7 @@ impl RenderCommandEncoder {
                 device.cmd_set_blend_constants(command, &self.blend_color);
             }
             // Metal biases triangles alone, where the bias or the slope scale is not zero.
-            let [constant, slope] = self.depth_bias;
+            let [constant, slope, clamp] = self.depth_bias;
             let triangles = !matches!(
                 topology,
                 vk::PrimitiveTopology::LINE_LIST
@@ -2420,7 +2409,7 @@ impl RenderCommandEncoder {
             );
             let biased = triangles && (constant != 0.0 || slope != 0.0);
             if dirty & BIAS != 0 {
-                device.cmd_set_depth_bias(command, constant, 0.0, slope);
+                device.cmd_set_depth_bias(command, constant, clamp, slope);
             }
             if dirty & BIAS != 0 || biased != self.biased {
                 device.cmd_set_depth_bias_enable(command, biased);
