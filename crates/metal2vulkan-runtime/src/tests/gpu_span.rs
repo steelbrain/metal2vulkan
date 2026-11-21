@@ -15,7 +15,7 @@ pub(crate) mod on_device {
     use std::time::Instant;
 
     /// The words of a long command buffer's buffer, each dispatch's grid: 64 MiB.
-    const WORDS: u32 = 1 << 24;
+    pub(crate) const WORDS: u32 = 1 << 24;
 
     /// The most dispatches a long command buffer holds, on the fastest device.
     const MOST: u64 = 20_000;
@@ -29,7 +29,7 @@ pub(crate) mod on_device {
     const NAMED: u64 = 256 << 20;
 
     /// A Private buffer of [`WORDS`] words.
-    fn words(device: &Device) -> Buffer {
+    pub(crate) fn words(device: &Device) -> Buffer {
         let length = u64::from(WORDS) * 4;
         let block = (device.take_block(MemoryClass::Private, length)).expect("a Private block");
         (device.new_buffer(block.id, 0, length, None)).expect("a buffer")
@@ -37,7 +37,7 @@ pub(crate) mod on_device {
 
     /// A command buffer of `queue` of `count` dispatches of `state` over `buffer`, `threads` each
     /// ([`WORDS`] for a long one), in one serial encoder, so each waits for the one before it.
-    fn long(
+    pub(crate) fn long(
         queue: &CommandQueue,
         state: &ComputePipelineState,
         buffer: &Buffer,
@@ -62,7 +62,7 @@ pub(crate) mod on_device {
     /// times cannot size it: Vulkan lets a timestamp be written at any stage logically later than
     /// the one named). A first command buffer of one dispatch runs before it, so nothing a first
     /// use waits for is timed.
-    fn dispatches_for(
+    pub(crate) fn dispatches_for(
         name: &str,
         queue: &CommandQueue,
         state: &ComputePipelineState,

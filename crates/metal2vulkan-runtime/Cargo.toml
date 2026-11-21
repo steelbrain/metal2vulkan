@@ -40,4 +40,4 @@ serde_json.workspace = true
 
 # The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)"] }

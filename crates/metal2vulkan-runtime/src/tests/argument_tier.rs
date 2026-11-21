@@ -468,6 +468,74 @@ mod on_device {
         });
     }
 
+    /// A GPU hazard (`m2v_gpu_hazards`, docs/VALIDATION.md; a CPU device runs it always): a read
+    /// of freed memory where the runtime frees an idle allocation under work in flight. A Shared
+    /// buffer of 17 MiB, in an allocation of its own, is read only by address, through a constant
+    /// buffer whose bytes the CPU wrote (`ab_address`), by a command buffer that waits on an event
+    /// first and names nothing of it. Its block's last handle drops right after the commit, and
+    /// the event is set past twice the idle age. The allocation's free waits for that command
+    /// buffer (`crate::memory::Wait`): it completes with no error, and the read sees the bytes the
+    /// buffer held.
+    #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
+    #[test]
+    fn every_device_keeps_memory_read_by_address_alone_past_its_release_until_the_read_retires() {
+        use crate::tests::command::on_device::shared_event;
+        const LEN: u64 = 17 << 20;
+        let Some(library) = library("ab_pointers") else {
+            return;
+        };
+        each_device("argument_tier_idle_free", |name, _, device| {
+            let read = state(name, &device, &library, "ab_address");
+            let block = (device.take_block(MemoryClass::Shared, LEN)).expect("a block of its own");
+            let far = (device.new_buffer(block.id, 0, LEN, Some(0))).expect("its buffer");
+            let bytes = u32_bytes((0..THREADS + 2).map(|k| 0xA000_0000 | k));
+            let contents = far.contents().expect("a Shared buffer");
+            // SAFETY: the range lies in the buffer, which is alive, and no GPU work uses it.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len())
+            };
+            let start = far.gpu_address();
+            let mut shared = Shared::new(&device);
+            let held = shared.of(&device, &(start + 8).to_le_bytes());
+            let out = shared.of(&device, &u32_bytes((0..THREADS).map(|_| 0)));
+            let event = shared_event(&device);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_compute_pipeline_state(&read).expect("a state");
+            encoder.set_buffer(Some(&held), 0, 0).expect("held");
+            encoder.set_buffer(Some(&out), 0, 1).expect("out");
+            (encoder.dispatch_threadgroups([2, 1, 1], [THREADS / 2, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            drop((far, block));
+            println!(
+                "{name}: the buffer at {start:#x}..{:#x} released",
+                start + LEN
+            );
+            std::thread::sleep(std::time::Duration::from_nanos(
+                2 * crate::memory::IDLE_AGE_NANOS,
+            ));
+            event.set_signaled_value(1);
+            finished(name, &command_buffer);
+            assert_eq!(device.loss(), None, "{name}: the device");
+            assert_eq!(
+                command_buffer.error(),
+                None,
+                "{name}: the reading command buffer"
+            );
+            let want: Vec<u32> = (0..THREADS).map(|i| 0xA000_0000 | (2 + i)).collect();
+            assert_eq!(
+                words::<u32>(&out, THREADS as usize),
+                want,
+                "{name}: the bytes it held"
+            );
+        });
+    }
+
     /// A slot pointer converted to an integer: thread `i` stores the address of element `i` of
     /// buffer 0, bound 16 bytes past its buffer's start, and increments the element through the
     /// same pointer (`ab_slot_address`). The address is the buffer's `gpuAddress` plus 16 plus

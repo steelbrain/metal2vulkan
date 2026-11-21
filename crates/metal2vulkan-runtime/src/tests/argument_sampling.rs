@@ -7,7 +7,9 @@
 //! it, at texel edges, so a linear sampler's answer differs from the default sampler's.
 //! `engine/px_samplers`' `px_sample_argument` and `engine/xr_samples`' `xr_sample_runtime` sample
 //! one texture through one normalized sampler state held in an argument buffer and bound at a
-//! sampler slot, which read the same texels.
+//! sampler slot, which read the same texels. `hs_sample`'s textures placed in a heap and reached
+//! through their indices by a pass that names only the heap are read as they were where their
+//! last handles drop right after the commit (a GPU hazard).
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -15,10 +17,10 @@
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Block, Buffer, ComputePipelineDescriptor, Device, DispatchType, FunctionDescriptor,
-        IndexClass, Library, MemoryClass, NumberedSampler, PixelFormat, Region, Resource,
-        ResourceUsage, SamplerDescriptor, StageSource, Texture, TextureDescriptor, TextureType,
-        TextureUsage,
+        Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType,
+        FunctionDescriptor, HeapRange, IndexClass, Library, MemoryClass, NumberedSampler,
+        PixelFormat, Region, Resource, ResourceUsage, SamplerDescriptor, StageSource, Texture,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 
@@ -93,6 +95,36 @@ mod on_device {
         texture
     }
 
+    /// `hs_sample`'s state, its constexpr sampler numbered [`CONSTEXPR`].
+    fn hs_sample(name: &str, device: &Device, library: &Library) -> ComputePipelineState {
+        let function = library.function("hs_sample").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        (device.new_compute_pipeline_state(&descriptor, |samplers| {
+            assert!(
+                matches!(samplers, [NumberedSampler::Constexpr(_)]),
+                "{name}: {samplers:?}"
+            );
+            Ok(vec![CONSTEXPR])
+        }))
+        .unwrap_or_else(|error| panic!("{name}: hs_sample: {error}"))
+    }
+
+    /// The bytes of `hs_sample`'s `half` texture and its `float` texture, row by row.
+    fn hs_bytes() -> (Vec<u8>, Vec<u8>) {
+        let texels = (SIDE * SIDE) as usize;
+        let halves = (0..texels)
+            .flat_map(|i| (0..4).map(move |c| HALVES[half_at(i, c)].1))
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let floats = (0..texels)
+            .flat_map(|i| (0..4).map(move |c| float_at(i, c)))
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        (halves, floats)
+    }
+
     /// A Shared buffer of `bytes` at `offset` of `block`.
     fn shared(device: &Device, block: &Block, offset: u64, bytes: &[u8]) -> Buffer {
         let buffer =
@@ -130,27 +162,9 @@ mod on_device {
                 (device.grant_indices(class, first, 2))
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             });
-            let function = library.function("hs_sample").expect("the kernel");
-            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                FunctionDescriptor::new(function),
-            ));
-            let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
-                assert!(
-                    matches!(samplers, [NumberedSampler::Constexpr(_)]),
-                    "{name}: {samplers:?}"
-                );
-                Ok(vec![CONSTEXPR])
-            }))
-            .unwrap_or_else(|error| panic!("{name}: hs_sample: {error}"));
+            let state = hs_sample(name, &device, &library);
             let texels = (SIDE * SIDE) as usize;
-            let halves: Vec<u8> = (0..texels)
-                .flat_map(|i| (0..4).map(move |c| HALVES[half_at(i, c)].1))
-                .flat_map(u16::to_le_bytes)
-                .collect();
-            let floats: Vec<u8> = (0..texels)
-                .flat_map(|i| (0..4).map(move |c| float_at(i, c)))
-                .flat_map(f32::to_le_bytes)
-                .collect();
+            let (halves, floats) = hs_bytes();
             let h = texture(
                 name,
                 &device,
@@ -209,6 +223,161 @@ mod on_device {
             println!(
                 "{name}: an argument buffer's textures sampled through slot and constexpr samplers"
             );
+        });
+    }
+
+    /// A GPU hazard (`m2v_gpu_hazards`, docs/VALIDATION.md; a CPU device runs it always): a read
+    /// through set 1 of textures released under the work that reads them. `hs_sample`'s two
+    /// textures sit in one heap at indices of their own, and its pass names only the heap
+    /// (`use_heap`), reaching them through the resource IDs its argument buffer holds. Their last
+    /// handles drop right after the commit, in two forms: while the command buffer waits on an
+    /// event (committed, not submitted), and while long work committed ahead of it on its queue
+    /// runs. A texture's going waits for the command buffers committed before its release
+    /// (`crate::memory::Wait`): each completes with no error, and its pass reads the textures as
+    /// they were.
+    #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
+    #[test]
+    fn every_device_keeps_heap_textures_read_through_their_indices_past_their_release() {
+        use crate::tests::command::on_device::shared_event;
+        use crate::tests::compute::on_device::step;
+        use crate::tests::gpu_span::on_device::{dispatches_for, long, words, WORDS};
+        let Some(library) = library("examples/heap_samples.ll") else {
+            return;
+        };
+        each_device("argument_sampling_released", |name, _, device| {
+            let _grants = [
+                (IndexClass::Texture, 1, 4),
+                (IndexClass::Sampler, SLOT_SAMPLER, 2),
+            ]
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let state = hs_sample(name, &device, &library);
+            let texels = (SIDE * SIDE) as usize;
+            let (halves, floats) = hs_bytes();
+            let want: Vec<[f32; 4]> = (0..texels)
+                .flat_map(|i| {
+                    let half = [0, 1, 2, 3].map(|c| HALVES[half_at(i, c)].0);
+                    let float = [0, 1, 2, 3].map(|c| float_at(i, c));
+                    [half, float, half, float]
+                })
+                .collect();
+            let sampler = (device.new_sampler_state(&SamplerDescriptor::new(), SLOT_SAMPLER))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let len = MemoryClass::Private.block_len();
+            let heap_block = (device.take_block(MemoryClass::Private, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let heap = HeapRange {
+                block: heap_block.id,
+                offset: 0,
+                len,
+            };
+            let descriptor = |format| {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+                d.usage = TextureUsage::SHADER_READ;
+                d
+            };
+            let formats = [
+                (PixelFormat::RGBA16Float, 8),
+                (PixelFormat::RGBA32Float, 16),
+            ];
+            let fits = formats.map(|(format, _)| {
+                (device.heap_texture_size_and_align(&descriptor(format)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let align = fits.iter().map(|fit| fit.align).max().unwrap_or(1);
+            let stride =
+                (fits.iter().map(|fit| fit.size).max().unwrap_or(0)).next_multiple_of(align);
+            // The texture of `format` (`texel` bytes a texel) at place `at` of the heap and texture
+            // index `index`, its bytes `bytes`.
+            let place = |at: u64, (format, texel): (PixelFormat, u64), index: u32, bytes: &[u8]| {
+                let texture =
+                    (device.new_heap_texture(&descriptor(format), Some(index), heap, at * stride))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let whole = Region {
+                    origin: [0; 3],
+                    size: [SIDE, SIDE, 1],
+                };
+                let row = u64::from(SIDE) * texel;
+                (texture.replace_region(
+                    whole,
+                    0,
+                    0,
+                    crate::HostBytes::from(bytes),
+                    row,
+                    row * u64::from(SIDE),
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                texture
+            };
+            let block = (device.take_block(MemoryClass::Shared, 65_536)).expect("a Shared block");
+            let ahead_state = step(&device);
+            let busy = words(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let count = dispatches_for(name, &queue, &ahead_state, &busy, 200_000_000);
+            let event = shared_event(&device);
+            let mut unlike = Vec::new();
+            for (round, form) in ["at an event wait", "behind long work"]
+                .into_iter()
+                .enumerate()
+            {
+                let first = 1 + 2 * round as u32;
+                let at = 2 * round as u64;
+                let h = place(at, formats[0], first, &halves);
+                let f = place(at + 1, formats[1], first + 1, &floats);
+                let ids: Vec<u8> = [&h, &f]
+                    .iter()
+                    .flat_map(|t| t.gpu_resource_id().to_bits().to_le_bytes())
+                    .collect();
+                let held = shared(&device, &block, 512 * at, &ids);
+                let out = shared(&device, &block, 512 * at + 256, &[0; 16 * 16]);
+                let ahead = (round == 1).then(|| long(&queue, &ahead_state, &busy, count, WORDS));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                if ahead.is_none() {
+                    (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+                }
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&held), 0, 0).expect("held");
+                encoder.set_buffer(Some(&out), 0, 1).expect("out");
+                (encoder.set_sampler_state(Some(&sampler), 0)).expect("the sampler");
+                (encoder.use_heap(heap.block)).expect("the heap");
+                (encoder.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder.end_encoding();
+                if let Some(ahead) = &ahead {
+                    ahead.commit().expect("a commit");
+                }
+                command_buffer.commit().expect("a commit");
+                drop((h, f));
+                println!(
+                    "{name}: the textures at indices {first} and {} released {form}",
+                    first + 1
+                );
+                if ahead.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    event.set_signaled_value(1);
+                }
+                for command_buffer in ahead.iter().chain([&command_buffer]) {
+                    finished(name, command_buffer);
+                }
+                let (loss, error) = (device.loss(), command_buffer.error());
+                let read = float4s(&out, 4 * texels);
+                println!("{name}: {form}: loss {loss:?}, error {error:?}, read {read:?}");
+                if loss.is_some() || error.is_some() || read != want {
+                    unlike.push(form);
+                }
+                if loss.is_some() {
+                    break;
+                }
+            }
+            assert!(
+                unlike.is_empty(),
+                "{name}: the textures were not read as they were {unlike:?}"
+            );
+            println!("{name}: released heap textures read as they were through their indices");
         });
     }
 
