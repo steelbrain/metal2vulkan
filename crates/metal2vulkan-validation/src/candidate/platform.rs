@@ -18,6 +18,7 @@ mod render;
 mod runtime;
 mod runtime_bounds;
 mod runtime_depth;
+mod runtime_multisample;
 mod runtime_probe;
 mod runtime_render;
 mod runtime_textures;

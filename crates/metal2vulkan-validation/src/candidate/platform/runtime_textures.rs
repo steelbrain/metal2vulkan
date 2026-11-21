@@ -8,7 +8,9 @@
 //! index of the run's texture grant (the bound textures first, then the members), and every
 //! level's slices written from the case's bytes before the work (`replaceRegion:`, level 0
 //! first), but for a 32-bit float depth's, which the run renders (`runtime_depth`), with the
-//! texture made for rendering too. Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
+//! texture made for rendering too, and a multisampled texture's, Private as Metal keeps one, which
+//! the run renders sample by sample (`runtime_multisample`), made for rendering and for views of
+//! another pixel format too. Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
 //! `argument_sampler_descriptor`), at an index of the run's sampler grant counted down from its
 //! top, so it never meets the constexpr samplers the pipeline numbers up from the bottom. A
 //! member's `gpuResourceID` is the word its owner holds at its field ([`Bound::words`]), as a
@@ -16,10 +18,12 @@
 //! it (`getBytes:`): the selected region of level 0, slice by slice.
 
 use super::runtime_depth;
+use super::runtime_multisample;
 use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
 use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat};
 use crate::check::admission::ExecutorError;
+use crate::executor_contract::multisample::sample_read;
 use crate::gpu::DeviceType;
 use crate::literal::LiteralTexture;
 use metal2vulkan::metal::TextureUsage;
@@ -146,7 +150,7 @@ pub(super) fn make(
 ) -> Result<Bound, ExecutorError> {
     let count = wanted.textures.len() + wanted.members.len();
     let (grant, mut at) = texture_indices(device, indices, count, &error)?;
-    let mut fills = Vec::new();
+    let mut fills = Fills::default();
     let mut textures = BTreeMap::new();
     for ((&binding, texture), index) in wanted.textures.iter().zip(&mut at) {
         let usage = wanted
@@ -172,9 +176,10 @@ pub(super) fn make(
         let made = made_texture(device, texture, usage, index, &error, &mut fills)?;
         members.insert(key, made);
     }
-    if !fills.is_empty() {
-        runtime_depth::filled(device, device_type, &fills, &error)?;
+    if !fills.depths.is_empty() {
+        runtime_depth::filled(device, device_type, &fills.depths, &error)?;
     }
+    runtime_multisample::filled(device, device_type, &fills.samples, &error)?;
     let mut samplers = BTreeMap::new();
     for (&binding, sampler) in wanted.samplers {
         let state = device
@@ -199,15 +204,23 @@ pub(super) fn make(
     })
 }
 
+/// The draws a run renders into its textures before the work: each 32-bit float depth's level and
+/// slice (`runtime_depth`) and each multisampled texture's slice (`runtime_multisample`).
+#[derive(Default)]
+struct Fills {
+    depths: Vec<runtime_depth::Fill>,
+    samples: Vec<runtime_multisample::Fill>,
+}
+
 /// `texture` made with `usage` at `index`, every level's slices written from its bytes; a 32-bit
-/// float depth's are pushed to `fills` instead, which the run renders (`runtime_depth`).
+/// float depth's and a multisampled texture's are pushed to `fills` instead, which the run renders.
 fn made_texture(
     device: &rt::Device,
     texture: &LiteralTexture,
     usage: rt::TextureUsage,
     index: u32,
     error: &impl Fn(&str, rt::Error) -> ExecutorError,
-    fills: &mut Vec<runtime_depth::Fill>,
+    fills: &mut Fills,
 ) -> Result<rt::Texture, ExecutorError> {
     let what = format!("texture {}", texture.binding);
     let layout = texture.layout().map_err(ExecutorError::Failed)?;
@@ -221,16 +234,48 @@ fn made_texture(
     descriptor.array_length = layout.metal_array_length(texture.texture_type);
     descriptor.sample_count = layout.sample_count;
     descriptor.mipmap_level_count = texture.mip_levels;
-    // A 32-bit float depth is filled by a draw, which renders into the texture (`runtime_depth`).
+    // A 32-bit float depth is filled by a draw, which renders into the texture (`runtime_depth`),
+    // and a multisampled texture by a draw per slice, a color one through a view of an
+    // unsigned-integer format (`runtime_multisample`).
     let depth = texture.format == TextureFormat::Depth32Float;
-    descriptor.usage = match depth {
-        true => usage | rt::TextureUsage::RENDER_TARGET,
-        false => usage,
+    let multisampled = layout.sample_count > 1;
+    descriptor.usage = match (depth, multisampled) {
+        (false, true) => {
+            usage | rt::TextureUsage::RENDER_TARGET | rt::TextureUsage::PIXEL_FORMAT_VIEW
+        }
+        (true, _) => usage | rt::TextureUsage::RENDER_TARGET,
+        (false, false) => usage,
     };
-    descriptor.storage_mode = rt::StorageMode::Shared;
+    descriptor.storage_mode = match multisampled {
+        true => rt::StorageMode::Private,
+        false => rt::StorageMode::Shared,
+    };
     let made = device
         .new_texture(&descriptor, Some(index))
         .map_err(|e| error(&what, e))?;
+    if multisampled {
+        let read = sample_read(texture.format).map_err(ExecutorError::Failed)?;
+        let slice = layout.width as usize
+            * layout.height as usize
+            * layout.sample_count as usize
+            * texture.format.bytes_per_pixel();
+        let slices = layout.array_layers as usize;
+        if slice == 0 || texture.bytes.len() < slice * slices {
+            return Err(ExecutorError::Failed(format!(
+                "{what} supplies {} bytes, short of its {slices} multisampled slices",
+                texture.bytes.len()
+            )));
+        }
+        for (at, texels) in texture.bytes.chunks_exact(slice).take(slices).enumerate() {
+            fills.samples.push(runtime_multisample::Fill {
+                texture: made.clone(),
+                slice: at as u32,
+                read,
+                texels: texels.to_vec(),
+            });
+        }
+        return Ok(made);
+    }
     for level in 0..texture.mip_levels {
         let (dimensions, bytes) = texture.level(level).map_err(ExecutorError::Failed)?;
         let span = crate::literal::subresource_span(
@@ -254,7 +299,7 @@ fn made_texture(
         {
             let slice = span.base_slice + slice as u32;
             if depth {
-                fills.push(runtime_depth::Fill {
+                fills.depths.push(runtime_depth::Fill {
                     texture: made.clone(),
                     level,
                     slice,

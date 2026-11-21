@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v196";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v197";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1210,15 +1210,15 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         && authored.intersection_function_tables.is_empty()
 }
 
-/// Whether the runtime makes `texture` as the Metal oracle makes it: one sample and no sparse
-/// mapping (multisampled and sparse textures stay on the executor's own context), of a type the
-/// runtime builds, so neither a texture buffer (`Gap::TextureBuffer`) nor a cube array
-/// (`Gap::CubeArrayTexture`). A 32-bit float depth, whose bytes the runtime takes no upload of
-/// (`Gap::FloatDepthUpload`), is filled by a draw, as a guest fills one
-/// (`platform::runtime_depth`).
+/// Whether the runtime makes `texture` as the Metal oracle makes it: no sparse mapping (a sparse
+/// texture stays on the executor's own context), of a type the runtime builds, so neither a
+/// texture buffer (`Gap::TextureBuffer`) nor a cube array (`Gap::CubeArrayTexture`). A 32-bit
+/// float depth, whose bytes the runtime takes no upload of (`Gap::FloatDepthUpload`), is filled
+/// by a draw, as a guest fills one (`platform::runtime_depth`), and a multisampled texture, which
+/// neither Metal nor the runtime uploads, by a draw per slice that writes it sample by sample
+/// (`platform::runtime_multisample`).
 fn runtime_texture(texture: &LiteralTexture) -> bool {
-    texture.sample_count == 1
-        && texture.sparse.is_none()
+    texture.sparse.is_none()
         && !matches!(
             texture.texture_type,
             TextureType::Buffer | TextureType::CubeArray
@@ -1393,11 +1393,12 @@ pub struct RuntimeKernel<'a> {
 
 /// Whether `case`, mapped from `authored`, draws through the runtime
 /// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
-/// fragment case of one sample, its own stage's buffers, bound textures the runtime makes
-/// (`runtime_texture`) and bound samplers, function constants and linked functions, its vertex
-/// buffers at static strides, its color targets and a depth/stencil attachment of one sample and
-/// one aspect (a fragment case renders into at least one attachment: the runtime makes no pass
-/// without one, `Gap::RenderPass`), the encoder's depth-stencil state, cull mode and winding, and
+/// fragment case of any sample count (`raster_sample_count`; each attachment of more samples
+/// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
+/// buffers, bound textures the runtime makes (`runtime_texture`) and bound samplers, function
+/// constants and linked functions, its vertex buffers at static strides, its color targets and a
+/// depth/stencil attachment of one aspect (a fragment case renders into at least one attachment:
+/// the runtime makes no pass without one, `Gap::RenderPass`), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
 /// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
 /// buffer), observing a buffer, a texture, a color target, the depth/stencil attachment's aspect
@@ -1422,7 +1423,7 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         output,
         companion: _,
         rate_map_pass,
-        raster_sample_count,
+        raster_sample_count: _,
     } = case;
     let bound = |function: &graphics::RenderFunction| {
         let graphics::StageResources {
@@ -1447,13 +1448,12 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
     // The runtime renders into no separate depth and stencil textures in one pass
     // (`Gap::RenderPass` of `DepthStencilViews`), which the oracle makes of an attachment of both.
     let one_aspect = |attachment: &LiteralDepthStencil| {
-        attachment.samples == 1 && (attachment.depth.is_none() || attachment.stencil.is_none())
+        attachment.depth.is_none() || attachment.stencil.is_none()
     };
     bound(vertex)
         && fragment.as_ref().is_none_or(bound)
         && (fragment.is_none() || !color_targets.is_empty() || depth_stencil.is_some())
         && vertex_buffers.iter().all(|buffer| !buffer.dynamic)
-        && color_targets.values().all(|target| target.samples == 1)
         && depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
         && matches!(
@@ -1484,7 +1484,6 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
                 | graphics::RenderOutput::Stencil { .. }
         )
         && rate_map_pass.is_none()
-        && raster_sample_count.is_none()
         && authored.intersection_function_tables.is_empty()
 }
 

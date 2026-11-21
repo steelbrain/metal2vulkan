@@ -478,15 +478,23 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   buffer's texture array is the descriptor arrays its resource ids' masked indices read
   (`resource-id:shader`), a read past it a texel of a bound texture or zero. Each buffer target sits
   between guards of its declared reach in a Shared block of its own, read back after the
-  dispatch. A multisampled, sparse, texture-buffer or cube-array texture keeps the case on the executor's own
+  dispatch. A multisampled texture, which neither Metal nor the runtime uploads, is Private and
+  filled by a draw per slice of the owned `sample_fill` pair, its fragment run once per sample
+  writing that sample's texel from a buffer, a color one through an unsigned-integer view of its
+  texel size so its bits cross unconverted, a depth one under an always-passing depth test that
+  writes. A sparse, texture-buffer or cube-array texture keeps the case on the executor's own
   context. A pixel format the runtime makes no image of on the device records `not_enabled`, as
-  the executor's own context records a format its query lacks. A vertex or fragment case of one
-  sample draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
+  the executor's own context records a format its query lacks. A vertex or fragment case of any
+  sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, function constants and linked functions, its
   generated companion, its vertex buffers at static strides, its color targets (Shared 2D
   textures, loaded and stored by the pass), a depth/stencil attachment of one aspect as the oracle
   makes it (a Shared `Depth32Float` filled by a draw of its depths, as a 32-bit float depth texture
-  is, or a Shared `Stencil8` written from its bytes, loaded and stored by the pass), the oracle's
+  is, or a Shared `Stencil8` written from its bytes, loaded and stored by the pass; in a pass of
+  more samples each attachment Private and multisampled, filled as a multisampled texture is, a
+  stencil aspect of one value in every sample cleared to it by the pass, and every sample read
+  back after the draw by a dispatch of the pair's kernels, unresolved, in the layout
+  `executor_contract::multisample` states), the oracle's
   depth-stencil state, cull mode and winding, and one direct or indexed draw of primitives or one
   patch draw of a post-tessellation vertex function with no patch index buffer (its factors a
   Shared buffer bound as the tessellation factor buffer at the oracle's offset and instance
@@ -496,7 +504,7 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
-  into the oracle's 1x1 `R8Unorm` attachment. More samples, layered rendering, a dynamic vertex
+  into the oracle's 1x1 `R8Unorm` attachment. Layered rendering, a dynamic vertex
   stride, an argument-buffer member, a patch index buffer, an imageblock, a rasterization-rate map, an
   out-of-bounds target other than an attribute buffer or a fragment pass with no attachment (the
   runtime makes no pass without one) keeps the case on the executor's own context. An indexed

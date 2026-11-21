@@ -432,7 +432,8 @@ fn each_level_of_a_mipmapped_texture_holds_its_own_texels() {
 }
 
 /// A depth texture read and a multisampled integer texture read of one sample, which this
-/// executor initializes per sample.
+/// executor initializes per sample, and so does a run through the runtime, by a draw that writes
+/// each sample through an unsigned-integer view (`platform::runtime_multisample`).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn depth_and_multisampled_textures_read_their_authored_texels() {
@@ -464,9 +465,12 @@ fn depth_and_multisampled_textures_read_their_authored_texels() {
         [1, 1, 1],
         buffer_output(8),
     );
-    let run = run(&case, &fixture("texture_ops.ll")).unwrap();
-    // Sample 2's `.y`.
-    assert_eq!(run.output, floats(&[0.375, 14.0]));
+    let bitcode = fixture("texture_ops.ll");
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        // Sample 2's `.y`.
+        assert_eq!(run.output, floats(&[0.375, 14.0]), "{name}");
+    }
 }
 
 /// A sample count the device's image format properties do not allow is refused typed before any

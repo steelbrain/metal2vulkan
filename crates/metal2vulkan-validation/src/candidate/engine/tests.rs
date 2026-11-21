@@ -2557,10 +2557,11 @@ fn plain_kernel() -> ComputeCase {
 /// The runtime runs a kernel case of buffers, threadgroup memory and constants, bound textures it
 /// makes and bound samplers, argument buffers of buffers, such textures and samplers, dispatched
 /// by threads or threadgroups and observing a buffer, a texture, an argument-buffer member or
-/// nothing, a 32-bit float depth among its textures (which the run fills by a draw) and its
-/// out-of-bounds targets among them (`platform::runtime_bounds`); a case with anything else (a pipeline state in an argument buffer, an explicit imageblock, an indirect
-/// dispatch, a texture the runtime does not make: multisampled, sparse, a texture buffer or a cube
-/// array) stays on the executor's own context.
+/// nothing, a 32-bit float depth or a multisampled texture among its textures (which the run
+/// fills by a draw) and its out-of-bounds targets among them (`platform::runtime_bounds`); a case
+/// with anything else (a pipeline state in an argument buffer, an explicit imageblock, an indirect
+/// dispatch, a texture the runtime does not make: sparse, a texture buffer or a cube array) stays
+/// on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
@@ -2670,6 +2671,10 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         ..texture(TextureType::D2, 1)
     };
     assert!(runs_through_runtime(&authored, &textured(depth)));
+    assert!(runs_through_runtime(
+        &authored,
+        &textured(texture(TextureType::D2Multisample, 4))
+    ));
     let bounded = ComputeCase {
         out_of_bounds: vec![OutOfBoundsTarget {
             resource: OutOfBoundsResource::Buffer { binding: 0 },
@@ -2690,7 +2695,6 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
             dispatch: replay_dispatch([2, 1, 1]),
             ..plain.clone()
         },
-        textured(texture(TextureType::D2Multisample, 4)),
         textured(sparse),
         textured(texture(TextureType::Buffer, 1)),
         textured(texture(TextureType::CubeArray, 1)),
@@ -2701,16 +2705,16 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     }
 }
 
-/// The runtime draws a vertex or fragment case of one sample, its own stage's buffers, textures
-/// and samplers, static vertex strides, color targets, and one direct or indexed draw of
-/// primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
+/// The runtime draws a vertex or fragment case of any sample count, its own stage's buffers,
+/// textures and samplers, static vertex strides, color targets, and one direct or indexed draw
+/// of primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
 /// target or nothing; and a rasterization-disabled vertex case, which renders into the oracle's
-/// sink; a depth/stencil attachment of one sample and one aspect, observed or not; and an
-/// attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil attachment
-/// of both aspects or more samples, more samples, layered rendering, a dynamic vertex stride, an
-/// argument-buffer member, an explicit imageblock, a fragment pass with no attachment, which the
-/// runtime makes no pass of, a patch draw through a patch index buffer, or an index buffer's
-/// out-of-bounds target) stays on the executor's own context.
+/// sink; a depth/stencil attachment of one aspect, of one sample or more, observed or not; and
+/// an attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil
+/// attachment of both aspects, layered rendering, a dynamic vertex stride, an argument-buffer
+/// member, an explicit imageblock, a fragment pass with no attachment, which the runtime makes no
+/// pass of, a patch draw through a patch index buffer, or an index buffer's out-of-bounds target)
+/// stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -2812,8 +2816,8 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             .argument_buffer_buffers
             .insert((0, 0), vec![0; 16]);
     }
-    // A depth/stencil attachment of one sample and one aspect, observed or not, with or without a
-    // color target; one of both aspects or of more samples stays on the executor's own context.
+    // A depth/stencil attachment of one aspect, of one sample or more, observed or not, with or
+    // without a color target; one of both aspects stays on the executor's own context.
     let depth = LiteralDepthStencil {
         dimensions: [2, 2],
         samples: 1,
@@ -2825,7 +2829,17 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         stencil: Some(vec![0; 4]),
         ..depth.clone()
     };
-    for attachment in [&depth, &stencil] {
+    let multisampled_depth = LiteralDepthStencil {
+        samples: 4,
+        depth: Some(vec![0; 64]),
+        ..depth.clone()
+    };
+    let multisampled_stencil = LiteralDepthStencil {
+        samples: 4,
+        stencil: Some(vec![0; 16]),
+        ..stencil.clone()
+    };
+    for attachment in [&depth, &stencil, &multisampled_depth, &multisampled_stencil] {
         let attached = RenderCase {
             depth_stencil: Some(attachment.clone()),
             ..plain.clone()
@@ -2847,32 +2861,26 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         };
         assert!(runs_render_through_runtime(&authored, &observed));
     }
+    // A pass of more samples, its color target filled and read back sample by sample.
+    let multisampled = RenderCase {
+        raster_sample_count: Some(4),
+        color_targets: BTreeMap::from([(
+            0,
+            ColorTarget {
+                samples: 4,
+                bytes: vec![0; 64],
+                ..target.clone()
+            },
+        )]),
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(&authored, &multisampled));
     let others = [
         RenderCase {
             depth_stencil: Some(LiteralDepthStencil {
                 stencil: Some(vec![0; 4]),
                 ..depth.clone()
             }),
-            ..plain.clone()
-        },
-        RenderCase {
-            depth_stencil: Some(LiteralDepthStencil {
-                samples: 4,
-                depth: Some(vec![0; 64]),
-                ..depth.clone()
-            }),
-            ..plain.clone()
-        },
-        RenderCase {
-            raster_sample_count: Some(4),
-            color_targets: BTreeMap::from([(
-                0,
-                ColorTarget {
-                    samples: 4,
-                    bytes: vec![0; 64],
-                    ..target.clone()
-                },
-            )]),
             ..plain.clone()
         },
         RenderCase {

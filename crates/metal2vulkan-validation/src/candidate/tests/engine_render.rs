@@ -460,6 +460,55 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
     }
 }
 
+/// A pass of 4 samples: `sample_rate_mask_in` runs once per sample (`sample_id`) and writes its
+/// coverage beside its sample index, so sample `s` of the one pixel holds `(mask, s, 0, 1)` over
+/// the authored contents, each sample's own. Through the runtime the target is filled and read
+/// back sample by sample (`platform::runtime_multisample`) and holds the same words.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn each_sample_of_a_multisampled_target_holds_its_own_invocation() {
+    let fragment = public("engine/sample_rate.ll");
+    let mut authored = crate::companion::tests::case(
+        Stage::Fragment,
+        "sample_rate_mask_in",
+        TextureFormat::Rgba32Uint,
+    );
+    authored.raster_sample_count = Some(4);
+    authored.render_targets[0].initial_bytes_b64 = b64(&[0xab; 4 * 16]);
+    authored.output = OutputSelection::RenderTarget {
+        index: 0,
+        origin: [0, 0],
+        dimensions: [1, 1],
+    };
+    let (case, companion) = with_companion(&authored, &fragment);
+    let run = run(
+        &case,
+        RenderLibraries {
+            vertex: &companion,
+            fragment: Some(&fragment),
+        },
+    )
+    .unwrap();
+    let words: Vec<u32> = run
+        .output
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect();
+    let indices: Vec<[u32; 3]> = words
+        .chunks_exact(4)
+        .map(|sample| [sample[1], sample[2], sample[3]])
+        .collect();
+    assert_eq!(indices, [[0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1]]);
+    #[cfg(target_os = "linux")]
+    {
+        assert!(crate::candidate::engine::runs_render_through_runtime(
+            &authored, &case
+        ));
+        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+        assert_eq!(through.output, run.output, "through the runtime");
+    }
+}
+
 /// A tessellation case drawn through the render executor's patch path: the factor buffer bound
 /// where the plan's factor write names it, the probe as the evaluation stage, and the case's cull
 /// mode. `k7_tess_quad_probe` draws patch 0 over the target's left half and patch 1, its mirror
