@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1322 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 8019 |
+| ledger rows (a case whose gap is recorded) | 8039 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3292,6 +3292,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
@@ -3308,6 +3316,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
@@ -3316,6 +3328,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
