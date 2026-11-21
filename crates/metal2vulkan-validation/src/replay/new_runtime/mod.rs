@@ -436,18 +436,10 @@ fn stages_line(at: &str, stages: &Stages) -> String {
 /// instruction pointer and vendor record.
 fn loss_line(loss: &rt::DeviceLoss) -> String {
     let mut line = format!("loss {} {:?}", loss.call, loss.result);
-    let at = |a: &rt::FaultAddress| {
-        format!("{:?} {:#x} precision {:#x}", a.kind, a.address, a.precision)
-    };
     if let Some(fault) = &loss.fault {
         line.push_str(&format!("; fault {:?}", fault.description));
-        line.extend(fault.accesses.iter().map(|a| format!("; access {}", at(a))));
-        line.extend(
-            fault
-                .instructions
-                .iter()
-                .map(|a| format!("; instruction {}", at(a))),
-        );
+        line.extend(fault.accesses.iter().map(|a| format!("; access {a:?}")));
+        line.extend((fault.instructions.iter()).map(|a| format!("; instruction {a:?}")));
         line.extend((fault.vendor.iter()).map(|(description, code, data)| {
             format!("; vendor {description:?} code {code:#x} data {data:#x}")
         }));

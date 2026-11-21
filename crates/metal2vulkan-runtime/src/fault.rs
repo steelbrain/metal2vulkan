@@ -5,6 +5,7 @@
 use crate::command::DeviceLoss;
 use crate::device::Core;
 use ash::vk;
+use std::fmt;
 
 /// What the driver reported of a lost device's fault ([`DeviceLoss::fault`]), as it gave it:
 /// `vkGetDeviceFaultInfoEXT`'s description, addresses and vendor records. The runtime places no
@@ -30,7 +31,7 @@ pub struct DeviceFault {
 /// One address the driver reported (`VkDeviceFaultAddressInfoEXT`).
 ///
 /// No Metal counterpart: Metal reports no fault address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FaultAddress {
     /// `addressType`.
     pub kind: vk::DeviceFaultAddressTypeEXT,
@@ -39,6 +40,28 @@ pub struct FaultAddress {
     /// `addressPrecision`, a power of two: the address lies in the `precision` bytes from
     /// `address` rounded down to a multiple of it.
     pub precision: u64,
+}
+
+/// The kind by its Vulkan name, then the address and the precision in hex: ash's
+/// `DeviceFaultAddressTypeEXT` has no `Debug` of its own without ash's `debug` feature.
+impl fmt::Debug for FaultAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const KINDS: [&str; 7] = [
+            "NONE",
+            "READ_INVALID",
+            "WRITE_INVALID",
+            "EXECUTE_INVALID",
+            "INSTRUCTION_POINTER_UNKNOWN",
+            "INSTRUCTION_POINTER_INVALID",
+            "INSTRUCTION_POINTER_FAULT",
+        ];
+        let raw = self.kind.as_raw();
+        match usize::try_from(raw).ok().and_then(|at| KINDS.get(at)) {
+            Some(name) => f.write_str(name)?,
+            None => write!(f, "kind {raw}")?,
+        }
+        write!(f, " {:#x} precision {:#x}", self.address, self.precision)
+    }
 }
 
 /// `loss`, a loss the runtime met itself, with its [`fault`](DeviceLoss::fault) set: the
