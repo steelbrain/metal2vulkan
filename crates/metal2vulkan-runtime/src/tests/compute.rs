@@ -916,6 +916,9 @@ pub(crate) mod on_device {
             run(name, &command_buffer);
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 1001 * index).collect();
             assert_eq!(words(&o), expected, "{name}");
+            println!(
+                "{name}: indirect dispatches off 4 and past the end refused; the last 12 bytes ran"
+            );
         });
     }
 

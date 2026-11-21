@@ -2667,6 +2667,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 _ => BLUE,
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: indirect draws off 4 and past the end refused; the last bytes drew");
         });
     }
 
