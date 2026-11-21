@@ -1700,6 +1700,7 @@ field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_waits	pub pipeline_cache
 field	metal2vulkan-runtime::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
 field	metal2vulkan-runtime::Metrics.pipeline_creation_nanos	pub pipeline_creation_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-runtime::Metrics.preprocess_regions_remade	pub preprocess_regions_remade: u64
 field	metal2vulkan-runtime::Metrics.private_arena_allocations	pub private_arena_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.private_arena_blocks	pub private_arena_blocks: u64
 field	metal2vulkan-runtime::Metrics.private_arena_dispatches	pub private_arena_dispatches: u64

@@ -254,10 +254,12 @@ pub(crate) enum Metric {
     SparseBinds,
     /// [`Metrics::resolves`].
     Resolves,
+    /// [`Metrics::preprocess_regions_remade`].
+    PreprocessRegionsRemade,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::Resolves as usize + 1;
+const METRICS: usize = Metric::PreprocessRegionsRemade as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -296,6 +298,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::AttachmentLoopReads,
     Metric::SparseBinds,
     Metric::Resolves,
+    Metric::PreprocessRegionsRemade,
 ];
 
 // Each metric of the order is at its own index.
@@ -656,6 +659,7 @@ struct Atomics {
     surface_wait_submissions: AtomicU64,
     sparse_binds: AtomicU64,
     resolves: AtomicU64,
+    preprocess_regions_remade: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -801,6 +805,7 @@ impl Counters {
             Metric::AttachmentLoopReads => &a.attachment_loop_reads,
             Metric::SparseBinds => &a.sparse_binds,
             Metric::Resolves => &a.resolves,
+            Metric::PreprocessRegionsRemade => &a.preprocess_regions_remade,
         }
     }
 
@@ -1622,6 +1627,7 @@ impl Counters {
             surface_wait_submissions: a.surface_wait_submissions.load(Relaxed),
             sparse_binds: a.sparse_binds.load(Relaxed),
             resolves: a.resolves.load(Relaxed),
+            preprocess_regions_remade: a.preprocess_regions_remade.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2415,6 +2421,10 @@ pub struct Metrics {
     /// `MTLStoreActionStoreAndMultisampleResolve`): one per attachment a pass resolves, counted
     /// as its encoder ends.
     pub resolves: u64,
+    /// No Metal counterpart: preprocess regions of indirect command buffers' executions made
+    /// within a second after the device freed an idle one past its bound of idle regions (128
+    /// MiB): regions given back and made again, each at its own `vkAllocateMemory`.
+    pub preprocess_regions_remade: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes

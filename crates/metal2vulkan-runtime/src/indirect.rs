@@ -16,6 +16,7 @@
 //! forgotten first; a command buffer or upload that copies from one keeps it until it retires.
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
@@ -51,8 +52,13 @@ pub(crate) const SHAPES: usize = 256;
 pub(crate) const PART: u32 = 64;
 /// The most bytes of preprocess regions no execution holds that a device keeps for the next ones:
 /// the regions of one frame of Apple's published rendering sample's 45,024 commands, which a
-/// completed frame gives back for a later one to take: 704 parts at the most a part takes (151,808
-/// bytes, NVIDIA's for 17 tokens), about 107 MB, with room for the regions' rounding.
+/// completed frame gives back for a later one to take (in a steady run only one frame's regions
+/// are idle; those of the frames in flight are in use): its 11 executions' 710 parts at the most a
+/// part takes (151,808 bytes, NVIDIA's for 17 tokens), about 108 MB, with room for the regions'
+/// rounding. A region made within a second of one freed past it is counted
+/// ([`Metrics::preprocess_regions_remade`](crate::Metrics::preprocess_regions_remade)), and every
+/// idle region goes once it has been idle for the runtime's idle age
+/// ([`memory::IDLE_AGE_NANOS`]): at rest the pool holds nothing.
 pub(crate) const IDLE_BYTES: u64 = 128 << 20;
 /// The granule a preprocess region's bytes are rounded up to.
 const REGION_GRANULE: u64 = 64 << 10;
@@ -200,7 +206,11 @@ pub(crate) struct Indirect {
     templates: Mutex<Lru<IndirectDrawLayout, Arc<Template>>>,
     layouts: Mutex<Lru<Tokens, Arc<CommandsLayout>>>,
     shapes: Mutex<Lru<(u64, Raster, IndirectDrawLayout, u32), Shape>>,
+    /// The idle regions, the oldest first.
     regions: Mutex<Vec<Region>>,
+    /// When the last region freed past [`IDLE_BYTES`] went, in nanoseconds of
+    /// [`host_time`](crate::host_time); 0 before the first.
+    evicted_at: AtomicU64,
 }
 
 /// The tokens of an execution of a content's commands of one record layout: each run of slot
@@ -277,9 +287,20 @@ pub(crate) struct Region {
     memory_type: u32,
     address: u64,
     size: u64,
+    /// When it last became idle, in nanoseconds of [`host_time`](crate::host_time).
+    idle_since: u64,
 }
 
 impl Region {
+    /// It, for the block-maker thread to free ([`memory::Loose`]).
+    pub(crate) fn into_loose(self) -> memory::Loose {
+        memory::Loose::Preprocess {
+            buffer: self.buffer,
+            memory: self.memory,
+            bytes: self.size,
+        }
+    }
+
     /// Whether the region holds `need`, from its first byte at `need`'s alignment.
     fn holds(&self, need: &vk::MemoryRequirements) -> bool {
         let start = self.address.next_multiple_of(need.alignment.max(1)) - self.address;
@@ -334,6 +355,7 @@ impl Indirect {
             layouts: Mutex::new(Lru::new(LAYOUTS)),
             shapes: Mutex::new(Lru::new(SHAPES)),
             regions: Mutex::new(Vec::new()),
+            evicted_at: AtomicU64::new(0),
         }
     }
 
@@ -490,7 +512,7 @@ impl Indirect {
                 .filter(|(_, region)| region.holds(need) && region.size <= most)
                 .min_by_key(|(_, region)| region.size)
                 .map(|(at, _)| at);
-            best.map(|at| idle.swap_remove(at))
+            best.map(|at| idle.remove(at))
         };
         let region = match found {
             Some(region) => {
@@ -499,6 +521,10 @@ impl Indirect {
                 region
             }
             None => {
+                let evicted = self.evicted_at.load(Ordering::Relaxed);
+                if evicted != 0 && memory::remade(evicted, crate::host_time()) {
+                    core.counters.count(Metric::PreprocessRegionsRemade);
+                }
                 let size = (need.size + need.alignment).next_multiple_of(REGION_GRANULE);
                 // SAFETY: the device is live.
                 unsafe { make_region(core, size, need.memory_type_bits) }?
@@ -509,29 +535,47 @@ impl Indirect {
         Ok(region)
     }
 
-    /// Takes back `region` from a retired command buffer: idle, the oldest idle regions freed
-    /// while the idle bytes pass [`IDLE_BYTES`].
-    fn give_back(&self, core: &Core, region: Region) {
+    /// Takes back `region` from a retired command buffer: idle from now, the oldest idle regions
+    /// given to the block-maker thread to free while the idle bytes pass [`IDLE_BYTES`], and the
+    /// block-maker thread woken to free each one once it has been idle for the idle age
+    /// ([`due`](Self::due)). No driver free runs here, on the completion thread.
+    fn give_back(&self, core: &Core, mut region: Region) {
         core.counters
             .fall_by(Gauge::PreprocessUsedBytes, region.size);
         core.counters
             .rise_by(Gauge::PreprocessIdleBytes, region.size);
-        let mut idle = lock(&self.regions);
-        idle.push(region);
-        let mut bytes: u64 = idle.iter().map(|region| region.size).sum();
+        region.idle_since = crate::host_time();
         let mut freed = Vec::new();
-        while bytes > IDLE_BYTES && !idle.is_empty() {
-            let oldest = idle.remove(0);
-            bytes -= oldest.size;
-            freed.push(oldest);
+        {
+            let mut idle = lock(&self.regions);
+            idle.push(region);
+            let mut bytes: u64 = idle.iter().map(|region| region.size).sum();
+            while bytes > IDLE_BYTES && !idle.is_empty() {
+                let oldest = idle.remove(0);
+                bytes -= oldest.size;
+                freed.push(oldest);
+            }
         }
-        drop(idle);
+        if !freed.is_empty() {
+            (self.evicted_at).store(crate::host_time(), Ordering::Relaxed);
+        }
         for region in freed {
-            core.counters
-                .fall_by(Gauge::PreprocessIdleBytes, region.size);
             // SAFETY: an idle region is in no pending work.
-            unsafe { region.destroy(core) };
+            unsafe { core.pool.give_back_loose(region.into_loose()) };
         }
+        core.pool.nudge();
+    }
+
+    /// On the block-maker thread: the oldest idle region, taken out, where it has been idle for
+    /// the idle age ([`memory::IDLE_AGE_NANOS`]) at `now`; else when it will have been (`Err`).
+    /// `None` where no region is idle.
+    pub(crate) fn due(&self, now: u64) -> Option<Result<Region, u64>> {
+        let mut idle = lock(&self.regions);
+        let since = idle.first()?.idle_since;
+        Some(match memory::idle_due(since, now) {
+            None => Ok(idle.remove(0)),
+            Some(at) => Err(at),
+        })
     }
 
     /// The template of reset commands of `layout`: the device's, or one made now, written in the
@@ -757,6 +801,7 @@ unsafe fn make_region(core: &Core, size: u64, bits: u32) -> Result<Region, Error
         memory_type,
         address: 0,
         size,
+        idle_since: 0,
     };
     // SAFETY: the memory is the buffer's type and size, and unbound.
     if let Err(result) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {

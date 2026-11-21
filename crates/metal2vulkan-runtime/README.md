@@ -3583,10 +3583,13 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 - Each execution takes a preprocess region when it is recorded, an idle one of the device's pool
   or one made then, its parts' preprocess one after another, each sized by
   `vkGetGeneratedCommandsMemoryRequirementsEXT` with the inherited pipeline at 64 commands, and
-  gives it back when its command buffer completes. The pool
-  keeps at most 128 MiB of idle regions, the oldest freed past that; nothing waits and no execution
-  is refused for the pool's sake. The gauges `indirect_command_buffers`, `preprocess_used_bytes`
-  and `preprocess_idle_bytes` count them, each zero once the device is dropped.
+  gives it back when its command buffer completes. The pool keeps at most 128 MiB of idle regions,
+  the oldest freed past that, and the block-maker thread frees each region idle for 250 ms, the
+  idle age, as it frees idle allocations: at rest the pool holds nothing.
+  `Metrics::preprocess_regions_remade` counts the regions made within a second after one was freed
+  past the bound. Nothing waits and no execution is refused for the pool's sake. The gauges
+  `indirect_command_buffers`, `preprocess_used_bytes` and `preprocess_idle_bytes` count them, each
+  zero once the device is dropped.
 - Of `VK_KHR_maintenance5` the runtime uses one structure, `VkBufferUsageFlags2CreateInfoKHR`, for
   the preprocess buffers' `VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT`.
 
@@ -3606,9 +3609,10 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   14,170 commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's
   driver (620.70.06, an RTX 2080) one of more than 64 commands ended out of order, a cause not yet
   found. The parts cost, at 14,000 commands against one execution: 62% more GPU time on the XTX
-  and 61 times as much on the 2080, and 25 to 34 times the recording time. On the 2080 a command
-  of 17 tokens also takes four times the preprocess bytes (2,372 a command in a part, 592 in one
-  execution of 1,024 or more).
+  and 61 times as much on the 2080, and 25 to 34 times the recording time. Their memory, for a
+  frame of Apple's rendering sample at its worst (45,024 commands of 17 tokens in 11 executions,
+  710 parts): about 108 MB of preprocess regions on the 2080 and 28 MB on the XTX, where single
+  executions would take about 27 MB on each (592 and 608 bytes a command).
 - On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
   `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
   command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver

@@ -28,8 +28,10 @@
 //!   - the device's caches hold at most their capacities past them: 16 templates, 256 execution
 //!     shapes and 64 command layouts.
 //!   - the preprocess pool: regions held past 128 MiB in use all go back, the idle bytes at most
-//!     128 MiB after them; 200 executions keep the regions' bytes flat between the 100th and the
-//!     200th; every indirect gauge is zero once the device is dropped.
+//!     128 MiB after them; as many taken again at once count the regions made again past the
+//!     bound; past the idle age the idle bytes reach 0, the pool at rest; 200 executions keep the
+//!     regions' bytes flat between the 100th and the 200th; every indirect gauge is zero once the
+//!     device is dropped.
 //!
 //! `llvm-as` assembles the fixtures; without it a device test skips visibly.
 
@@ -150,6 +152,7 @@ mod on_device {
     use ash::vk;
     use metal2vulkan::pipeline::IndirectDrawLayout;
     use metal2vulkan_devtools::engine_dir;
+    use std::time::{Duration, Instant};
 
     /// The commands the scene's kernel encodes.
     const N: u32 = 4;
@@ -886,17 +889,36 @@ mod on_device {
                 }
                 let regions = held.len();
                 drop(held);
-                let g = counters.gauges();
-                assert_eq!(g.preprocess_used_bytes, 0, "{name}");
-                assert!(
-                    0 < g.preprocess_idle_bytes && g.preprocess_idle_bytes <= IDLE_BYTES,
-                    "{name}: {} idle bytes",
-                    g.preprocess_idle_bytes
-                );
+                // The regions past the bound go on the block-maker thread, their bytes idle until
+                // then.
+                let settled = |done: &dyn Fn(u64) -> bool| {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        let idle = counters.gauges().preprocess_idle_bytes;
+                        if done(idle) || Instant::now() > deadline {
+                            return idle;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                };
+                let kept = settled(&|idle| idle <= IDLE_BYTES);
+                assert_eq!(counters.gauges().preprocess_used_bytes, 0, "{name}");
+                assert!(0 < kept && kept <= IDLE_BYTES, "{name}: {kept} idle bytes");
+                let before = counters.metrics().preprocess_regions_remade;
+                let again: Vec<_> = (0..regions)
+                    .map(|_| ok(name, indirect.executed(core, &shape, 1)).0)
+                    .collect();
+                let remade = counters.metrics().preprocess_regions_remade - before;
+                assert!(remade > 0, "{name}: regions made again past the bound");
+                drop(again);
+                let since = Instant::now();
+                let rest = settled(&|idle| idle == 0);
+                assert_eq!(rest, 0, "{name}: the pool at rest");
                 println!(
                     "{name}: {regions} regions of {capacity} commands held past {IDLE_BYTES} bytes \
-                     went back, {} bytes kept idle",
-                    g.preprocess_idle_bytes
+                     went back, {kept} bytes kept idle; {remade} made again past the bound; idle \
+                     bytes 0 {} ms after the last went back",
+                    since.elapsed().as_millis()
                 );
             }
             let mut buffers = Buffers::new(&device);

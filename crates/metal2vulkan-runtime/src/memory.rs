@@ -65,7 +65,14 @@ pub(crate) const IDLE_AGE_NANOS: u64 = 250_000_000;
 /// How soon after a free of its class, in nanoseconds of [`host_time`](crate::host_time), an
 /// allocation of the pool is counted as one remade
 /// ([`Metrics::shared_remade_after_frees`](crate::Metrics::shared_remade_after_frees)): a second.
+/// A preprocess region is counted so after one freed past the bound
+/// ([`Metrics::preprocess_regions_remade`](crate::Metrics::preprocess_regions_remade)).
 const REMADE_WITHIN_NANOS: u64 = 1_000_000_000;
+
+/// Whether what is made at `now` is made within [`REMADE_WITHIN_NANOS`] of a free at `freed`.
+pub(crate) fn remade(freed: u64, now: u64) -> bool {
+    now.saturating_sub(freed) < REMADE_WITHIN_NANOS
+}
 
 /// A texture block or an allocation is sparse while it holds something and what it holds is less
 /// than its length over this: one sixteenth
@@ -700,6 +707,12 @@ pub(crate) enum Loose {
         buffer: vk::Buffer,
         memory: vk::DeviceMemory,
     },
+    /// An idle preprocess region of `bytes`, its buffer and memory (`crate::indirect::Region`).
+    Preprocess {
+        buffer: vk::Buffer,
+        memory: vk::DeviceMemory,
+        bytes: u64,
+    },
 }
 
 struct State {
@@ -1278,6 +1291,13 @@ impl Pool {
         self.changed.notify_all();
     }
 
+    /// Wakes the block-maker thread to weigh what another part of the device made idle: a
+    /// preprocess region ([`crate::indirect`]).
+    pub(crate) fn nudge(&self) {
+        drop(self.lock());
+        self.changed.notify_all();
+    }
+
     /// An import's or an export's numbers: its block's, and its allocation's. Err:
     /// [`Limit::BlockIds`].
     pub(crate) fn own_numbers(&self) -> Result<(BlockId, AllocationId), Error> {
@@ -1642,9 +1662,21 @@ pub(crate) fn run(core: Arc<Core>) {
             pool.changed.notify_all();
             continue;
         }
-        // The idle rule, both classes: the next allocation to free.
+        // The idle rule, both classes: the next allocation to free; first, a preprocess region
+        // idle for the idle age.
         let now = crate::host_time();
         let mut wake: Option<Duration> = None;
+        match (core.indirect.as_ref()).and_then(|indirect| indirect.due(now)) {
+            Some(Ok(region)) => {
+                drop(state);
+                // SAFETY: an idle region is in no pending work.
+                unsafe { free_loose(&core, region.into_loose()) };
+                state = pool.lock();
+                continue;
+            }
+            Some(Err(at)) => wake = Some(Duration::from_nanos(at.saturating_sub(now))),
+            None => {}
+        }
         let mut gone = None;
         for class in MemoryClass::ALL {
             let due = match pool.rule(&state, class, now) {
@@ -1902,7 +1934,7 @@ fn make_allocation(
     };
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);
-    if freed_at != 0 && crate::host_time().saturating_sub(freed_at) < REMADE_WITHIN_NANOS {
+    if freed_at != 0 && remade(freed_at, crate::host_time()) {
         (core.counters).remade_after_free(class == MemoryClass::Shared);
     }
     core.counters.rise_by(class.allocation_gauge(), len);
@@ -2571,6 +2603,19 @@ unsafe fn free_loose(core: &Core, loose: Loose) {
                 free(&core.device, memory);
             }
             counters.fall(Gauge::Blocks);
+        }
+        Loose::Preprocess {
+            buffer,
+            memory,
+            bytes,
+        } => {
+            // SAFETY: the caller's.
+            unsafe {
+                core.device.destroy_buffer(buffer, None);
+                free(&core.device, memory);
+            }
+            counters.fall(Gauge::Blocks);
+            counters.fall_by(Gauge::PreprocessIdleBytes, bytes);
         }
     }
 }
