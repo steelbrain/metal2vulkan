@@ -859,7 +859,9 @@ pub struct Capabilities {
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
     /// [`feedback_loop`](Self::feedback_loop) holds, then [`BORDER_SWIZZLE_EXTENSIONS`] where the
     /// device lists them and reports both the border swizzle's features, then
-    /// [`BARYCENTRIC_EXTENSIONS`] where the device lists it and reports its feature.
+    /// [`BARYCENTRIC_EXTENSIONS`] where the device lists it and reports its feature, then
+    /// [`INDIRECT_COMMANDS`] where the device lists both and reports their features
+    /// ([`indirect_commands`](Self::indirect_commands)).
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,

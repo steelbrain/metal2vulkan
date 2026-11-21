@@ -402,6 +402,10 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         if barycentric {
             expected.extend(floor::BARYCENTRIC_EXTENSIONS);
         }
+        // The indirect commands' pair, where device creation took it.
+        if device.core().indirect.is_some() {
+            expected.extend(floor::INDIRECT_COMMANDS);
+        }
         if maintenance && offered {
             expected.push(swapchain);
         }
