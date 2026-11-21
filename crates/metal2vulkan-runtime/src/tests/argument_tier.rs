@@ -15,6 +15,9 @@
 //!   CPU wrote into a constant buffer, and `ab_slot_address` stores a slot pointer converted to an
 //!   integer, which is the slot's `gpuAddress` plus its offsets.
 //!
+//! A buffer read by address alone stays readable past its block's release until the read retires
+//! (a GPU hazard), and a release under work committed before it waits for that work.
+//!
 //! The program writes each texture member itself, as the texture's `gpuResourceID`, and each
 //! pointer member as the buffer's `gpu_address` plus the offset an encoder's `setBuffer:offset:`
 //! names, as tier 2's layout lets it. The floor holds every feature tier 2 rests on (buffer device addresses, and the
@@ -533,6 +536,61 @@ mod on_device {
                 want,
                 "{name}: the bytes it held"
             );
+        });
+    }
+
+    /// A release under work committed before it waits for that work (`crate::memory::Wait`): a
+    /// command buffer that waits on an event, committed before the last handles of a 17 MiB
+    /// Shared block (an allocation of its own) and of a texture at an index drop, holds both.
+    /// Nothing reads either. Past twice the idle age the allocation is not freed, the index is in
+    /// use and `releases_waiting` counts what waits; once the event is set and the command buffer
+    /// retires, the allocation is freed, nothing waits and the grant may be returned.
+    #[test]
+    fn every_device_holds_a_release_until_the_work_committed_before_it_retires() {
+        use crate::tests::command::on_device::{shared_event, within};
+        use crate::{Error, Refusal};
+        const LEN: u64 = 17 << 20;
+        each_device("argument_tier_held_release", |name, _, device| {
+            let counters = device.counters();
+            let grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 2, 2);
+            d.usage = TextureUsage::SHADER_READ;
+            let texture =
+                (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let block = (device.take_block(MemoryClass::Shared, LEN)).expect("a block of its own");
+            let event = shared_event(&device);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            command_buffer.commit().expect("a commit");
+            let freed = counters.metrics().allocations_freed;
+            drop((texture, block));
+            std::thread::sleep(std::time::Duration::from_nanos(
+                2 * crate::memory::IDLE_AGE_NANOS,
+            ));
+            let (held, waiting) = (
+                counters.metrics().allocations_freed,
+                counters.gauges().releases_waiting,
+            );
+            let in_use = device.release_indices(grant);
+            event.set_signaled_value(1);
+            finished(name, &command_buffer);
+            assert_eq!(held, freed, "{name}: an allocation freed under the work");
+            assert!(waiting >= 1, "{name}: {waiting} releases waiting");
+            assert!(
+                matches!(
+                    in_use,
+                    Err(Error::Refused(Refusal::IndicesInUse { index: 1, .. }))
+                ),
+                "{name}: the index under the work: {in_use:?}"
+            );
+            within("the releases once the work retired", || {
+                counters.metrics().allocations_freed > freed
+                    && counters.gauges().releases_waiting == 0
+            });
+            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("{name}: {waiting} releases held under the work, then gone");
         });
     }
 

@@ -11,11 +11,13 @@ use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
 use crate::places::Ranges;
+use crate::reaper::{Free, Job};
 use crate::submit_calls::SubmitCalls;
 use ash::vk;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -49,8 +51,9 @@ const BASE_ALIGN: u64 = 2 << 20;
 
 /// The idle age, in nanoseconds of [`host_time`](crate::host_time): 250 ms, one value for every
 /// device. An allocation is idle once it holds no live block: its idle time starts when its last
-/// live block comes back, and only a take that lands in it again ends it. Commits and submissions
-/// play no part, so a program that keeps committing gives back what it stopped using. The
+/// live block comes back, and only a take that lands in it again ends it. A program that keeps
+/// committing gives back what it stopped using: the free waits only for the work committed
+/// before the allocation went idle ([`Wait`]). The
 /// block-maker thread frees an allocation idle this long, after the consumer's unmap of it, one at
 /// a time and between the allocations it makes, so a free never runs beside its own
 /// `vkAllocateMemory`; a class's reserve ([`State::whole`]) is not freed. A driver may hold a
@@ -69,6 +72,34 @@ const REMADE_WITHIN_NANOS: u64 = 1_000_000_000;
 /// ([`Gauges::texture_block_sparse_bytes`](crate::Gauges::texture_block_sparse_bytes),
 /// [`Gauges::private_take_sparse_bytes`](crate::Gauges::private_take_sparse_bytes)).
 pub(crate) const SPARSE: u64 = 16;
+
+/// What a release waits for before its memory, object or index goes: the command buffers
+/// committed before it, which may reach it with no handle of it, by address (a heap's buffers
+/// through an argument buffer) or through set 1 (a heap's textures and sampler states by their
+/// resource IDs). Such a reader may read another block's bytes by then, as on a Mac, but never
+/// memory or an object the device freed. Nothing is kept past the work in flight.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Wait {
+    /// Every command buffer committed up to this place in the commit order is to be submitted.
+    Commits(u64),
+    /// Then the submission of this progress value is to complete.
+    Progress(u64),
+}
+
+impl Wait {
+    /// Whether the work it waits for completed, on the block-maker thread without the pool's
+    /// lock: a wait for commits moves on to the progress value of the last submission once each
+    /// of them is submitted (`Work::settled`).
+    fn over(&mut self, core: &Core) -> bool {
+        if let Wait::Commits(commits) = *self {
+            match core.work.settled(commits) {
+                Some(progress) => *self = Wait::Progress(progress),
+                None => return false,
+            }
+        }
+        matches!(*self, Wait::Progress(progress) if core.done.completed() >= progress)
+    }
+}
 
 /// The idle clock, the one clock for everything the runtime gives back: what became idle at
 /// `since` and stayed idle is due at `now` ([`host_time`](crate::host_time)) once
@@ -509,6 +540,8 @@ struct Allocation {
     /// When it became idle, in nanoseconds of [`host_time`](crate::host_time): when it was made,
     /// or when its last live block came back. The oldest idle allocation is freed first.
     idle_since: u64,
+    /// What its free waits for, noted when it became idle.
+    wait: Wait,
     /// A spilled allocation whose last block came back: no take lands in it, its bytes are not
     /// the class's free bytes, and the idle rule frees it next, so the next allocation tries
     /// device-local memory again.
@@ -553,12 +586,22 @@ impl Allocation {
 ///
 /// The idle rule runs on the block-maker thread as a block is taken or given back, and again when
 /// the oldest idle allocation reaches [`IDLE_AGE_NANOS`]: it frees each idle allocation of that
-/// age, one at a time, whatever the device's queues are doing.
+/// age, one at a time, once the work committed before it went idle completed ([`Wait`]); so wait
+/// the frees of imported and exported blocks, and the objects released under work in flight
+/// ([`Pool::release`]).
 pub(crate) struct Pool {
     state: Mutex<State>,
     /// Signalled whenever the state changes, for the block-maker thread and for takers waiting
     /// on it.
     changed: Condvar,
+    /// The last commit's place in the device's commit order, which memory given back notes, and
+    /// the command buffers committed and not yet retired.
+    commits: AtomicU64,
+    in_flight: AtomicU64,
+    /// The completion thread's rounds of retirements, and whether the block-maker thread waits
+    /// for one to free ([`retired`](Self::retired)).
+    rounds: AtomicU64,
+    awaiting: AtomicBool,
     mappings: Option<Arc<dyn BlockMappings>>,
     /// The device's counters: the idle bytes, the allocations made and the long reuses.
     counters: Counters,
@@ -663,11 +706,14 @@ struct State {
     /// Per class, its allocations in the order they were made.
     allocations: [Vec<Allocation>; 2],
     /// Imported and exported blocks given back, with the imports' releases, for the block-maker
-    /// thread to free.
-    owned: VecDeque<(Memory, Option<Release>)>,
+    /// thread to free, each with its [`Wait`].
+    owned: VecDeque<((Memory, Option<Release>), Wait)>,
     /// Memory of its own other threads' objects held, given back for the block-maker thread to
     /// free.
     loose: VecDeque<Loose>,
+    /// Objects and indices released while work was in flight, each with its [`Wait`], for the
+    /// block-maker thread to hand to the reaper ([`Pool::release`]).
+    held: VecDeque<(Free, Wait)>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
@@ -794,6 +840,7 @@ impl Pool {
                 allocations: [Vec::new(), Vec::new()],
                 owned: VecDeque::new(),
                 loose: VecDeque::new(),
+                held: VecDeque::new(),
                 failed: [false, false],
                 freed_at: [0, 0],
                 // The device's fixed-size internals: the block-maker thread's first work.
@@ -811,6 +858,10 @@ impl Pool {
                 waiting: 0,
             }),
             changed: Condvar::new(),
+            commits: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            rounds: AtomicU64::new(0),
+            awaiting: AtomicBool::new(false),
             mappings,
             counters,
             granule: GRANULE.max(granularity.next_power_of_two()),
@@ -822,6 +873,57 @@ impl Pool {
 
     fn lock(&self) -> MutexGuard<'_, State> {
         lock(&self.state)
+    }
+
+    /// A command buffer took place `seq` in the commit order.
+    pub(crate) fn committed(&self, seq: u64) {
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        self.commits.fetch_max(seq, Ordering::SeqCst);
+    }
+
+    /// A command buffer committed retired, completed or ended.
+    pub(crate) fn ended(&self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// What memory given back now waits for: every command buffer committed so far, nothing where
+    /// none is in flight.
+    fn noted(&self) -> Wait {
+        match self.in_flight.load(Ordering::SeqCst) {
+            0 => Wait::Progress(0),
+            _ => Wait::Commits(self.commits.load(Ordering::SeqCst)),
+        }
+    }
+
+    /// The program let go of `object` (a texture's or a sampler state's index, views, image or
+    /// sampler), which work committed before now may reach with no handle of it, through set 1:
+    /// it goes once that work retired ([`Wait`]), on the reaper thread. Where none is in flight,
+    /// it goes at once, an index on this thread, so its grant may be returned at once
+    /// ([`Device::release_indices`](crate::Device::release_indices)). Releases keep their order.
+    pub(crate) fn release(&self, core: &Core, object: Free) {
+        let wait = self.noted();
+        let now = matches!(wait, Wait::Progress(0));
+        if now && matches!(object, Free::TextureIndex(..) | Free::SamplerIndex(..)) {
+            return crate::reaper::free(core, object);
+        }
+        let mut state = self.lock();
+        if now && state.held.is_empty() {
+            drop(state);
+            return core.reaper.give(Job::Free(object));
+        }
+        state.held.push_back((object, wait));
+        self.counters.rise(Gauge::ReleasesWaiting);
+        self.changed.notify_all();
+    }
+
+    /// The completion thread ran a round of retirements: it wakes the block-maker thread where a
+    /// free waits for work to complete.
+    pub(crate) fn retired(&self) {
+        self.rounds.fetch_add(1, Ordering::SeqCst);
+        if self.awaiting.load(Ordering::SeqCst) {
+            let _state = self.lock();
+            self.changed.notify_all();
+        }
     }
 
     fn wait<'a>(&self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
@@ -1133,6 +1235,7 @@ impl Pool {
     /// allocation at once.
     pub(crate) fn give_back(&self, memory: Memory) {
         let class = memory.class;
+        let wait = self.noted();
         self.counters.fall_by(class.placed_gauge(), memory.len);
         let mut state = self.lock();
         state.failed[class.index()] = false;
@@ -1144,6 +1247,7 @@ impl Pool {
                 allocation.texture = false;
                 // Its idle time starts now, however long ago the block was released.
                 allocation.idle_since = crate::host_time();
+                allocation.wait = wait;
                 allocation.retiring = allocation.spilled;
                 allocation.reused = false;
             }
@@ -1157,7 +1261,8 @@ impl Pool {
     /// Takes back an imported or exported block, for the block-maker thread to free, and then to
     /// run an import's release.
     pub(crate) fn give_back_own(&self, memory: Memory, release: Option<Release>) {
-        self.lock().owned.push_back((memory, release));
+        let wait = self.noted();
+        self.lock().owned.push_back(((memory, release), wait));
         self.changed.notify_all();
     }
 
@@ -1467,6 +1572,9 @@ pub(crate) fn run(core: Arc<Core>) {
     let pool = &core.pool;
     let mut state = pool.lock();
     loop {
+        // A free whose wait is not over holds; a retirement round since this read wakes it.
+        let round = pool.rounds.load(Ordering::SeqCst);
+        let mut held = false;
         if state.stop {
             let ring = state.asked[Internal::RingBlock.index()];
             state.asked = [false; INTERNALS];
@@ -1485,7 +1593,9 @@ pub(crate) fn run(core: Arc<Core>) {
             pool.changed.notify_all();
             continue;
         }
-        if let Some((memory, release)) = state.owned.pop_front() {
+        let own;
+        (state, own) = ripe(&core, state, |state| &mut state.owned, &mut held);
+        if let Some((memory, release)) = own {
             drop(state);
             free_own(&core, &memory, release);
             state = pool.lock();
@@ -1495,6 +1605,15 @@ pub(crate) fn run(core: Arc<Core>) {
             drop(state);
             // SAFETY: as given back.
             unsafe { free_loose(&core, loose) };
+            state = pool.lock();
+            continue;
+        }
+        let object;
+        (state, object) = ripe(&core, state, |state| &mut state.held, &mut held);
+        if let Some(object) = object {
+            drop(state);
+            core.counters.fall(Gauge::ReleasesWaiting);
+            core.reaper.give(Job::Free(object));
             state = pool.lock();
             continue;
         }
@@ -1523,6 +1642,23 @@ pub(crate) fn run(core: Arc<Core>) {
         for class in MemoryClass::ALL {
             let due = match pool.rule(&state, class, now) {
                 Rule::Free(memory) => {
+                    let Some(mut wait) = state.find(class, memory).map(|a| a.wait) else {
+                        continue;
+                    };
+                    pool.awaiting.store(true, Ordering::SeqCst);
+                    drop(state);
+                    let over = wait.over(&core);
+                    state = pool.lock();
+                    match state.find(class, memory) {
+                        // Still idle: no take landed in it while the lock was dropped.
+                        Some(allocation) if allocation.live == 0 && over => {}
+                        Some(allocation) => {
+                            allocation.wait = wait;
+                            held |= allocation.live == 0;
+                            continue;
+                        }
+                        None => continue,
+                    }
                     gone = state.take_out(class, memory);
                     pool.settle(&mut state, class);
                     break;
@@ -1541,11 +1677,38 @@ pub(crate) fn run(core: Arc<Core>) {
             state.freed_at[class.index()] = crate::host_time();
             continue;
         }
+        if held && pool.rounds.load(Ordering::SeqCst) != round {
+            continue;
+        }
+        pool.awaiting.store(held, Ordering::SeqCst);
         state = match wake {
             Some(timeout) => pool.wait_for(state, timeout),
             None => pool.wait(state),
         };
     }
+}
+
+/// The oldest entry of a queue of memory given back, taken out where its [`Wait`] is over; where
+/// it is not, it stays first, and `held` is set. The pool's lock is dropped for the check.
+fn ripe<'a, T>(
+    core: &'a Core,
+    mut state: MutexGuard<'a, State>,
+    queue: fn(&mut State) -> &mut VecDeque<(T, Wait)>,
+    held: &mut bool,
+) -> (MutexGuard<'a, State>, Option<T>) {
+    let Some((item, mut wait)) = queue(&mut state).pop_front() else {
+        return (state, None);
+    };
+    core.pool.awaiting.store(true, Ordering::SeqCst);
+    drop(state);
+    let over = wait.over(core);
+    let mut state = core.pool.lock();
+    if over {
+        return (state, Some(item));
+    }
+    queue(&mut state).push_front((item, wait));
+    *held = true;
+    (state, None)
 }
 
 /// On the block-maker thread: makes `internal` with the function a call that needs it makes it
@@ -1725,6 +1888,7 @@ fn make_allocation(
         placed: 0,
         texture: false,
         idle_since: crate::host_time(),
+        wait: Wait::Progress(0),
         retiring: false,
         reused: false,
         ahead: false,
@@ -2441,10 +2605,20 @@ fn free_allocation(core: &Core, allocation: Allocation) {
 pub(crate) fn free_all(core: &mut Core) {
     let mut allocations = Vec::new();
     let mut idle = [0; 2];
+    // The GPU completed everything submitted: no wait holds. What was held goes first, as its
+    // memory and places come back here.
+    let held: Vec<Free> = {
+        let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
+        state.held.drain(..).map(|(object, _)| object).collect()
+    };
+    for object in held {
+        core.counters.fall(Gauge::ReleasesWaiting);
+        crate::reaper::free(core, object);
+    }
     let (owned, loose): (Vec<(Memory, Option<Release>)>, Vec<Loose>) = {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
         (
-            state.owned.drain(..).collect(),
+            state.owned.drain(..).map(|(own, _)| own).collect(),
             state.loose.drain(..).collect(),
         )
     };

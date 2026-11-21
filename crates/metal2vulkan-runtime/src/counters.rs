@@ -437,6 +437,8 @@ pub(crate) enum Gauge {
     ImportBytes,
     /// [`Gauges::surface_import_bytes`].
     SurfaceImportBytes,
+    /// [`Gauges::releases_waiting`].
+    ReleasesWaiting,
 }
 
 /// A site that allocates on the consumer's threads, inside its calls, counted on its own in
@@ -716,6 +718,7 @@ struct Atomics {
     private_placed_bytes: AtomicU64,
     import_bytes: AtomicU64,
     surface_import_bytes: AtomicU64,
+    releases_waiting: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -1393,6 +1396,7 @@ impl Counters {
             Gauge::PrivatePlacedBytes => &a.private_placed_bytes,
             Gauge::ImportBytes => &a.import_bytes,
             Gauge::SurfaceImportBytes => &a.surface_import_bytes,
+            Gauge::ReleasesWaiting => &a.releases_waiting,
         }
     }
 
@@ -1697,6 +1701,7 @@ impl Counters {
             private_placed_bytes: a.private_placed_bytes.load(Relaxed),
             import_bytes: a.import_bytes.load(Relaxed),
             surface_import_bytes: a.surface_import_bytes.load(Relaxed),
+            releases_waiting: a.releases_waiting.load(Relaxed),
         }
     }
 }
@@ -2764,4 +2769,9 @@ pub struct Gauges {
     /// Bytes of the surface plane imports [`surface_imports`](Self::surface_imports) counts, as
     /// each was allocated.
     pub surface_import_bytes: u64,
+    /// Releases of textures' indices, views and images, texture views' views, sampler states'
+    /// indices and device samplers that wait for the command buffers committed before them to
+    /// retire, which may reach them through set 1 with no handle of them: 0 once that work has
+    /// retired, and with nothing in flight at the release.
+    pub releases_waiting: u64,
 }

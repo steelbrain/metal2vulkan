@@ -430,8 +430,8 @@ pub enum Refusal {
         index: u32,
     },
     /// A release of a grant while a texture, a sampler state or a constexpr sampler holds one of
-    /// its indices ([`Device::release_indices`](crate::Device::release_indices)). Metal has no
-    /// counterpart.
+    /// its indices ([`Device::release_indices`](crate::Device::release_indices)), a released one
+    /// until the command buffers committed before its release retired. Metal has no counterpart.
     ///
     /// Basis: ours (an object's index stays granted while the object holds it).
     IndicesInUse {

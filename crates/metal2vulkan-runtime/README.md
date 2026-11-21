@@ -324,8 +324,14 @@ in its memory.
   An allocation that holds no block anyone holds is idle. Its idle time starts when its last block
   comes back, and only a take that lands in it again ends it. The idle age is 250 ms, on every
   device: the block-maker thread frees each allocation idle that long, one at a time, after
-  `BlockMappings::unmap` of it, whatever the device's queues are doing, so a program that keeps
-  committing gives back what it stopped using within 250 ms plus the frees ahead of it. The
+  `BlockMappings::unmap` of it, once every command buffer committed before it went idle has
+  retired. Memory a command buffer reaches by address alone (a heap's buffers through an argument
+  buffer, with no handle of them) is so never freed while work committed before its release is
+  unretired; a range of it taken again meanwhile still gives such a reader the new block's bytes.
+  So a program that keeps committing gives back what it stopped using within 250 ms plus the
+  frees ahead of it and the work in flight at its release. A command buffer that waits at an event
+  (`CommandBuffer::encode_wait_for_event`) holds every such free released after its commit until
+  it retires, as a free waits for the command buffers committed before it in commit order. The
   harness's own rows `idle_frees` and `idle_frees_under_commits` hold each free, measured alone,
   to begin within 25 ms of its idle age, with no commits and with one every 2 ms. It frees
   between the allocations it makes, never beside one. Each class keeps a reserve that the idle
@@ -346,7 +352,9 @@ in its memory.
   free ranges between blocks; `shared_buffer_bytes` and `private_buffer_bytes` count live buffers'
   lengths by their block's class, `texture_block_bytes` the placed textures' image sizes and
   `texture_own_bytes` textures' allocations of their own, and `import_bytes` and
-  `surface_import_bytes` the imports' and the surface plane imports' bytes. The texture blocks
+  `surface_import_bytes` the imports' and the surface plane imports' bytes; `releases_waiting`
+  counts the releases of textures and sampler states that wait for work in flight (Set 1 and
+  index grants). The texture blocks
   and the allocations holding the consumer's Private blocks are counted apart, as nothing moves
   a live texture or block and a block or allocation goes back only once it holds nothing:
   `texture_block_held_bytes` counts the texture blocks whole (the one kept empty among them) and
@@ -543,7 +551,8 @@ list a handle's extensions, or whose buffers do not import it, refuses that call
 An imported block is Shared, and is the whole of an allocation of its own, whose number
 (`BlockInfo::allocation`) no hook is told of. Each import is one `VkDeviceMemory` allocation and
 counts against the device's allocations; `Gauges::imports` counts those live. The block lives
-until its last handle and its last buffer, command buffer or upload are gone; then the block-maker
+until its last handle and its last buffer, command buffer or upload are gone, and every command
+buffer committed before then has retired (one may reach it by address alone); then the block-maker
 thread frees its memory, which ends the import, and runs `release`, Metal's deallocator, after it
 (at teardown, on the thread that tears down). Neither `BlockMappings` hook runs for an imported
 block.
@@ -1114,8 +1123,17 @@ made, with no lock, and never rewritten for layouts.
   takes the ID: the new object writes its elements (a texture with no storage view writes its
   storage element null where it took the index from another, so nothing stale answers there),
   and the earlier object's going, at its release or once its command buffers retire, touches
-  neither the index nor its elements. No work in flight may read a displaced or released object
-  through the index: the program's duty, as it is Metal's, which the runtime does not check. A
+  neither the index nor its elements. No work in flight may read a displaced object through the
+  index: the program's duty, as it is Metal's, which the runtime does not check. A released one
+  it may: a texture's index, elements, views and image, a texture view's views, and a sampler
+  state's index and device samplers go once every command buffer committed before the release
+  has retired, at once where none is in flight, so that work reads them as they were
+  (`Gauges::releases_waiting` counts what waits). Metal leaves that read undefined: a program that
+  released textures a frame in flight still sampled finished every run with no command buffer
+  error on two Macs, with the answer it gave with the textures held on a Radeon Pro 5300M, and one
+  a few channel levels off it, differing from run to run, on an Apple M3 Max. The runtime gives
+  the first answer. As with memory, a command
+  buffer that waits at an event holds every such release after its commit until it retires. A
   sampler state or constexpr sampler whose device samplers equal the displaced one's is safe under
   work in flight: equal create infos share the device's `VkSampler`s, the arrays keep the samplers last written at each index, and
   an element that holds its sampler already is not written, so the placement changes no
@@ -1123,7 +1141,8 @@ made, with no lock, and never rewritten for layouts.
   written). A different sampler state stays the program's duty.
   Making one at an index not granted is `Refusal::IndicesNotGranted`. Where nothing took it, the
   index is free again once its owner's last handle is gone, and with it the last command buffer
-  that used it; its elements read their default again from then.
+  that used it, and every command buffer committed before that has retired; its elements read
+  their default again from then.
 
 ## Textures
 

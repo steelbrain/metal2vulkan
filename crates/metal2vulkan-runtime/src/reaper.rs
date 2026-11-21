@@ -6,8 +6,12 @@
 //! replacing it past its bound (`crate::cache`). No driver free runs on the completion thread,
 //! so no completion waits behind one. Device memory it does not free: a texture's allocation of
 //! its own, a surface plane's import and a copy's staging buffer go to the block-maker thread,
-//! whose form of every free a submission waits out at most one of (`crate::submit_calls`).
+//! whose form of every free a submission waits out at most one of (`crate::submit_calls`). A
+//! texture's or a sampler state's index, views, image or sampler released while work was in flight
+//! come from the block-maker thread once the command buffers committed before the release retired
+//! (`crate::memory::Pool::release`).
 
+use crate::arrays::Owner;
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
 use crate::memory::Loose;
@@ -77,6 +81,11 @@ pub(crate) enum Free {
     AttachmentViews(Vec<vk::ImageView>),
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
     Sampler(vk::Sampler),
+    /// A released texture's index and owner word, its second element too where it says so
+    /// (`Arrays::vacate_texture`).
+    TextureIndex((u32, Owner), bool),
+    /// A released sampler state's index and owner word (`Arrays::vacate_samplers`).
+    SamplerIndex(u32, Owner),
 }
 
 impl Reaper {
@@ -152,7 +161,7 @@ unsafe fn free_backing(core: &Core, backing: Backing) {
 }
 
 /// Frees one object.
-fn free(core: &Core, object: Free) {
+pub(crate) fn free(core: &Core, object: Free) {
     let device = &core.device;
     match object {
         Free::Semaphore(semaphore) => {
@@ -235,6 +244,15 @@ fn free(core: &Core, object: Free) {
             unsafe { device.destroy_sampler(sampler, None) };
             core.counters.fall(Gauge::DeviceSamplers);
         }
+        // SAFETY: no pending work reads the elements: the work committed before the release
+        // retired (`crate::memory::Wait`), and each command buffer that used the object held it.
+        Free::TextureIndex(at, second) => unsafe {
+            (core.arrays).vacate_texture(device, &core.counters, at, second)
+        },
+        // SAFETY: as above.
+        Free::SamplerIndex(index, owner) => unsafe {
+            (core.arrays).vacate_samplers(device, &core.counters, index, owner)
+        },
     }
 }
 

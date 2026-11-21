@@ -357,7 +357,7 @@ struct Views {
 
 impl Drop for Views {
     fn drop(&mut self) {
-        (self.core.reaper).give(Job::Free(Free::Views([self.sampled, self.storage])));
+        (self.core.pool).release(&self.core, Free::Views([self.sampled, self.storage]));
     }
 }
 
@@ -788,7 +788,7 @@ impl Drop for Image {
                 backing: self.backing,
             },
         };
-        self.core.reaper.give(Job::Free(free));
+        self.core.pool.release(&self.core, free);
     }
 }
 
@@ -887,17 +887,9 @@ impl Drop for TextureInner {
                 core.reaper.give(Job::Released(image, self.image.bytes));
             }
         }
-        if let Some((index, owner)) = self.index {
-            // SAFETY: no work that reads its elements is pending: each command buffer that used
-            // the texture held it until it retired.
-            unsafe {
-                (core.arrays).vacate_texture(
-                    &core.device,
-                    &core.counters,
-                    (index, owner),
-                    self.image.attachment_reads,
-                )
-            };
+        if let Some(at) = self.index {
+            let second = self.image.attachment_reads;
+            core.pool.release(core, Free::TextureIndex(at, second));
         }
         // Its element is null, or another texture's: its view of the shadow goes before the
         // shadow, which its image holds.
@@ -907,7 +899,7 @@ impl Drop for TextureInner {
                 .take()
         });
         if let Some(view) = shadow {
-            core.reaper.give(Job::Free(Free::ShadowView(view)));
+            core.pool.release(core, Free::ShadowView(view));
         }
     }
 }
@@ -931,8 +923,14 @@ impl Device {
     /// buffer not yet retired still holds, is taken at once, as Metal's later texture at a
     /// resource ID takes the ID: the new texture owns the index and its elements from then, and
     /// the earlier one's going, at its release or once its command buffers retire, touches
-    /// neither. No work in flight may read a displaced or released texture through the index
-    /// (the program's duty, as it is Metal's; nothing checks it).
+    /// neither. No work in flight may read a displaced texture through the index (the program's
+    /// duty, as it is Metal's; nothing checks it). A released one it may: its index, elements,
+    /// views and image go once every command buffer committed before the release retired
+    /// ([`Gauges::releases_waiting`](crate::Gauges::releases_waiting)), so that work reads it as
+    /// it was. Metal leaves that read undefined: a program that released textures a frame in
+    /// flight still sampled finished every run with no command buffer error on two Macs, with the
+    /// answer it gave with the textures held on a Radeon Pro 5300M, and one a few channel levels
+    /// off it, differing from run to run, on an Apple M3 Max. The runtime gives the first answer.
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a

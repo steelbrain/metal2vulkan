@@ -1000,7 +1000,7 @@ impl Device {
     ///
     /// Err: [`Refusal::IndicesNotGranted`] where one of its indices is not granted;
     /// [`Refusal::IndicesInUse`] where a texture or a sampler state lives at one, until its last
-    /// handle is gone.
+    /// handle is gone and the command buffers committed before that retired.
     pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error> {
         lock(&self.core().arrays.grants).release(grant)
     }

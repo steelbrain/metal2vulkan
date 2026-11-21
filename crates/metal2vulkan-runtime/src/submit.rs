@@ -1164,6 +1164,19 @@ impl Work {
     pub(crate) fn progress(&self) -> u64 {
         self.lock().progress
     }
+
+    /// The progress value of the last submission once every command buffer committed up to place
+    /// `commits` in the commit order is submitted, or ended before it was; None while one waits
+    /// in its queue's FIFO or in a group not yet submitted (`crate::memory::Wait`).
+    pub(crate) fn settled(&self, commits: u64) -> Option<u64> {
+        let state = self.lock();
+        let waits = |pending: &Pending| pending.seq <= commits;
+        let queued = (state.fifos.iter()).flat_map(|fifo| &fifo.entries);
+        let staged = (state.fifos.iter()).filter_map(|fifo| fifo.group.as_ref());
+        let held = queued.filter_map(|entry| entry.pending.as_ref()).any(waits)
+            || (staged.flat_map(|group| &group.finished)).any(|(_, pending, _)| waits(pending));
+        (!held).then_some(state.progress)
+    }
 }
 
 impl WorkState {

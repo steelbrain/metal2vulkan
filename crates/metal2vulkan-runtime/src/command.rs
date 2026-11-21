@@ -659,8 +659,11 @@ impl CommandBuffer {
         for (drawable, _) in &presents {
             drawable.presented();
         }
+        let seq = work.seq();
+        // What is given back from now waits for this command buffer (`crate::memory::Wait`).
+        core.pool.committed(seq);
         let pending = Pending {
-            seq: work.seq(),
+            seq,
             next: 0,
             value: 0,
             gpu,
@@ -1533,6 +1536,8 @@ pub(crate) fn retire(
     if let Some((start, end)) = gpu_times {
         inner.queue.ran(end.saturating_sub(start));
     }
+    // What was released while it was in flight may go (`crate::memory::Wait`).
+    core.pool.ended();
     let (stamps, stages) = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its

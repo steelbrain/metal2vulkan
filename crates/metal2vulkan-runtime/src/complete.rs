@@ -569,6 +569,7 @@ pub(crate) fn run(core: Arc<Core>) {
             // this round, which sees no completion, running while it is held.
             done.busy.store(true, Ordering::SeqCst);
             core.work.completed();
+            core.pool.retired();
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the
             // last calibration, read again first where the period has passed since it, and moved

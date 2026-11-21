@@ -13,7 +13,7 @@ use crate::arrays::{Owner, ResourceId};
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit};
-use crate::reaper::{Free, Job};
+use crate::reaper::Free;
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::DeviceProfile;
@@ -184,11 +184,7 @@ impl SamplerInner {
 impl Drop for SamplerInner {
     fn drop(&mut self) {
         let core = &self.core;
-        // SAFETY: no work that reads its elements is pending: each command buffer that used the
-        // state held it until it retired.
-        unsafe {
-            (core.arrays).vacate_samplers(&core.device, &core.counters, self.index, self.owner)
-        };
+        (core.pool).release(core, Free::SamplerIndex(self.index, self.owner));
         core.counters.fall(Gauge::Samplers);
         give_back(core, &self.uses);
     }
@@ -335,7 +331,7 @@ fn give_back(core: &Core, uses: &[Option<SamplerDesc>]) {
             .collect()
     };
     for sampler in freed {
-        core.reaper.give(Job::Free(Free::Sampler(sampler)));
+        core.pool.release(core, Free::Sampler(sampler));
     }
 }
 
