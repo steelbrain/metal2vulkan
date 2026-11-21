@@ -1129,10 +1129,18 @@ made, with no lock, and never rewritten for layouts.
   takes the ID: the new object writes its elements (a texture with no storage view writes its
   storage element null where it took the index from another, so nothing stale answers there),
   and the earlier object's going, at its release or once its command buffers retire, touches
-  neither the index nor its elements. No work in flight may read a displaced object through the
-  index: the program's duty, as it is Metal's, which the runtime does not check. A released one
-  it may: a texture's index, elements, views and image, a texture view's views, and a sampler
-  state's index and device samplers go once every command buffer committed before the release
+  neither the index nor its elements. Taking an index that a released object still holds for a
+  command buffer not yet retired writes elements that work in flight may use, a write Vulkan does
+  not define (an element of these bindings may change while a command buffer that uses the set is
+  pending only where no shader invocation uses it). Not asking for one is the consumer's duty, not
+  the program's: Metal hands a released ID out again at once (seen on a Radeon Pro 5300M), so a
+  program can be given the ID of an object that work in flight still reads. A consumer keeps a
+  released ID back from the program until every command buffer committed before the release has
+  retired. The runtime does not check it, and does not refuse the placement: from that retirement
+  until the vacate below, the index is still the released object's and a placement is defined;
+  the displaced form is for that window. Work in flight may read a released object that still
+  holds its index: a texture's index, elements, views and image, a texture view's views, and a
+  sampler state's index and device samplers go once every command buffer committed before the release
   has retired, at once where none is in flight, so that work reads them as they were
   (`Gauges::releases_waiting` counts what waits). Metal leaves that read undefined: a program that
   released textures a frame in flight still sampled finished every run with no command buffer
@@ -1144,7 +1152,7 @@ made, with no lock, and never rewritten for layouts.
   work in flight: equal create infos share the device's `VkSampler`s, the arrays keep the samplers last written at each index, and
   an element that holds its sampler already is not written, so the placement changes no
   descriptor that pending work reads (`Metrics::sampler_element_writes` counts the elements
-  written). A different sampler state stays the program's duty.
+  written). A different sampler state stays the consumer's duty.
   Making one at an index not granted is `Refusal::IndicesNotGranted`. Where nothing took it, the
   index is free again once its owner's last handle is gone, and with it the last command buffer
   that used it: at once where nothing was in flight then, and otherwise once every command buffer

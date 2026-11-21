@@ -923,9 +923,12 @@ impl Device {
     /// buffer not yet retired still holds, is taken at once, as Metal's later texture at a
     /// resource ID takes the ID: the new texture owns the index and its elements from then, and
     /// the earlier one's going, at its release or once its command buffers retire, touches
-    /// neither. No work in flight may read a displaced texture through the index (the program's
-    /// duty, as it is Metal's; nothing checks it). A released one it may: its index, elements,
-    /// views and image go once every command buffer committed before the release retired
+    /// neither. Work in flight must not use the index's elements then: Vulkan does not define
+    /// that write. Keeping it away is the consumer's duty, not the program's, as Metal hands a
+    /// released ID out again at once (seen on a Radeon Pro 5300M): a consumer keeps a released ID
+    /// back from the program until every command buffer committed before the release has retired.
+    /// Nothing checks it. Work in flight may read a released texture that still holds its index:
+    /// its index, elements, views and image go once every command buffer committed before the release retired
     /// ([`Gauges::releases_waiting`](crate::Gauges::releases_waiting)), the index then on the
     /// block-maker thread's next pass, so that work reads it as it was. Metal leaves that read
     /// undefined: a program that released textures a frame in flight still sampled finished every

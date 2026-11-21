@@ -227,8 +227,8 @@ and the (name id, value) answer pairs.
   it, as Metal's later texture at an ID takes the ID: the earlier object's release leaves the
   index. A placement at an index waits first for the commits of the command buffers that named
   an object while it held the index, live or released since, to retire (their completed handlers have run, which the runtime runs once it
-  has let go of what they held): Metal leaves it to the program never to take an element from
-  under work that runs, and the program's own timing kept that. An object named after a later
+  has let go of what they held): the runtime leaves it to its consumer never to write an
+  element that work in flight may use. An object named after a later
   one took its index holds it no more: the index is the later one's, and that naming owes it
   nothing. Where the runtime refuses a named index (it lies outside the object's class), the object
   takes the lowest free one, and the report counts it. A constexpr sampler, which the stream names

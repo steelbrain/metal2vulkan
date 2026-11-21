@@ -38,8 +38,12 @@ the program released that work in flight still holds, writes its elements and ow
 once; where the earlier texture had a storage element and the later has none, the later one
 writes that element null, so nothing stale answers there. The earlier object's release, and its
 teardown once its work retires, touch neither the index nor its elements; the owner's empties
-them. The rule rests on the duty Metal puts on a program: no work in flight reads a displaced or
-released object through that ID. The runtime does not check it.
+them. Vulkan does not define that write where work in flight uses the element. Keeping it away is
+the consumer's duty, not the program's: Metal hands a released ID out again at once (seen on a
+Radeon Pro 5300M), so a consumer keeps a released ID back from the program until every command
+buffer committed before the release has retired. The runtime does not check it, and does not refuse
+the placement: between that retirement and the index's vacate the placement is defined, and the
+displaced form is for that window.
 
 ## The arrays
 

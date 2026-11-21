@@ -335,8 +335,8 @@ impl Arrays {
     ///
     /// Each view is live and of the device, of an image in that layout whenever work uses it,
     /// `looped` only where the set was made with the second elements and the image has the
-    /// feedback usage, and no work in flight reads a displaced texture through the index (the
-    /// program's duty, as it is Metal's).
+    /// feedback usage, and where it displaces, no work in flight uses the index's elements (the
+    /// consumer's duty: Vulkan does not define that write).
     pub(crate) unsafe fn place_texture(
         &self,
         device: &ash::Device,
@@ -512,8 +512,9 @@ impl Arrays {
     ///
     /// # Safety
     ///
-    /// Each sampler is live and of the device whenever work uses it, and no work in flight reads
-    /// a displaced object through the index.
+    /// Each sampler is live and of the device whenever work uses it, and where it displaces, no
+    /// work in flight uses an element it writes (the consumer's duty: Vulkan does not define that
+    /// write).
     pub(crate) unsafe fn place_samplers(
         &self,
         device: &ash::Device,
@@ -538,7 +539,8 @@ impl Arrays {
     /// # Safety
     ///
     /// No pending work uses an element of `added`, each sampler is live and of the device
-    /// whenever work uses it, and no work in flight reads a displaced object through the index.
+    /// whenever work uses it, and where it displaces, no work in flight uses an element it
+    /// writes (the consumer's duty: Vulkan does not define that write).
     pub(crate) unsafe fn hold_samplers(
         &self,
         device: &ash::Device,
