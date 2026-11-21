@@ -14,10 +14,11 @@
 //!   says the play is no verdict past it: its gap, frame and call.
 //! - A pass's visibility results play as the runtime's: in a `Reset` pass, `Counting` and
 //!   `Boolean` modes before draws of the whole target write its 16 samples into their words, and
-//!   a word no mode took keeps its bytes, nothing skipped. A mode at an offset the encoder took
-//!   before is the runtime's refusal, Metal's own, skipped and counted by its kind; in an
-//!   `Accumulate` pass both modes are the runtime's gap, skipped and counted, and the buffer keeps
-//!   its bytes.
+//!   a word no mode took keeps its bytes, nothing skipped; the backend's gauges read the one
+//!   occlusion pool at the frame's end and none at the device's drop. A mode at an offset the
+//!   encoder took before is the runtime's refusal, Metal's own, skipped and counted by its kind;
+//!   in an `Accumulate` pass both modes are the runtime's gap, skipped and counted, and the buffer
+//!   keeps its bytes.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
@@ -655,7 +656,8 @@ const UNWRITTEN: u64 = 0xaaaa_aaaa_aaaa_aaaa;
 /// `Accumulate`): `Counting` at offset 0 (call 18) and a draw of the whole target (call 19), then
 /// `Boolean` at offset 8 (call 20) and the draw again (call 21), and, with `revisit`, `Counting` at
 /// offset 0 again (call 22), which Metal's validation stops; no mode takes offset 16. Once the
-/// command buffer completes, the stream checks the buffer as `words`.
+/// command buffer completes, the stream checks the buffer as `words`, then presents, which ends
+/// the frame.
 fn visibility_results(dir: &ScratchDir, kind: u64, revisit: bool, words: [u64; 3]) -> PathBuf {
     written(dir, |w| {
         let library = w.blob(&render_library(dir))?;
@@ -740,19 +742,41 @@ fn visibility_results(dir: &ScratchDir, kind: u64, revisit: bool, words: [u64; 3
         w.call(WAIT_COMPLETED, 12, 0, &[], &[])?;
         let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
         let sum = Value::List(vec![Value::Bytes(Sha256::digest(&bytes).to_vec())]);
-        w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])
+        w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])
     })
 }
 
 /// A `Reset` pass's visibility results play as the runtime's: `Counting` at offset 0 writes the
 /// 16 samples of the target that the draw covers, `Boolean` at offset 8 the same count (the
 /// runtime's `Boolean` word is the count, nonzero exactly where a sample passed), and offset 16,
-/// which no mode took, keeps its bytes. The check reads those words, and nothing is skipped.
+/// which no mode took, keeps its bytes. The check reads those words, and nothing is skipped. The
+/// backend's gauges carry the occlusion pools: the frame's end reads the one pool the command
+/// buffer took, and the device's drop none.
 #[test]
 fn a_pass_s_visibility_results_play_on_the_new_runtime() {
     let dir = ScratchDir::new("rt-replay-visibility").unwrap();
     let path = visibility_results(&dir, 0, false, [16, 16, UNWRITTEN]);
-    let (report, _) = play("visibility", &path);
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let (report, ended) = Player::new(&mut backend).play(&mut reader);
+    for line in report.lines() {
+        eprintln!("REPLAY visibility {line}");
+    }
+    ended.unwrap();
+    assert_eq!(
+        report.ends[0].live["occlusion_pools"], 1,
+        "{:?}",
+        report.ends
+    );
+    let ended = backend.end();
+    ended.result().unwrap();
+    let pools = ended
+        .gauges
+        .iter()
+        .find(|(gauge, _)| *gauge == "occlusion_pools");
+    assert_eq!(pools, Some(&("occlusion_pools", 0)), "{:?}", ended.gauges);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
     for skipped in [
