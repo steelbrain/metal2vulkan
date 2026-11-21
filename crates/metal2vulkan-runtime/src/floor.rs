@@ -228,8 +228,6 @@ pub(crate) fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::ExtCustomBorderColor)
     } else if name == ash::ext::external_memory_host::NAME {
         Some(VkExtension::ExtExternalMemoryHost)
-    } else if name == ash::khr::maintenance5::NAME {
-        Some(VkExtension::KhrMaintenance5)
     } else {
         None
     }
@@ -762,10 +760,13 @@ pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
 pub(crate) const FAULT_REPORTS: &[Feature] = &[feature!(fault.device_fault)];
 
 /// The features of [`INDIRECT_COMMANDS`]: enabled together where the device offers indirect
-/// command buffers ([`IndirectCommandLimits`]), and neither otherwise.
+/// command buffers ([`IndirectCommandLimits`]), and neither otherwise. The translator is told of
+/// neither `maintenance5` nor `VK_KHR_maintenance5`: told, it would hold `A8Unorm` in `A8_UNORM`
+/// on a device with indirect command buffers and in `R8_UNORM` on one without, a second form
+/// chosen by a query. The README's `Enabled, not stated` table records both.
 pub(crate) const INDIRECT_COMMAND_FEATURES: &[Feature] = &[
     feature!(generated_commands.device_generated_commands),
-    feature!(maintenance5.maintenance5 => Maintenance5),
+    feature!(maintenance5.maintenance5),
 ];
 
 /// Every table of features device creation enables, each where its own rule says: the floor's,

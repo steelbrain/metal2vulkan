@@ -45,19 +45,38 @@ fn creation_extensions() -> BTreeSet<&'static CStr> {
         .collect()
 }
 
-/// The README's `Not enabled` table: each feature it records, by the translator's name.
-fn recorded() -> BTreeSet<VkFeature> {
+/// The data rows of the README's table headed `header` under its subsection `title`.
+fn readme_table(title: &str, header: &[&str]) -> Vec<Vec<String>> {
     let path = crate::tests::crate_dir().join("README.md");
     let readme = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let heading = format!("### {title}");
     let section: Vec<&str> = readme
         .lines()
-        .skip_while(|line| *line != "### Not enabled")
+        .skip_while(|line| *line != heading)
         .skip(1)
         .take_while(|line| !line.starts_with("## ") && !line.starts_with("### "))
         .collect();
-    assert!(!section.is_empty(), "the README has no `### Not enabled`");
-    table(&section, &["Feature", "Structure", "Without it"])
+    assert!(!section.is_empty(), "the README has no `{heading}`");
+    table(&section, header)
+}
+
+/// The items of the README's `Enabled, not stated` table of the kind `kind` (`feature` or
+/// `extension`), by their Vulkan names.
+fn unstated(kind: &str) -> BTreeSet<String> {
+    readme_table(
+        "Enabled, not stated",
+        &["Item", "Kind", "Why it is not stated"],
+    )
+    .into_iter()
+    .filter(|row| row[1].starts_with(kind))
+    .map(|row| row[0].clone())
+    .collect()
+}
+
+/// The README's `Not enabled` table: each feature it records, by the translator's name.
+fn recorded() -> BTreeSet<VkFeature> {
+    readme_table("Not enabled", &["Feature", "Structure", "Without it"])
         .into_iter()
         .map(|row| {
             vocabulary(&row[0])
@@ -80,9 +99,12 @@ fn creation_features() -> BTreeSet<VkFeature> {
 /// Every entry of a table device creation enables carries the translator's name for its member,
 /// where the translator names it, so a feature creation enables reaches the translator's
 /// description wherever creation enables it; and a device that reports every one of them gives
-/// the translator each.
+/// the translator each. The exceptions are the README's `Enabled, not stated` features, each of
+/// which creation enables, the translator names, and the description does not state.
 #[test]
 fn every_feature_creation_enables_reaches_the_translator() {
+    let unstated = unstated("feature");
+    let mut met = BTreeSet::new();
     let mut device = at_the_floor();
     for feature in ENABLED.iter().copied().flatten() {
         *(feature.field)(&mut device.features) = vk::TRUE;
@@ -97,6 +119,15 @@ fn every_feature_creation_enables_reaches_the_translator() {
     for feature in ENABLED.iter().copied().flatten() {
         let member = vulkan_name(feature.member);
         let name = vocabulary(&member);
+        if unstated.contains(&member) {
+            let name = name.unwrap_or_else(|| {
+                panic!("{member}: in `Enabled, not stated`, and the translator does not name it")
+            });
+            assert_eq!(feature.translator, None, "{member}: stated");
+            assert!(!enables.features.contains(&name), "{name:?} is passed");
+            met.insert(member);
+            continue;
+        }
         assert_eq!(
             feature.translator, name,
             "{}.{member}: the translator's name",
@@ -109,13 +140,21 @@ fn every_feature_creation_enables_reaches_the_translator() {
         }
     }
     assert!(named > 60, "{named} named features enabled");
+    assert_eq!(
+        met, unstated,
+        "the `Enabled, not stated` features that creation enables"
+    );
 }
 
 /// Each extension device creation may enable reaches the translator's description where the
 /// translator names it, as the translator itself reads its name: a profile document that lists it
-/// alone gives the translator's description that one extension.
+/// alone gives the translator's description that one extension. The exceptions are the README's
+/// `Enabled, not stated` extensions, each of which the translator names and the description does
+/// not state.
 #[test]
 fn every_extension_creation_enables_reaches_the_translator() {
+    let unstated = unstated("extension");
+    let mut met = BTreeSet::new();
     let path = metal2vulkan_devtools::validation_dir().join("profiles/runtime-floor.json");
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
@@ -148,12 +187,26 @@ fn every_extension_creation_enables_reaches_the_translator() {
             .expect("the profile's capabilities")
             .push(Value::from("m2v_listed"));
         let read: Vec<VkExtension> = read(&listed).difference(&bare).copied().collect();
+        let vulkan = name.to_string_lossy().into_owned();
+        if unstated.contains(&vulkan) {
+            assert!(
+                !read.is_empty(),
+                "{vulkan}: in `Enabled, not stated`, and the translator does not name it"
+            );
+            assert_eq!(shader_extension(name), None, "{vulkan}: stated");
+            met.insert(vulkan);
+            continue;
+        }
         assert_eq!(
             shader_extension(name),
             read.first().copied(),
             "{name:?}: the translator reads {read:?}"
         );
     }
+    assert_eq!(
+        met, unstated,
+        "the `Enabled, not stated` extensions that creation may enable"
+    );
 }
 
 /// A committed device profile as the floor reads a device: its extensions, with the floor's that the

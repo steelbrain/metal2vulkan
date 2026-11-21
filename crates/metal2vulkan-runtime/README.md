@@ -4603,6 +4603,21 @@ under `--cfg m2v_cpu_icd` on the machine's CPU device, it derives the translator
 without each feature the device reports that creation does not enable, and fails on one that
 changes the profile and is not in this table, and on a row whose feature creation enables.
 
+### Enabled, not stated
+
+Device creation enables each item below where its own rule says, and the translator's description
+of the device never states it, though the translator names it. Every other feature and extension
+creation enables that the translator names, the description states.
+
+| Item | Kind | Why it is not stated |
+|---|---|---|
+| `maintenance5` | feature (`VkPhysicalDeviceMaintenance5FeaturesKHR`) | enabled with indirect command buffers alone. Stated, the translator would hold `A8Unorm` in `A8_UNORM` where a device has them and in `R8_UNORM` read as `(0, 0, 0, r)` where it does not, a second form chosen by a query; it is held in `R8_UNORM` on every device (Known gaps of textures) |
+| `VK_KHR_maintenance5` | extension | as `maintenance5` |
+
+`tests::feature_enables` holds this table to the code: an item creation enables that the
+translator names reaches the description unless a row here names it, and a row names an item
+creation enables, that the translator names, and that the description does not state.
+
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's
 Vulkan loader lists.
