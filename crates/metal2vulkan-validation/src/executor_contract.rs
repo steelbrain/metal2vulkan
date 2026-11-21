@@ -720,7 +720,9 @@ pub fn unsupported_source_requirements(
 ///   checker requires authored as a device-buffer array);
 /// - [`ToolingRequirement::RenderAccelerationStructure`]: a vertex or fragment function's
 ///   acceleration-structure or intersection-function-table argument (the checker requires every
-///   bound one).
+///   bound one);
+/// - [`ToolingRequirement::RenderFunctionTable`]: a vertex or fragment function's
+///   visible-function-table argument, which the runtime's render pipeline state does not read.
 ///
 /// A post-tessellation vertex function is none of them: the candidate draws its patches as the
 /// oracle does (`tessellation`); nor is a fragment function's color input, whose render target the
@@ -750,6 +752,8 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
                 .as_deref()
                 .is_some_and(crate::air::meta::is_device_buffer_array_type_name)
     });
+    let function_table = (reflection.bindings.iter())
+        .any(|binding| binding.kind == ResourceKind::VisibleFunctionTable);
     let acceleration_structure = reflection.bindings.iter().any(|binding| {
         matches!(
             binding.kind,
@@ -766,6 +770,10 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
         (
             render && acceleration_structure,
             ToolingRequirement::RenderAccelerationStructure,
+        ),
+        (
+            render && function_table,
+            ToolingRequirement::RenderFunctionTable,
         ),
     ]
     .into_iter()
@@ -815,6 +823,10 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
                 && (!case.acceleration_structures.is_empty()
                     || !case.intersection_function_tables.is_empty()),
             ToolingRequirement::RenderAccelerationStructure,
+        ),
+        (
+            render && !case.visible_function_tables.is_empty(),
+            ToolingRequirement::RenderFunctionTable,
         ),
         (
             case.stage == Stage::Vertex && case.depth_stencil.is_some(),
@@ -2698,6 +2710,11 @@ entry:
                 "intersection_function_table<triangle_data>",
                 ToolingRequirement::RenderAccelerationStructure,
             ),
+            (
+                ResourceKind::VisibleFunctionTable,
+                "visible_function_table<WordOp>",
+                ToolingRequirement::RenderFunctionTable,
+            ),
         ] {
             let mut binding = buffer.clone();
             binding.kind = kind;
@@ -2865,6 +2882,20 @@ entry:
         let mut fragment = traced.clone();
         fragment.stage = Stage::Fragment;
         only(&fragment, ToolingRequirement::RenderAccelerationStructure);
+        // A function table: a kernel's runs; a vertex or fragment function's is the runtime's
+        // limit.
+        let mut tabled = kernel.clone();
+        tabled.visible_function_tables = vec![crate::case::FunctionTableResource {
+            binding: 1,
+            size: 1,
+            entries: Vec::new(),
+        }];
+        assert!(case_requirements(&tabled).is_empty());
+        for stage in [Stage::Vertex, Stage::Fragment] {
+            let mut drawn = tabled.clone();
+            drawn.stage = stage;
+            only(&drawn, ToolingRequirement::RenderFunctionTable);
+        }
         let mut arrays = kernel.clone();
         arrays.device_buffer_arrays = vec![device_buffer_array(0, 1, &[0])];
         assert!(case_requirements(&arrays).is_empty());
