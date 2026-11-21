@@ -653,12 +653,15 @@ impl DeviceDescription {
     ///
     /// The set keeps Vulkan's co-enable rules: where `robustBufferAccess` stays and the description
     /// does not report `robustBufferAccessUpdateAfterBind`, the update-after-bind features of the
-    /// storage buffer, uniform texel buffer, and storage texel buffer descriptor types, which the
-    /// core does not read, are left out (VUID-VkDeviceCreateInfo-robustBufferAccess-10247); and
-    /// `robustBufferAccess2` without `robustBufferAccess`, or `multiviewTessellationShader` without
-    /// `multiview`, is left out. A consumer that wants those update-after-bind features itself on
-    /// such a device enables them without `robustBufferAccess` (and `robustBufferAccess2`), and the
-    /// profile then contains buffer accesses in the shader.
+    /// storage buffer, uniform texel buffer, and storage texel buffer descriptor types are left out
+    /// (VUID-VkDeviceCreateInfo-robustBufferAccess-10247); and `robustBufferAccess2` without
+    /// `robustBufferAccess`, or `multiviewTessellationShader` without `multiview`, is left out. The
+    /// core reads the two texel-buffer ones: a texture buffer is an element of a set-1 texel-buffer
+    /// array, which needs its type's update-after-bind feature, so a device made from this set on
+    /// such a device refuses every texture buffer, naming the feature it lacks. A consumer that wants
+    /// texture buffers there enables those features without `robustBufferAccess` (and
+    /// `robustBufferAccess2`), as the runtime does, and the profile then contains buffer accesses
+    /// in the shader.
     pub fn recommended_enables(&self) -> EnableSet {
         let features = self.features.iter().copied();
         let features = co_enabled(features, self.robust_buffer_access_update_after_bind);

@@ -49,9 +49,11 @@ fn floor_with(extensions: &[VkExtension], features: &[VkFeature]) -> DeviceDescr
 /// On every committed profile the recommendation lists only what the description lists, is closed
 /// (`with_enabled` accepts it, `Device::from_queries` accepts the result), and is a fixed point:
 /// the device made from it needs exactly it, as does the device made from the full description. It
-/// leaves out nothing: no committed profile lists the buffer update-after-bind features with
-/// `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`
-/// ([`a_recommendation_keeps_vuid_10247`] builds one).
+/// leaves out only what VUID 10247 forbids: `runtime-floor` is the one committed profile that lists
+/// buffer update-after-bind features (the two texel-buffer ones the runtime's floor requires for
+/// texture buffers) with `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`, so
+/// its recommendation keeps `robustBufferAccess` and leaves those two out; the runtime enables
+/// them and never `robustBufferAccess` ([`a_recommendation_keeps_vuid_10247`] builds another).
 #[test]
 fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     let mut left_out = Vec::new();
@@ -116,7 +118,20 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     }
     let m = profile("moltenvk-m3").recommended_enables();
     assert!(m.extensions.contains(&VkExtension::KhrPortabilitySubset));
-    assert!(left_out.is_empty(), "{left_out:?}");
+    left_out.sort();
+    assert_eq!(
+        left_out,
+        vec![
+            (
+                "runtime-floor".to_string(),
+                VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind
+            ),
+            (
+                "runtime-floor".to_string(),
+                VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind
+            ),
+        ]
+    );
 }
 
 /// A description listing `robustBufferAccess` and update-after-bind features: without
