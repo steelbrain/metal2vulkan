@@ -2290,7 +2290,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
   for a new workgroup size, threadgroup memory lengths or tiles), `first_use_line_waits` (a
   render content's line-class pipeline) and `first_use_point_waits` (its point-class pipeline).
-  No dispatch lowers a function.
+  No dispatch lowers a function. `Counters::variant_makes(from)` answers the kept makes of
+  kernels' `VkPipeline`s numbered `from` or later, the last 256 to end on the device, each a
+  `VariantMake`: its key (the `DispatchVariant` its dispatches answer), who started it
+  (`VariantStart`: the state's creation, a `prepare_dispatch` call, or a dispatch's first use),
+  when it began and ended in `host_time`, whether it made the pipeline, and the first-use waits
+  that waited for it, with when the earliest began. A wait on a make another thread started
+  found that make in flight. Neither type has a Metal counterpart.
 - `ComputePipelineState::prepare_dispatch(Dispatch, threads_per_threadgroup,
   threadgroup_memory_lengths)` has no Metal counterpart: it is a hook for a consumer's pre-pass.
   Metal compiles a compute state whole when the state is made, and so does the state's creation

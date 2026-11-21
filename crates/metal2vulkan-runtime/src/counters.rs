@@ -1,7 +1,10 @@
 //! The device's counters: cumulative metrics and live gauges, as relaxed atomics that are always
-//! on, and each timed part's longest call under a lock taken only when a call passes it. Each part
-//! of the runtime adds to its own; nothing turns them on or off.
+//! on, each timed part's longest call under a lock taken only when a call passes it, and the last
+//! variant makes of compute kernels under a lock taken once a make. Each part of the runtime adds
+//! to its own; nothing turns them on or off.
 
+use crate::pipeline::DispatchVariant;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -100,6 +103,61 @@ pub(crate) enum FirstUse {
     /// A render content's point-class pipeline, at its first draw of points
     /// ([`Metrics::first_use_point_waits`]).
     Points,
+}
+
+/// The variant makes [`Counters::variant_makes`] keeps: the last this many to end.
+pub(crate) const VARIANT_MAKES: usize = 256;
+
+/// No Metal counterpart: who started a make of a compute kernel's `VkPipeline` for one
+/// [`DispatchVariant`] ([`VariantMake::start`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VariantStart {
+    /// The state's creation, at a size it knows: a tiling kernel's tiles, an image-only kernel's
+    /// square workgroups, or an observing kernel's `requiredThreadsPerThreadgroup`.
+    State,
+    /// A [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) call, ahead of the
+    /// dispatches that run it.
+    Ahead,
+    /// A dispatch's encoding that found it neither made nor being made, which waited for it: a
+    /// first-use wait ([`Metrics::first_use_variant_waits`]).
+    FirstUse,
+}
+
+/// No Metal counterpart: one ended make of a compute kernel's `VkPipeline`
+/// ([`Counters::variant_makes`]): the key it was made for, who started it, when it began and
+/// ended, and the first-use waits that waited for it. Times are [`host_time`](crate::host_time)'s.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VariantMake {
+    /// Its number among the device's variant makes, from 0, in the order they ended.
+    pub number: u64,
+    /// The key of the dispatches that run it, as
+    /// [`dispatch_variant`](crate::ComputePipelineState::dispatch_variant) answers them; the
+    /// states of one content share it.
+    pub variant: DispatchVariant,
+    /// Who started it.
+    pub start: VariantStart,
+    /// When it began: when it was entered as being made, before its `vkCreateComputePipelines`
+    /// call.
+    pub began: u64,
+    /// When it ended, made or failed.
+    pub ended: u64,
+    /// Whether it made the `VkPipeline`. A make that failed is made again by the next call or
+    /// dispatch that needs it, a make of its own.
+    pub made: bool,
+    /// The first-use waits that waited for it: the dispatch that started it where
+    /// [`start`](Self::start) is [`VariantStart::FirstUse`], and each dispatch that found it being
+    /// made, a make already in flight.
+    pub waits: u32,
+    /// When the earliest of those waits began; 0 where none waited.
+    pub first_wait: u64,
+}
+
+/// The last [`VARIANT_MAKES`] variant makes to end, oldest first, and the number of the next.
+#[derive(Default)]
+struct VariantMakes {
+    next: u64,
+    kept: VecDeque<VariantMake>,
 }
 
 /// A [`Part`]'s longest call: its nanoseconds, its bytes, and whether it made an allocation of
@@ -472,6 +530,8 @@ struct Atomics {
     first_use_sites: [[AtomicU64; 3]; 3],
     /// The makes ahead of a dispatch: their count and total nanoseconds.
     made_ahead: [AtomicU64; 2],
+    /// [`Counters::variant_makes`].
+    variant_makes: Mutex<VariantMakes>,
     blocks_made: AtomicU64,
     block_bytes_made: AtomicU64,
     consumer_allocations: AtomicU64,
@@ -712,6 +772,29 @@ impl Counters {
         let [count, total] = &self.atomics.made_ahead;
         count.fetch_add(1, Relaxed);
         total.fetch_add(nanos, Relaxed);
+    }
+
+    /// One more ended variant make, `make` of its number: kept, and the oldest kept dropped past
+    /// [`VARIANT_MAKES`].
+    pub(crate) fn variant_made(&self, make: impl FnOnce(u64) -> VariantMake) {
+        let mut makes = (self.atomics.variant_makes.lock()).unwrap_or_else(PoisonError::into_inner);
+        if makes.kept.len() == VARIANT_MAKES {
+            makes.kept.pop_front();
+        }
+        let number = makes.next;
+        makes.next += 1;
+        makes.kept.push_back(make(number));
+    }
+
+    /// No Metal counterpart: the kept variant makes numbered `from` or later, oldest first. The
+    /// device keeps the last 256 to end, so a reader that passes one past the last number it read
+    /// gets each make once, and a number missing at the front was dropped before the read.
+    pub fn variant_makes(&self, from: u64) -> Vec<VariantMake> {
+        let makes = (self.atomics.variant_makes.lock()).unwrap_or_else(PoisonError::into_inner);
+        (makes.kept.iter())
+            .filter(|make| make.number >= from)
+            .copied()
+            .collect()
     }
 
     /// One more surface wait ([`Metrics::surface_waits`]): `nanos` nanoseconds, for `submissions`

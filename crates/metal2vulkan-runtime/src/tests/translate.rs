@@ -751,6 +751,91 @@ mod on_device {
         });
     }
 
+    /// Each make of a kernel's `VkPipeline` is kept in the device's counters with its key and who
+    /// started it: a tiling kernel's tiles by the state's creation, a size `prepare_dispatch` was
+    /// given by that call, and a size only a dispatch gives by the dispatch, a first-use wait
+    /// counted on the make. Each key is the one `dispatch_variant` answers for the dispatch, and
+    /// the first-use waits the dispatch added are the waits its make counts.
+    #[test]
+    fn every_device_keeps_each_variant_make_with_its_key_and_who_started_it() {
+        use crate::{Counters, Dispatch, VariantMake, VariantStart};
+
+        let (Some(tiling), Some(observing)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("icb_replay_grid_template"),
+        ) else {
+            return;
+        };
+        let next = |counters: &Counters| {
+            (counters.variant_makes(0).last()).map_or(0, |make| make.number + 1)
+        };
+        let one = |name: &str, makes: Vec<VariantMake>, what: &str| -> VariantMake {
+            assert_eq!(makes.len(), 1, "{name}: {what}: {makes:?}");
+            let make = makes[0];
+            assert!(
+                make.made && make.began <= make.ended,
+                "{name}: {what}: {make:?}"
+            );
+            make
+        };
+        each_device("variant_makes", |name, _, device| {
+            let counters = device.counters();
+            let from = next(&counters);
+            let tiles = state(name, &device, &tiling);
+            let make = one(name, counters.variant_makes(from), "the state's tiles");
+            let key = tiles.dispatch_variant(Dispatch::Threads([300, 1, 1]), [4, 1, 1], &[]);
+            assert_eq!(
+                (Some(make.variant), make.start, make.waits, make.first_wait),
+                (key, VariantStart::State, 0, 0),
+                "{name}: the state's tiles"
+            );
+
+            let state = state(name, &device, &observing);
+            let length = |size: [u32; 3]| (4 * size.iter().product::<u32>()).next_multiple_of(16);
+            let (grid, size) = ([8, 4, 1], [4, 2, 1]);
+            let lengths = [(0, length(size))];
+            let from = next(&counters);
+            state.prepare_dispatch(Dispatch::Threads(grid), size, &lengths);
+            let make = one(name, counters.variant_makes(from), "prepare_dispatch");
+            let key = state.dispatch_variant(Dispatch::Threads(grid), size, &lengths);
+            assert_eq!(
+                (Some(make.variant), make.start, make.waits),
+                (key, VariantStart::Ahead, 0),
+                "{name}: prepare_dispatch"
+            );
+
+            let (groups, size) = ([3, 2, 1], [2, 2, 1]);
+            let lengths = [(0, length(size))];
+            let (from, before) = (next(&counters), counters.metrics());
+            grid_template_run(
+                name,
+                &device,
+                &state,
+                (groups, size, How::Groups),
+                length(size),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let after = counters.metrics();
+            let make = one(name, counters.variant_makes(from), "the first use");
+            let key = state.dispatch_variant(Dispatch::Threadgroups(groups), size, &lengths);
+            assert_eq!(
+                (Some(make.variant), make.start, make.waits),
+                (key, VariantStart::FirstUse, 1),
+                "{name}: the first use"
+            );
+            assert_eq!(
+                after.first_use_variant_waits - before.first_use_variant_waits,
+                1,
+                "{name}: the first use's wait"
+            );
+            assert!(
+                make.first_wait > 0 && make.first_wait <= make.began,
+                "{name}: the wait began before the make: {make:?}"
+            );
+            println!("{name}: variant makes kept: the state's, prepare_dispatch's, a first use's");
+        });
+    }
+
     /// A state's make counts the time of its `vkCreateComputePipelines` calls in
     /// `Metrics::pipeline_creation_nanos` and of its calls into the translator in
     /// `translation_nanos`: each above 0, and the two, made on the make's own thread, within the

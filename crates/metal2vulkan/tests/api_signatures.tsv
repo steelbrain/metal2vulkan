@@ -791,6 +791,7 @@ enum	metal2vulkan-runtime::StoreAction	#[derive(Clone, Copy, Debug, Default, Par
 enum	metal2vulkan-runtime::SurfaceCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum SurfaceCopy
 enum	metal2vulkan-runtime::SurfaceForm	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum SurfaceForm
 enum	metal2vulkan-runtime::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
+enum	metal2vulkan-runtime::VariantStart	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum VariantStart
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
 enum	metal2vulkan-runtime::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan::bind::AccessClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AccessClass
@@ -1882,6 +1883,14 @@ field	metal2vulkan-runtime::Timed.over_1_ms	pub over_1_ms: u64
 field	metal2vulkan-runtime::Timed.over_20_ms	pub over_20_ms: u64
 field	metal2vulkan-runtime::Timed.over_5_ms	pub over_5_ms: u64
 field	metal2vulkan-runtime::Timed.total_nanos	pub total_nanos: u64
+field	metal2vulkan-runtime::VariantMake.began	pub began: u64
+field	metal2vulkan-runtime::VariantMake.ended	pub ended: u64
+field	metal2vulkan-runtime::VariantMake.first_wait	pub first_wait: u64
+field	metal2vulkan-runtime::VariantMake.made	pub made: bool
+field	metal2vulkan-runtime::VariantMake.number	pub number: u64
+field	metal2vulkan-runtime::VariantMake.start	pub start: VariantStart
+field	metal2vulkan-runtime::VariantMake.variant	pub variant: DispatchVariant
+field	metal2vulkan-runtime::VariantMake.waits	pub waits: u32
 field	metal2vulkan-runtime::VertexDescriptor.attributes	pub attributes: BTreeMap<u32, VertexAttributeDescriptor>
 field	metal2vulkan-runtime::VertexDescriptor.layouts	pub layouts: BTreeMap<u32, VertexBufferLayoutDescriptor>
 field	metal2vulkan-runtime::Viewport.height	pub height: f64
@@ -6546,6 +6555,7 @@ method	metal2vulkan-runtime::ComputePipelineState::texture_accesses	pub fn textu
 method	metal2vulkan-runtime::ComputePipelineState::thread_execution_width	pub fn thread_execution_width(&self) -> u32
 method	metal2vulkan-runtime::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-runtime::Counters::metrics	pub fn metrics(&self) -> Metrics
+method	metal2vulkan-runtime::Counters::variant_makes	pub fn variant_makes(&self, from: u64) -> Vec<VariantMake>
 method	metal2vulkan-runtime::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
 method	metal2vulkan-runtime::DepthStencilState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
 method	metal2vulkan-runtime::Device::argument_buffers_support	pub fn argument_buffers_support(&self) -> ArgumentBuffersTier
@@ -7626,6 +7636,7 @@ struct	metal2vulkan-runtime::TextureLevelQuery	#[derive(Clone, Copy, Debug, Part
 struct	metal2vulkan-runtime::TexturePlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct TexturePlace
 struct	metal2vulkan-runtime::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
 struct	metal2vulkan-runtime::Timed	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Timed
+struct	metal2vulkan-runtime::VariantMake	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VariantMake
 struct	metal2vulkan-runtime::VertexDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexDescriptor
 struct	metal2vulkan-runtime::Viewport	#[derive(Clone, Copy, Debug, PartialEq)] pub struct Viewport
 struct	metal2vulkan-runtime::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
@@ -9494,6 +9505,9 @@ variant	metal2vulkan-runtime::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-runtime::TextureViewKind::Slices	Slices
 variant	metal2vulkan-runtime::TextureViewKind::SurfacePixelFormat	SurfacePixelFormat
 variant	metal2vulkan-runtime::TextureViewKind::TextureType	TextureType
+variant	metal2vulkan-runtime::VariantStart::Ahead	Ahead
+variant	metal2vulkan-runtime::VariantStart::FirstUse	FirstUse
+variant	metal2vulkan-runtime::VariantStart::State	State
 variant	metal2vulkan-runtime::VisibilityResultMode::Boolean	Boolean
 variant	metal2vulkan-runtime::VisibilityResultMode::Counting	Counting
 variant	metal2vulkan-runtime::VisibilityResultMode::Disabled	Disabled

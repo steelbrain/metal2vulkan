@@ -41,11 +41,14 @@
 //! it and waits for it, then records, so there is one recorded form. Each such wait is a
 //! first-use wait, counted with its time
 //! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs after the
-//! make.
+//! make. Each make of a `VkPipeline` is kept in the device's counters as it ends
+//! ([`Counters::variant_makes`]): its key, who started it (the state's make, a
+//! [`ComputePipelineState::prepare_dispatch`] call or a first use) and the first-use waits that
+//! waited for it.
 
 use crate::arrays::BINDINGS;
 use crate::cache;
-use crate::counters::{FirstUse, Gauge, Metric};
+use crate::counters::{Counters, FirstUse, Gauge, Metric, VariantMake, VariantStart};
 use crate::device::{lock, Core};
 use crate::encoder::{
     decide, size_checked, threadgroup_memory, Dispatch, Lengths, Module, BUFFER_SLOTS,
@@ -108,6 +111,30 @@ pub struct DispatchVariant {
     module: Module,
     local: [u32; 3],
     lengths: Lengths,
+}
+
+impl DispatchVariant {
+    /// Its `VkPipeline`'s key among its kernel's variants.
+    fn key(&self) -> Key<'_> {
+        (
+            self.local,
+            self.lengths.as_slice(),
+            self.module == Module::Tiles,
+        )
+    }
+}
+
+#[cfg(test)]
+impl DispatchVariant {
+    /// For the tests: the key of content `content`'s whole module at one thread.
+    pub(crate) fn of_content(content: u64) -> DispatchVariant {
+        DispatchVariant {
+            content,
+            module: Module::Whole,
+            local: [1, 1, 1],
+            lengths: Lengths::default(),
+        }
+    }
 }
 
 /// The number the next [`Compiled`] takes: each content made has its own, never reused in the
@@ -389,12 +416,20 @@ struct More {
     /// The variants made past the cells.
     made: Vec<(Variant, vk::Pipeline)>,
     /// The variants a thread is making now.
-    pending: Vec<([u32; 3], Vec<u32>, bool)>,
+    pending: Vec<Making>,
+}
+
+/// A variant a thread is making now, and the first-use waits that wait for it
+/// ([`VariantMake::waits`]): how many, and when the earliest began.
+struct Making {
+    variant: DispatchVariant,
+    waits: u32,
+    first_wait: u64,
 }
 
 impl More {
-    fn pending(&self, (size, lengths, tiles): Key<'_>) -> Option<usize> {
-        (self.pending.iter()).position(|(s, l, t)| *s == size && l == lengths && *t == tiles)
+    fn pending(&self, key: Key<'_>) -> Option<usize> {
+        (self.pending.iter()).position(|making| making.variant.key() == key)
     }
 }
 
@@ -448,25 +483,41 @@ impl Variants {
     }
 }
 
-/// A variant entered as pending under [`Variants`]'s lock, for the thread that makes it: the
-/// entry leaves when this ends, made or not, panicking included, and wakes the waiting
-/// dispatches.
+/// A variant entered as pending under [`Variants`]'s lock, for the thread that makes it, started
+/// by `start` at `began`: the entry leaves when this ends, made or not, panicking included, the
+/// make is kept in the device's counters ([`Counters::variant_makes`]), and the waiting dispatches
+/// wake.
 struct Pending<'a> {
     variants: &'a Variants,
-    key: Key<'a>,
+    counters: &'a Counters,
+    variant: DispatchVariant,
+    start: VariantStart,
+    began: u64,
     made: Option<(Variant, vk::Pipeline)>,
 }
 
 impl Drop for Pending<'_> {
     fn drop(&mut self) {
         let mut more = lock(&self.variants.more);
-        if let Some(at) = more.pending(self.key) {
-            more.pending.swap_remove(at);
-        }
+        let at = more.pending(self.variant.key());
+        let making = at.map(|at| more.pending.swap_remove(at));
+        let made = self.made.is_some();
         if let Some((variant, pipeline)) = self.made.take() {
             self.variants.keep(&mut more, variant, pipeline);
         }
         drop(more);
+        let ended = host_time();
+        let (waits, first_wait) = making.map_or((0, 0), |making| (making.waits, making.first_wait));
+        self.counters.variant_made(|number| VariantMake {
+            number,
+            variant: self.variant,
+            start: self.start,
+            began: self.began,
+            ended,
+            made,
+            waits,
+            first_wait,
+        });
         self.variants.ended.notify_all();
     }
 }
@@ -923,19 +974,15 @@ impl Compiled {
         // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
         // tiles', or an image-only kernel's square workgroups'.
         let first = match &compiled.form {
-            Form::Tiled => Some((&compiled.whole, [GRID_TILE_THREADS, 1, 1], true)),
-            Form::Square => Some((&compiled.whole, SQUARE, false)),
+            Form::Tiled => Some((&compiled.whole, Module::Tiles, [GRID_TILE_THREADS, 1, 1])),
+            Form::Square => Some((&compiled.whole, Module::Whole, SQUARE)),
             Form::Sized { .. } => None,
         };
-        if let Some((kernel, size, tiles)) = first {
-            let variant = Variant {
-                size,
-                threadgroup_lengths: vec![0; kernel.interface.threadgroups.len()],
-                tiles,
-            };
-            let made = kernel.make(&compiled.core, &variant)?;
-            let variants = &kernel.variants;
-            variants.keep(&mut lock(&variants.more), variant, made);
+        if let Some((kernel, module, size)) = first {
+            let lengths = Lengths::zeros(kernel.interface.threadgroups.len());
+            let variant = compiled.variant(module, size, lengths);
+            let more = lock(&kernel.variants.more);
+            kernel.make_pending(&compiled.core, more, variant, VariantStart::State, None)?;
         }
         // An observing kernel at the descriptor's `requiredThreadsPerThreadgroup`, the size its
         // dispatches give: the `VkPipeline`s a whole grid and a ragged one run, where the module
@@ -947,8 +994,8 @@ impl Compiled {
                 let found = compiled.dispatched(dispatch, size, &[]);
                 if let Some((kernel, module, local, lengths)) = found {
                     if kernel.interface.threadgroups.is_empty() {
-                        let key = (local, lengths.as_slice(), module == Module::Tiles);
-                        kernel.make_ahead(&compiled.core, key);
+                        let variant = compiled.variant(module, local, lengths);
+                        kernel.make_ahead(&compiled.core, variant, VariantStart::State);
                     }
                 }
             }
@@ -1543,8 +1590,8 @@ impl ComputePipelineState {
             return;
         };
         let core = &compiled.core;
-        let key = (local, lengths.as_slice(), module == Module::Tiles);
-        if let Some(nanos) = kernel.make_ahead(core, key) {
+        let variant = compiled.variant(module, local, lengths);
+        if let Some(nanos) = kernel.make_ahead(core, variant, VariantStart::Ahead) {
             core.counters.made_ahead(nanos);
         }
     }
@@ -1572,12 +1619,7 @@ impl ComputePipelineState {
         let compiled = &self.inner.compiled;
         let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
         let (_, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
-        Some(DispatchVariant {
-            content: compiled.id,
-            module,
-            local,
-            lengths,
-        })
+        Some(compiled.variant(module, local, lengths))
     }
 
     /// `maxTotalThreadsPerThreadgroup`: the translator's answer for the device, which is Metal's
@@ -1741,6 +1783,22 @@ impl Compiled {
         }
     }
 
+    /// The key of the dispatches that run `module` at workgroup size `local` with threadgroup
+    /// memory `lengths`: its [`DispatchVariant`].
+    pub(crate) fn variant(
+        &self,
+        module: Module,
+        local: [u32; 3],
+        lengths: Lengths,
+    ) -> DispatchVariant {
+        DispatchVariant {
+            content: self.id,
+            module,
+            local,
+            lengths,
+        }
+    }
+
     /// What a dispatch of `dispatch` at threadgroup size `size`, with the encoder's threadgroup
     /// memory lengths `set`, runs, decided as the dispatch decides it: its kernel, its module, its
     /// workgroup size and its kernel's threadgroup memory lengths. None where the dispatch refuses
@@ -1816,13 +1874,18 @@ impl Kernel {
         unsafe { core.device.create_shader_module(&info, None) }
     }
 
-    /// The `VkPipeline` of the variant `key`, made now where it is not yet: the calling thread
-    /// waits for it, a first-use wait, so what is recorded never depends on when a compile
-    /// finishes. Where another thread is making it, the call waits for that make, also a
-    /// first-use wait, and makes it itself where that one failed. One of the kernel's first
-    /// [`VARIANT_CELLS`] variants is found with no lock.
-    pub(crate) fn pipeline(&self, core: &Core, key: Key<'_>) -> Result<vk::Pipeline, Error> {
+    /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
+    /// it, a first-use wait, so what is recorded never depends on when a compile finishes. Where
+    /// another thread is making it, the call waits for that make, also a first-use wait counted in
+    /// that make's [`VariantMake::waits`], and makes it itself where that one failed. One of the
+    /// kernel's first [`VARIANT_CELLS`] variants is found with no lock.
+    pub(crate) fn pipeline(
+        &self,
+        core: &Core,
+        variant: DispatchVariant,
+    ) -> Result<vk::Pipeline, Error> {
         let variants = &self.variants;
+        let key = variant.key();
         if let Ok(pipeline) = variants.in_cells(key) {
             return Ok(pipeline);
         }
@@ -1840,22 +1903,37 @@ impl Kernel {
                 }
                 return Ok(pipeline);
             }
-            if more.pending(key).is_none() {
+            let Some(at) = more.pending(key) else {
                 break;
+            };
+            if !waits {
+                let making = &mut more.pending[at];
+                making.waits = making.waits.saturating_add(1);
+                making.first_wait = match making.first_wait {
+                    0 => began,
+                    first => first.min(began),
+                };
             }
             waits = true;
             more = (variants.ended.wait(more)).unwrap_or_else(PoisonError::into_inner);
         }
-        let pipeline = self.make_pending(core, more, key)?;
+        let start = VariantStart::FirstUse;
+        let pipeline = self.make_pending(core, more, variant, start, Some(began))?;
         waited(core);
         Ok(pipeline)
     }
 
-    /// [`ComputePipelineState::prepare_dispatch`]'s make of the variant `key`: none where it is
-    /// made or a thread is making it; else made on the calling thread, and its nanoseconds where
-    /// it was made.
-    pub(crate) fn make_ahead(&self, core: &Core, key: Key<'_>) -> Option<u64> {
+    /// A make of `variant` ahead of its dispatches, started by `start`: none where it is made or a
+    /// thread is making it; else made on the calling thread, and its nanoseconds where it was
+    /// made.
+    pub(crate) fn make_ahead(
+        &self,
+        core: &Core,
+        variant: DispatchVariant,
+        start: VariantStart,
+    ) -> Option<u64> {
         let variants = &self.variants;
+        let key = variant.key();
         if variants.in_cells(key).is_ok() {
             return None;
         }
@@ -1864,33 +1942,44 @@ impl Kernel {
             return None;
         }
         let began = host_time();
-        let made = self.make_pending(core, more, key).ok();
+        let made = self.make_pending(core, more, variant, start, None).ok();
         made.map(|_| host_time().saturating_sub(began))
     }
 
-    /// Makes the variant `key`, which `more`, the lock held, shows neither made nor pending:
-    /// entered as pending, made with the lock released, and kept.
+    /// Makes `variant`, which `more`, the lock held, shows neither made nor pending, started by
+    /// `start`: entered as pending, with the first-use wait that began at `wait` where a dispatch
+    /// makes it, made with the lock released, kept, and kept in the device's counters
+    /// ([`Counters::variant_makes`]).
     fn make_pending(
         &self,
         core: &Core,
         mut more: MutexGuard<'_, More>,
-        key: Key<'_>,
+        variant: DispatchVariant,
+        start: VariantStart,
+        wait: Option<u64>,
     ) -> Result<vk::Pipeline, Error> {
-        let (size, lengths, tiles) = key;
-        more.pending.push((size, lengths.to_vec(), tiles));
+        more.pending.push(Making {
+            variant,
+            waits: u32::from(wait.is_some()),
+            first_wait: wait.unwrap_or(0),
+        });
         drop(more);
         let mut pending = Pending {
             variants: &self.variants,
-            key,
+            counters: &core.counters,
+            variant,
+            start,
+            began: host_time(),
             made: None,
         };
-        let variant = Variant {
+        let (size, lengths, tiles) = variant.key();
+        let made = Variant {
             size,
             threadgroup_lengths: lengths.to_vec(),
             tiles,
         };
-        let pipeline = self.make(core, &variant)?;
-        pending.made = Some((variant, pipeline));
+        let pipeline = self.make(core, &made)?;
+        pending.made = Some((made, pipeline));
         Ok(pipeline)
     }
 

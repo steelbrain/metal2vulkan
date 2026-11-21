@@ -1032,7 +1032,7 @@ impl ComputeCommandEncoder {
             _ => {
                 let (set, max) = (&self.threadgroup_lengths, limits.max_shared_memory);
                 let lengths = threadgroup_memory(kernel, set, local, max)?;
-                kernel.pipeline(core, (local, lengths.as_slice(), module == Module::Tiles))?
+                kernel.pipeline(core, inner.variant(module, local, lengths))?
             }
         };
         self.last = Some(Last {
@@ -1269,6 +1269,14 @@ pub(crate) struct Lengths {
 }
 
 impl Lengths {
+    /// `count` lengths of 0: a kernel's threadgroup arguments, none of which the encoder set.
+    pub(crate) fn zeros(count: usize) -> Lengths {
+        Lengths {
+            words: [0; BUFFER_SLOTS as usize],
+            count: count.min(BUFFER_SLOTS as usize) as u8,
+        }
+    }
+
     /// One length for each threadgroup argument.
     pub(crate) fn as_slice(&self) -> &[u32] {
         &self.words[..usize::from(self.count)]
