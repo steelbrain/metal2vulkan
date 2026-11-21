@@ -502,6 +502,7 @@ impl Device {
             mut subgroup_uniform_control_flow,
             mut quad_control,
             mut interlock,
+            mut barycentric,
             mut robustness2,
             mut portability,
             mut feedback_loop,
@@ -547,6 +548,9 @@ impl Device {
         }
         if enabled(ash::ext::fragment_shader_interlock::NAME) {
             features = features.push_next(&mut interlock);
+        }
+        if enabled(ash::khr::fragment_shader_barycentric::NAME) {
+            features = features.push_next(&mut barycentric);
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);

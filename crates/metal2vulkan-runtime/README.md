@@ -2859,6 +2859,16 @@ or does not check is rebuilt from the generations' names, with young counted ful
   26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix function (each library whose
   bytes name one disassembled with `llvm-dis`, jobs m3-max-52530, 52531, 52532, 52557 and 52604).
   Their libraries that call quad functions, 2 to 5 a stream, call them from no fragment function.
+- On a device without `fragmentShaderBarycentric` (Barycentrics, under Floor), a fragment function
+  that reads `[[barycentric_coord]]` is refused at creation, an `Error::Translation` naming
+  `Barycentrics`: the translator's other form, weights a generated geometry stage writes, needs
+  `geometryShader`, which device creation does not enable. Of the venues run, lavapipe, ANV on the
+  Iris Xe, RADV on the RX 550, the UHD 630's Windows driver and KosmicKrisp on the M3 Max list no
+  `VK_KHR_fragment_shader_barycentric` (`vulkaninfo`, jobs m3-max-61287, 61291, 61292 and 61296);
+  NVIDIA's driver on the RTX 3090, RTX 2080 and RTX 5080 Laptop, and RADV on the RX 7900 XTX and
+  the 780M, list it and report the feature (m3-max-61287 to 61290 and 61296). No replay stream has
+  one: the states-only plays of the 36 streams on lavapipe refuse none of their render states
+  (m3-max-60927 to 60930 and 60945).
 - On a device without `fragmentShaderPixelInterlock` (Pixel interlock, under Floor), a fragment
   function's raster order group on memory it reads and writes is refused at creation, an
   `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`. Of the venues
@@ -3453,6 +3463,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
+| `VK_KHR_fragment_shader_barycentric` | device, where reported | a fragment function's `[[barycentric_coord]]`, through the barycentric feature below; `Device::extensions` names it only where that feature is enabled |
 
 ### Features
 
@@ -3566,6 +3577,19 @@ render encoders). No other feature of the extension is enabled.
 | Pixel-interlock feature | Structure | Used for |
 |---|---|---|
 | `fragmentShaderPixelInterlock` | `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT` | a fragment function's raster order groups on memory it reads and writes |
+
+### Barycentrics
+
+A fragment function that reads `[[barycentric_coord]]` has one form: it reads the device's own
+weights, `BaryCoordKHR` or `BaryCoordNoPerspKHR`. Where the device lists
+`VK_KHR_fragment_shader_barycentric` and reports the feature below, device creation enables both,
+and the translator builds the function; elsewhere it enables neither, and the translator refuses
+the function at creation, an `Error::Translation` naming `Barycentrics` (Known gaps of render
+pipeline states). So `Device::extensions` names the extension only with its feature.
+
+| Barycentric feature | Structure | Used for |
+|---|---|---|
+| `fragmentShaderBarycentric` | `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR` | a fragment function's `[[barycentric_coord]]`, read from the device's own weights |
 
 ### Limits
 

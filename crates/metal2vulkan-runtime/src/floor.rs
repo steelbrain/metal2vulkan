@@ -101,6 +101,12 @@ pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[
     ash::ext::border_color_swizzle::NAME,
 ];
 
+/// The device extension of a fragment function's `[[barycentric_coord]]`
+/// (`VK_KHR_fragment_shader_barycentric`): device creation enables it, with its feature
+/// ([`BARYCENTRICS`]), where the device lists it and reports the feature, and neither otherwise,
+/// so [`Device::extensions`](crate::Device::extensions) names it only with its feature.
+pub const BARYCENTRIC_EXTENSIONS: &[&CStr] = &[ash::khr::fragment_shader_barycentric::NAME];
+
 /// The translator's name for an extension device creation enables that its shaders may use, or
 /// that its description of the device must enable: the portability subset, where the device lists
 /// it.
@@ -113,6 +119,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrShaderQuadControl)
     } else if name == ash::ext::fragment_shader_interlock::NAME {
         Some(VkExtension::ExtFragmentShaderInterlock)
+    } else if name == ash::khr::fragment_shader_barycentric::NAME {
+        Some(VkExtension::KhrFragmentShaderBarycentric)
     } else if name == ash::ext::robustness2::NAME {
         Some(VkExtension::ExtRobustness2)
     } else if name == ash::khr::portability_subset::NAME {
@@ -236,6 +244,10 @@ pub struct Features {
     /// `VK_EXT_fragment_shader_interlock`: read only where the device lists it, and then only
     /// `fragmentShaderPixelInterlock` enabled.
     pub interlock: vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT<'static>,
+    /// `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR`, of
+    /// `VK_KHR_fragment_shader_barycentric`: read where the device lists it, and enabled where it
+    /// reports `fragmentShaderBarycentric` ([`BARYCENTRIC_EXTENSIONS`]).
+    pub barycentric: vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR<'static>,
     /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: `nullDescriptor` and
     /// `robustImageAccess2` are enabled, never the robust buffer access beside them.
     pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
@@ -300,6 +312,9 @@ macro_rules! feature {
     };
     (@structure interlock) => {
         "VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT"
+    };
+    (@structure barycentric) => {
+        "VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR"
     };
     (@structure robustness2) => {
         "VkPhysicalDeviceRobustness2FeaturesEXT"
@@ -524,6 +539,15 @@ pub(crate) const QUAD_CONTROL: &[Feature] =
 pub(crate) const PIXEL_INTERLOCK: &[Feature] =
     &[feature!(interlock.fragment_shader_pixel_interlock => FragmentShaderPixelInterlock)];
 
+/// The feature of `VK_KHR_fragment_shader_barycentric` ([`BARYCENTRIC_EXTENSIONS`]): enabled with
+/// the extension where the device lists it and reports the feature, and neither otherwise. A
+/// fragment function that reads `[[barycentric_coord]]` reads `BaryCoordKHR` or
+/// `BaryCoordNoPerspKHR`, the one form the translator builds on the floor; on a device without
+/// the feature the translator refuses the function (`Barycentrics`). No answer chooses a second
+/// form.
+pub(crate) const BARYCENTRICS: &[Feature] =
+    &[feature!(barycentric.fragment_shader_barycentric => FragmentShaderBarycentric)];
+
 /// The features of `VK_EXT_border_color_swizzle` ([`BORDER_SWIZZLE_EXTENSIONS`]): enabled together
 /// where the device lists the extensions and reports `borderColorSwizzleFromImage` (Vulkan requires
 /// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a second form, and the
@@ -553,6 +577,7 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
         .chain(STEP_RATES)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
+        .chain(BARYCENTRICS)
     {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
@@ -730,13 +755,15 @@ pub struct Capabilities {
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
     /// step-rate, quad-control, pixel-interlock and linear-attachment ones the device reports, the
-    /// attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, and the
-    /// border-swizzle ones where the device reports both.
+    /// attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, the border-swizzle
+    /// ones where the device reports both, and the barycentric one where the device lists its
+    /// extension and reports it.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
     /// [`feedback_loop`](Self::feedback_loop) holds, then [`BORDER_SWIZZLE_EXTENSIONS`] where the
-    /// device lists them and reports both the border swizzle's features.
+    /// device lists them and reports both the border swizzle's features, then
+    /// [`BARYCENTRIC_EXTENSIONS`] where the device lists it and reports its feature.
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
@@ -836,6 +863,7 @@ unsafe fn query(
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
         let quad_control_listed = listed(ash::khr::shader_quad_control::NAME);
         let interlock_listed = listed(ash::ext::fragment_shader_interlock::NAME);
+        let barycentric_listed = listed(ash::khr::fragment_shader_barycentric::NAME);
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
         let portability_listed = listed(ash::khr::portability_subset::NAME);
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
@@ -856,6 +884,7 @@ unsafe fn query(
             subgroup_uniform_control_flow,
             quad_control,
             interlock,
+            barycentric,
             robustness2,
             portability,
             feedback_loop,
@@ -880,6 +909,9 @@ unsafe fn query(
         }
         if interlock_listed {
             features = features.push_next(&mut *interlock);
+        }
+        if barycentric_listed {
+            features = features.push_next(&mut *barycentric);
         }
         if robustness2_listed {
             features = features.push_next(&mut *robustness2);
@@ -914,6 +946,7 @@ unsafe fn query(
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
         quad_control.p_next = std::ptr::null_mut();
         interlock.p_next = std::ptr::null_mut();
+        barycentric.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
         portability.p_next = std::ptr::null_mut();
         feedback_loop.p_next = std::ptr::null_mut();
@@ -1030,6 +1063,13 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             *(feature.field)(&mut features) = vk::TRUE;
         }
     }
+    let barycentric = BARYCENTRIC_EXTENSIONS.iter().all(|&name| listed(name))
+        && (BARYCENTRICS.iter()).all(|feature| *(feature.field)(&mut reported) == vk::TRUE);
+    if barycentric {
+        for feature in BARYCENTRICS {
+            *(feature.field)(&mut features) = vk::TRUE;
+        }
+    }
     if listed(ash::nv::linear_color_attachment::NAME) {
         for feature in LINEAR_ATTACHMENTS {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
@@ -1060,6 +1100,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             )
             .chain(ATTACHMENT_READ_EXTENSIONS.iter().filter(|_| feedback_loop))
             .chain(BORDER_SWIZZLE_EXTENSIONS.iter().filter(|_| border_swizzle))
+            .chain(BARYCENTRIC_EXTENSIONS.iter().filter(|_| barycentric))
             .copied()
             .collect(),
         queue_family,

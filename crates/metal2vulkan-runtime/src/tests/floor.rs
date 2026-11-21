@@ -4,11 +4,11 @@
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BORDER_SWIZZLE,
-    BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
-    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS,
-    PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY,
-    SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS, BARYCENTRIC_EXTENSIONS,
+    BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS,
+    LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS,
+    OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL,
+    REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -331,6 +331,7 @@ fn a_device_at_the_floor_is_above_it() {
     for optional in (OPTIONAL.iter().chain(STEP_RATES))
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
+        .chain(BARYCENTRICS)
     {
         assert!(!holds(enabled, optional), "{} is enabled", optional.member);
     }
@@ -1213,6 +1214,49 @@ fn quad_control_is_enabled_where_reported() {
         .contains(&VkExtension::KhrShaderQuadControl));
 }
 
+/// A device that lists `VK_KHR_fragment_shader_barycentric` and reports
+/// `fragmentShaderBarycentric` is given both, and the translator sees both; one that lists the
+/// extension without the feature, or reports the feature without listing it, is given neither, so
+/// the extension is named among those enabled only with its feature.
+#[test]
+fn barycentrics_are_enabled_where_listed_and_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let extension = ash::khr::fragment_shader_barycentric::NAME;
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        let enables = shader_enables(&capabilities);
+        let enabled = capabilities.extensions.contains(&extension);
+        let feature = BARYCENTRICS
+            .iter()
+            .all(|feature| holds(&capabilities.features, feature));
+        assert_eq!(
+            enables
+                .extensions
+                .contains(&VkExtension::KhrFragmentShaderBarycentric),
+            enabled,
+            "the translator's extension"
+        );
+        assert_eq!(
+            enables
+                .features
+                .contains(&VkFeature::FragmentShaderBarycentric),
+            feature,
+            "the translator's feature"
+        );
+        (enabled, feature)
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false), "at the floor");
+    device.extensions.push(extension.to_owned());
+    assert_eq!(answer(&device), (false, false), "listed, not reported");
+    device.features.barycentric.fragment_shader_barycentric = vk::TRUE;
+    assert_eq!(answer(&device), (true, true), "listed and reported");
+    let mut device = at_the_floor();
+    device.features.barycentric.fragment_shader_barycentric = vk::TRUE;
+    assert_eq!(answer(&device), (false, false), "reported, not listed");
+}
+
 /// A device that lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage` is
 /// given the extension, `VK_EXT_custom_border_color` (which it requires: Vulkan's
 /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`), and both its features; one that lists it
@@ -1513,6 +1557,11 @@ fn the_readme_states_the_floor() {
                 .iter()
                 .map(|name| (name, "device, where reported from the image")),
         )
+        .chain(
+            BARYCENTRIC_EXTENSIONS
+                .iter()
+                .map(|name| (name, "device, where reported")),
+        )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
     assert_eq!(stated, code, "the README's extensions");
@@ -1536,6 +1585,10 @@ fn the_readme_states_the_floor() {
         (
             ["Pixel-interlock feature", "Structure", "Used for"],
             PIXEL_INTERLOCK,
+        ),
+        (
+            ["Barycentric feature", "Structure", "Used for"],
+            BARYCENTRICS,
         ),
         (
             ["Border-swizzle feature", "Structure", "Used for"],
@@ -1717,6 +1770,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut subgroup_uniform_control_flow,
             mut quad_control,
             mut interlock,
+            mut barycentric,
             mut robustness2,
             mut portability,
             mut feedback_loop,
@@ -1745,6 +1799,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::ext::fragment_shader_interlock::NAME) {
             features = features.push_next(&mut interlock);
+        }
+        if enabled(ash::khr::fragment_shader_barycentric::NAME) {
+            features = features.push_next(&mut barycentric);
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);

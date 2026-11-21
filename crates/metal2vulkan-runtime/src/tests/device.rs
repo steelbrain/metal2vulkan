@@ -352,6 +352,14 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
             unsafe { vk_instance.get_physical_device_features2(physical.raw(), &mut features) };
         }
         let from_image = swizzles.border_color_swizzle_from_image == vk::TRUE;
+        // So is the barycentric one.
+        let mut weights = vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR::default();
+        if lists(ash::khr::fragment_shader_barycentric::NAME) {
+            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut weights);
+            // SAFETY: as above; `weights` lives through the call.
+            unsafe { vk_instance.get_physical_device_features2(physical.raw(), &mut features) };
+        }
+        let barycentric = weights.fragment_shader_barycentric == vk::TRUE;
 
         let mut asked = vec![
             DeviceExtension::new(missing),
@@ -389,6 +397,10 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         // The border swizzle's, where the device reports it from the image.
         if from_image {
             expected.extend(floor::BORDER_SWIZZLE_EXTENSIONS);
+        }
+        // The barycentric one, where the device reports its feature.
+        if barycentric {
+            expected.extend(floor::BARYCENTRIC_EXTENSIONS);
         }
         if maintenance && offered {
             expected.push(swapchain);

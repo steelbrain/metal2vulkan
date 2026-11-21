@@ -4,6 +4,7 @@ mod alpha_test;
 mod argument_sampling;
 mod argument_tier;
 mod arrays;
+mod barycentrics;
 mod bicubic;
 mod bicubic_draw;
 mod blit;

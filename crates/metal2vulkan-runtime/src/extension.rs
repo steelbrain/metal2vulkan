@@ -37,6 +37,7 @@ impl DeviceExtension {
     /// `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR`,
     /// `VkPhysicalDeviceShaderQuadControlFeaturesKHR`,
     /// `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT`,
+    /// `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR`,
     /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`,
     /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` or
     /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`.
