@@ -2658,14 +2658,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - What a state's creation is given is made there, as Metal compiles a state when it is made:
   every lowering, a kernel's variants among them, and each `VkPipeline` whose key the descriptor
   holds (a kernel's, Compute pipeline states above; a render content's triangle class, and its
-  line class where `inputPrimitiveTopology` names that class). What only a dispatch or a draw
-  gives waits for it: a kernel's `VkPipeline` at a threadgroup size and threadgroup memory
-  lengths is made at the consumer's `prepare_dispatch` call or at the dispatch, and a render
-  content's line class, where its descriptor names no class, at its first draw of lines (one
-  `VkPipeline` for both classes needs `dynamicPrimitiveTopologyUnrestricted`, which the floor
-  does not require, and no second form is chosen by it). Each such make at a dispatch or a draw
-  is a first-use wait: on a cold play, `Metrics::first_use_waits` against
-  `Metrics::made_ahead_variants` reads what the consumer's pre-pass left to the encoding threads.
+  line or point class where `inputPrimitiveTopology` names that class). What only a dispatch or a
+  draw gives waits for it: a kernel's `VkPipeline` at a threadgroup size and threadgroup memory
+  lengths is made at the consumer's `prepare_dispatch` call or at the dispatch, a render
+  content's line or point class, unless its descriptor names that class, at its first draw of it
+  (one `VkPipeline` for every class needs `dynamicPrimitiveTopologyUnrestricted`, which the floor
+  does not require, and no second form is chosen by it), and its `VkPipeline` under the depth
+  clip mode `Clamp` or the triangle fill mode `Lines` at its first draw under it (Known gaps of
+  render pipeline states). Each such make at a dispatch or a draw is a first-use wait, and on a
+  cold cache it compiles in that call, where Metal changes these with no compile: on a cold play,
+  `Metrics::first_use_waits` against `Metrics::made_ahead_variants` reads what the consumer's
+  pre-pass left to the encoding threads.
 - A compute kernel with an explicit imageblock has no state (`Gap::KernelInput` of
   `KernelInputKind::RuntimeFact` naming `ImageblockSize`). The Metal Shading Language specification
   supports imageblocks on macOS for Apple silicon only (sections 5.6 and 6.14), so a device that
