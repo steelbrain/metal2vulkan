@@ -3662,10 +3662,11 @@ fn constant_read_sampler(state: &crate::air::abi::SamplerState) -> ReadSampler {
 
 /// Plan what read through a sampler `t` of `image` reads besides the image: a runtime slot's
 /// word (`RuntimeSlot::reads`), and where an index outside the level may read the border texel, a
-/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`), or a heap element's
-/// handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the module's search then
-/// names by its index in the handle (`AccessPlan::heap_border`). A `ulong` texel's border, which
-/// is not measured, is not implemented.
+/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`; under the identity domains
+/// its resource ID's word holds them, `emit::identity_id`), or a heap element's handle-table
+/// entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the module's search then names by its
+/// index in the handle (`AccessPlan::heap_border`). A `ulong` texel's border, which is not
+/// measured, is not implemented.
 fn select_through(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -3685,6 +3686,7 @@ fn select_through(
         return Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture)).into());
     }
     match image {
+        ImageRef::Slot(_) if crate::lower::access::identity(cx.profile) => Ok(()),
         ImageRef::Slot(index) => {
             let Some(s) = cx.families.texture.slots.get_mut(&index) else {
                 return Err(cx.invariant("an unplanned texture slot"));

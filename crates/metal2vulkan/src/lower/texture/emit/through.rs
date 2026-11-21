@@ -315,15 +315,25 @@ pub(super) fn finish(
 }
 
 /// The border texels of `image` (a `u32`, bit `3c + b` set where channel `c` of Metal's border
-/// texel for border color `b` reads 1): a slot's `BorderTexels` specialization, or a heap
-/// element's handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the entry index
-/// its handle carries names.
+/// texel for border color `b` reads 1): a slot's `BorderTexels` specialization, under the identity
+/// domains bits 0-11 of its resource ID's word (`TextureWord::BORDER_TEXELS`), or a heap element's
+/// handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the entry index its handle
+/// carries names.
 fn border_bits(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     image: ImageRef,
 ) -> BResult<SValue> {
     match image {
+        ImageRef::Slot(index) if cx.plan.families.access.identity => {
+            let (_, word) = super::identity_id(cx, fb, index)?;
+            let mask = u32s(
+                fb,
+                1,
+                crate::metal::resource_word::TextureWord::BORDER_TEXELS,
+            )?;
+            fb.binary(BinOp::BitwiseAnd, word, mask)
+        }
         ImageRef::Slot(index) => {
             let bits = cx.decl.families.texture.border_texels.get(&index).copied();
             bits.ok_or_else(|| {

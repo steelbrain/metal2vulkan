@@ -896,6 +896,22 @@ impl Case for ReadThrough {
         sites.push(words);
         Ok(())
     }
+
+    /// A case that reads through a runtime sampler of an opaque-black border (`border-black`)
+    /// makes that sampler state, which the runtime notes on every device
+    /// (`crate::replay::swizzled_border_notice`).
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        let black = (self.reads.iter()).any(|read| match read.through {
+            Through::Slot(_, spec)
+            | Through::Table(_, spec)
+            | Through::HeapTextureSlot(_, spec) => crate::replay::reads_opaque_black_border(&spec),
+            Through::Constexpr | Through::HeapTexture => false,
+        });
+        match black {
+            true => vec![crate::replay::swizzled_border_notice()],
+            false => Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

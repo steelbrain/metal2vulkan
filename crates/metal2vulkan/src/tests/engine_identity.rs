@@ -37,6 +37,11 @@
 //!   array's. It passes L3 and, on the CPU interpreter, adds to the texels of the element its
 //!   pushed resource ID names and answers the texels they held, guarded by the element's size on
 //!   a device without robust image access.
+//! - A slot's read through a runtime sampler that clamps to its border color
+//!   (`engine/kernel_read_through`'s `rt_arg`) takes the border texels from bits 0-11 of the
+//!   slot's resource ID's word, with no `BorderTexels` specialization or fact. It passes L3 and,
+//!   on the CPU interpreter, reads Metal's border texel of `R32Float`, `RGBA8Unorm`, `A8Unorm`
+//!   and a swizzled `RGBA8Unorm` under each border color, and the texel inside the texture.
 //! - The same kernel with its textures in an argument buffer (`tex` with `ab`) reads their
 //!   resource IDs from the buffer's members, at its pushed address, and answers the same at the
 //!   same elements, with no handle table and no descriptor; IDs whose indices are 65,536 past
@@ -1779,6 +1784,169 @@ fn a_texture_atomic_is_the_r32_storage_element_its_resource_id_names() {
                 "{stem}: element {}",
                 other.element
             );
+        }
+    }
+}
+
+/// The address of the positions [`a_read_through_a_sampler_takes_its_border_texels_from_the_word`]
+/// pushes for `rt_arg`'s buffer 0.
+const POSITIONS: u64 = 0x5_0000_0000;
+
+/// A slot's read through a runtime sampler that clamps every axis to its border color
+/// (`engine/kernel_read_through`'s `rt_arg`: `texture2d<float>`, offset `(1, -1)`) under the
+/// identity domains takes the texel an index outside the texture reads from bits 0-11 of the slot's
+/// resource ID's word, for the color the sampler's word names: no specialization constant but the
+/// dispatch's, and no `BorderTexels` fact. On the CPU interpreter the border texels of
+/// `R32Float`, `RGBA8Unorm`, `A8Unorm` and an `RGBA8Unorm` swizzled `(a, b, 0, r)` match Metal's
+/// ([`border_texel`](crate::metal::sampler::border_texel)) under each border color, and a read
+/// inside the texture reads its texel.
+#[test]
+fn a_read_through_a_sampler_takes_its_border_texels_from_the_word() {
+    use crate::metal::sampler::{border_texel, SamplerWord, BORDER_COLORS};
+    use crate::metal::{SamplerAddressMode, SamplerBorderColor, TextureSwizzle};
+    let Some(bc) = assemble("kernel_read_through") else {
+        return;
+    };
+    // Thread `i` reads at `P[i] + (1, -1)`: inside at (1, 0) and (1, 1), and past the right, left
+    // and top edges of the 2 × 2 texture.
+    const P: [[i32; 4]; 5] = [
+        [0, 1, 0, 0],
+        [1, 2, 0, 0],
+        [-2, 1, 0, 0],
+        [0, 0, 0, 0],
+        [0, 2, 0, 0],
+    ];
+    const INSIDE: [Option<(u32, u32)>; 5] = [Some((1, 0)), None, None, None, Some((1, 1))];
+    const L: [u32; 3] = [5, 1, 1];
+    // The texture at index 3 of the sampled array, the sampler at index 1 of its arrays.
+    const TEX: u32 = 3;
+    const SAMPLER: u32 = 1;
+    let swizzled = TextureSwizzleChannels::new(
+        TextureSwizzle::Alpha,
+        TextureSwizzle::Blue,
+        TextureSwizzle::Zero,
+        TextureSwizzle::Red,
+    );
+    let formats = [
+        (PixelFormat::R32Float, TextureSwizzleChannels::DEFAULT),
+        (PixelFormat::RGBA8Unorm, TextureSwizzleChannels::DEFAULT),
+        (PixelFormat::A8Unorm, TextureSwizzleChannels::DEFAULT),
+        (PixelFormat::RGBA8Unorm, swizzled),
+    ];
+    let colors = [
+        SamplerBorderColor::TransparentBlack,
+        SamplerBorderColor::OpaqueBlack,
+        SamplerBorderColor::OpaqueWhite,
+    ];
+    let f = |v: f32| v.to_bits();
+    let held = |x: u32, y: u32| [f(x as f32 + 0.25), f(y as f32 + 0.5), f(0.125), f(0.75)];
+    let filler = |_: u32, _: u32| [0xdead_beef; 4];
+    let mut profiles: Vec<(String, DeviceProfile)> = PROFILES
+        .iter()
+        .map(|stem| {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            (stem.to_string(), p)
+        })
+        .collect();
+    profiles.push((
+        "moltenvk-m3 without robustImageAccess2".to_string(),
+        identity_without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
+    ));
+    for (stem, p) in &profiles {
+        let (a, plan, module) =
+            compile_kept(&bc, "rt_arg", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            (a.interface.spec.iter()).all(|c| dispatch_key(c.key)),
+            "{stem}: {:?}",
+            a.interface.spec
+        );
+        assert!(
+            !(plan.facts.iter()).any(|f| matches!(f, RuntimeFact::BorderTexels { .. })),
+            "{stem}: {:?}",
+            plan.facts
+        );
+        let linked = link(&[&a], &LinkInputs::standalone(), p).unwrap_or_else(|e| panic!("{e}"));
+        let sampled: Vec<ResourceSlot> = (linked.table.bindings.iter())
+            .filter(|(slot, _)| matches!(slot.kind, ResourceKind::Heap(HandleClass::Image(_))))
+            .map(|(slot, _)| *slot)
+            .collect();
+        let [sampled] = sampled[..] else {
+            panic!("{stem}: {sampled:?}");
+        };
+        for (pf, swizzle) in formats {
+            let word = TextureWord::of(pf, swizzle).expect("a word").0;
+            let present = crate::metal::format::channels(pf).expect("channels");
+            for (color, rgba) in colors.into_iter().zip(BORDER_COLORS) {
+                let mut desc = crate::bind::SamplerDescriptor::new();
+                desc.s_address_mode = SamplerAddressMode::ClampToBorderColor;
+                desc.t_address_mode = SamplerAddressMode::ClampToBorderColor;
+                desc.r_address_mode = SamplerAddressMode::ClampToBorderColor;
+                desc.border_color = color;
+                let sampler = SamplerWord::of(&desc).0;
+                let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+                for field in &plan.push.fields {
+                    let PushLoc::Push { offset } = field.loc else {
+                        panic!("{stem}: {field:?} spilled");
+                    };
+                    let o = offset as usize;
+                    let bytes = match field.field {
+                        PushField::SlotGuestBase(s) => match (s.class, s.index) {
+                            (SlotClass::Buffer, 0) => slot_word(POSITIONS),
+                            (SlotClass::Buffer, 1) => slot_word(OUT),
+                            (SlotClass::Texture, 0) => resource_id(TEX, word),
+                            (SlotClass::Sampler, 0) => resource_id(SAMPLER, sampler),
+                            _ => panic!("{stem}: unexpected slot {s:?}"),
+                        },
+                        PushField::DispatchRegion => {
+                            let region = region_bytes([0; 3], L, L).expect("packs");
+                            push[o..o + 32].copy_from_slice(&region);
+                            continue;
+                        }
+                        PushField::SlotBounds(s) => {
+                            push[o..o + 8].copy_from_slice(&bounds_word(16 * P.len(), 0));
+                            assert_eq!(s.class, SlotClass::Buffer, "{stem}");
+                            continue;
+                        }
+                        PushField::ZeroAddress => ZERO_UNMAPPED,
+                        _ => panic!("{stem}: unexpected push field {field:?}"),
+                    };
+                    push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
+                }
+                let mut images: Vec<Image> = (0..TEX)
+                    .map(|e| texture(sampled, e, [1, 1], filler, None))
+                    .collect();
+                images.push(texture(sampled, TEX, [2, 2], held, None));
+                let positions = P.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+                let res = Resources {
+                    buffers: vec![
+                        Buffer {
+                            slot: None,
+                            address: Some(POSITIONS),
+                            bytes: positions,
+                        },
+                        Buffer {
+                            slot: None,
+                            address: Some(OUT),
+                            bytes: vec![0; 16 * P.len()],
+                        },
+                    ],
+                    push,
+                    spec: local_size3(L),
+                };
+                let (got, _) = run_with_images(&module, &Config::default(), res, images)
+                    .unwrap_or_else(|e| panic!("{stem}: {e}"));
+                let border =
+                    border_texel(pf, present, swizzle, rgba).map(|one| f(f32::from(u8::from(one))));
+                let want: Vec<u8> = (INSIDE.iter())
+                    .flat_map(|at| match at {
+                        Some((x, y)) => held(*x, *y),
+                        None => border,
+                    })
+                    .flat_map(|lane| lane.to_le_bytes())
+                    .collect();
+                assert_eq!(got.buffers[1], want, "{stem}: {pf:?} {swizzle:?} {color:?}");
+            }
         }
     }
 }

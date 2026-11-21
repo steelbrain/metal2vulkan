@@ -1878,8 +1878,8 @@ fn finish(
 }
 
 /// Whether fact `f` names state of a bound texture or sampler the identity domains do not source
-/// yet: anything but a texture's presence and its format's missing alpha, which its resource ID
-/// holds.
+/// yet: anything but a texture's presence, its format's missing alpha and its border texels,
+/// which its resource ID holds.
 fn identity_unsourced(f: &RuntimeFact) -> bool {
     matches!(
         f,
@@ -1915,7 +1915,6 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
             | RuntimeFact::StorageTextureIntegerChannels { .. }
             | RuntimeFact::YCbCrInPlace { .. }
             | RuntimeFact::TexelRows { .. }
-            | RuntimeFact::BorderTexels { .. }
             | RuntimeFact::TexelBufferParts { .. }
     )
 }
@@ -1924,7 +1923,8 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// fragment function that reaches memory only through its buffer slots' device addresses, the
 /// device addresses it loads or makes from integers (`access::dynamic`, no root table), its
 /// textures' and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
-/// descriptor and no state of a bound texture or sampler but its resource ID's
+/// descriptor and no state of a bound texture or sampler but its resource ID's: a texture's
+/// presence, its format's missing alpha and the border texels a read through a sampler reads
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
 /// pushed: the dispatch's region, a storage texture's integer channel widths, the compute
 /// encoder's stage-in region (`PushField::StageInRegion`), the stride of a vertex layout whose

@@ -63,7 +63,9 @@ A shader takes a texture slot's ID from the slot's push field (`PushField::SlotG
 argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the
 arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
 where it checks a `read` itself (a device without `robustImageAccess2`), takes an out-of-bounds
-alpha of 1 from bit 12 of the word. The runtime writes a slot's ID, so its index is an element;
+alpha of 1 from bit 12 of the word. A slot's `read` through a sampler (MSL 4.1) takes the border
+texel an index outside the level reads on a border axis from bits 0-11 of the word, for the
+sampler's border color. The runtime writes a slot's ID, so its index is an element;
 the program writes an argument buffer's, so the shader masks its index to its low 16 bits: a bad
 ID reads the element at `index & 0xFFFF`, never one outside the arrays.
 

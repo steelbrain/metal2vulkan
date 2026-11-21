@@ -221,7 +221,8 @@ pub struct SlotPlan {
     /// checks, or a level-view read under any check, past the bound level count.
     pub oob_alpha: bool,
     /// A read of the slot through a sampler may read the border texel, which the slot's
-    /// `BorderTexels` specialization gives (`RuntimeFact::BorderTexels`).
+    /// `BorderTexels` specialization gives (`RuntimeFact::BorderTexels`). Never under the identity
+    /// domains, where the slot's resource ID's word holds the border texels.
     pub border_texels: bool,
     /// The device is left both an out-of-bounds store and an out-of-bounds load of the slot, so
     /// its variable is decorated `Volatile`; set by [`finish`].
@@ -1763,13 +1764,12 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
 impl SlotPlan {
     /// Whether the identity domains lower the slot: its declaration has an identity array class
     /// ([`identity_class`]), or it has none (a slot that is only tested for presence), and it reads
-    /// no state of the bound texture but its resource ID's (its presence and its format's missing
-    /// alpha). A conversion by the bound format, a swizzle, sparse residency, border texels,
-    /// constant lanes and offset bases each read a constant or a binding the slot does not have
-    /// there yet.
+    /// no state of the bound texture but its resource ID's (its presence, its format's missing
+    /// alpha and its border texels). A conversion by the bound format, a swizzle, sparse
+    /// residency, constant lanes and offset bases each read a constant or a binding the slot does
+    /// not have there yet.
     pub(crate) fn identity_lowered(&self) -> bool {
-        let state = self.border_texels
-            || self.sparse_arm
+        let state = self.sparse_arm
             || self.tile_map
             || self.sparse_writes
             || self.declares_texel_format()
