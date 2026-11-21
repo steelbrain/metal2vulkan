@@ -431,6 +431,30 @@ fn stages_line(at: &str, stages: &Stages) -> String {
     format!("stages {at}{}", named.collect::<String>())
 }
 
+/// A `loss CALL RESULT` line of the report for the device's first loss (`Device::loss`), with the
+/// driver's fault report as given where the runtime read one: its description, then each access,
+/// instruction pointer and vendor record.
+fn loss_line(loss: &rt::DeviceLoss) -> String {
+    let mut line = format!("loss {} {:?}", loss.call, loss.result);
+    let at = |a: &rt::FaultAddress| {
+        format!("{:?} {:#x} precision {:#x}", a.kind, a.address, a.precision)
+    };
+    if let Some(fault) = &loss.fault {
+        line.push_str(&format!("; fault {:?}", fault.description));
+        line.extend(fault.accesses.iter().map(|a| format!("; access {}", at(a))));
+        line.extend(
+            fault
+                .instructions
+                .iter()
+                .map(|a| format!("; instruction {}", at(a))),
+        );
+        line.extend((fault.vendor.iter()).map(|(description, code, data)| {
+            format!("; vendor {description:?} code {code:#x} data {data:#x}")
+        }));
+    }
+    line
+}
+
 /// A compute pipeline state's making: its wall time, and whether its kernel was new to the play
 /// (no state of another specialization of it made before).
 struct Creation {
@@ -3170,6 +3194,7 @@ impl Backend for NewRuntime {
         let metrics = self.device.counters().metrics();
         let longest = metrics.commit_lock_wait_max_nanos;
         lines.push(format!("commit lock wait longest {longest} ns"));
+        lines.extend(self.device.loss().as_ref().map(loss_line));
         let ended = self.frame_stages.iter().enumerate();
         lines.extend(ended.map(|(frame, stages)| stages_line(&frame.to_string(), stages)));
         lines.push(stages_line("end", &stages(&metrics)));

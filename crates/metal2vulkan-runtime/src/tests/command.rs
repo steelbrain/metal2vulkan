@@ -3671,10 +3671,12 @@ pub(crate) mod on_device {
         let first = DeviceLoss {
             call: "vkQueuePresentKHR",
             result: vk::Result::ERROR_DEVICE_LOST,
+            fault: None,
         };
         let second = DeviceLoss {
             call: "vkAcquireNextImageKHR",
             result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+            fault: None,
         };
         each_device("device_loss", |name, instance, device| {
             assert_eq!(device.loss(), None, "{name}: no loss before the loss");
@@ -3702,18 +3704,22 @@ pub(crate) mod on_device {
                         .expect("a wait outside a scheduled handler")
                 });
                 thread::sleep(Duration::from_millis(20));
-                device.report_loss(first);
+                device.report_loss(first.clone());
                 waiter.join().expect("the waiter")
             });
             assert!(
                 !waiting,
                 "{name}: a wait for a pending signal ends at the loss"
             );
-            assert_eq!(device.loss(), Some(first), "{name}: the reported loss");
-            device.report_loss(second);
             assert_eq!(
                 device.loss(),
-                Some(first),
+                Some(first.clone()),
+                "{name}: the reported loss"
+            );
+            device.report_loss(second.clone());
+            assert_eq!(
+                device.loss(),
+                Some(first.clone()),
                 "{name}: a second report keeps the first's cause"
             );
 
@@ -3763,11 +3769,16 @@ pub(crate) mod on_device {
         let report = DeviceLoss {
             call: "vkQueuePresentKHR",
             result: vk::Result::SUCCESS,
+            fault: None,
         };
         each_device("reported_loss_as_given", |name, _, device| {
             let queue = queue(&device);
-            device.report_loss(report);
-            assert_eq!(device.loss(), Some(report), "{name}: the reported loss");
+            device.report_loss(report.clone());
+            assert_eq!(
+                device.loss(),
+                Some(report.clone()),
+                "{name}: the reported loss"
+            );
             let late = queue.command_buffer().expect("a command buffer");
             late.commit().expect("a commit");
             finished(name, &late);

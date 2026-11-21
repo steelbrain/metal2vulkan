@@ -60,6 +60,7 @@ use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
+use crate::fault;
 use crate::fill;
 use crate::memory::{Block, Internal};
 use crate::over::{self, Leans};
@@ -1176,7 +1177,7 @@ impl WorkState {
 
     /// The device's first loss, None while it is not lost.
     pub(crate) fn loss(&self) -> Option<DeviceLoss> {
-        self.loss
+        self.loss.clone()
     }
 
     /// The next place in the commit order.
@@ -2099,7 +2100,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         (true, Some(upload)) => kept.push(upload),
         (true, None) => match Upload::begin(core, 0) {
             Ok(upload) => kept.push(upload),
-            Err(Error::Vulkan { call, result }) => ok = Err(DeviceLoss { call, result }),
+            Err(Error::Vulkan { call, result }) => ok = Err(DeviceLoss::of(call)(result)),
             Err(error) => unreachable!("an upload's begin fails only in a Vulkan call: {error}"),
         },
         (false, Some(upload)) => {
@@ -2262,7 +2263,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
                 }
             }
         }
-        Err(loss) => complete::lose(core, loss),
+        Err(loss) => complete::lose(core, fault::report(core, loss)),
     }
     core.done.submitted(
         core,

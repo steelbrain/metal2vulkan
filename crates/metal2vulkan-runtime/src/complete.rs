@@ -8,6 +8,7 @@ use crate::counters::{Metric, HANDLER_STEPS};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
+use crate::fault;
 use crate::submit::{Ended, Finished, Upload};
 use crate::times::{self, Calibration, OwnEnd, Spans};
 use ash::vk;
@@ -449,10 +450,7 @@ pub(crate) fn reached_by_wait(
     match unsafe { device.wait_semaphores(&wait, 0) } {
         Ok(()) => Ok(true),
         Err(vk::Result::TIMEOUT) => Ok(false),
-        Err(result) => Err(DeviceLoss {
-            call: "vkWaitSemaphores",
-            result,
-        }),
+        Err(result) => Err(DeviceLoss::of("vkWaitSemaphores")(result)),
     }
 }
 
@@ -564,7 +562,7 @@ pub(crate) fn run(core: Arc<Core>) {
             state.waiting = Waiting::Not;
             drop(state);
             if let Some(loss) = newly_lost {
-                core.work.lose(loss);
+                core.work.lose(fault::report(&core, loss));
             }
             // Set before the submit thread's mark is read (`Work::completed`): a group it keeps
             // while submissions were in flight goes, a completion having left fewer of them, or
@@ -688,10 +686,10 @@ pub(crate) fn run(core: Arc<Core>) {
             Err(result) => {
                 state.lost = true;
                 drop(state);
-                core.work.lose(DeviceLoss {
-                    call: "vkWaitSemaphores",
-                    result,
-                });
+                core.work.lose(fault::report(
+                    &core,
+                    DeviceLoss::of("vkWaitSemaphores")(result),
+                ));
                 state = done.lock();
             }
         }

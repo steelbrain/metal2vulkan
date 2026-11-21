@@ -56,7 +56,9 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), and
 /// `VK_NV_linear_color_attachment`, with its `linearColorAttachment` feature where the device
 /// reports it, through which an opaque handle's surface plane whose `LINEAR` tiling renders only
-/// as a linear colour attachment lies in place.
+/// as a linear colour attachment lies in place, and `VK_EXT_device_fault`, with its `deviceFault`
+/// feature, which Vulkan requires of a device that lists it, through which a lost device's fault
+/// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)).
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -73,6 +75,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::ext::queue_family_foreign::NAME,
     ash::ext::image_drm_format_modifier::NAME,
     ash::nv::linear_color_attachment::NAME,
+    ash::ext::device_fault::NAME,
 ];
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
@@ -278,6 +281,9 @@ pub struct Features {
     /// `VkPhysicalDeviceLinearColorAttachmentFeaturesNV`, of `VK_NV_linear_color_attachment`:
     /// read and enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`]).
     pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>,
+    /// `VkPhysicalDeviceFaultFeaturesEXT`, of `VK_EXT_device_fault`: read and enabled only where
+    /// the device lists it ([`OPTIONAL_EXTENSIONS`]), and then only `deviceFault`.
+    pub fault: vk::PhysicalDeviceFaultFeaturesEXT<'static>,
     /// `VkPhysicalDeviceLineRasterizationFeaturesEXT`, of `VK_EXT_line_rasterization`:
     /// `bresenhamLines` is enabled, and none of the other line modes beside it.
     pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
@@ -340,6 +346,9 @@ macro_rules! feature {
     };
     (@structure linear_attachment) => {
         "VkPhysicalDeviceLinearColorAttachmentFeaturesNV"
+    };
+    (@structure fault) => {
+        "VkPhysicalDeviceFaultFeaturesEXT"
     };
     (@structure line_rasterization) => {
         "VkPhysicalDeviceLineRasterizationFeaturesEXT"
@@ -601,6 +610,12 @@ pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
 pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
     &[feature!(linear_attachment.linear_color_attachment)];
 
+/// The feature of `VK_EXT_device_fault` (one of [`OPTIONAL_EXTENSIONS`]), which Vulkan requires of
+/// a device that lists it: enabled where the device lists the extension and reports it. It adds no
+/// form: a lost device's report is read once, at its first loss, and nothing is read beside the
+/// work ([`DeviceLoss::fault`](crate::DeviceLoss::fault)). The translator is not told of it.
+pub(crate) const FAULT_REPORTS: &[Feature] = &[feature!(fault.device_fault)];
+
 /// What the translator's shaders may use of what device creation enables: each enabled feature of
 /// `capabilities` the translator names, and each enabled extension it names.
 pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
@@ -790,10 +805,10 @@ pub struct Capabilities {
     /// loop.
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
-    /// step-rate, quad-control, pixel-interlock and linear-attachment ones the device reports, the
-    /// attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, the border-swizzle
-    /// ones where the device reports both, and the barycentric one where the device lists its
-    /// extension and reports it.
+    /// step-rate, quad-control, pixel-interlock, linear-attachment and fault-report ones the device
+    /// reports, the attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, the
+    /// border-swizzle ones where the device reports both, and the barycentric one where the device
+    /// lists its extension and reports it.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
@@ -909,6 +924,7 @@ unsafe fn query(
             || listed(ash::ext::vertex_attribute_divisor::NAME);
         let border_swizzle_listed = listed(ash::ext::border_color_swizzle::NAME);
         let linear_attachment_listed = listed(ash::nv::linear_color_attachment::NAME);
+        let fault_listed = listed(ash::ext::device_fault::NAME);
         let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
 
         let Features {
@@ -928,6 +944,7 @@ unsafe fn query(
             divisor,
             border_swizzle,
             linear_attachment,
+            fault,
             line_rasterization,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
@@ -970,6 +987,9 @@ unsafe fn query(
         if linear_attachment_listed {
             features = features.push_next(&mut *linear_attachment);
         }
+        if fault_listed {
+            features = features.push_next(&mut *fault);
+        }
         if line_rasterization_listed {
             features = features.push_next(&mut *line_rasterization);
         }
@@ -990,6 +1010,7 @@ unsafe fn query(
         divisor.p_next = std::ptr::null_mut();
         border_swizzle.p_next = std::ptr::null_mut();
         linear_attachment.p_next = std::ptr::null_mut();
+        fault.p_next = std::ptr::null_mut();
         line_rasterization.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
@@ -1110,6 +1131,11 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     }
     if listed(ash::nv::linear_color_attachment::NAME) {
         for feature in LINEAR_ATTACHMENTS {
+            *(feature.field)(&mut features) = *(feature.field)(&mut reported);
+        }
+    }
+    if listed(ash::ext::device_fault::NAME) {
+        for feature in FAULT_REPORTS {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
     }

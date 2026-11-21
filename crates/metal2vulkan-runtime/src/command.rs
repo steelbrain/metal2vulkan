@@ -7,6 +7,7 @@ use crate::counters::{Metric, Stage, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
+use crate::fault::DeviceFault;
 use crate::fence::Fences;
 use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
@@ -111,18 +112,33 @@ pub enum CommandBufferError {
 /// failed result as a loss, an out-of-memory one included. `call` can also be the consumer's own
 /// Vulkan call on the device, such as `vkQueuePresentKHR`, whose loss the consumer reports with a
 /// `DeviceLoss` it makes of that call's name and result ([`Device::report_loss`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Metal reports a page fault (`MTLCommandBufferErrorPageFault`) with no address; `fault` carries
+/// the device's driver's report of the fault as given, where it gave one. Placing its addresses is
+/// the consumer's: it holds the allocations' mappings ([`BlockMappings`](crate::BlockMappings)),
+/// its blocks and its buffers.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceLoss {
     /// The Vulkan command, such as `vkQueueSubmit2`.
     pub call: &'static str,
     /// What it returned.
     pub result: vk::Result,
+    /// The device's fault report (`vkGetDeviceFaultInfoEXT`), which the runtime reads once, at
+    /// the device's first loss, where that loss's result is `ERROR_DEVICE_LOST` and device
+    /// creation enabled `VK_EXT_device_fault` (where the device lists it), a loss of the runtime's
+    /// own: None otherwise, or where the read failed. A loss the consumer reports
+    /// ([`Device::report_loss`]) carries the fault the consumer gives.
+    pub fault: Option<DeviceFault>,
 }
 
 impl DeviceLoss {
     /// The loss a failed Vulkan `call` names, for `map_err`.
     pub(crate) fn of(call: &'static str) -> impl FnOnce(vk::Result) -> DeviceLoss {
-        move |result| DeviceLoss { call, result }
+        move |result| DeviceLoss {
+            call,
+            result,
+            fault: None,
+        }
     }
 }
 

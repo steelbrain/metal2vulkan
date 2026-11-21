@@ -28,6 +28,7 @@ mod error;
 mod event;
 mod export;
 mod extension;
+mod fault;
 mod fence;
 mod fill;
 pub mod floor;
@@ -79,6 +80,7 @@ pub use error::{
 pub use event::{Event, SharedEvent};
 pub use export::{Export, ExportHandle};
 pub use extension::{ConsumerFeature, DeviceExtension};
+pub use fault::{DeviceFault, FaultAddress};
 pub use fence::Fence;
 pub use host_bytes::HostBytes;
 pub use import::ImportHandle;

@@ -5,10 +5,11 @@
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS, BARYCENTRIC_EXTENSIONS,
-    BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, FILL_MODES, INSTANCE_EXTENSIONS,
-    LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL, OPTIONAL_EXTENSIONS,
-    OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL,
-    REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, FAULT_REPORTS, FILL_MODES,
+    INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL,
+    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY,
+    PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS,
+    TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -1405,6 +1406,27 @@ fn the_linear_attachment_is_enabled_where_listed_and_reported() {
     assert_eq!(answer(&device), (true, false), "listed, not reported");
 }
 
+/// A device that lists `VK_EXT_device_fault` is given it, and `deviceFault` where it reports it
+/// (Vulkan requires it of every device that lists the extension); one that reports the feature
+/// without listing the extension is given neither.
+#[test]
+fn the_fault_report_is_enabled_where_listed_and_reported() {
+    let name = ash::ext::device_fault::NAME;
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        (
+            capabilities.extensions.contains(&name),
+            capabilities.features.fault.device_fault == vk::TRUE,
+        )
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false), "at the floor");
+    device.features.fault.device_fault = vk::TRUE;
+    assert_eq!(answer(&device), (false, false), "reported, not listed");
+    device.extensions.push(name.to_owned());
+    assert_eq!(answer(&device), (true, true), "listed and reported");
+}
+
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
 /// elements: through the attachment feedback loop where it lists both extensions and reports both
 /// features, which device creation then enables, and through a copy of the image where it does
@@ -1670,6 +1692,10 @@ fn the_readme_states_the_floor() {
             ["Linear-attachment feature", "Structure", "Used for"],
             LINEAR_ATTACHMENTS,
         ),
+        (
+            ["Fault-report feature", "Structure", "Used for"],
+            FAULT_REPORTS,
+        ),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
             .into_iter()
@@ -1850,6 +1876,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
+            mut fault,
             mut line_rasterization,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
@@ -1893,6 +1920,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::nv::linear_color_attachment::NAME) {
             features = features.push_next(&mut linear_attachment);
+        }
+        if enabled(ash::ext::device_fault::NAME) {
+            features = features.push_next(&mut fault);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

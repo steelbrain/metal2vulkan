@@ -552,7 +552,7 @@ const-value	metal2vulkan-runtime::floor::BORDER_SWIZZLE_EXTENSIONS	&[ash::ext::c
 const-value	metal2vulkan-runtime::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME, ash::ext::line_rasterization::NAME]
 const-value	metal2vulkan-runtime::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME]
+const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME, ash::ext::device_fault::NAME]
 const-value	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-runtime::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-runtime::floor::VERSION	vk::API_VERSION_1_3
@@ -1453,7 +1453,12 @@ field	metal2vulkan-runtime::DepthStencilDescriptor.back_face_stencil	pub back_fa
 field	metal2vulkan-runtime::DepthStencilDescriptor.depth_compare_function	pub depth_compare_function: CompareFunction
 field	metal2vulkan-runtime::DepthStencilDescriptor.depth_write_enabled	pub depth_write_enabled: bool
 field	metal2vulkan-runtime::DepthStencilDescriptor.front_face_stencil	pub front_face_stencil: StencilDescriptor
+field	metal2vulkan-runtime::DeviceFault.accesses	pub accesses: Vec<FaultAddress>
+field	metal2vulkan-runtime::DeviceFault.description	pub description: String
+field	metal2vulkan-runtime::DeviceFault.instructions	pub instructions: Vec<FaultAddress>
+field	metal2vulkan-runtime::DeviceFault.vendor	pub vendor: Vec<(String, u64, u64)>
 field	metal2vulkan-runtime::DeviceLoss.call	pub call: &'static str
+field	metal2vulkan-runtime::DeviceLoss.fault	pub fault: Option<DeviceFault>
 field	metal2vulkan-runtime::DeviceLoss.result	pub result: vk::Result
 field	metal2vulkan-runtime::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-runtime::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
@@ -1464,6 +1469,9 @@ field	metal2vulkan-runtime::Export.handle	pub handle: std::os::fd::OwnedFd
 field	metal2vulkan-runtime::Export.handle	pub handle: std::os::windows::io::OwnedHandle
 field	metal2vulkan-runtime::Export.memory_type	pub memory_type: u32
 field	metal2vulkan-runtime::Export.size	pub size: u64
+field	metal2vulkan-runtime::FaultAddress.address	pub address: u64
+field	metal2vulkan-runtime::FaultAddress.kind	pub kind: vk::DeviceFaultAddressTypeEXT
+field	metal2vulkan-runtime::FaultAddress.precision	pub precision: u64
 field	metal2vulkan-runtime::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan-runtime::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan-runtime::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -1905,6 +1913,7 @@ field	metal2vulkan-runtime::floor::Features.barycentric	pub barycentric: vk::Phy
 field	metal2vulkan-runtime::floor::Features.border_swizzle	pub border_swizzle: vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-runtime::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
+field	metal2vulkan-runtime::floor::Features.fault	pub fault: vk::PhysicalDeviceFaultFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.interlock	pub interlock: vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT<'static>
@@ -7555,11 +7564,13 @@ struct	metal2vulkan-runtime::DepthStencilDescriptor	#[cfg_attr(feature = "serde"
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState
 struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-runtime::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
-struct	metal2vulkan-runtime::DeviceLoss	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct DeviceLoss
+struct	metal2vulkan-runtime::DeviceFault	#[derive(Clone, Debug, PartialEq, Eq)] pub struct DeviceFault
+struct	metal2vulkan-runtime::DeviceLoss	#[derive(Clone, Debug, PartialEq, Eq)] pub struct DeviceLoss
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DispatchVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct DispatchVariant
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event
 struct	metal2vulkan-runtime::Export	#[derive(Debug)] #[non_exhaustive] pub struct Export
+struct	metal2vulkan-runtime::FaultAddress	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct FaultAddress
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence
 struct	metal2vulkan-runtime::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan-runtime::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges

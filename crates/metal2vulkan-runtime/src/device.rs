@@ -265,6 +265,9 @@ pub(crate) struct Core {
     /// the attachment feedback loop (`floor::Capabilities::feedback_loop`): every render pipeline
     /// takes the feedback loop's enable as dynamic state, which each draw sets.
     pub(crate) feedback: Option<ash::ext::attachment_feedback_loop_dynamic_state::Device>,
+    /// `VK_EXT_device_fault`'s command, where device creation enabled it (where the device lists
+    /// it): a lost device's fault report, read once, at its first loss (`crate::fault`).
+    pub(crate) fault: Option<ash::ext::device_fault::Device>,
     /// A draw may read an attachment of its own pass through a texture
     /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
     /// set, else through a copy of the image into its shadow (`crate::shadow`).
@@ -516,6 +519,7 @@ impl Device {
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
+            mut fault,
             mut line_rasterization,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
@@ -576,6 +580,9 @@ impl Device {
         }
         if enabled(ash::nv::linear_color_attachment::NAME) {
             features = features.push_next(&mut linear_attachment);
+        }
+        if enabled(ash::ext::device_fault::NAME) {
+            features = features.push_next(&mut fault);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
@@ -675,6 +682,10 @@ impl Device {
         let feedback = (capabilities.feedback_loop).then(|| {
             ash::ext::attachment_feedback_loop_dynamic_state::Device::new(vk_instance, &device)
         });
+        let fault = (capabilities
+            .extensions
+            .contains(&ash::ext::device_fault::NAME))
+        .then(|| ash::ext::device_fault::Device::new(vk_instance, &device));
         let limits = &properties.properties.limits;
         // The sampler arrays' two defaults count against the device's samplers too.
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
@@ -729,6 +740,7 @@ impl Device {
             ticks,
             calibrated,
             feedback,
+            fault,
             attachment_reads: capabilities.attachment_reads,
             linear_attachments: (capabilities.features.linear_attachment).linear_color_attachment
                 == vk::TRUE,
@@ -926,8 +938,9 @@ impl Device {
     /// the runtime meets itself. [`Device::loss`] then answers `loss`, unless the device was
     /// already lost: the first loss is kept, and a later report changes nothing. The runtime
     /// takes `loss` as given and reads nothing of its result, so a report of a result that is no
-    /// error, `SUCCESS` included, ends the device's work all the same. As at any loss, the device
-    /// is not recovered.
+    /// error, `SUCCESS` included, ends the device's work all the same, and the loss's
+    /// [`fault`](DeviceLoss::fault) is the one `loss` carries. As at any loss, the device is not
+    /// recovered.
     pub fn report_loss(&self, loss: DeviceLoss) {
         complete::lose(&self.shared.core, loss);
     }

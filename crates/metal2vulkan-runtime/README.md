@@ -1813,7 +1813,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   resource ID from the lost device names nothing on the new one. Vulkan gives an imported allocation
   no way to take a chosen device address (`VUID-VkMemoryAllocateInfo-opaqueCaptureAddress-03333`),
   so a guest's addresses cannot be kept across a new device. A failed `vkQueueSubmit2` of any
-  result, out-of-memory included, ends the device; `Device::loss()` names the call and result.
+  result, out-of-memory included, ends the device; `Device::loss()` names the call and result,
+  and, at the runtime's own `ERROR_DEVICE_LOST` on a device that lists `VK_EXT_device_fault`, the
+  driver's fault report as given (`DeviceLoss::fault`), whose addresses the consumer places among
+  its own blocks and buffers.
 - Command buffers committed while an earlier one of their queue runs are reported complete
   together, at the last one's end, where Metal reports each at its own. Measured with the harness
   row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,
@@ -3600,6 +3603,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
 | `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
+| `VK_EXT_device_fault` | device, where listed | a lost device's fault report, read once at its first loss (`DeviceLoss::fault`), through the fault-report feature below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 | `VK_KHR_fragment_shader_barycentric` | device, where reported | a fragment function's `[[barycentric_coord]]`, through the barycentric feature below; `Device::extensions` names it only where that feature is enabled |
@@ -3930,6 +3934,19 @@ does their `DRM_FORMAT_MOD_LINEAR` modifier for each of those formats it is list
 | Linear-attachment feature | Structure | Used for |
 |---|---|---|
 | `linearColorAttachment` | `VkPhysicalDeviceLinearColorAttachmentFeaturesNV` | a `LINEAR` surface plane rendered as a linear colour attachment |
+
+### Fault reports
+
+Where the device lists `VK_EXT_device_fault`, device creation enables it, and its feature below,
+which Vulkan requires of a device that lists it. It adds no form and nothing beside the work: at
+the device's first loss of its own whose result is `ERROR_DEVICE_LOST`, the runtime reads the
+driver's report once (`vkGetDeviceFaultInfoEXT`) into `DeviceLoss::fault`. The RTX 3090 (NVIDIA
+620.70.06) lists it; after an MMU fault (Xid 13) of a read through a freed buffer's address it
+reported the read's page and an instruction pointer.
+
+| Fault-report feature | Structure | Used for |
+|---|---|---|
+| `deviceFault` | `VkPhysicalDeviceFaultFeaturesEXT` | the fault report of a lost device |
 
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's

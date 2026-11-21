@@ -24,6 +24,7 @@ mod dispatch_tiles;
 mod dma_bufs;
 mod draw;
 mod export;
+mod fault;
 mod fence;
 mod fetch;
 mod first_use_sites;

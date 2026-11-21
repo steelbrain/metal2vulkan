@@ -979,6 +979,10 @@ making's wall time, and whether no state of another specialization of the kernel
 function by name, was made before), its `commit lock wait longest N ns` (the runtime's
 `commit_lock_wait_max_nanos`: the longest wait of a commit for the runtime's work lock in the play;
 the executed counter `commit_lock_wait_nanos` gives the waits by frame, summed), its
+`loss CALL RESULT` where the device was lost (`Device::loss`: the first loss's call and result,
+then, where the runtime read the driver's fault report, `; fault "DESCRIPTION"` and an
+`; access KIND ADDRESS precision P`, `; instruction KIND ADDRESS precision P` or
+`; vendor "DESCRIPTION" code C data D` for each of its records, as the driver gave them), its
 `stages F commit_to_scheduled=C0,...,C22 scheduled_to_gpu_start=... gpu_run=...
 gpu_end_to_handler=...` for each frame `F` a later call followed and `stages end ...` at the play's
 end (the runtime's four histograms of its command buffers' stages, `Metrics::commit_to_scheduled`
