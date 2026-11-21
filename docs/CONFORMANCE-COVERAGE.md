@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1322 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7343 |
+| ledger rows (a case whose gap is recorded) | 7414 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2302,7 +2302,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-tails-blits` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-kernels` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
-| `buffer-tails-texture-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `buffer-tails-texture-buffer` | refused: the runtime's layout over a buffer (`Refusal::BufferTextureLayout`, basis ours): a texture buffer whose texels run past its buffer's length, which plai… |
 | `compressed-views-bc4-r-snorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc4-r-unorm` | An accepted difference: Metal documents no BC4 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
 | `compressed-views-bc5-rg-snorm` | An accepted difference: Metal documents no BC5 view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a d… |
@@ -3284,42 +3284,46 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
 | `nearest-sample-positions` | The device's own answer (rule 1): a nearest sample a few units in the last place from a texel edge lands on the device's texel, a texel from Metal's. Note `devi… |
-| `norm-storage-codes-rgb10a2unorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
-| `norm-storage-codes-rgba16snorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgb10a2unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
-| `norm-storage-codes-rgba16unorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
-| `norm-storage-codes-rgba8snorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba16unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
-| `norm-storage-codes-rgba8unorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8snorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
-| `norm-storage-fields-rgb10a2unorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
+| `norm-storage-codes-rgba8unorm` | The device's own answer (rule 1): a `float` the function writes to a normalized storage texture at a tie between two codes is rounded by the device's conversion… |
 | `padded-fetch-r10x6-clear-float` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `padded-fetch-r10x6-draw-float` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `padded-fetch-r10x6-load-float` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
@@ -3824,36 +3828,36 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `handler-waits-completed-until-completed` | An accepted difference: Apple documents waitUntilCompleted as "Blocks the current thread until the GPU finishes executing the command buffer and all of its comp… |
 | `indirect-private-type-getters` | The rt side does not port `indirect_draw_read_back` yet: it waits on the side's indirect command buffers (`newIndirectCommandBufferWithDescriptor:`), which it a… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `read-write-tier-descriptors` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
@@ -3958,12 +3962,13 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `tessellation-patch-indices` | Refused until built: a control-point index type (`tessellationControlPointIndexType`), which the translator's address form of the control stage does not read (`… |
 | `tessellation-patch-indices` | Refused until built: a control-point index type (`tessellationControlPointIndexType`), which the translator's address form of the control stage does not read (`… |
 | `tessellation-patch-indices` | Refused until built: a control-point index type (`tessellationControlPointIndexType`), which the translator's address form of the control stage does not read (`… |
-| `texel-swizzles-r32float` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `texel-swizzles-r32uint` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `texel-swizzles-rg32float` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `texel-swizzles-rgba16uint` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `texel-swizzles-rgba8unorm` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `texel-swizzles-views` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `texel-swizzles-r32float` | refused: a known gap of the runtime (its README, Known gaps of textures): a texture buffer with a swizzle other than each channel's own (`Gap::TextureBufferSwiz… |
+| `texel-swizzles-r32uint` | refused: a known gap of the runtime (its README, Known gaps of textures): a texture buffer with a swizzle other than each channel's own (`Gap::TextureBufferSwiz… |
+| `texel-swizzles-rg32float` | refused: a known gap of the runtime (its README, Known gaps of textures): a texture buffer with a swizzle other than each channel's own (`Gap::TextureBufferSwiz… |
+| `texel-swizzles-rgba16uint` | refused: a known gap of the runtime (its README, Known gaps of textures): a texture buffer with a swizzle other than each channel's own (`Gap::TextureBufferSwiz… |
+| `texel-swizzles-rgba8unorm` | refused: a known gap of the runtime (its README, Known gaps of textures): a texture buffer with a swizzle other than each channel's own (`Gap::TextureBufferSwiz… |
+| `texel-swizzles-rgba8unorm` | The device's own answer (rule 1): a read of an 8-bit unorm texture buffer, each `float` channel doubled: lavapipe converts an 8-bit code by the reciprocal produ… |
+| `texel-swizzles-views` | refused: a known gap of the runtime (its README, Known gaps of textures): a view of a texture buffer (`Gap::TextureView` of `TextureViewKind::TextureBuffer`); n… |
 | `texture-fills-170` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_R11Unorm with the usage the case asks, so rt makes no such te… |
 | `texture-fills-178` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatEAC_RGBA8 with the usage the case asks, so rt makes no such textu… |
 | `texture-fills-180` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatETC2_RGB8 with the usage the case asks, so rt makes no such textu… |
@@ -6926,23 +6931,90 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `buffer-depth-samples-s8-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-depth-samples-s8-part-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-fills-of-every-size` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every fillBuffer:range:value: range at a whole 4… |
-| `buffer-textures-cpu-access` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `buffer-textures-made` | The runtime's storage mode of a texture over a buffer (its README: a resource's `storageMode` is this crate's, a texture's descriptor states it): the texture ta… |
+| `buffer-textures-made` | The runtime's storage mode of a texture over a buffer (its README: a resource's `storageMode` is this crate's, a texture's descriptor states it): the texture ta… |
+| `buffer-textures-made` | The runtime's storage mode of a texture over a buffer (its README: a resource's `storageMode` is this crate's, a texture's descriptor states it): the texture ta… |
+| `buffer-textures-made` | The runtime's storage mode of a texture over a buffer (its README: a resource's `storageMode` is this crate's, a texture's descriptor states it): the texture ta… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
+| `buffer-textures-made` | refused: Metal's documented alignment (`minimumTextureBufferAlignmentForPixelFormat:`, `Refusal::TextureBufferAlignment`): a texture buffer's offset is a multip… |
 | `chroma-pair-copies-bgrg422` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatBGRG422). rt… |
 | `chroma-pair-copies-gbgr422` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatGBGR422). rt… |
 | `chroma-pair-texel-reads-bgrg422` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatBGRG422). rt… |
@@ -7096,10 +7168,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-formats-without-textures` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
@@ -7124,10 +7200,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
@@ -7264,18 +7336,18 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `heap-sizes-unspecialized` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
@@ -7655,7 +7727,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `rate-map-zero-width-layers-subscript` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no rasterization rate map call). The rt side of … |
 | `rate-map-zero-width-with-layer-count-and-layers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no rasterization rate map call). The rt side of … |
 | `rate-map-zero-width-with-screen-size-and-layer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no rasterization rate map call). The rt side of … |
-| `read-through-buffer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
@@ -8231,9 +8302,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
 | `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
 | `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `texture-buffer-fill-groups` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-buffer-fill-streams` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-buffer-long-fills` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `texture-buffer-fill-groups` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
+| `texture-buffer-fill-streams` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
+| `texture-buffer-long-fills` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
 | `texture-fills-10` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-103` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-105` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
@@ -8311,10 +8382,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-heap-run-551-b5` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `texture-fills-own-two-plane-550` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `texture-fills-own-two-plane-551` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `texture-pairs-plain-contents` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-plain-contents` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-plain-contents` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-plain-contents` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
@@ -8329,14 +8400,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-storage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
@@ -8365,15 +8436,15 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-type-levels-slices` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_4x4_LDR with the usage the case asks, so rt makes no such te… |
@@ -8410,32 +8481,32 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
 | `texture-pairs-usage-crossings` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatBC1_RGBA with the usage the case asks, so rt makes no such textur… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
-| `texture-pairs-usage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `texture-pairs-usage-crossings` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `texture-round-trip-11` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatR8Unorm_sRGB with the usage the case asks, so rt makes no such te… |
 | `texture-round-trip-116` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Bfloat… |
 | `texture-round-trip-26` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatR16Bfloat). … |
@@ -9324,7 +9395,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
-| `format-footprints-plain-stragglers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `format-footprints-plain-stragglers` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
