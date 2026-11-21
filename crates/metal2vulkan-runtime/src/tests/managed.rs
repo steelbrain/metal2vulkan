@@ -29,7 +29,9 @@
 //!
 //! A texture over a Managed buffer in an image of its own, on every device: a command buffer of
 //! another queue that runs ahead of the first of its own queue's to read it, that one in a group
-//! held or held for room, reads the buffer's bytes, as does that one.
+//! held or held for room, reads the buffer's bytes, as does that one; and a command buffer
+//! committed before a capture of a range over it, in a group held or held for room, reads the
+//! buffer's bytes outside that range, and the one that takes the capture the new bytes.
 
 use crate::capture::{merge, taker, Captured};
 use crate::submit::put_ahead;
@@ -157,15 +159,17 @@ fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_ca
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::buffer::BufferObject;
+    use crate::submit::UNSEEN_JOINS;
     use crate::tests::command::on_device::{
-        each_device, fill, finished, two_queues, within, Arena,
+        behind_busy, each_device, fill, finished, two_queues, within, Arena,
     };
     use crate::tests::compute::on_device::{add, quiet_step, step, WORDS};
     use crate::texture::TextureObject;
     use crate::{
         Block, BlockId, Buffer, BufferLayout, BytesPlace, CommandBuffer, CommandBufferStatus,
         ComputePipelineState, Device, DispatchType, Error, IndexClass, MemoryClass, PixelFormat,
-        Refusal, Region, StorageMode, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
+        TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
@@ -1298,97 +1302,130 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A texture over a Managed buffer in an image of its own, made once the buffer's named bytes
-    /// reached the bytes shaders reach, is read by two queues behind the busy gate
-    /// ([`two_queues`]): by A's command buffer numbered `reader`, the first of A's to read it, and
-    /// by B1, committed after it and run before it. Both read the buffer's bytes: Metal's texture
-    /// over a buffer shares the buffer's storage, and a command buffer committed after a
-    /// `didModifyRange:` and a commit reads what it named. A3 is in A's group held when B1 is
-    /// submitted, A4 held for room in no group. The form is printed: with two copies
-    /// (`Device::has_unified_memory` false) the texture's entry in its buffer owes its first copy
-    /// in (`crate::over::ManagedOvers`); with one, the Shared rules copy it in for each
-    /// submission (`crate::over`).
+    /// The texels of the texture over a Managed buffer the tests below read, RGBA8Unorm.
+    const OVER_TEXELS: [u32; 2] = [16, 4];
+    const OVER_ROW: u64 = 64;
+    /// A texel past the row: no device lays a linear image's rows there, so the texture is an
+    /// image of its own.
+    const OVER_PITCH: u64 = OVER_ROW + 4;
+    const OVER_LEN: u64 = 512;
+
+    /// A Managed buffer of [`OVER_LEN`] bytes in Shared block `cpu`, its bytes written, named and
+    /// taken by a commit that has run, and a texture over it at [`OVER_PITCH`] made after that:
+    /// its first copy in is owed by its making alone. With two copies
+    /// (`Device::has_unified_memory` false) its buffer's entry owes it
+    /// (`crate::over::ManagedOvers`); with one, the Shared rules copy it in for each submission
+    /// (`crate::over`). Returns the buffer, its bytes, the texture and its form printed.
+    fn over_managed(
+        name: &str,
+        device: &Device,
+        cpu: BlockId,
+    ) -> (Buffer, Vec<u8>, Texture, String) {
+        let managed = (new_managed(device, cpu, 0, OVER_LEN, 0))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let bytes: Vec<u8> = (0..OVER_LEN).map(|i| (i % 251) as u8 + 1).collect();
+        write(&managed, 0, &bytes);
+        (managed.did_modify_range(0, OVER_LEN)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let queue = device.new_command_queue(1).expect("a queue");
+        let capture = queue.command_buffer().expect("a command buffer");
+        capture.commit().expect("a commit");
+        finished(name, &capture);
+        let first = IndexClass::Texture.range().start;
+        (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+        let mut d = TextureDescriptor::new(
+            TextureType::Type2D,
+            PixelFormat::RGBA8Unorm,
+            OVER_TEXELS[0],
+            OVER_TEXELS[1],
+        );
+        d.usage = TextureUsage::SHADER_READ;
+        let texture = (managed.new_texture(&d, Some(first), 0, OVER_PITCH))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let (two, own, entry) = (
+            !device.has_unified_memory(),
+            texture.copied_over().is_some(),
+            texture.managed_over().is_some(),
+        );
+        assert!(own, "{name}: an image of its own");
+        assert_eq!(
+            entry, two,
+            "{name}: owed by its buffer's entry with two copies"
+        );
+        let form = format!(
+            "two copies {two}, an image of its own {own}, owed by its buffer's entry {entry}"
+        );
+        (managed, bytes, texture, form)
+    }
+
+    /// Encodes a copy of the texture's texels into `into`, packed.
+    fn read_over(command_buffer: &CommandBuffer, texture: &Texture, into: &Buffer) {
+        let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+        let at = TexturePlace {
+            slice: 0,
+            level: 0,
+            origin: [0; 3],
+        };
+        let layout = BufferLayout {
+            offset: 0,
+            bytes_per_row: OVER_ROW,
+            bytes_per_image: 0,
+        };
+        let size = [OVER_TEXELS[0], OVER_TEXELS[1], 1];
+        (blit.copy_from_texture_to_buffer(texture, at, size, into, layout)).expect("a copy");
+        blit.end_encoding();
+    }
+
+    /// The texture's texels as they lie in `bytes`, packed.
+    fn over_rows(bytes: &[u8]) -> Vec<u8> {
+        (0..u64::from(OVER_TEXELS[1]))
+            .flat_map(|row| {
+                let at = (row * OVER_PITCH) as usize;
+                bytes[at..at + OVER_ROW as usize].iter().copied()
+            })
+            .collect()
+    }
+
+    /// A texture over a Managed buffer in an image of its own ([`over_managed`]) is read by two
+    /// queues behind the busy gate ([`two_queues`]): by A's command buffer numbered `reader`, the
+    /// first of A's to read it, and by B1, committed after it and run before it. Both read the
+    /// buffer's bytes: Metal's texture over a buffer shares the buffer's storage, and a command
+    /// buffer committed after a `didModifyRange:` and a commit reads what it named. A3 is in A's
+    /// group held when B1 is submitted, A4 held for room in no group. The form, A's submissions
+    /// in flight and group held as B1 commits, and the order they ran in are printed.
     fn over_read_from_two_queues(test: &str, reader: u32) {
-        const TEXELS: [u32; 2] = [16, 4];
-        const ROW: u64 = 64;
-        // A texel past the row: no device lays a linear image's rows there, so the texture is an
-        // image of its own.
-        const OVER_PITCH: u64 = ROW + 4;
-        const OVER_LEN: u64 = 512;
         each_device(test, |name, _, device| {
-            let two = !device.has_unified_memory();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let managed = (new_managed(&device, cpu.id, 0, OVER_LEN, 0))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let bytes: Vec<u8> = (0..OVER_LEN).map(|i| (i % 251) as u8 + 1).collect();
-            write(&managed, 0, &bytes);
-            (managed.did_modify_range(0, OVER_LEN))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            // The commit that captures the range, run before the texture is made: the texture's
-            // first copy in is then owed by nothing but its making.
-            let queue = device.new_command_queue(1).expect("a queue");
-            let capture = queue.command_buffer().expect("a command buffer");
-            capture.commit().expect("a commit");
-            finished(name, &capture);
-            let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
-            let mut d = TextureDescriptor::new(
-                TextureType::Type2D,
-                PixelFormat::RGBA8Unorm,
-                TEXELS[0],
-                TEXELS[1],
-            );
-            d.usage = TextureUsage::SHADER_READ;
-            let texture = (managed.new_texture(&d, Some(first), 0, OVER_PITCH))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let own = texture.copied_over().is_some();
-            let entry = texture.managed_over().is_some();
+            let (managed, bytes, texture, form) = over_managed(name, &device, cpu.id);
             let mut arena = Arena::new(&device);
             let (a_read, b_read) = (arena.buffer(), arena.buffer());
-            let encode = |number: u32, command_buffer: &CommandBuffer, after: bool| {
-                let into = match (number, after) {
-                    (6, false) => &b_read,
-                    (number, false) if number == reader => &a_read,
-                    _ => return,
+            let encode =
+                |number: u32, command_buffer: &CommandBuffer, after: bool| match (number, after) {
+                    (6, false) => read_over(command_buffer, &texture, &b_read),
+                    (number, false) if number == reader => {
+                        read_over(command_buffer, &texture, &a_read)
+                    }
+                    _ => {}
                 };
-                let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
-                let at = TexturePlace {
-                    slice: 0,
-                    level: 0,
-                    origin: [0; 3],
-                };
-                let layout = BufferLayout {
-                    offset: 0,
-                    bytes_per_row: ROW,
-                    bytes_per_image: 0,
-                };
-                let size = [TEXELS[0], TEXELS[1], 1];
-                (blit.copy_from_texture_to_buffer(&texture, at, size, into, layout))
-                    .expect("a copy");
-                blit.end_encoding();
-            };
-            let log = two_queues(name, &device, encode, |_, _| {});
-            let rows: Vec<u8> = (0..u64::from(TEXELS[1]))
-                .flat_map(|row| {
-                    let at = (row * OVER_PITCH) as usize;
-                    bytes[at..at + ROW as usize].iter().copied()
-                })
-                .collect();
+            let mut held = None;
+            let log = two_queues(name, &device, encode, |_, a_work| {
+                held = Some(device.core().work.in_flight(a_work[0].queue()));
+            });
+            let rows = over_rows(&bytes);
             let (a_bytes, b_bytes) = (read(&a_read, rows.len()), read(&b_read, rows.len()));
             println!(
-                "{test}: {name}: two copies {two}; an image of its own {own}, owed by its \
-                 buffer's entry {entry}; log {log:?}; A{reader} read the bytes {}, B1 {} (its \
-                 first texels {:?}, the bytes' {:?})",
+                "{test}: {name}: {form}; A's submissions in flight and group held as B1 commits \
+                 {held:?}; log {log:?}; A{reader} read the bytes {}, B1 {} (its first texels \
+                 {:?}, the bytes' {:?})",
                 a_bytes == rows,
                 b_bytes == rows,
                 &b_bytes[..8],
                 &rows[..8]
             );
-            assert!(own, "{name}: an image of its own");
             assert_eq!(
-                entry, two,
-                "{name}: owed by its buffer's entry with two copies"
+                held,
+                Some((2, true)),
+                "{name}: A's group held as B1 commits"
             );
             assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: B1 ran ahead of A3 to A5");
             assert!(
@@ -1396,7 +1433,7 @@ pub(crate) mod on_device {
                 "{name}: A{reader} reads the buffer's bytes"
             );
             assert!(b_bytes == rows, "{name}: B1 reads the buffer's bytes");
-            drop((texture, managed, a_read, b_read, arena, capture, queue));
+            drop((texture, managed, a_read, b_read, arena));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
@@ -1413,5 +1450,88 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_reads_a_managed_texture_over_on_a_queue_passing_one_held_for_room() {
         over_read_from_two_queues("managed over passing one held for room", 4);
+    }
+
+    /// A copy in a texture over a Managed buffer in an image of its own owes ([`over_managed`])
+    /// stays owed to a command buffer committed before a capture that copies the texture in, as
+    /// that capture's copy in runs ahead of a later command buffer only (`crate::capture`). Behind
+    /// the busy gate ([`behind_busy`]), R reads the texture; then the consumer writes and names
+    /// the texture's last row, and C, committed after on the same queue, takes the capture and
+    /// reads the texture. R runs first and reads the buffer's bytes in the other rows (Metal
+    /// leaves the named row undefined for it, `MTLBuffer.h` `didModifyRange:`); C reads the new
+    /// bytes in every row. With `held`, [`UNSEEN_JOINS`] command buffers join the queue's group
+    /// held first, so R is held for room in no group when C commits; else R is in the group held.
+    fn over_read_before_a_capture(test: &str, held: bool) {
+        each_device(test, |name, _, device| {
+            let counters = device.counters();
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (managed, mut bytes, texture, form) = over_managed(name, &device, cpu.id);
+            let before = over_rows(&bytes);
+            let mut arena = Arena::new(&device);
+            let (r_read, c_read) = (arena.buffer(), arena.buffer());
+            let queue = device.new_command_queue(16).expect("a queue");
+            let mut kept = Vec::new();
+            let mut counted = 0;
+            behind_busy(name, &device, &queue, |_, _, _| {
+                for _ in 0..UNSEEN_JOINS * usize::from(held) {
+                    let joins = queue.command_buffer().expect("a command buffer");
+                    (joins.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+                    joins.commit().expect("a commit");
+                    kept.push(joins);
+                }
+                let room = counters.metrics().held_for_room;
+                let reader = queue.command_buffer().expect("a command buffer");
+                read_over(&reader, &texture, &r_read);
+                reader.commit().expect("a commit");
+                within(name, || reader.status() == CommandBufferStatus::Scheduled);
+                counted = counters.metrics().held_for_room - room;
+                let at = 3 * OVER_PITCH;
+                let row = at as usize..(at + OVER_ROW) as usize;
+                bytes[row.clone()].fill(0xC5);
+                write(&managed, at, &bytes[row]);
+                (managed.did_modify_range(at, OVER_ROW))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let capturer = queue.command_buffer().expect("a command buffer");
+                read_over(&capturer, &texture, &c_read);
+                capturer.commit().expect("a commit");
+                within(name, || capturer.status() == CommandBufferStatus::Scheduled);
+                kept.extend([reader, capturer]);
+            });
+            for command_buffer in &kept {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            let (after, unnamed) = (over_rows(&bytes), 3 * OVER_ROW as usize);
+            let (r_bytes, c_bytes) = (read(&r_read, after.len()), read(&c_read, after.len()));
+            println!(
+                "{test}: {name}: {form}; R held for room {counted}; R read the bytes outside the \
+                 named row {} (its first texels {:?}, the bytes' {:?}), C the new bytes {}",
+                r_bytes[..unnamed] == before[..unnamed],
+                &r_bytes[..8],
+                &before[..8],
+                c_bytes == after
+            );
+            assert_eq!(counted, u64::from(held), "{name}: R held for room");
+            assert!(
+                r_bytes[..unnamed] == before[..unnamed],
+                "{name}: R reads the buffer's bytes outside the named row"
+            );
+            assert!(c_bytes == after, "{name}: C reads the new bytes");
+            drop((texture, managed, r_read, c_read, arena, queue, kept));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// [`over_read_before_a_capture`] with R in the group held when C commits.
+    #[test]
+    fn every_device_reads_a_managed_texture_over_in_a_group_ahead_of_a_later_capture() {
+        over_read_before_a_capture("managed over before a capture", false);
+    }
+
+    /// [`over_read_before_a_capture`] with R held for room in no group when C commits.
+    #[test]
+    fn every_device_reads_a_managed_texture_over_held_for_room_ahead_of_a_later_capture() {
+        over_read_before_a_capture("managed over held before a capture", true);
     }
 }
