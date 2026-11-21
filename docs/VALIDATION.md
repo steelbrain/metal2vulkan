@@ -484,17 +484,22 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   sample draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, function constants and linked functions, its
   generated companion, its vertex buffers at static strides, its color targets (Shared 2D
-  textures, loaded and stored by the pass), the oracle's depth-stencil state, cull mode and
-  winding, and one direct or indexed draw of primitives, observing a buffer, a texture, a color
-  target or nothing, its out-of-bounds targets, if any, attribute buffers. Their facts are read
+  textures, loaded and stored by the pass), a depth/stencil attachment of one aspect as the oracle
+  makes it (a Shared `Depth32Float` filled by a draw of its depths, as a 32-bit float depth texture
+  is, or a Shared `Stencil8` written from its bytes, loaded and stored by the pass), the oracle's
+  depth-stencil state, cull mode and winding, and one direct or indexed draw of primitives,
+  observing a buffer, a texture, a color target, the attachment's aspect or nothing, its
+  out-of-bounds targets, if any, attribute buffers. Their facts are read
   before the state is made, from the translator's compile of the state's descriptor on the
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
-  into the oracle's 1x1 `R8Unorm` attachment. A depth/stencil attachment, more samples, layered rendering, a dynamic vertex
-  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an
-  out-of-bounds target other than an attribute buffer or a fragment pass with no color target (the
-  runtime makes no pass without an attachment) keeps the case on the executor's own context. An
+  into the oracle's 1x1 `R8Unorm` attachment. A depth/stencil attachment of both aspects (the
+  oracle's two textures, which the runtime renders into in no one pass: `Gap::RenderPass` of
+  `DepthStencilViews`), more samples, layered rendering, a dynamic vertex stride, an
+  argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an out-of-bounds
+  target other than an attribute buffer or a fragment pass with no attachment (the runtime makes
+  no pass without one) keeps the case on the executor's own context. An
   indexed draw past its index buffer, which the runtime refuses as Metal's validation does
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, the runtime's limit, and runs
   on Metal alone. Its device worker enables the

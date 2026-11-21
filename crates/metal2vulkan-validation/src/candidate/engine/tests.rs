@@ -2704,11 +2704,12 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
 /// The runtime draws a vertex or fragment case of one sample, its own stage's buffers, textures
 /// and samplers, static vertex strides, color targets, and one direct or indexed draw of
 /// primitives, observing a buffer, a texture, a color target or nothing; and a
-/// rasterization-disabled vertex case, which renders into the oracle's sink; and an attribute
-/// buffer's out-of-bounds target. A case with anything else (a depth/stencil attachment, more
-/// samples, layered rendering, a dynamic vertex stride, an argument-buffer member, an explicit
-/// imageblock, a depth observation, a fragment pass with no color target, which the runtime makes
-/// no pass of, or an index buffer's out-of-bounds target) stays on the executor's own context.
+/// rasterization-disabled vertex case, which renders into the oracle's sink; a depth/stencil
+/// attachment of one sample and one aspect, observed or not; and an attribute buffer's
+/// out-of-bounds target. A case with anything else (a depth/stencil attachment of both aspects or
+/// more samples, more samples, layered rendering, a dynamic vertex stride, an argument-buffer
+/// member, an explicit imageblock, a fragment pass with no attachment, which the runtime makes no
+/// pass of, or an index buffer's out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -2793,13 +2794,54 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             .argument_buffer_buffers
             .insert((0, 0), vec![0; 16]);
     }
+    // A depth/stencil attachment of one sample and one aspect, observed or not, with or without a
+    // color target; one of both aspects or of more samples stays on the executor's own context.
+    let depth = LiteralDepthStencil {
+        dimensions: [2, 2],
+        samples: 1,
+        depth: Some(vec![0; 16]),
+        stencil: None,
+    };
+    let stencil = LiteralDepthStencil {
+        depth: None,
+        stencil: Some(vec![0; 4]),
+        ..depth.clone()
+    };
+    for attachment in [&depth, &stencil] {
+        let attached = RenderCase {
+            depth_stencil: Some(attachment.clone()),
+            ..plain.clone()
+        };
+        assert!(runs_render_through_runtime(&authored, &attached));
+        let observed = RenderCase {
+            color_targets: BTreeMap::new(),
+            output: match attachment.depth {
+                Some(_) => RenderOutput::Depth {
+                    origin: [0, 0],
+                    dimensions: [1, 1],
+                },
+                None => RenderOutput::Stencil {
+                    origin: [0, 0],
+                    dimensions: [1, 1],
+                },
+            },
+            ..attached
+        };
+        assert!(runs_render_through_runtime(&authored, &observed));
+    }
     let others = [
         RenderCase {
             depth_stencil: Some(LiteralDepthStencil {
-                dimensions: [2, 2],
-                samples: 1,
-                depth: Some(vec![0; 16]),
-                stencil: None,
+                stencil: Some(vec![0; 4]),
+                ..depth.clone()
+            }),
+            ..plain.clone()
+        },
+        RenderCase {
+            depth_stencil: Some(LiteralDepthStencil {
+                samples: 4,
+                depth: Some(vec![0; 64]),
+                ..depth.clone()
             }),
             ..plain.clone()
         },
@@ -2830,13 +2872,6 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
                 cell_bytes: 4,
                 bytes: vec![0; 16],
             }),
-            ..plain.clone()
-        },
-        RenderCase {
-            output: RenderOutput::Depth {
-                origin: [0, 0],
-                dimensions: [1, 1],
-            },
             ..plain.clone()
         },
         RenderCase {

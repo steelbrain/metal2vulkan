@@ -65,7 +65,7 @@ use crate::gpu::wait::wait_timeout;
 use crate::gpu::DeviceType;
 use crate::hash::sha256_bytes;
 use crate::library_module::ResolvedLinkedFunctions;
-use crate::literal::{LiteralResources, LiteralTexture};
+use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralTexture};
 use crate::metal::ORACLE_ABI;
 use crate::observation::{
     Backend, CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming,
@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v194";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v195";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1395,10 +1395,11 @@ pub struct RuntimeKernel<'a> {
 /// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
 /// fragment case of one sample, its own stage's buffers, bound textures the runtime makes
 /// (`runtime_texture`) and bound samplers, function constants and linked functions, its vertex
-/// buffers at static strides, its color targets (a fragment case renders into at least one: the
-/// runtime makes no pass without an attachment, `Gap::RenderPass`), the encoder's depth-stencil
-/// state, cull mode and winding, and one direct or indexed draw of primitives, observing a buffer,
-/// a texture, a color target or nothing, whose out-of-bounds targets, if any, are attribute
+/// buffers at static strides, its color targets and a depth/stencil attachment of one sample and
+/// one aspect (a fragment case renders into at least one attachment: the runtime makes no pass
+/// without one, `Gap::RenderPass`), the encoder's depth-stencil state, cull mode and winding, and
+/// one direct or indexed draw of primitives, observing a buffer, a texture, a color target, the
+/// depth/stencil attachment's aspect or nothing, whose out-of-bounds targets, if any, are attribute
 /// buffers (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::RenderCase) -> bool {
@@ -1441,12 +1442,17 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
             && textures.values().all(runtime_texture)
             && function_tables.is_empty()
     };
+    // The runtime renders into no separate depth and stencil textures in one pass
+    // (`Gap::RenderPass` of `DepthStencilViews`), which the oracle makes of an attachment of both.
+    let one_aspect = |attachment: &LiteralDepthStencil| {
+        attachment.samples == 1 && (attachment.depth.is_none() || attachment.stencil.is_none())
+    };
     bound(vertex)
         && fragment.as_ref().is_none_or(bound)
-        && (fragment.is_none() || !color_targets.is_empty())
+        && (fragment.is_none() || !color_targets.is_empty() || depth_stencil.is_some())
         && vertex_buffers.iter().all(|buffer| !buffer.dynamic)
         && color_targets.values().all(|target| target.samples == 1)
-        && depth_stencil.is_none()
+        && depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
         && matches!(assembly, graphics::Assembly::Primitives(_))
         && matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. })
@@ -1460,6 +1466,8 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
                 | graphics::RenderOutput::Buffer { .. }
                 | graphics::RenderOutput::Texture { .. }
                 | graphics::RenderOutput::RenderTarget { .. }
+                | graphics::RenderOutput::Depth { .. }
+                | graphics::RenderOutput::Stencil { .. }
         )
         && rate_map_pass.is_none()
         && raster_sample_count.is_none()

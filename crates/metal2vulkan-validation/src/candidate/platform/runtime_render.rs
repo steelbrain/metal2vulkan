@@ -9,7 +9,10 @@
 //! buffer; each bound texture and sampler as the Metal oracle makes them (`runtime_textures`); each
 //! color attachment a Shared 2D texture of its format and extent, written from the case's bytes
 //! and loaded and stored by the pass, and the oracle's 1x1 `R8Unorm` attachment where
-//! rasterization is disabled, which no draw writes; the oracle's depth-stencil state, stencil
+//! rasterization is disabled, which no draw writes; the depth/stencil attachment's one aspect as
+//! the oracle makes it, a Shared `Depth32Float` filled by a draw of the case's depths
+//! (`runtime_depth`, as the runtime takes no upload of one) or a Shared `Stencil8` written from its
+//! bytes, loaded and stored by the pass; the oracle's depth-stencil state, stencil
 //! references, cull mode and winding; one draw, direct or indexed, in one command buffer, waited
 //! for under the hang protocol, then read back.
 //!
@@ -19,6 +22,7 @@
 
 use super::runtime::{self, runtime_error, Identity, Placed};
 use super::runtime_bounds;
+use super::runtime_depth;
 use super::runtime_textures::{self, Bound, Indices, Wanted};
 use crate::candidate::engine::graphics::{
     self, Assembly, ColorTarget, RenderCase, RenderFinals, RenderOutput,
@@ -28,6 +32,7 @@ use crate::case::Stage;
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::ModuleCensus;
 use crate::gpu::DeviceType;
+use crate::literal::LiteralDepthStencil;
 use metal2vulkan::bind::DrawCall;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{
@@ -112,7 +117,7 @@ fn run(
         .as_deref()
         .map(|bytes| Placed::new(device, "the index buffer", bytes))
         .transpose()?;
-    let targets = Targets::make(device, case, &mut indices)?;
+    let targets = Targets::make(device, device_type, case, &mut indices)?;
     let depth_stencil = device.new_depth_stencil_state(&case.depth_stencil_state.descriptor);
     let label = crate::gpu::wait::SubmissionLabel {
         case_id: case_id.into(),
@@ -176,6 +181,7 @@ fn run(
             let finals = RenderFinals {
                 buffers: stages.finals(),
                 targets: targets.finals(case)?,
+                depth_stencil: targets.depth_stencil_finals()?,
                 ..RenderFinals::default()
             };
             graphics::select_render_output(output, &finals).map_err(ExecutorError::Failed)?
@@ -365,10 +371,21 @@ impl Stages {
     }
 }
 
-/// The pass's color attachments, by Metal index.
+/// The pass's color attachments, by Metal index, and its depth/stencil attachment's aspect.
 struct Targets {
     textures: BTreeMap<u32, rt::Texture>,
+    depth_stencil: Option<DepthStencil>,
     _grant: Option<rt::IndexGrant>,
+}
+
+/// A depth/stencil attachment of one sample and one aspect, as the oracle makes it (Metal's
+/// separate `Depth32Float` and `Stencil8`): the runtime renders into no separate depth and stencil
+/// textures in one pass (`Gap::RenderPass` of `DepthStencilViews`), so a case of both stays on the
+/// executor's own context (`engine::runs_render_through_runtime`).
+struct DepthStencil {
+    texture: rt::Texture,
+    depth: bool,
+    dimensions: [u32; 2],
 }
 
 impl Targets {
@@ -378,6 +395,7 @@ impl Targets {
     /// (a case of that draw authors no color target, `RasterizationDisabledRenderTarget`).
     fn make(
         device: &rt::Device,
+        device_type: DeviceType,
         case: &RenderCase,
         indices: &mut Indices,
     ) -> Result<Targets, ExecutorError> {
@@ -387,15 +405,29 @@ impl Targets {
             let sink = attachment(device, SINK, [1, 1], (0, at.start))?;
             return Ok(Targets {
                 textures: BTreeMap::from([(0, sink)]),
+                depth_stencil: None,
                 _grant: grant,
             });
         }
-        let (grant, at) = runtime_textures::texture_indices(
+        let aspects = usize::from(case.depth_stencil.is_some());
+        let (grant, mut at) = runtime_textures::texture_indices(
             device,
             indices,
-            case.color_targets.len(),
+            case.color_targets.len() + aspects,
             &runtime_error,
         )?;
+        let depth_stencil = case
+            .depth_stencil
+            .as_ref()
+            .map(|authored| {
+                let index = at.next().ok_or_else(|| {
+                    ExecutorError::Failed(
+                        "no texture index for the depth/stencil attachment".into(),
+                    )
+                })?;
+                DepthStencil::make(device, device_type, authored, index)
+            })
+            .transpose()?;
         let mut textures = BTreeMap::new();
         for ((&index, target), at) in case.color_targets.iter().zip(at) {
             let format = resources::pixel_format(target.format);
@@ -416,6 +448,7 @@ impl Targets {
         }
         Ok(Targets {
             textures,
+            depth_stencil,
             _grant: grant,
         })
     }
@@ -429,7 +462,53 @@ impl Targets {
             attachment.load_action = rt::LoadAction::Load;
             attachment.store_action = rt::StoreAction::Store;
         }
+        match &self.depth_stencil {
+            Some(made) if made.depth => {
+                let attachment = &mut pass.depth_attachment;
+                attachment.texture = Some(made.texture.clone());
+                attachment.load_action = rt::LoadAction::Load;
+                attachment.store_action = rt::StoreAction::Store;
+            }
+            Some(made) => {
+                let attachment = &mut pass.stencil_attachment;
+                attachment.texture = Some(made.texture.clone());
+                attachment.load_action = rt::LoadAction::Load;
+                attachment.store_action = rt::StoreAction::Store;
+            }
+            None => {}
+        }
         pass
+    }
+
+    /// The depth/stencil attachment's aspect with its bytes now, where the pass has one.
+    fn depth_stencil_finals(&self) -> Result<Option<LiteralDepthStencil>, ExecutorError> {
+        let Some(made) = &self.depth_stencil else {
+            return Ok(None);
+        };
+        let [width, height] = made.dimensions;
+        let row = width as usize * if made.depth { 4 } else { 1 };
+        let image = row * height as usize;
+        let mut bytes = vec![0u8; image];
+        made.texture
+            .get_bytes(
+                &mut bytes,
+                row as u64,
+                image as u64,
+                whole([width, height]),
+                0,
+                0,
+            )
+            .map_err(|error| runtime_error("the depth/stencil attachment's read-back", error))?;
+        let (depth, stencil) = match made.depth {
+            true => (Some(bytes), None),
+            false => (None, Some(bytes)),
+        };
+        Ok(Some(LiteralDepthStencil {
+            dimensions: made.dimensions,
+            samples: 1,
+            depth,
+            stencil,
+        }))
     }
 
     /// Each authored color target with its bytes now, by Metal index.
@@ -466,6 +545,75 @@ impl Targets {
             })
             .collect()
     }
+}
+
+impl DepthStencil {
+    /// `authored`'s one aspect at texture index `at` of the run's grant: a `Depth32Float` filled
+    /// with its depths by a draw (`runtime_depth`), or a `Stencil8` written from its bytes.
+    fn make(
+        device: &rt::Device,
+        device_type: DeviceType,
+        authored: &LiteralDepthStencil,
+        at: u32,
+    ) -> Result<DepthStencil, ExecutorError> {
+        let [width, height] = authored.dimensions;
+        let what = "the depth/stencil attachment";
+        match (&authored.depth, &authored.stencil) {
+            (Some(depths), None) => {
+                let texture = aspect(device, rt::PixelFormat::Depth32Float, [width, height], at)?;
+                let fill = runtime_depth::Fill {
+                    texture: texture.clone(),
+                    level: 0,
+                    slice: 0,
+                    width,
+                    depths: depths.clone(),
+                };
+                runtime_depth::filled(device, device_type, &[fill], &runtime_error)?;
+                Ok(DepthStencil {
+                    texture,
+                    depth: true,
+                    dimensions: authored.dimensions,
+                })
+            }
+            (None, Some(stencil)) => {
+                let texture = aspect(device, rt::PixelFormat::Stencil8, [width, height], at)?;
+                texture
+                    .replace_region(
+                        whole([width, height]),
+                        0,
+                        0,
+                        stencil.as_slice().into(),
+                        u64::from(width),
+                        u64::from(width) * u64::from(height),
+                    )
+                    .map_err(|error| runtime_error(what, error))?;
+                Ok(DepthStencil {
+                    texture,
+                    depth: false,
+                    dimensions: authored.dimensions,
+                })
+            }
+            _ => Err(ExecutorError::Failed(format!(
+                "{what} through the runtime holds one aspect"
+            ))),
+        }
+    }
+}
+
+/// A Shared 2D depth or stencil attachment of `format` and `extent` at texture index `at` of the
+/// run's grant.
+fn aspect(
+    device: &rt::Device,
+    format: rt::PixelFormat,
+    [width, height]: [u32; 2],
+    at: u32,
+) -> Result<rt::Texture, ExecutorError> {
+    let mut descriptor = rt::TextureDescriptor::new(rt::TextureType::Type2D, format, width, height);
+    descriptor.usage = rt::TextureUsage::RENDER_TARGET;
+    descriptor.storage_mode = rt::StorageMode::Shared;
+    device
+        .new_texture(&descriptor, Some(at))
+        .map_err(|error| runtime_error("the depth/stencil attachment", error))
 }
 
 /// A Shared 2D color attachment of `format` and `extent`, color attachment `index`'s, at texture

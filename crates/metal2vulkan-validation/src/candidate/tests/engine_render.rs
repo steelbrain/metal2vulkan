@@ -285,7 +285,7 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
 /// A fragment case with a depth/stencil attachment: `fragment_depth_stencil` writes depth 0.5 under
 /// `depth(any)` and stencil 7, and the oracle's depth-stencil state (always-pass depth test with
 /// writes, always-pass stencil test that replaces) stores both over the attachment's authored 1.0
-/// and 0xab, as the oracle does for case 685a8d84.
+/// and 0xab, as the oracle does for case 685a8d84; through the runtime, each aspect alone.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
@@ -333,6 +333,43 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             run.status,
             Some(metal2vulkan::bind::StatusReport::default())
         );
+    }
+    // Through the runtime, each aspect alone: an attachment of both is the oracle's two
+    // textures, which the runtime renders into in no one pass.
+    #[cfg(target_os = "linux")]
+    {
+        for (depth, output, expected) in [
+            (
+                true,
+                OutputSelection::Depth {
+                    origin: [0, 0],
+                    dimensions: [1, 1],
+                },
+                0.5f32.to_le_bytes().to_vec(),
+            ),
+            (
+                false,
+                OutputSelection::Stencil {
+                    origin: [0, 0],
+                    dimensions: [1, 1],
+                },
+                vec![7],
+            ),
+        ] {
+            authored.depth_stencil = Some(crate::case::DepthStencilResource {
+                dimensions: [1, 1],
+                initial_depth_b64: depth.then(|| b64(&1.0f32.to_le_bytes())),
+                initial_stencil_b64: (!depth).then(|| b64(&[0xab])),
+                state: None,
+            });
+            authored.output = output;
+            let (case, companion) = with_companion(&authored, &fragment);
+            assert!(crate::candidate::engine::runs_render_through_runtime(
+                &authored, &case
+            ));
+            let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+            assert_eq!(through.output, expected, "{:?}", authored.output);
+        }
     }
 }
 
