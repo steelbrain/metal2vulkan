@@ -2,14 +2,19 @@
 //! owned synthetic kernel, `arena`, keeps a private array of `N` words past the translator's
 //! floor, fills it with `31 gid + i` and folds it back read at `(7 j + gid) mod N` as
 //! `s = 3 s + a[k]`, so each thread's answer depends on every word of its own slot in an order no
-//! other slot's words reproduce. It runs at 7176 words (28,704 bytes a thread), 9216 (36 KiB) and
-//! 51,200 (200 KiB), over 8 threadgroups of 64, under the device's own budget (one piece) and
-//! under a budget of a test's (`Core::arena_budget`) that splits the dispatch: two threadgroups a
-//! piece at 28,704 bytes, four at 36 KiB and one at 200 KiB. The device's own budget splits a
-//! dispatch too where its slots pass it, into the pieces that budget holds. Every answer is the
-//! CPU's. The counts show the path: one arena
-//! dispatch each, its pieces, a barrier before each piece but the first in a block the dispatch
-//! took new, and none for a kernel without an arena, whose dispatches beside it add no barrier.
+//! other slot's words reproduce. Its thread's index is its threadgroup's position times 64 plus
+//! its position in it, so it observes its threadgroups and runs in Metal's: a kernel that reads
+//! only its position in the grid may run in workgroups of the runtime's own shape, whose pieces
+//! differ.
+//!
+//! It runs at 7176 words (28,704 bytes a thread), 9216 (36 KiB) and 51,200 (200 KiB), over 8
+//! threadgroups of 64, under the device's own budget and under a budget of a test's
+//! (`Core::arena_budget`) that splits the dispatch: two threadgroups a piece at 28,704 bytes, four
+//! at 36 KiB and one at 200 KiB. The device's own budget splits a dispatch too where its slots
+//! pass it, into the pieces that budget holds. Every answer is the CPU's. The counts show the
+//! path: one arena dispatch each, its pieces, a barrier before each piece but the first in a
+//! block the dispatch took new, and none for a kernel without an arena, whose dispatches beside
+//! it add no barrier.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -30,13 +35,16 @@ mod on_device {
     /// The kernel `arena` of `n` private words and the kernel `plain`, which writes its thread's
     /// index and keeps no private memory.
     fn module(n: u32) -> String {
+        let threads = THREADS;
         format!(
             r#"; Owned synthetic kernels: a private array of {n} words, and none.
 source_filename = "private_arena.metal"
 
-define void @arena(ptr addrspace(1) %out, i32 %gid) {{
+define void @arena(ptr addrspace(1) %out, i32 %tg, i32 %tid) {{
 entry:
   %a = alloca [{n} x i32], align 4
+  %first = mul i32 %tg, {threads}
+  %gid = add i32 %first, %tid
   %m = mul i32 %gid, 31
   br label %fill
 fill:
@@ -76,12 +84,15 @@ entry:
 }}
 
 !air.kernel = !{{!0, !3}}
-!0 = !{{ptr @arena, !1, !2}}
+!0 = !{{ptr @arena, !1, !4}}
 !3 = !{{ptr @plain, !1, !2}}
 !1 = !{{}}
 !2 = !{{!10, !12}}
+!4 = !{{!10, !13, !14}}
 !10 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
 !12 = !{{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}}
+!13 = !{{i32 1, !"air.threadgroup_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tg"}}
+!14 = !{{i32 2, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}}
 "#
         )
     }
