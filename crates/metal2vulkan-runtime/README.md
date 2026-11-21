@@ -1217,7 +1217,11 @@ made, with no lock, and never rewritten for layouts.
 - Refused as Metal refuses each descriptor (`Refusal::TextureZeroExtent`,
   `TextureExtentForType`, `TextureCubeNotSquare`, `TextureArrayLength`, `TextureLevelCount`,
   `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`)
-  and Memoryless storage (`Gap::MemorylessTexture`) are not built. A cube array texture's image
+  and Memoryless storage (`Gap::MemorylessTexture`) are not built. A texture buffer is refused at
+  both makes, `Device::new_texture` and `Buffer::new_texture`, and a pipeline whose function
+  declares a `texture_buffer` is refused at creation (`Unsupported{IdentityDomains}`): a consumer
+  that tells a guest texture buffers are supported (an alignment, a format's buffer usage) hands it
+  nil for each one it makes. A cube array texture's image
   is cube-compatible with six layers a cube, and its view is a cube array view (`imageCubeArray`,
   in the floor).
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
