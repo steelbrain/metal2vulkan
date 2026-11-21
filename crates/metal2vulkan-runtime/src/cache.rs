@@ -1197,7 +1197,9 @@ impl Caches {
         self.blob.get().map(PathBuf::as_path)
     }
 
-    /// Makes the reaper's writes of lowerings wait, or go on, for a test.
+    /// Keeps the lowerings waiting to be written in their queue, or lets the reaper take them, for
+    /// a test: the reaper takes none while they are stalled, so the queue holds every one handed
+    /// over. A test that lets them go pokes the reaper.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn stall_writes(&self, stalled: bool) {
         (self.writes_stalled).store(stalled, std::sync::atomic::Ordering::Release);
@@ -1307,21 +1309,22 @@ impl Caches {
         kept.flatten()
     }
 
-    /// The next lowering, refusal or record waiting for the reaper to write it.
+    /// The next lowering, refusal or record waiting for the reaper to write it; none while a test
+    /// stalls the writes, which then stay in the queue.
     pub(crate) fn next_write(&self) -> Option<(String, Vec<u8>)> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if self
+            .writes_stalled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return None;
+        }
         lock(&self.pending).pop()
     }
 
     /// On the reaper: writes `bytes` under `file` in the store, as [`keep_translation`] queued
     /// them.
     pub(crate) fn write_kept(&self, file: &str, bytes: &[u8], counters: &Counters) {
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        while self
-            .writes_stalled
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            std::thread::sleep(Duration::from_millis(1));
-        }
         if let Some(store) = &self.store {
             if store.put(file, bytes) {
                 counters.cache_written(bytes.len() as u64);

@@ -2109,6 +2109,7 @@ mod on_device {
             );
             caches.set_pending_bound(crate::cache::PENDING_BYTES);
             caches.stall_writes(false);
+            device.core().reaper.poke();
             within("the writes", || counters.metrics().cache_bytes_written > 0);
             drop((a, b));
             drop(device);
