@@ -570,7 +570,9 @@ fn the_interface_states_the_pixel_reads() {
 /// pixel form only where the portability member allows it, and is refused naming the member: with
 /// it the pipeline compiles, requires the member and the centered offset, and converts to MSL that
 /// Metal compiles; either way, the pipeline of the same function at one sample compiles without
-/// either.
+/// either. The memory writer runs at pixel rate: with the member it reads its center varying
+/// through the same pixel form, and without it where the device evaluates it, noting
+/// `MultisamplePosition`, rather than being refused.
 #[test]
 fn a_center_varying_at_sample_rate_needs_the_interpolation_functions() {
     let Some(lib) = fixture() else { return };
@@ -600,6 +602,11 @@ fn a_center_varying_at_sample_rate_needs_the_interpolation_functions() {
                     Err(AssembleError::Missing(why)) => eprintln!("SKIPPED: {why}"),
                     Err(AssembleError::Rejected(why)) => panic!("{what}: MoltenVK's MSL: {why}"),
                 }
+            } else if fragment == COUNTER {
+                let p = four.unwrap_or_else(|e| panic!("{what}: {e}"));
+                validate(&p, &dev, &what);
+                assert!(!p.requirements.features.contains(&feature), "{what}");
+                assert!(noted(&p), "{what}");
             } else {
                 assert_eq!(
                     four.map(|_| ()),
