@@ -42,7 +42,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
 /// reconvergence modes, each for the optional features of its own, quad control and the fragment
 /// shader interlock, for `shaderQuadControl` and `fragmentShaderPixelInterlock` where the device
-/// reports them, the portability subset, which
+/// reports them, the shader stencil export, through which a fragment function's `[[stencil]]`
+/// output is the fragment's stencil reference (`FragStencilRefEXT`), the portability subset, which
 /// Vulkan requires enabled where a device lists it, with the portability features the floor asks
 /// of such a device, the vertex attribute divisor's two extensions, for the step-rate feature
 /// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
@@ -61,6 +62,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
     ash::khr::shader_quad_control::NAME,
     ash::ext::fragment_shader_interlock::NAME,
+    ash::ext::shader_stencil_export::NAME,
     ash::khr::portability_subset::NAME,
     ash::khr::vertex_attribute_divisor::NAME,
     ash::ext::vertex_attribute_divisor::NAME,
@@ -121,6 +123,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::ExtFragmentShaderInterlock)
     } else if name == ash::khr::fragment_shader_barycentric::NAME {
         Some(VkExtension::KhrFragmentShaderBarycentric)
+    } else if name == ash::ext::shader_stencil_export::NAME {
+        Some(VkExtension::ExtShaderStencilExport)
     } else if name == ash::ext::robustness2::NAME {
         Some(VkExtension::ExtRobustness2)
     } else if name == ash::khr::portability_subset::NAME {

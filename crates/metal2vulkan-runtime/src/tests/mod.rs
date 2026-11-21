@@ -84,6 +84,7 @@ mod staging;
 #[cfg(m2v_gpu)]
 mod stamps;
 mod state_answers;
+mod stencil_export;
 mod storage_element;
 mod subgroup_sizes;
 mod submit_infos;

@@ -2854,14 +2854,22 @@ or does not check is rebuilt from the generations' names, with young counted ful
   step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions' and a tessellation's, an imageblock, a
-  fragment function's stencil output, a specialization other than the sample and amplification
-  counts, dynamic state beyond Vulkan 1.3's (a vertex buffer layout whose stride is set per bind
-  among it), a feature or extension device creation does not enable, and a function that reads
-  what a draw does not supply (`DrawInput`: a function table, a table the binder builds, a
-  parameter block past the push range, a push field or bind-time fact the encoder does not fill,
+  fragment function's stencil output applied by the function itself (`ShaderStencil`, a form the
+  translator does not choose under the identity domains), a specialization other than the sample and
+  amplification counts, dynamic state beyond Vulkan 1.3's (a vertex buffer layout whose stride is
+  set per bind among it), a feature or extension device creation does not enable, and a function
+  that reads what a draw does not supply (`DrawInput`: a function table, a table the binder builds,
+  a parameter block past the push range, a push field or bind-time fact the encoder does not fill,
   an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
   reads only its slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
+- On a device that does not list `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]`
+  output is refused at creation, an `Error::Translation` naming `StencilExport`: under the identity
+  domains the pixel interlock chooses no other form. Metal's feature set tables give stencil
+  feedback to the Apple5 family and later and to Metal 3 and Metal 4. NVIDIA's 615 and 620 drivers
+  on the RTX 2080, RTX 3090 and RTX 5080 Laptop list none (`vulkaninfo`, jobs m3-max-48727, 48729
+  and 48731); RADV on the RX 7900 XTX, the 780Ms and the RX 550, ANV on the Iris Xe, lavapipe,
+  KosmicKrisp and the UHD 630's Windows driver list it (48727 to 48731, 48736, 48737 and 61508).
 - On a device without `shaderQuadControl` (Quad control, under Floor), a fragment function whose
   group operations read, combine or count other lanes (every SIMD-group and quad group function, and
   the SIMD-group matrix functions) is refused at creation, an `Error::Translation` naming
@@ -3512,6 +3520,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_shader_quad_control` | device, where listed | a fragment function's group operations over other lanes, through the quad-control feature below |
 | `VK_EXT_fragment_shader_interlock` | device, where listed | a fragment function's raster order groups on memory it reads and writes, through the pixel-interlock feature below |
+| `VK_EXT_shader_stencil_export` | device, where listed | a fragment function's `[[stencil]]` output as the fragment's stencil reference (`FragStencilRefEXT`); RADV, ANV, lavapipe, KosmicKrisp and the UHD 630's Windows driver list it, NVIDIA's 615 and 620 drivers do not |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
