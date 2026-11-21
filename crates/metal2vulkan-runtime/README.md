@@ -3568,9 +3568,9 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   `optimize_indirect_command_buffer` records nothing.
 - `RenderCommandEncoder::execute_commands_in_buffer` runs the range in parts of 64 commands, in
   order, the last part the rest: one `vkCmdExecuteGeneratedCommandsEXT` a part, a sequence a
-  command, with the encoder's pipeline state and render state: a push constant token for each run
-  of slot words the state's functions read at consecutive push offsets, the index buffer token, a
-  sequence index token and the indexed draw token. Before each part the execution pushes the part's
+  command, with the encoder's pipeline state and render state: a push constant token for each
+  slot word the state's functions read, the index buffer token, a sequence index token and the
+  indexed draw token. Before each part the execution pushes the part's
   first command, which the vertex function adds to the sequence index. The device keeps 64 command
   layouts, one per shape of tokens, and 256 execution shapes of a part's 64 commands, one per
   state, raster state (the depth clip and triangle fill modes, which choose the state's pipeline)
@@ -3621,12 +3621,21 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   an execution of N commands whose generated commands pass about 4 MiB (296 bytes a command,
   14,170 commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's
   driver (620.70.06, an RTX 2080) one of 96 commands or more (65 drew right) ended with its own
-  29th to 32nd commands on top of every later one, a cause not yet found. The parts cost, at
+  29th to 32nd commands on top of every later one, under the token bug below. The parts cost, at
   14,000 commands against one execution: 62% more GPU time on the XTX and 61 times as much on the
   2080, and 25 to 34 times the recording time. Their memory, for a frame of Apple's rendering
   sample at its worst (45,024 commands of 17 tokens in 11 executions, 710 parts): about 108 MB of
   preprocess regions on the 2080 and 28 MB on the XTX, where single executions would take about 27
   MB on each (592 and 608 bytes a command).
+- Each slot word a command holds is a push constant token of its own, on every device, where a run
+  of words at consecutive offsets could share one: on NVIDIA's driver (620.70.06, an RTX 2080) a
+  24-byte push constant token in an execution of 96 commands or more carried command 31's bytes in
+  every later command, and three 8-byte tokens of the same bytes carried each command's own (a
+  standalone program, which draws right either way on RADV and lavapipe). The cost: a command takes
+  at most `maxIndirectCommandsTokenCount` less 3 buffer slots (13 on lavapipe, 29 on NVIDIA's
+  driver, 125 on RADV), and on the 2080 that program's part of 64 commands of three vertex words
+  and one fragment word takes 69,888 preprocess bytes, against 57,600 with the vertex words in one
+  token.
 - On NVIDIA's driver (620.70.06, an RTX 2080) an execution whose leading commands draw nothing
   loses the draws after them in the same part: after a reset of commands 0 to 31, an execution of
   commands 0 to 63 draws nothing. A cause not yet found.
@@ -3649,7 +3658,7 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   (`InheritedBuffers`), more than 31 buffers of a stage (`BindCount`), a count of 0 or one past
   `maxIndirectSequenceCount` (`Capacity`), a compute state for indirect command buffers
   (`ComputeCommands`), an execution with a state made without `supportIndirectCommandBuffers`
-  (`UnflaggedState`), one whose slot runs take more tokens than `maxIndirectCommandsTokenCount`
+  (`UnflaggedState`), one whose slots take more tokens than `maxIndirectCommandsTokenCount`
   (`Tokens`: 16 on lavapipe, 32 on NVIDIA's driver, 128 on RADV), and one whose functions read what
   a command cannot carry: a slot the command holds outside the push bytes, a fixed-function vertex
   binding, or a vertex layout that must draw from base instance 0 (`DrawInput`).

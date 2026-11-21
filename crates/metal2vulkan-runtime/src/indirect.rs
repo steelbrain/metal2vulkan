@@ -214,15 +214,20 @@ pub(crate) struct Indirect {
     evicted_at: AtomicU64,
 }
 
-/// The tokens of an execution of a content's commands of one record layout: each run of slot
-/// words the content pushes one after another (its offset in a command, its push offset and its
-/// bytes), then the index buffer, the sequence index at its push offset, and the indexed draw at
-/// the layout's offsets; and the push offset of the part's first command, which an execution
-/// pushes before each part.
+/// The tokens of an execution of a content's commands of one record layout: each slot word the
+/// content pushes, a token of its own (its offset in a command and its push offset), then the
+/// index buffer, the sequence index at its push offset, and the indexed draw at the layout's
+/// offsets; and the push offset of the part's first command, which an execution pushes before
+/// each part.
+///
+/// A token of one 8-byte word each, never one token for a run of words: on NVIDIA's driver
+/// (620.70.06, an RTX 2080) a 24-byte push constant token of an execution of more than 64
+/// sequences carried an earlier sequence's bytes, where three 8-byte tokens of the same bytes
+/// carried each sequence's own.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Tokens {
     pub(crate) layout: IndirectDrawLayout,
-    pub(crate) pushes: Vec<(u32, u32, u32)>,
+    pub(crate) pushes: Vec<(u32, u32)>,
     pub(crate) sequence: u32,
     pub(crate) base: u32,
 }
@@ -417,7 +422,7 @@ impl Indirect {
             },
         };
         let pushes: Vec<dgc::PushConstantToken> = (tokens.pushes.iter())
-            .map(|&(_, push, bytes)| range(push, bytes))
+            .map(|&(_, push)| range(push, IndirectDrawLayout::SLOT_BYTES))
             .collect();
         let sequence = range(tokens.sequence, 4);
         let index = dgc::IndexBufferToken {
@@ -647,11 +652,10 @@ impl Indirect {
     }
 }
 
-/// The tokens of an execution of `draws`' content's commands of `layout`: a push constant token
-/// for each run of the slot words the content pushes at consecutive offsets for consecutive slots
-/// of a command, the slots the command holds alone, then the index buffer, the sequence index at
-/// the content's `IndirectSequence` field and the indexed draw; the part's first command goes at
-/// its `IndirectBase` field.
+/// The tokens of an execution of `draws`' content's commands of `layout` ([`Tokens`]): a push
+/// constant token for each slot word the content pushes of a slot the command holds, then the
+/// index buffer, the sequence index at the content's `IndirectSequence` field and the indexed
+/// draw; the part's first command goes at its `IndirectBase` field.
 ///
 /// Err: [`IndirectCommandsKind::UnflaggedState`] for a content whose vertex function reads no
 /// execution range; [`IndirectCommandsKind::DrawInput`] for one that reads a slot the command
@@ -697,18 +701,9 @@ pub(crate) fn tokens(
         return Err(IndirectCommandsKind::DrawInput);
     }
     words.sort_unstable();
-    let mut pushes: Vec<(u32, u32, u32)> = Vec::new();
-    for (at, push) in words {
-        match pushes.last_mut() {
-            Some((first, pushed, bytes)) if *first + *bytes == at && *pushed + *bytes == push => {
-                *bytes += 8
-            }
-            _ => pushes.push((at, push, 8)),
-        }
-    }
     Ok(Tokens {
         layout,
-        pushes,
+        pushes: words,
         sequence,
         base,
     })

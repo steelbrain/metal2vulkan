@@ -87,11 +87,11 @@ fn a_commands_slots_are_pushed_with_the_widest_bounds() {
 }
 
 #[test]
-fn an_executions_tokens_are_its_runs_of_slot_words() {
+fn an_executions_tokens_are_a_token_per_slot_word() {
     let layout = IndirectDrawLayout::new(3, 2).expect("a layout");
     // Vertex slots 0 to 2 and fragment slot 0 lie at consecutive offsets of both the push bytes
-    // and the command: one run. Fragment slot 1 follows in the command but not in the push bytes,
-    // and vertex slot 3 is past the command's count.
+    // and the command, and still take a token each. Fragment slot 1 follows in the command but
+    // not in the push bytes, and vertex slot 3 is past the command's count.
     let fields = ranged(vec![
         (DrawPlace::Push(0), VERTEX, slot(0)),
         (DrawPlace::Push(8), VERTEX, slot(1)),
@@ -101,10 +101,10 @@ fn an_executions_tokens_are_its_runs_of_slot_words() {
         (DrawPlace::Push(48), VERTEX, slot(3)),
     ]);
     let found = tokens(&draws(fields), layout).expect("tokens");
-    assert_eq!(found.pushes, [(0, 0, 32), (32, 40, 8)]);
-    assert_eq!((found.sequence, found.base, found.count()), (104, 108, 5));
+    assert_eq!(found.pushes, [(0, 0), (8, 8), (16, 16), (24, 24), (32, 40)]);
+    assert_eq!((found.sequence, found.base, found.count()), (104, 108, 8));
 
-    // Fourteen slots, two apart in the command and consecutive in the push bytes: a run each.
+    // Fourteen slots, two apart in the command and consecutive in the push bytes: a token each.
     let wide = IndirectDrawLayout::new(27, 0).expect("a layout");
     let fields = ranged(
         (0..14)

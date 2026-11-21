@@ -1376,8 +1376,8 @@ pub enum IndirectCommandsKind {
     /// vertex function does not skip the commands outside the range.
     UnflaggedState,
     /// An execution whose pipeline state's buffer slots need more tokens than the device takes in
-    /// one command (`maxIndirectCommandsTokenCount`): one per run of slots its functions push
-    /// consecutively, the sequence index, the index buffer and the draw.
+    /// one command (`maxIndirectCommandsTokenCount`): one per buffer slot of the command its
+    /// functions read, the sequence index, the index buffer and the draw.
     Tokens,
     /// An execution whose pipeline state reads what a command cannot carry: a buffer slot the
     /// command binds placed outside the push constants (in a parameter block), a fixed-function
