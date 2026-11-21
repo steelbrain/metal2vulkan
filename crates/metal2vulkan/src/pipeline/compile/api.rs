@@ -662,6 +662,7 @@ impl Device {
             stages.push(stage_module(c, &linked, i)?);
         }
         note_sample_position(d.into(), &artifacts, &mut stages);
+        note_device_runs(d.into(), &artifacts, &mut stages);
         let keys: Vec<FunctionCompileKey> = artifacts.iter().map(|a| a.key).collect();
         let mut requirements = mesh.artifact().requirements.clone();
         for a in artifacts
@@ -945,6 +946,7 @@ impl Device {
             stages.push(stage_module(c, &linked, i)?);
         }
         note_sample_position(pass(), &artifacts, &mut stages);
+        note_device_runs(pass(), &artifacts, &mut stages);
         let keys: Vec<FunctionCompileKey> = artifacts.iter().map(|a| a.key).collect();
         let mut requirements = vertex.artifact().requirements.clone();
         for a in artifacts.iter().skip(1) {
@@ -1914,6 +1916,31 @@ fn note_sample_position(
         // Unconditional on the stage: no specialization removes it.
         m.specialized_notes
             .retain(|s| s.note != PrecisionNote::MultisamplePosition);
+    }
+}
+
+/// Record `PrecisionNote::DeviceFragmentRuns` on the fragment stage of a pipeline of pass `d` that
+/// rasterizes more than one sample, where its function writes memory: it runs as many times per
+/// pixel as the device runs it.
+fn note_device_runs(
+    d: FragmentPass<'_>,
+    stages: &[&FunctionArtifact],
+    modules: &mut [StageModule],
+) {
+    if d.raster_sample_count <= 1 || !d.rasterization_enabled {
+        return;
+    }
+    for (a, m) in stages.iter().zip(modules) {
+        if a.interface.stage != Stage::Fragment || !a.interface.writes_memory {
+            continue;
+        }
+        if !m
+            .precision_notes
+            .contains(&PrecisionNote::DeviceFragmentRuns)
+        {
+            m.precision_notes.push(PrecisionNote::DeviceFragmentRuns);
+            m.precision_notes.sort_unstable();
+        }
     }
 }
 

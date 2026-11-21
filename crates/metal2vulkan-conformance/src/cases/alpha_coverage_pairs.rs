@@ -31,9 +31,10 @@
 //! stored. So the field acts after the fragment, on the fragment's output, as blending does, and a
 //! case that tried to read the alpha's coverage from the shader would have measured the rasterizer
 //! instead. The report is kept because that independence is worth comparing, and because the run
-//! count says Metal shades this fragment **once per sample** at four samples (four runs, not one),
-//! which is the shape our own `GraphicsState::sample_shading` claims for a fragment that writes
-//! memory.
+//! count says Metal shades this fragment **once per sample** at four samples (four runs, not one).
+//! Documented Metal names no run count for a fragment that writes memory, and the runtime runs it
+//! as many times as the device does (`device-fragment-runs`), so the runs word is compared as
+//! nonzero alone, justified by that notice; the coverage word beside it is compared exactly.
 //!
 //! What the alpha's coverage *is* read from is therefore the stored texel, and for the same reason a
 //! sample mask the **fragment writes** can only be seen there.
@@ -115,7 +116,7 @@
 //! One one-pixel target a row, four samples at most, one triangle a pass, no loop, and a report
 //! buffer of eight bytes indexed by the one pixel's own coordinate.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -219,19 +220,22 @@ impl Row {
     }
 }
 
-/// What a **four-sample** row with an alpha output announced: the coverage of a clipped edge split
-/// per sample (`clipped-coverage-split`) and the sample outputs written in a loop
-/// (`looped-sample-outputs`), with `alphaToCoverage` on or off. With it on, the device's own
-/// conversion of the alpha into the attachment (`device-color-conversion`) and its own coverage of
-/// the alpha (`device-alpha-coverage`) fire too, which the suite declares for every case
+/// The report's runs word, the first of its two: the element at byte offset 0 of the coverage site.
+const RUNS_WORD: &str = "case/drawn/coverage/0";
+
+/// What a **four-sample** row with an alpha output announces: the coverage of a clipped edge split
+/// per sample (`clipped-coverage-split`), with `alphaToCoverage` on or off, measured on the RTX
+/// 5080 Laptop (615.71.09) for all ten such rows, each divergent on the notices site and nothing
+/// else (replay-nvidia.log); and the run count of its fragment, which writes memory, as the
+/// device's (`device-fragment-runs`), which the compile records for such a fragment in a pipeline
+/// of more than one sample. With the field on, the device's own conversion of the alpha into the
+/// attachment (`device-color-conversion`) and its own coverage of the alpha
+/// (`device-alpha-coverage`) fire too, which the suite declares for every case
 /// ([`crate::replay::NATIVE_NOTES`]). A four-sample row whose fragment writes **no alpha** names
-/// none: nothing narrows the coverage, so neither the split nor the looped outputs fire.
-///
-/// Measured on the RTX 5080 Laptop (615.71.09) for all ten such rows, each divergent on the
-/// notices site and nothing else (replay-nvidia.log).
+/// none: it reads no coverage and writes no memory.
 const ALPHA_MULTISAMPLE: &[Degradation] = &[
     Degradation::ClippedCoverageSplit,
-    Degradation::LoopedSampleOutputs,
+    Degradation::DeviceFragmentRuns,
 ];
 
 /// A single-sample row, whose store announces nothing but the device's own answers, which the suite
@@ -500,16 +504,27 @@ impl Case for AlphaCoverageCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened.** The coverage report is an integer, and the resolve of `k`
-        // covered samples against `4 - k` uncovered is compared exactly, which is this suite's
-        // ruling for the same shape in `super::sample_positions`. Every entry below is a notice
-        // declaration at `case/notices/*`, which moves no coverage and no texel. The notices are
-        // [`Row::notices`], the set measured **for that row** rather than for the family.
-        self.row
+        // **One value is loosened: the run count.** The coverage word is an integer, and the
+        // resolve of `k` covered samples against `4 - k` uncovered is compared exactly, which is
+        // this suite's ruling for the same shape in `super::sample_positions`. The notices are
+        // [`Row::notices`], each a declaration at `case/notices/*` that moves no coverage and no
+        // texel. A row that announces `device-fragment-runs` compares its report's runs word, the
+        // first, as nonzero alone: documented Metal names no count of runs for a fragment that
+        // writes memory, and the device's count is the runtime's.
+        let mut allowances: Vec<Allowance> = self
+            .row
             .notices
             .iter()
             .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+            .collect();
+        if self.row.notices.contains(&Degradation::DeviceFragmentRuns) {
+            allowances.push(Allowance::new(
+                RUNS_WORD,
+                Loosening::Nonzero,
+                Justification::notice(Degradation::DeviceFragmentRuns),
+            ));
+        }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -999,29 +1014,47 @@ mod tests {
     }
 
     /// Every row fingerprints its own inputs, so no recording can be read for another row, and no
-    /// row loosens a **value**: every allowance it names is a notice declaration at
-    /// `case/notices/*`, which the comparison reads as the set of notices our side announced and
-    /// never as a tolerance on a coverage or a texel.
+    /// row loosens a **value** but the run count: every allowance it names is a notice declaration
+    /// at `case/notices/*`, which the comparison reads as the set of notices our side announced and
+    /// never as a tolerance on a coverage or a texel, or, for a four-sample row with a report, its
+    /// runs word as nonzero, justified by `device-fragment-runs`.
     #[test]
-    fn every_row_fingerprints_apart_and_nothing_is_loosened() {
+    fn every_row_fingerprints_apart_and_only_the_run_count_is_loosened() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
+        let runs = Justification::notice(Degradation::DeviceFragmentRuns);
         let mut seen: Vec<Vec<u8>> = Vec::new();
         for case in all() {
+            let reports_runs = case.row.samples > 1 && case.row.report != Report::NoAlpha;
+            assert_eq!(
+                case.row.notices.contains(&Degradation::DeviceFragmentRuns),
+                reports_runs,
+                "{}",
+                case.name()
+            );
             for allowance in case.allowances() {
-                assert_eq!(allowance.path, notices, "{}: a loosened value", case.name());
                 assert!(
-                    matches!(
-                        allowance.justified_by,
-                        crate::allowance::Justification::Degradation(_)
+                    matches!(allowance.justified_by, Justification::Degradation(_)),
+                    "{}: an allowance that is not a notice's",
+                    case.name()
+                );
+                if allowance.path == notices {
+                    continue;
+                }
+                assert_eq!(
+                    (
+                        allowance.path.as_str(),
+                        &allowance.loosening,
+                        &allowance.justified_by
                     ),
-                    "{}: an allowance that is not a notice declaration",
+                    (RUNS_WORD, &Loosening::Nonzero, &runs),
+                    "{}: a loosened value",
                     case.name()
                 );
             }
-            // Whatever the row itself was measured announcing.
+            // Whatever the row itself announces, and the runs word where it reports them.
             assert_eq!(
                 case.allowances().len(),
-                case.row.notices.len(),
+                case.row.notices.len() + usize::from(reports_runs),
                 "{}",
                 case.name()
             );

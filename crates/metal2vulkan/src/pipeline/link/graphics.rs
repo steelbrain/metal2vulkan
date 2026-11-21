@@ -73,11 +73,15 @@
 //!   per sample, and an Apple M3 Max ran a function with a device atomic once per covered sample
 //!   under 4x multisampling with or without one.
 //! - **Fragment invocations under multisampling**. With `rasterSampleCount` above 1 and
-//!   rasterization on, Metal (Apple M3 Max, 4x, measured) runs a fragment function that writes
-//!   memory once per covered sample, whatever its inputs, and every invocation reads `[[position]]`
-//!   (x, y, z, and w), its center and centroid varyings, `[[point_coord]]`, and
-//!   `[[barycentric_coord]]` as the pixel's, and `[[sample_mask]]` as the pixel's coverage; only
-//!   `[[sample_id]]` and sample-qualified varyings are the sample's. Vulkan runs a fragment shader
+//!   rasterization on, Metal runs a fragment function that reads `[[sample_id]]` or a
+//!   sample-qualified varying per sample (MSL 5.5: the function "may execute per-sample"), and every
+//!   invocation reads `[[position]]` (x, y, z, and w), its center and centroid varyings,
+//!   `[[point_coord]]`, and `[[barycentric_coord]]` as the pixel's, and `[[sample_mask]]` as the
+//!   pixel's coverage; only `[[sample_id]]` and sample-qualified varyings are the sample's (Apple M3
+//!   Max, 4x, measured). Documented Metal names no run count for any other function: one that
+//!   writes memory runs as any other, as many times as the device runs it (Apple's GPUs were
+//!   measured to run it once per covered sample; Vulkan runs a fragment shader at least once per
+//!   pixel, `PrecisionNote::DeviceFragmentRuns`). Vulkan runs a fragment shader
 //!   once per covered sample only under sample shading, which a `SampleId` input turns on and a
 //!   `Sample` input may, and sample shading moves `FragCoord` to the sample, lets an undecorated or
 //!   `Centroid` input interpolate anywhere in the sample's area, may move `PointCoord` there, and
@@ -87,12 +91,9 @@
 //!   pixel center, its center varyings through that instruction at offset 0, or, where the device
 //!   reads them at the pixel center itself as Metal does (`VkProperty::MetalCenterVaryings`,
 //!   MoltenVK), as they are: both the pixel center whatever the invocation shades
-//!   (`StageIo::{multisampled, varyings_at_pixel, position_depth}`). A function that writes memory
-//!   (`StageInterface::writes_memory`) runs under the pipeline's sample shading at a minimum of 1.0
-//!   (`GraphicsState::sample_shading`, needing `sampleRateShading`), as one that reads
-//!   `[[sample_id]]` does: once per covered sample, where a Vulkan stage without sample shading
-//!   runs at least once per pixel. A function that runs per sample (one of those, or one that
-//!   reads a sample-qualified varying) beside `[[sample_mask]]` cannot run under sample shading:
+//!   (`StageIo::{multisampled, varyings_at_pixel, position_depth}`). A function that runs per
+//!   sample (one that reads `[[sample_id]]` or a sample-qualified varying) beside `[[sample_mask]]`
+//!   cannot run under sample shading:
 //!   Vulkan gives an invocation under sample shading only the bits of the samples it shades, a quad
 //!   holds one sample index, and no subgroup is promised to hold a pixel's other sample
 //!   invocations, so no form gathers the pixel's coverage. Compiled for the pipeline, such a
@@ -702,7 +703,7 @@ pub fn graphics_state(
             return Err(Error::NeedsInput(RuntimeInput::Multisampled));
         }
     }
-    let sample_shading = sample_invocations(r, fs, p)?;
+    sample_invocations(r, fs, p)?;
     use vk::DynamicState as D;
     let mut dynamic_states = vec![
         D::VIEWPORT,
@@ -786,7 +787,6 @@ pub fn graphics_state(
         // The fragment stage's facts decide them (`link::fetch`).
         storage_attachments: Vec::new(),
         shadow_stencil: None,
-        sample_shading,
         vertex_writes_memory: vs.writes_memory,
         // Stored as the builtin, through the synthesized geometry stages, or (on a device with
         // one viewport) nowhere: the raw varying is written in every case.
@@ -904,28 +904,26 @@ fn interpolates_at_sample(io: &StageIo) -> bool {
     })
 }
 
-/// Check how the fragment stage `fs` runs and reads under multisampling (see the module docs),
-/// returning whether the pipeline enables sample shading at a minimum of 1.0
-/// (`GraphicsState::sample_shading`). With more than one sample and rasterization on, a function
-/// that writes memory runs per covered sample under sample shading, which needs
-/// `sampleRateShading`; a function that runs per sample (that one, or one that reads
-/// `[[sample_id]]`, as a per-sample framebuffer fetch's stage does, or a sample-qualified varying)
-/// reads `[[position]]`'s x and y and its center varyings at the pixel through their pixel forms,
-/// is refused for a center varying where the device has no pixel form, and needs `multisampled`
-/// where it has one but was compiled without it. Its other pixel reads (`[[position]]`'s z and w,
-/// `[[point_coord]]`, `[[barycentric_coord]]`, a centroid varying) read where Vulkan evaluates
-/// them, noted by the compile layer.
+/// Check how the fragment stage `fs` runs and reads under multisampling (see the module docs).
+/// With more than one sample and rasterization on, a function that runs per sample (one that
+/// reads `[[sample_id]]`, as a per-sample framebuffer fetch's stage does, or a sample-qualified
+/// varying) reads `[[position]]`'s x and y and its center varyings at the pixel through their pixel
+/// forms, is refused for a center varying where the device has no pixel form, and needs
+/// `multisampled` where it has one but was compiled without it. Its other pixel reads
+/// (`[[position]]`'s z and w, `[[point_coord]]`, `[[barycentric_coord]]`, a centroid varying) read
+/// where Vulkan evaluates them, noted by the compile layer. A function that writes memory runs as
+/// any other, as many times as the device runs it (`PrecisionNote::DeviceFragmentRuns`).
 fn sample_invocations(
     r: &RenderLinkInputs,
     fs: Option<&StageInterface>,
     p: &DeviceProfile,
-) -> Result<bool, Error> {
+) -> Result<(), Error> {
     // A pipeline has a fragment stage only with rasterization on.
     let Some(fs) = fs else {
-        return Ok(false);
+        return Ok(());
     };
     if r.raster_sample_count <= 1 {
-        return Ok(false);
+        return Ok(());
     }
     let io = &fs.io;
     // The barycentric weights' varyings are center varyings, and an interpolant read at the
@@ -952,14 +950,11 @@ fn sample_invocations(
         }
         .into()
     };
-    // Metal repeats the side effects per covered sample; Vulkan does under sample shading at a
-    // minimum of 1.0, which the pipeline enables (a `SampleId` input enables it too).
-    let sample_shading = fs.writes_memory;
-    let per_sample = sample_shading
-        || io.builtins.contains(&StageBuiltin::SampleId)
-        || interpolated(|s| s == Sampling::Sample);
+    // A `SampleId` input, or a `Sample` one, runs the stage once per covered sample.
+    let per_sample =
+        io.builtins.contains(&StageBuiltin::SampleId) || interpolated(|s| s == Sampling::Sample);
     if !per_sample {
-        return Ok(false);
+        return Ok(());
     }
     // Metal hands each of the pixel's sample invocations the pixel's coverage. A Vulkan
     // invocation under sample shading sees only its own samples' bits, and nothing gathers a
@@ -969,7 +964,7 @@ fn sample_invocations(
     // for the reason its interface records.
     if io.builtins.contains(&StageBuiltin::SampleMaskIn) {
         match io.coverage_loop {
-            CoverageLoop::Looped => return Ok(false),
+            CoverageLoop::Looped => return Ok(()),
             CoverageLoop::Unlooped => return Err(Error::NeedsInput(RuntimeInput::Multisampled)),
             CoverageLoop::Refused(r) => return Err(r.error()),
             CoverageLoop::NotNeeded => {
@@ -979,9 +974,6 @@ fn sample_invocations(
             }
         }
     }
-    if sample_shading && !rate {
-        return Err(refused());
-    }
     // Compiled for a multisampled pipeline, the function reads `[[position]]`'s x and y and
     // (with the pixel form) its center varyings at the pixel. `[[position]]`'s z and w,
     // `[[point_coord]]`, `[[barycentric_coord]]` and a centroid varying have no pixel form under
@@ -990,7 +982,7 @@ fn sample_invocations(
     let position = io.builtins.contains(&StageBuiltin::FragCoord);
     let center = interpolated(Sampling::reads_center);
     if !position && !center {
-        return Ok(sample_shading);
+        return Ok(());
     }
     if !rate {
         return Err(refused());
@@ -1033,7 +1025,7 @@ fn sample_invocations(
         // Compiled for another device.
         return Err(refused());
     }
-    Ok(sample_shading)
+    Ok(())
 }
 
 /// What the device's alpha to coverage gives a render pipeline whose graphics state is `g` on `p`

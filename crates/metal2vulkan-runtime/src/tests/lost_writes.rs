@@ -23,11 +23,12 @@
 //!   gaps of pipeline states), and the argument buffer's form joins the test once they do.
 //! - A memory-writing fragment at 4 samples: `lw_count` reads `[[sample_mask]]`, adds 1 to its
 //!   pixel's run count and ORs the mask into its pixel's word, drawn by `lw_half` over the
-//!   target's lower-left half. Metal runs such a function once per covered sample, each run
-//!   reading the pixel's whole coverage: each pixel's count is its mask's bits, every pixel
-//!   inside the triangle is all four samples, and some on its diagonal fewer. Measured on Apple's
-//!   GPU through a driver that also ran each such shader per covered sample: a looping function
-//!   counted each covered sample once per covered sample.
+//!   target's lower-left half. Apple's GPUs were measured to run such a function once per covered
+//!   sample, each run reading the pixel's whole coverage; documented Metal names no count, and the
+//!   runtime runs it as the device does (`PrecisionNote::DeviceFragmentRuns`). The test holds the
+//!   device to what Vulkan promises: every pixel the triangle covers ran at least once and no
+//!   other pixel ran, and the masks a pixel's runs read are its coverage at the standard sample
+//!   locations, exactly. It prints how many runs each count of covered samples took.
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -37,8 +38,9 @@ mod on_device {
     use crate::tests::draw::on_device::{library, pass, run, state, Buffers};
     use crate::{
         ColorAttachmentDescriptor, CullMode, Device, Error, FunctionDescriptor, IndexClass,
-        Library, NumberedSampler, PixelFormat, PrimitiveType, Region, RenderPipelineDescriptor,
-        StageSource, StorageMode, Texture, TextureDescriptor, TextureType, TextureUsage,
+        Library, NumberedSampler, PixelFormat, PrecisionNote, PrimitiveType, Region,
+        RenderPipelineDescriptor, StageSource, StorageMode, Texture, TextureDescriptor,
+        TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::fixtures_dir;
 
@@ -334,16 +336,43 @@ mod on_device {
         });
     }
 
-    /// A memory-writing fragment at 4 samples runs once per covered sample, each run reading the
-    /// pixel's whole coverage: each pixel's run count is its mask's bits.
+    /// The samples of pixel `(x, y)` that `lw_half` covers at Vulkan's standard 4-sample
+    /// locations, bit `i` for sample `i`: its triangle covers the framebuffer points with
+    /// `x / WIDTH <= y / HEIGHT`, and no sample lies on that edge.
+    fn half_coverage(x: u32, y: u32) -> u32 {
+        const STANDARD_4: [(f64, f64); 4] = [
+            (0.375, 0.125),
+            (0.875, 0.375),
+            (0.125, 0.625),
+            (0.625, 0.875),
+        ];
+        (STANDARD_4.iter().enumerate())
+            .filter(|(_, (sx, sy))| {
+                (f64::from(x) + sx) * f64::from(HEIGHT) <= (f64::from(y) + sy) * f64::from(WIDTH)
+            })
+            .fold(0, |mask, (i, _)| mask | 1 << i)
+    }
+
+    /// A memory-writing fragment at 4 samples runs as many times as the device runs it, which its
+    /// state notes (`PrecisionNote::DeviceFragmentRuns`). Vulkan runs at least one invocation for a
+    /// fragment, includes each covered sample in at least one, and sets an invocation's
+    /// `SampleMask` bit "if and only if the sample is considered covered for this fragment shader
+    /// invocation" (vkspec 35.5 and the `SampleMask` built-in): so every covered pixel ran at least
+    /// once, no other pixel ran, and the masks each pixel's runs ORed are its coverage exactly.
     #[test]
-    fn every_device_runs_a_memory_writing_fragment_once_per_covered_sample() {
+    fn every_device_runs_a_memory_writing_fragment_at_least_once_per_covered_pixel() {
         let Some(library) = fixture() else {
             return;
         };
         let d = descriptor(&library, "lw_half", "lw_count", 4);
         each_device("lost_writes_per_sample", |name, _, device| {
             let state = state(name, &device, &d);
+            assert!(
+                state
+                    .precision_notes()
+                    .contains(&PrecisionNote::DeviceFragmentRuns),
+                "{name}: the state does not note the device's runs"
+            );
             let pixels = (WIDTH * HEIGHT) as usize;
             let mut buffers = Buffers::new(&device);
             let runs = buffers.of(&device, &vec![0; pixels * 4]);
@@ -370,23 +399,35 @@ mod on_device {
                     .to_vec()
             };
             let (runs, masks) = (read(&runs), read(&masks));
-            let wrong: Vec<(usize, u32, u32)> = (0..pixels)
-                .filter(|&p| runs[p] != masks[p].count_ones() || masks[p] > 0xf)
-                .map(|p| (p, runs[p], masks[p]))
+            // Pixel `p` is `(p % WIDTH, p / WIDTH)`, as `lw_count` indexes its words.
+            let coverage: Vec<u32> = (0..pixels as u32)
+                .map(|p| half_coverage(p % WIDTH, p / WIDTH))
+                .collect();
+            let wrong: Vec<(usize, u32, u32, u32)> = (0..pixels)
+                .filter(|&p| masks[p] != coverage[p] || (runs[p] == 0) != (coverage[p] == 0))
+                .map(|p| (p, runs[p], masks[p], coverage[p]))
                 .collect();
             assert!(
                 wrong.is_empty(),
-                "{name}: (pixel, runs, mask) not once per covered sample: {wrong:?}"
+                "{name}: (pixel, runs, mask, coverage) off Vulkan's promise: {wrong:?}"
             );
-            let full = masks.iter().filter(|&&m| m == 0xf).count();
-            let partial = masks.iter().filter(|&&m| m != 0 && m != 0xf).count();
-            let empty = masks.iter().filter(|&&m| m == 0).count();
+            let full = coverage.iter().filter(|&&m| m == 0xf).count();
+            let partial = coverage.iter().filter(|&&m| m != 0 && m != 0xf).count();
+            let empty = coverage.iter().filter(|&&m| m == 0).count();
             assert!(
                 full > 0 && partial > 0 && empty > 0,
                 "{name}: {full} covered pixels, {partial} partly, {empty} not"
             );
+            // How many runs each count of covered samples took: (covered samples, runs) -> pixels.
+            let mut taken = std::collections::BTreeMap::<(u32, u32), usize>::new();
+            for p in (0..pixels).filter(|&p| coverage[p] != 0) {
+                *taken
+                    .entry((coverage[p].count_ones(), runs[p]))
+                    .or_default() += 1;
+            }
             println!(
-                "{name}: {full} covered pixels ran 4 times, {partial} on the edge once per covered sample"
+                "{name}: {full} pixels covered, {partial} partly, {empty} not; (covered samples, \
+                 runs) -> pixels: {taken:?}"
             );
         });
     }

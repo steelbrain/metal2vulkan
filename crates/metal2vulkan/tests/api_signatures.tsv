@@ -3042,7 +3042,6 @@ field	metal2vulkan::pipeline::GraphicsState.reads_position_depth	pub reads_posit
 field	metal2vulkan::pipeline::GraphicsState.reads_primitive_id	pub reads_primitive_id: bool
 field	metal2vulkan::pipeline::GraphicsState.region_fan_out	pub region_fan_out: Option<FanOutState>
 field	metal2vulkan::pipeline::GraphicsState.sample_mask	pub sample_mask: Option<u32>
-field	metal2vulkan::pipeline::GraphicsState.sample_shading	pub sample_shading: bool
 field	metal2vulkan::pipeline::GraphicsState.shader_tests	pub shader_tests: Option<ShaderTestsUse>
 field	metal2vulkan::pipeline::GraphicsState.shadow_stencil	pub shadow_stencil: Option<ShadowStencilUse>
 field	metal2vulkan::pipeline::GraphicsState.snapshot_reads	pub snapshot_reads: bool
@@ -9488,6 +9487,7 @@ variant	metal2vulkan-runtime::PrecisionNote::DeviceColorConversion	DeviceColorCo
 variant	metal2vulkan-runtime::PrecisionNote::DeviceDenormals	DeviceDenormals
 variant	metal2vulkan-runtime::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan-runtime::PrecisionNote::DeviceFilteredMipmaps	DeviceFilteredMipmaps
+variant	metal2vulkan-runtime::PrecisionNote::DeviceFragmentRuns	DeviceFragmentRuns
 variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan-runtime::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization
@@ -11128,6 +11128,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColor
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDenormals	DeviceDenormals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceFilteredMipmaps	DeviceFilteredMipmaps
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceFragmentRuns	DeviceFragmentRuns
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization

@@ -563,10 +563,6 @@ pub(super) fn create_graphics_pipeline(
         .line_width(1.0);
     let mut multisample = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(graphics.rasterization_samples.into())
-        // Metal's once-per-covered-sample invocations of a function that writes memory; the minimum
-        // is ignored without sample shading, and stays Vulkan's default there.
-        .sample_shading_enable(graphics.sample_shading)
-        .min_sample_shading(if graphics.sample_shading { 1.0 } else { 0.0 })
         .alpha_to_coverage_enable(graphics.alpha_to_coverage)
         .alpha_to_one_enable(graphics.alpha_to_one);
     // The descriptor's private sample mask, one word.

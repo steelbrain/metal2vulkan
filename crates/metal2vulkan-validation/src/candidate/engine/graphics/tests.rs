@@ -335,7 +335,6 @@ fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
     let (pipeline, _, _) = planned_draw(&device("nvidia-rtx50-linux"), &render, libraries).unwrap();
     let shadow = pipeline.graphics.shadow_stencil.expect("the shadow");
     assert_eq!((shadow.format, shadow.samples), (vk::Format::R8_UINT, 4));
-    assert!(!pipeline.graphics.sample_shading);
     let requirements = &pipeline.requirements;
     assert!(requirements.features.contains(&VkFeature::Maintenance8));
     assert!(requirements

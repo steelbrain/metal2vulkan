@@ -2347,6 +2347,22 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceLineRasterization,
+    /// A fragment function that writes memory (`StageInterface::writes_memory`) in a render
+    /// pipeline of more than one sample runs as many times per pixel as the device runs it, each
+    /// run reading the pixel's whole coverage as `[[sample_mask]]` (a function that loops over its
+    /// covered samples, `CoverageLoop::Looped`, runs its loop in each). Documented Metal names no
+    /// run count for it: MSL's section 5.5 names only sample-qualified inputs, `[[sample_id]]` and
+    /// `[[color(m)]]` as making a function run per sample. Apple's GPUs were measured to run such a
+    /// function once per covered sample (an M3 Max and an M4). Vulkan runs a fragment shader
+    /// without sample shading at least once per pixel, and more where the device chooses ("Multiple
+    /// fragment shader invocations may be executed for the same fragment for any number of
+    /// implementation-dependent reasons", vkspec 35.5). So its writes repeat as often as the
+    /// device's runs. Static, decided by the pipeline's sample count and the function's writes:
+    /// the pipeline's compile records it on its fragment stage.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceFragmentRuns,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

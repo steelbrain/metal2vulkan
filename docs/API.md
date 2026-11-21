@@ -2671,6 +2671,15 @@ bound.
   `Invariant`; Vulkan promises no more across pipelines of other fragment modules and attachments.
   Groups past the first may differ at discard or depth edges if the driver compiles the variants
   differently.
+- `metal2vulkan-degrade-device-fragment-runs` (precision). `PrecisionNote::DeviceFragmentRuns`: A
+  fragment function that writes memory (`StageInterface::writes_memory`) in a render pipeline of
+  more than one sample, which the pipeline's compile records on its fragment stage, decided by the
+  sample count and the function's writes alone. It runs as many times per pixel as the device runs
+  it, each run reading the pixel's whole coverage as `[[sample_mask]]`, so its writes repeat as
+  often as the device's runs. Apple's GPUs were measured to run it once per covered sample;
+  documented Metal names no count (MSL section 5.5 makes a function run per sample only for a
+  sample-qualified input, `[[sample_id]]` or `[[color(m)]]`). Vulkan runs a fragment shader
+  without sample shading at least once per pixel and more where the device chooses (vkspec 35.5).
 
 ## 10. Accepted differences
 
@@ -2695,6 +2704,12 @@ each item named states the rule in full.
   driver covers there. Measured, where a line of the conformance case
   `primitive-type-restart-indices` runs through the boundary point (3.5, 1.0), Metal on an Apple M3
   Max covers the lower pixel and NVIDIA's driver on an RTX 5080 the upper.
+- **A memory-writing fragment function runs as many times as the device runs it.** Metal's GPUs
+  were measured to run a memory-writing fragment once per covered sample; documented Metal names
+  no count; here the count is the device's. The pipeline's fragment stage records
+  `PrecisionNote::DeviceFragmentRuns` (section 9). The conformance case `a2c-off-4-alpha-50`
+  records four runs of a fully covered pixel at four samples on an Apple M3 Max, and compares the
+  runs word as nonzero alone.
 
 **Resource IDs and identifiers**
 

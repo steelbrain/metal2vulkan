@@ -1409,7 +1409,7 @@ codec_struct! {
         alpha_to_coverage, alpha_to_one, rasterizer_discard, dynamic_states, input_attachments,
         rasterization_order_attachment_access, max_vertex_amplification_count, declares_layer,
         tessellation,
-        fragment_imageblock, sample_shading, vertex_writes_memory, writes_viewport_index,
+        fragment_imageblock, vertex_writes_memory, writes_viewport_index,
         storage_attachments, shadow_stencil, early_fragment_tests,
         writes_point_size, flat_fragment_inputs,
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
@@ -1523,6 +1523,7 @@ codec_enum! {
         SwizzledOpaqueBlackBorder,
         SimdgroupAccessOrder,
         DeviceLineRasterization,
+        DeviceFragmentRuns,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

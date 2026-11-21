@@ -29,11 +29,10 @@
 //! access is the arena's: contained against `TileThreadgroupLength`, its sub-word stores and its
 //! atomics `Device`-scope word atomics of the buffer, ordering it as device memory. A write of it
 //! (a store, or any atomic) needs `fragmentStoresAndAtomics`. A function that writes it writes
-//! memory (`StageInterface::writes_memory`), so in a multisampled pipeline link runs it once per
-//! covered sample under the pipeline's sample shading, as Metal runs it (it needs
-//! `sampleRateShading`, and one compiled without `multisampled` is `NeedsInput(Multisampled)`, as
-//! it reads `FragCoord`); one that only reads it runs once per pixel, reading what each of the
-//! pixel's samples would.
+//! memory (`StageInterface::writes_memory`), so in a multisampled pipeline it runs as many times
+//! per pixel as the device runs it (`PrecisionNote::DeviceFragmentRuns`), where Apple's GPUs run
+//! it once per covered sample; one that only reads it reads what each of the pixel's samples
+//! would.
 //!
 //! **Order.** The fragments of one draw reach the memory as Metal's do, unordered but for their
 //! atomics. The render encoder orders draws that reach it in encode order across render pass

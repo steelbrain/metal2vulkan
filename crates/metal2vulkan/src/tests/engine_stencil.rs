@@ -254,9 +254,11 @@ fn the_render_pipeline_states_the_shadow_and_refuses_what_it_cannot_order() {
         (s.format, s.formatless, s.samples),
         (vk::Format::R8_UINT, false, 4)
     );
-    // The shadow's writes are the product's: a function that writes no memory of its own runs
-    // per pixel, as on Metal, and tests each covered sample.
-    assert!(!four.graphics.sample_shading);
+    // The shadow's writes are the product's: a function that writes no memory of its own records
+    // nothing of its runs, and tests each covered sample.
+    assert!(!four.stages.iter().any(|m| m
+        .precision_notes
+        .contains(&crate::pipeline::PrecisionNote::DeviceFragmentRuns)));
     assert!(four
         .requirements
         .features

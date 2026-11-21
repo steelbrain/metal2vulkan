@@ -9,7 +9,7 @@
 //!   loop over the covered samples), the body reads the entry's copy. SPIRV-Cross declares the
 //!   input a scalar in the entry and passes it to a function as an array. The owned fixtures
 //!   `engine/msf_fetch_ms`'s `msf_fetch_mask_in` (the interlocked storage form of a framebuffer
-//!   fetch) and `engine/rt6_attachmentless`'s `rt6_mark_coverage` (the loop) read it.
+//!   fetch) and `engine/coverage_loop`'s `cov_loop_record` (the loop) read it.
 //!
 //! And one form that keeps MoltenVK's pipeline creation within the ceiling: SPIRV-Cross
 //! force-inlines every function it writes, so Metal's back end compiles a routine once per call. A
@@ -245,23 +245,23 @@ fn only_the_entry_reads_the_coverage_of_an_interlocked_body() {
     assert!(wrapped >= 2, "{wrapped} interlocked modules");
 }
 
-/// The loop over the covered samples of `rt6_mark_coverage` at four samples reads the coverage in
+/// The loop over the covered samples of `cov_loop_record` at four samples reads the coverage in
 /// the entry, and the body reads the entry's copy, on every profile where it compiles; on macOS the
 /// MoltenVK profiles' modules compile as MoltenVK's MSL.
 #[test]
 fn only_the_entry_reads_the_coverage_of_a_looped_body() {
-    let Some(lib) = library("rt6_attachmentless") else {
+    let Some(lib) = library("coverage_loop") else {
         return;
     };
     let mut looped = 0;
     for (stem, dev) in devices() {
-        let what = format!("{stem} rt6_mark_coverage at 4");
+        let what = format!("{stem} cov_loop_record at 4");
         let vertex = StageSource::Function(FunctionDescriptor::new(
-            lib.function("rt6_cover").expect("vertex"),
+            lib.function("cov_cover").expect("vertex"),
         ));
         let mut d = RenderPipelineDescriptor::new(vertex);
         d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-            lib.function("rt6_mark_coverage").expect("fragment"),
+            lib.function("cov_loop_record").expect("fragment"),
         )));
         d.raster_sample_count = 4;
         let p = match dev.compile_render_pipeline(&d, &Budget::standard()) {

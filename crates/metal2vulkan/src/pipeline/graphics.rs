@@ -93,13 +93,6 @@ pub struct GraphicsState {
     /// consumer binds the pass's imageblock storage to every draw of the pass
     /// (`WriteSource::Imageblock`).
     pub fragment_imageblock: Option<FragmentImageblock>,
-    /// `VkPipelineMultisampleStateCreateInfo::sampleShadingEnable`, with `minSampleShading` 1.0:
-    /// the pipeline rasterizes more than one sample and its fragment function writes memory
-    /// (`StageInterface::writes_memory`), which Metal runs once per covered sample. The pipeline's
-    /// requirements name `sampleRateShading`
-    /// (`VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784`). Without it the
-    /// consumer leaves sample shading disabled.
-    pub sample_shading: bool,
     /// The vertex function (a post-tessellation vertex function included) writes memory
     /// (`StageInterface::writes_memory`): each run of the pipeline's vertex stage repeats its
     /// side effects. A rate-mapped pass drawn region by region records each draw once per region,
@@ -525,7 +518,6 @@ impl GraphicsState {
             declares_layer: false,
             tessellation: None,
             fragment_imageblock: None,
-            sample_shading: false,
             vertex_writes_memory: false,
             writes_viewport_index: false,
             storage_attachments: Vec::new(),
@@ -612,16 +604,11 @@ impl GraphicsState {
         features
     }
 
-    /// The features the pipeline's multisample state needs: `sampleRateShading` for
-    /// [`sample_shading`](GraphicsState::sample_shading)
-    /// (`VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784`), and `alphaToOne`
-    /// for [`alpha_to_one`](GraphicsState::alpha_to_one)
+    /// The features the pipeline's multisample state needs: `alphaToOne` for
+    /// [`alpha_to_one`](GraphicsState::alpha_to_one)
     /// (`VUID-VkPipelineMultisampleStateCreateInfo-alphaToOneEnable-00785`).
     pub(crate) fn multisample_features(&self) -> BTreeSet<VkFeature> {
         let mut features = BTreeSet::new();
-        if self.sample_shading {
-            features.insert(VkFeature::SampleRateShading);
-        }
         if self.alpha_to_one {
             features.insert(VkFeature::AlphaToOne);
         }

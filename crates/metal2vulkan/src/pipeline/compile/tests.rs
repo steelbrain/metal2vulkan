@@ -3680,11 +3680,12 @@ entry:
 "#;
 
 /// A multisampled render pipeline whose fragment function only reads through a pointer it loads
-/// from a buffer (`WIDE_READ`) runs it at pixel rate: the resident-miss count its access keeps in
-/// the `ExecutionStatus` buffer is the product's write, not the function's, so the pipeline needs
-/// no sample shading and compiles on moltenvk-m3 as on lavapipe.
+/// from a buffer (`WIDE_READ`) does not write memory: the resident-miss count its access keeps in
+/// the `ExecutionStatus` buffer is the product's write, not the function's, so its fragment stage
+/// records nothing of its runs (`PrecisionNote::DeviceFragmentRuns`) and compiles on moltenvk-m3 as
+/// on lavapipe.
 #[test]
-fn a_fragment_reading_through_a_loaded_pointer_runs_at_pixel_rate() {
+fn a_fragment_reading_through_a_loaded_pointer_writes_no_memory() {
     let Some(bc) = assemble_text("wide_read", WIDE_READ) else {
         return;
     };
@@ -3703,7 +3704,12 @@ fn a_fragment_reading_through_a_loaded_pointer_runs_at_pixel_rate() {
         let pipe = device(stem)
             .compile_render_pipeline(&d, &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(!pipe.graphics.sample_shading, "{stem}");
+        assert!(
+            !pipe.stages.iter().any(|m| m
+                .precision_notes
+                .contains(&crate::pipeline::PrecisionNote::DeviceFragmentRuns)),
+            "{stem}"
+        );
     }
 }
 

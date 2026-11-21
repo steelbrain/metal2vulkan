@@ -2257,19 +2257,21 @@ fn the_raster_sample_count_needs_the_framebuffer_sample_counts() {
     );
 }
 
-/// Under multisampling Metal (Apple M3 Max, 4x) runs a fragment function that writes memory once
-/// per covered sample, whatever its inputs, and every invocation reads its position, its center
-/// and centroid varyings, its point and barycentric coordinates, and its sample mask as the
-/// pixel's. Vulkan runs per sample only under sample shading, which `SampleId` turns on, a `Sample`
-/// input may, and the pipeline enables for a function that writes memory; it moves those reads to
-/// the sample there. The same pipelines at one sample, a pixel-rate function that reads them, a
+/// Under multisampling Metal (Apple M3 Max, 4x) runs a fragment function that reads
+/// `[[sample_id]]` or a sample-qualified varying once per covered sample, and every invocation
+/// reads its position, its center and centroid varyings, its point and barycentric coordinates,
+/// and its sample mask as the pixel's. Vulkan runs per sample only under sample shading, which
+/// `SampleId` turns on and a `Sample` input may, and moves those reads to the sample there. A
+/// function that writes memory runs as any other, as the device runs it
+/// (`PrecisionNote::DeviceFragmentRuns`): its writes change nothing link decides. The same
+/// pipelines at one sample, a pixel-rate function that reads them, with side effects or without, a
 /// per-sample one that does not, one compiled for the pipeline that reads `[[position]]`'s x and y
 /// or its center varyings at the pixel, and a per-sample one that reads `[[position]]`'s z or w, a
 /// centroid varying, or its point or barycentric coordinates where Vulkan evaluates them (which
-/// the compile layer notes), link, with sample shading exactly where the function writes memory
-/// at four samples. A per-sample function whose pixel reads all have forms on the
-/// device, compiled without `multisampled`, needs that input. A device without `sampleRateShading`
-/// is named for the side effects and for a read that recompiling would not fix.
+/// the compile layer notes), link, and none needs `sampleRateShading` for its multisample state.
+/// A per-sample function whose pixel reads all have forms on the device, compiled without
+/// `multisampled`, needs that input. A device without `sampleRateShading` is named for a read that
+/// recompiling would not fix, and links the side effects.
 #[test]
 fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     use crate::error::RuntimeInput;
@@ -2338,17 +2340,17 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
             fragment(vec![center.clone(), centroid.clone()], pixel_reads, false),
             Links,
         ),
-        // Side effects: the pipeline's sample shading runs them once per covered sample.
+        // Side effects: the function runs as the device runs it, and its pixel reads stay the
+        // pixel's, as without them.
         (fragment(vec![], vec![], true), Links),
         (
             fragment(vec![flat.clone()], vec![B::FrontFacing], true),
             Links,
         ),
         (fragment(vec![sample.clone()], vec![], true), Links),
-        // ... and moves the pixel reads to the sample, where they have no pixel form.
-        (fragment(vec![center.clone()], vec![], true), Center),
-        (fragment(vec![], vec![B::FragCoord], true), Recompile),
-        (fragment(vec![], vec![B::SampleMaskIn], true), Coverage),
+        (fragment(vec![center.clone()], vec![], true), Links),
+        (fragment(vec![], vec![B::FragCoord], true), Links),
+        (fragment(vec![], vec![B::SampleMaskIn], true), Links),
         // Side effects with `SampleId`: once per covered sample in both.
         (
             fragment(
@@ -2436,7 +2438,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
             compiled(vec![sample], vec![B::SampleMaskIn], true, false),
             Coverage,
         ),
-        // Side effects beside the pixel forms, and beside a center varying without its form.
+        // Side effects compiled for the pipeline, with the pixel forms and without them.
         (
             {
                 let mut a = compiled(vec![center.clone()], vec![B::FragCoord], true, false);
@@ -2451,7 +2453,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
                 a.interface.writes_memory = true;
                 a
             },
-            Center,
+            Links,
         ),
     ];
     let mut r = RenderLinkInputs::new();
@@ -2471,24 +2473,16 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
         for (i, (fa, expect)) in cases.iter().enumerate() {
             let one =
                 link(&[&va, fa], &at(1), &p).unwrap_or_else(|e| panic!("{stem} case {i}: {e}"));
-            assert!(
-                !one.graphics.expect("graphics").sample_shading,
+            assert_eq!(
+                one.graphics.expect("graphics").multisample_features(),
+                BTreeSet::new(),
                 "{stem} case {i}"
             );
             let four = link(&[&va, fa], &at(4), &p).map(|l| {
-                let g = l.graphics.expect("graphics");
+                // No multisample state of these needs `sampleRateShading`.
                 assert_eq!(
-                    g.sample_shading, fa.interface.writes_memory,
-                    "{stem} case {i}"
-                );
-                // Sample shading needs `sampleRateShading`.
-                assert_eq!(
-                    g.multisample_features(),
-                    if g.sample_shading {
-                        BTreeSet::from([VkFeature::SampleRateShading])
-                    } else {
-                        BTreeSet::new()
-                    },
+                    l.graphics.expect("graphics").multisample_features(),
+                    BTreeSet::new(),
                     "{stem} case {i}"
                 );
             });
@@ -2511,13 +2505,9 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     )
     .expect("profile");
     assert!(!p.fields().fragment.sample_rate_shading);
-    assert_eq!(
-        link(&[&va, &cases[1].0], &at(4), &p).unwrap_err(),
-        Error::Unsupported(Unsupported::needs(
-            Feature::SampleRateShading,
-            Capability::Feature(VkFeature::SampleRateShading)
-        ))
-    );
+    // The side effects need no sample shading, so the device links them at four samples.
+    assert!(cases[1].0.interface.writes_memory);
+    link(&[&va, &cases[1].0], &at(4), &p).expect("side effects at four samples");
     link(&[&va, &cases[1].0], &at(1), &p).expect("one sample");
     assert_eq!(cases[12].1, Recompile);
     assert_eq!(
@@ -2530,7 +2520,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     // The pixel's coverage at sample rate is no device's to gain: a device without
     // `sampleRateShading` refuses it as not representable too, not as the feature it lacks.
     let covering: Vec<_> = cases.iter().filter(|(_, at4)| *at4 == Coverage).collect();
-    assert_eq!(covering.len(), 3);
+    assert_eq!(covering.len(), 2);
     for (fa, _) in covering {
         assert_eq!(link(&[&va, fa], &at(4), &p).unwrap_err(), coverage);
     }

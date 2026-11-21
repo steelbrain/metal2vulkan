@@ -618,7 +618,6 @@ mod serde_round_trips {
                 data_size: 12,
                 alignment: 4,
             }),
-            sample_shading: true,
             vertex_writes_memory: true,
             writes_viewport_index: true,
             storage_attachments: vec![StorageAttachmentUse {

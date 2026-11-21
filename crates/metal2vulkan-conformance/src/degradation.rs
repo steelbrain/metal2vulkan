@@ -185,6 +185,8 @@ pub enum Degradation {
     SwizzledOpaqueBlackBorder,
     /// `metal2vulkan-degrade-device-line-rasterization`.
     DeviceLineRasterization,
+    /// `metal2vulkan-degrade-device-fragment-runs`.
+    DeviceFragmentRuns,
 }
 
 impl Degradation {
@@ -277,6 +279,7 @@ impl Degradation {
         Degradation::DeviceDepthBias,
         Degradation::SwizzledOpaqueBlackBorder,
         Degradation::DeviceLineRasterization,
+        Degradation::DeviceFragmentRuns,
     ];
 
     /// The kind's code, `metal2vulkan-degrade-<kind>`.
@@ -415,6 +418,7 @@ impl Degradation {
             Degradation::DeviceLineRasterization => {
                 "metal2vulkan-degrade-device-line-rasterization"
             }
+            Degradation::DeviceFragmentRuns => "metal2vulkan-degrade-device-fragment-runs",
         }
     }
 
@@ -514,6 +518,7 @@ impl Degradation {
             PrecisionNote::DeviceReconvergence => Degradation::DeviceReconvergence,
             PrecisionNote::SimdgroupAccessOrder => Degradation::SimdgroupAccessOrder,
             PrecisionNote::DeviceLineRasterization => Degradation::DeviceLineRasterization,
+            PrecisionNote::DeviceFragmentRuns => Degradation::DeviceFragmentRuns,
         }
     }
 }

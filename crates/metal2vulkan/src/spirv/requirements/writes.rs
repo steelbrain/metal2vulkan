@@ -1,10 +1,10 @@
 //! Whether a module writes memory of its own.
 //!
-//! Metal runs a multisampled fragment function that writes memory another invocation or a later
-//! command can read once per covered sample, so link runs such a function under sample shading
-//! (`StageInterface::writes_memory`). The writes that count are the function's: a store, a copy,
-//! or an atomic other than a load into a storage buffer, a physical storage buffer, or an image,
-//! and an image write.
+//! A multisampled fragment function that writes memory another invocation or a later command can
+//! read runs as many times per pixel as the device runs it, which its pipeline's compile records
+//! (`StageInterface::writes_memory`, `PrecisionNote::DeviceFragmentRuns`). The writes that count
+//! are the function's: a store, a copy, or an atomic other than a load into a storage buffer, a
+//! physical storage buffer, or an image, and an image write.
 //!
 //! The product also writes one buffer the guest never names: the command buffer's
 //! `ExecutionStatus` buffer, whose words the resident-miss count, an absent read's mark and a

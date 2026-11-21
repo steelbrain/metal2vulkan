@@ -1,8 +1,8 @@
 //! `[[sample_mask]]` in a fragment function that Metal runs once per covered sample.
 //!
 //! Metal runs a fragment function of a multisampled pipeline once per covered sample when it
-//! reads `[[sample_id]]` or a sample-qualified varying, or writes memory, and hands every one of
-//! those runs the pixel's whole coverage as `[[sample_mask]]`, each run its own sample index and
+//! reads `[[sample_id]]` or a sample-qualified varying, and hands every one of those runs the
+//! pixel's whole coverage as `[[sample_mask]]`, each run its own sample index and
 //! its sample-qualified varyings at its sample, and everything else at the pixel (an M3 Max and an
 //! M4, measured). A Vulkan invocation under sample shading sees only its own sample's bit of the
 //! coverage, and nothing gathers a pixel's sample invocations, so such a function, compiled for a
@@ -137,8 +137,8 @@ fn sampled_varying(cx: &SelectCx<'_>, param: u32, role: &ParamRole, sampling: Ai
 
 /// Plan the loop over the covered samples before the stage interface (`fragment::plan_entry`):
 /// a fragment function that reads `[[sample_mask]]` and runs once per covered sample on Metal (it
-/// reads `[[sample_id]]` or a sample-qualified varying, or has a memory side effect) loops,
-/// compiled for a multisampled pipeline, unless its interface already shows why it cannot.
+/// reads `[[sample_id]]` or a sample-qualified varying) loops, compiled for a multisampled
+/// pipeline, unless its interface already shows why it cannot.
 pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.stage != Stage::Fragment {
         return Ok(());
@@ -167,11 +167,9 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     let sample_id = used(&|r| matches!(r, ParamRole::Builtin(Builtin::SampleId)));
     let sample_varying = varying(cx, AirSampling::Sample);
-    let writes = body
-        .insts
-        .iter()
-        .any(|(id, inst)| super::discard::side_effect(cx, id, inst));
-    let per_sample = sample_id || sample_varying || writes;
+    // A function that writes memory runs as the device runs it, as any other
+    // (`PrecisionNote::DeviceFragmentRuns`): documented Metal names no count for it.
+    let per_sample = sample_id || sample_varying;
     // A multisampled read of the coverage, or of a centroid varying at the pixel, meets no split
     // of a clipped primitive, where Metal's can (the module docs).
     if cx.inputs.multisampled && (mask || !per_sample) {

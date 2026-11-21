@@ -9,10 +9,12 @@
 //!   requires `VkProperty::InterpolateAtOffsetCentered`, which every device holds, and on a
 //!   portability-subset device `shaderSampleRateInterpolationFunctions`. A center varying read at
 //!   sample rate on a device without those interpolation functions is refused naming them.
-//! - A function that writes memory, which Metal runs once per covered sample, runs under the
-//!   pipeline's sample shading (`GraphicsState::sample_shading`, needing `sampleRateShading`).
-//! - A per-sample function (that one, or one that reads `[[sample_id]]` or a sample-qualified
-//!   varying) reads what has no pixel form under sample shading (`[[position]]`'s z and w, a
+//! - A function that writes memory runs as the device runs it, at pixel rate where nothing else
+//!   makes it per-sample, and its fragment stage notes `PrecisionNote::DeviceFragmentRuns` at four
+//!   samples: Apple's GPUs were measured to run it once per covered sample, and documented Metal
+//!   names no count.
+//! - A per-sample function (one that reads `[[sample_id]]` or a sample-qualified varying) reads
+//!   what has no pixel form under sample shading (`[[position]]`'s z and w, a
 //!   centroid varying) where Vulkan evaluates it for its sample, and notes
 //!   `PrecisionNote::MultisamplePosition`, as Metal accepts it.
 //! - At one sample every function compiles as without multisampling.
@@ -204,6 +206,16 @@ fn noted(p: &RenderPipeline) -> bool {
         .contains(&PrecisionNote::MultisamplePosition)
 }
 
+/// Whether the fragment module of `p` notes `DeviceFragmentRuns`.
+fn noted_runs(p: &RenderPipeline) -> bool {
+    p.stages
+        .iter()
+        .find(|m| m.stage == crate::vk::ShaderStage::FRAGMENT)
+        .expect("fragment stage")
+        .precision_notes
+        .contains(&PrecisionNote::DeviceFragmentRuns)
+}
+
 /// The refusal of a per-sample function's center varying on a device that lacks `needs`.
 fn needs_pixel_form(needs: Vec<Capability>) -> Error {
     Unsupported::needs_any_of(Feature::SampleRateShading, vec![needs]).into()
@@ -235,12 +247,15 @@ pub(super) fn pixel_form(dev: &Device) -> bool {
 /// `InterpolateAtOffset` at offset 0, which every device reads from the center. A per-sample
 /// `[[position]]` z
 /// and w, or centroid varying, compiles on every profile with `sampleRateShading` too, noting
-/// `MultisamplePosition`.
+/// `MultisamplePosition`. The function that writes memory compiles at pixel rate on every profile
+/// with fragment stores, its center varying read at the pixel where the device has the form, and
+/// notes `DeviceFragmentRuns` at four samples only.
 #[test]
 fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
     let Some(lib) = fixture() else { return };
     let mut checked = 0usize;
     let mut unformed = 0usize;
+    let mut writers = 0usize;
     for stem in stems() {
         let dev =
             Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
@@ -290,12 +305,13 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
                 !ext_insts(fragment_words(&one)).contains(&INTERPOLATE_AT_OFFSET),
                 "{what} at 1"
             );
+            assert!(!noted_runs(&one), "{what} at 1");
             let four = dev.compile_render_pipeline(&render(&lib, fragment, 4), &Budget::standard());
             match (fragment, four) {
                 (_, Err(Error::Unsupported(u))) if u.feature == Feature::RasterSampleCount => {
                     eprintln!("{what}: four samples are not a framebuffer sample count");
                 }
-                (CENTER | SAMPLED | COUNTER, Ok(p)) => {
+                (CENTER | SAMPLED, Ok(p)) => {
                     validate(&p, &dev, &what);
                     // `InterpolateAtOffset` at offset 0 is the pixel form.
                     let ext = ext_insts(fragment_words(&p));
@@ -314,9 +330,8 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
                             .contains(&VkProperty::InterpolateAtOffsetCentered),
                         "{what}"
                     );
-                    // Only the function that writes memory runs under the pipeline's sample
-                    // shading, which needs `sampleRateShading`.
-                    assert_eq!(p.graphics.sample_shading, fragment == COUNTER, "{what}");
+                    // Per sample through its input, which needs `sampleRateShading`.
+                    assert!(!noted_runs(&p), "{what}");
                     assert!(
                         p.requirements
                             .features
@@ -332,8 +347,8 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
                     assert!(noted(&p), "{what}");
                     let ext = ext_insts(fragment_words(&p));
                     assert!(!ext.contains(&INTERPOLATE_AT_OFFSET), "{what}: {ext:?}");
-                    // `[[sample_id]]` turns sample shading on itself; the pipeline does not.
-                    assert!(!p.graphics.sample_shading, "{what}");
+                    // `[[sample_id]]` turns sample shading on itself.
+                    assert!(!noted_runs(&p), "{what}");
                     assert!(
                         p.requirements
                             .features
@@ -342,15 +357,20 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
                     );
                     unformed += 1;
                 }
-                (COUNTER, Err(e)) => assert_eq!(
-                    e,
-                    Unsupported::needs(
-                        Feature::SampleRateShading,
-                        Capability::Feature(VkFeature::SampleRateShading)
-                    )
-                    .into(),
-                    "{what}"
-                ),
+                // The function that writes memory runs as the device runs it, at pixel rate, and
+                // reads its position and center varying as a pixel-rate function does.
+                (COUNTER, Ok(p)) => {
+                    validate(&p, &dev, &what);
+                    let ext = ext_insts(fragment_words(&p));
+                    assert!(ext.contains(&FLOOR), "{what}: {ext:?}");
+                    assert_eq!(
+                        ext.contains(&INTERPOLATE_AT_OFFSET),
+                        pixel_form(&dev),
+                        "{what}: {ext:?}"
+                    );
+                    assert!(noted_runs(&p), "{what}");
+                    writers += 1;
+                }
                 (_, other) => panic!("{what} at 4: {other:?}"),
             }
         }
@@ -362,6 +382,10 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
     assert!(
         unformed > 0,
         "no profile compiled a per-sample read without a pixel form"
+    );
+    assert!(
+        writers > 0,
+        "no profile compiled the memory writer at four samples"
     );
 }
 
@@ -409,8 +433,8 @@ fn a_pixel_rate_center_varying_reads_the_pixel_center_where_the_device_has_the_f
                 form,
                 "{what}"
             );
-            // A pixel-rate function runs without sample shading.
-            assert!(!p.graphics.sample_shading, "{what}");
+            // A pixel-rate function that writes no memory runs as Metal's does.
+            assert!(!noted_runs(&p), "{what}");
             with_form += usize::from(form);
             if samples == 4 && !form {
                 without_form.push(stem.clone());

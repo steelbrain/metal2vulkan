@@ -421,13 +421,14 @@ impl DepthCompares {
 }
 
 /// How a fragment function reads `[[sample_mask]]` where Metal runs it once per covered sample: it
-/// reads `[[sample_id]]` or a sample-qualified varying, or writes memory. Metal hands each of those
-/// runs the pixel's whole coverage, and a Vulkan invocation under sample shading sees only its own
-/// sample's bit, so such a function runs once per pixel instead, reads the coverage there, and runs
-/// its body once per covered sample in a loop over the coverage's bits, each pass reading its
-/// sample's index and its sample-qualified varyings at its sample. One pixel-rate invocation cannot
-/// write each sample's outputs, so the loop is only for a function whose side effects are its
-/// memory writes.
+/// reads `[[sample_id]]` or a sample-qualified varying. Metal hands each of those runs the pixel's
+/// whole coverage, and a Vulkan invocation under sample shading sees only its own sample's bit, so
+/// such a function runs once per pixel instead, reads the coverage there, and runs its body once
+/// per covered sample in a loop over the coverage's bits, each pass reading its sample's index and
+/// its sample-qualified varyings at its sample. One pixel-rate invocation writes one value per
+/// output, so its outputs are the last pass's (`PrecisionNote::LoopedSampleOutputs`). A function
+/// that writes memory and reads neither runs as any other, as many times as the device runs it
+/// (`PrecisionNote::DeviceFragmentRuns`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

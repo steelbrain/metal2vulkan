@@ -506,10 +506,10 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1235 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 15 |
-| tolerances in all | 19 |
+| modules that loosen a measured value | 16 |
+| tolerances in all | 20 |
 | modules declaring a notice (loosening no value) | 43 |
-| loosenings used | `Unchecked`, `AnyOf`, `Absolute` |
+| loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 133 |
@@ -527,7 +527,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 
 | family | cases | Metal ran | compared | items reached |
 |---|---|---|---|---|
-| `alpha_coverage_pairs` | 17 | 17 | every field | 113 |
+| `alpha_coverage_pairs` | 17 | 17 | 1 tolerance(s): `Degradation` | 113 |
 | `argument_encoder_crossings` | 4 | 4 | every field | 41 |
 | `argument_encoders` | 5 | 5 | every field | 57 |
 | `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 41 |
