@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7490 |
+| ledger rows (a case whose gap is recorded) | 7491 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5307,7 +5307,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-uint4` | Gap::RenderPass (NoAttachment): the rt README, Known gaps of render encoders, "Refused by `Gap::RenderPass`, naming its `RenderPassKind`: ... and a pass with no… |
 | `host-page-writes-kernel-store-read-only` | No read-only no-copy import (MTLResourceOptions bit 24): the rt README, Imported blocks, "The no-copy imports have no read-only form: ... over pages a consumer … |
 | `host-page-writes-visibility-read-only` | No read-only no-copy import (MTLResourceOptions bit 24): the rt README, Imported blocks, "The no-copy imports have no read-only form: ... over pages a consumer … |
-| `discard-quad-sum-placement` | refused: no stream uses it yet (fragment group census 11-19, m3-max-52530..52604: 26 streams, no fragment function calls a SIMD-group, quad or SIMD-group matrix… |
+| `discard-quad-sum-placement` | The device lacks shaderQuadControl (vulkaninfo: KosmicKrisp on the Apple M3 Max, m3-max-61179; the UHD Graphics 630's Windows driver 101.2145, m3-max-61190; eve… |
+| `discard-quad-sum-placement` | The device lacks shaderQuadControl (vulkaninfo: KosmicKrisp on the Apple M3 Max, m3-max-61179; the UHD Graphics 630's Windows driver 101.2145, m3-max-61190; eve… |
 | `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
 | `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
 | `buffer-textures-made` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
