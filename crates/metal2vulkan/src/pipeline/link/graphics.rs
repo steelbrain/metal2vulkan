@@ -796,24 +796,11 @@ pub fn graphics_state(
                 .outputs
                 .iter()
                 .any(|o| matches!(o.role, IoRole::SelectedViewport | IoRole::ViewportIndex)),
-        early_fragment_tests: fs.is_some_and(|fs| fs.io.early_fragment_tests),
-        writes_sample_mask: fs
-            .is_some_and(|fs| fs.io.builtins.contains(&StageBuiltin::SampleMaskOut)),
         // A band variant's pipeline states its band (`link`).
         line_band: None,
         // A fan-out variant's pipeline states its fan-out (`link`).
         region_fan_out: None,
         writes_point_size: vs.writes_point_size(),
-        flat_fragment_inputs: fs.is_some_and(|fs| reads_flat_inputs(&fs.io)),
-        clip_distances: vs
-            .io
-            .builtins
-            .iter()
-            .find_map(|b| match b {
-                StageBuiltin::ClipDistance { count } => Some(*count),
-                _ => None,
-            })
-            .unwrap_or(0),
         writes_depth: fs.is_some_and(|fs| {
             fs.io
                 .builtins
@@ -822,9 +809,6 @@ pub fn graphics_state(
         }),
         reads_barycentric_coord: fs.is_some_and(|fs| reads_barycentric_coord(&fs.io)),
         reads_primitive_id: fs.is_some_and(|fs| reads_primitive_id(&fs.io)),
-        reads_position_depth: fs.is_some_and(|fs| {
-            fs.io.builtins.contains(&StageBuiltin::FragCoord) && fs.io.position_depth
-        }),
         fragment_writes_memory: fs.is_some_and(|fs| fs.writes_memory),
         // The storage form's writes join the outputs' once `link::fetch` decided them.
         color_outputs: 0,
@@ -836,7 +820,6 @@ pub fn graphics_state(
         // The pipeline's private logic operation, once compile decided it
         // (`private_state::logic_operation`).
         logic_op: None,
-        interpolates_at_sample: fs.is_some_and(|fs| interpolates_at_sample(&fs.io)),
     };
     // The sample count against the attachments' sample counts.
     state.sample_count_properties(&p.fields().enabled.properties)?;
@@ -862,46 +845,6 @@ fn reads_barycentric_coord(io: &StageIo) -> bool {
 fn reads_primitive_id(io: &StageIo) -> bool {
     io.builtins.contains(&StageBuiltin::PrimitiveId)
         || io.inputs.iter().any(|v| v.role == IoRole::PrimitiveId)
-}
-
-/// Whether a fragment stage of interface `io` reads a flat input
-/// (`GraphicsState::flat_fragment_inputs`): a flat user varying, the render target array or
-/// viewport index a vertex function wrote, as an input of its own role or as its builtin, or the
-/// primitive ID's varying.
-fn reads_flat_inputs(io: &StageIo) -> bool {
-    let flat = io.inputs.iter().any(|v| {
-        matches!(
-            v.role,
-            IoRole::Varying {
-                interpolation: Some(Interpolation::Flat),
-                ..
-            } | IoRole::ViewportIndex
-                | IoRole::RenderTargetArrayIndex
-                | IoRole::PrimitiveId
-                | IoRole::MergedCommand
-        )
-    });
-    flat || io
-        .builtins
-        .iter()
-        .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex))
-}
-
-/// Whether a fragment stage of interface `io` reads an interpolant at a sample it names
-/// (`GraphicsState::interpolates_at_sample`).
-fn interpolates_at_sample(io: &StageIo) -> bool {
-    io.inputs.iter().any(|v| {
-        matches!(
-            v.role,
-            IoRole::Varying {
-                interpolation: Some(Interpolation::Smooth {
-                    sampling: Sampling::Interpolant { sample: true, .. },
-                    ..
-                }),
-                ..
-            }
-        )
-    })
 }
 
 /// Check how the fragment stage `fs` runs and reads under multisampling (see the module docs).

@@ -506,7 +506,6 @@ fn programmable_blending_beside_position_w_compiles_noted() {
             Ok(p) => {
                 validate(&p, &dev, &what);
                 assert!(noted(&p), "{what}");
-                assert!(p.graphics.reads_position_depth, "{what}");
                 compiled.push(stem);
             }
             Err(Error::Unsupported(u)) => assert!(

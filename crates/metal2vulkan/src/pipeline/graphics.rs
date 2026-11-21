@@ -130,22 +130,6 @@ pub struct GraphicsState {
     /// See [`ShadowStencilUse`] for the consumer contract.
     #[cfg_attr(feature = "serde", serde(default))]
     pub shadow_stencil: Option<ShadowStencilUse>,
-    /// The fragment function declares `[[early_fragment_tests]]` (its stage interface's
-    /// `io.early_fragment_tests`): Metal runs it only for the fragments that pass the depth and
-    /// stencil tests. A consumer
-    /// that emulates a test Vulkan does not run (a depth compare of `Never` without a depth
-    /// attachment, which Metal fails for every fragment) keeps such a function from running.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub early_fragment_tests: bool,
-    /// The fragment function writes the `SampleMask` output (its stage interface's
-    /// `io.builtins` lists `SampleMaskOut`): its own `[[sample_mask]]` return, or the render
-    /// pipeline's private masks it applies itself (`StageIo::sample_mask`). Under
-    /// [`early_fragment_tests`](GraphicsState::early_fragment_tests), Metal's visibility count of
-    /// the private masks keeps every sample the tests pass; Vulkan counts after the mask only
-    /// where the device states it (`earlyFragmentMultisampleCoverageAfterSampleCounting`,
-    /// [`Limits::early_fragment_multisample_coverage_after_sample_counting`](crate::device::Limits::early_fragment_multisample_coverage_after_sample_counting)).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub writes_sample_mask: bool,
     /// A render pipeline variant that draws its lines as bands of triangles
     /// (`VariantKey::line_band`, `pipeline::link::band`): its `topology` is `PATCH_LIST` (never
     /// dynamic), its stages the vertex stage, the band's synthesized tessellation control and
@@ -167,26 +151,6 @@ pub struct GraphicsState {
     /// through empty scissors).
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_point_size: bool,
-    /// The fragment function reads a flat input, which every fragment of a primitive reads from
-    /// one vertex of it (Vulkan's provoking vertex): a user varying it declares `[[flat]]` (a
-    /// mesh function's per-primitive output read as one included), or the
-    /// `[[render_target_array_index]]` or `[[viewport_array_index]]` a vertex function wrote,
-    /// read as a varying or as the `Layer` or `ViewportIndex` builtin, or the `[[primitive_id]]`
-    /// its vertex function computes (`IoRole::PrimitiveId`). `false` for a pipeline
-    /// without a fragment function, and for one whose fragment function reads only smooth
-    /// inputs, perspective-correct or not, or none. A consumer that draws a primitive's vertices
-    /// in another order can change what a draw shows only where this is set or the fragment
-    /// function reads `[[barycentric_coord]]`, which is no varying input and is not counted here
-    /// ([`reads_barycentric_coord`](GraphicsState::reads_barycentric_coord) states it); smooth
-    /// inputs interpolate alike in every order. What the vertex function writes to
-    /// `Layer` or `ViewportIndex` itself is [`declares_layer`](GraphicsState::declares_layer) and
-    /// [`writes_viewport_index`](GraphicsState::writes_viewport_index).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub flat_fragment_inputs: bool,
-    /// The elements of the vertex function's own `[[clip_distance]]` output, 0 for none (a mesh
-    /// pipeline's too).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub clip_distances: u32,
     /// Whether the fragment function writes its depth (`[[depth(...)]]`). A draw in depth clamp
     /// mode through a range above 0 runs such a function's `LoweringInputs::depth_clamp_range`
     /// variant where it can, as Metal stores a negative NaN depth as 0 past the range.
@@ -199,8 +163,8 @@ pub struct GraphicsState {
     /// write. Metal reads the weights at the pixel center (MSL 5.2.3.4), under a `centroid` or
     /// `sample` qualifier too, and so does the stage. `false` for a pipeline without a fragment
     /// function. A primitive's weights follow the order its vertices are drawn in, so
-    /// a consumer that draws them in another order can change what a draw shows only where this
-    /// or [`flat_fragment_inputs`](GraphicsState::flat_fragment_inputs) is set.
+    /// a consumer that draws them in another order can change what a draw shows where this is
+    /// set, as it can where the fragment function reads a flat input.
     #[cfg_attr(feature = "serde", serde(default))]
     pub reads_barycentric_coord: bool,
     /// Whether the fragment function reads `[[primitive_id]]`: Vulkan's `PrimitiveId`, or the
@@ -210,15 +174,6 @@ pub struct GraphicsState {
     /// quad, as two triangles) changes what a draw shows only where this is set.
     #[cfg_attr(feature = "serde", serde(default))]
     pub reads_primitive_id: bool,
-    /// Whether the fragment function may read its `[[position]]`'s z or w lanes, which Metal
-    /// gives as the viewport's depth `n + (f - n) z` unclamped and the clip-space w (the
-    /// fragment stage's `StageIo::position_depth` with its `FragCoord` builtin). `false` for a
-    /// pipeline without a fragment function, and for one that reads only the position's x and y
-    /// or not at all. A consumer that draws through a Vulkan viewport depth range other than
-    /// Metal's, where only the stored depth must be Metal's (one depth in Metal's depth clamp
-    /// mode), keeps what such a function reads only where this is `false`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub reads_position_depth: bool,
     /// The fragment function writes memory (`StageInterface::writes_memory`): it stores to a
     /// buffer or a texture, or updates one atomically. `false` for a pipeline without a fragment
     /// function. Metal never runs a function that declares `[[early_fragment_tests]]` for a
@@ -301,14 +256,6 @@ pub struct GraphicsState {
     /// attachments' states already draw them. `None` with the logic operation off, and for those.
     #[cfg_attr(feature = "serde", serde(default))]
     pub logic_op: Option<vk::LogicOp>,
-    /// The fragment function reads an `interpolant` at a sample it names (`interpolate_at_sample`,
-    /// an input its stage interface samples `Sampling::Interpolant` with `sample`): its module
-    /// uses `GLSL.std.450 InterpolateAtSample`, which Vulkan takes in no
-    /// pipeline made with custom sample locations
-    /// (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), so the consumer draws it
-    /// only at the device's own sample positions.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub interpolates_at_sample: bool,
 }
 
 /// What a consumer and the binder need of a tessellation pipeline.
@@ -522,17 +469,12 @@ impl GraphicsState {
             writes_viewport_index: false,
             storage_attachments: Vec::new(),
             shadow_stencil: None,
-            early_fragment_tests: false,
-            writes_sample_mask: false,
             line_band: None,
             region_fan_out: None,
             writes_point_size: false,
-            flat_fragment_inputs: false,
-            clip_distances: 0,
             writes_depth: false,
             reads_barycentric_coord: false,
             reads_primitive_id: false,
-            reads_position_depth: false,
             fragment_writes_memory: false,
             color_outputs: 0,
             sample_mask: None,
@@ -540,7 +482,6 @@ impl GraphicsState {
             snapshot_reads: false,
             color_group: None,
             logic_op: None,
-            interpolates_at_sample: false,
         }
     }
 

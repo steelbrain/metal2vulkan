@@ -3018,19 +3018,15 @@ field	metal2vulkan::pipeline::FunctionDescriptor.linked	pub linked: LinkedFuncti
 field	metal2vulkan::pipeline::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_coverage	pub alpha_to_coverage: bool
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_one	pub alpha_to_one: bool
-field	metal2vulkan::pipeline::GraphicsState.clip_distances	pub clip_distances: u32
 field	metal2vulkan::pipeline::GraphicsState.color_attachments	pub color_attachments: Vec<Option<ColorAttachmentState>>
 field	metal2vulkan::pipeline::GraphicsState.color_group	pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>
 field	metal2vulkan::pipeline::GraphicsState.color_outputs	pub color_outputs: u32
 field	metal2vulkan::pipeline::GraphicsState.declares_layer	pub declares_layer: bool
 field	metal2vulkan::pipeline::GraphicsState.depth_format	pub depth_format: Option<vk::Format>
 field	metal2vulkan::pipeline::GraphicsState.dynamic_states	pub dynamic_states: Vec<vk::DynamicState>
-field	metal2vulkan::pipeline::GraphicsState.early_fragment_tests	pub early_fragment_tests: bool
-field	metal2vulkan::pipeline::GraphicsState.flat_fragment_inputs	pub flat_fragment_inputs: bool
 field	metal2vulkan::pipeline::GraphicsState.fragment_imageblock	pub fragment_imageblock: Option<FragmentImageblock>
 field	metal2vulkan::pipeline::GraphicsState.fragment_writes_memory	pub fragment_writes_memory: bool
 field	metal2vulkan::pipeline::GraphicsState.input_attachments	pub input_attachments: Vec<InputAttachmentUse>
-field	metal2vulkan::pipeline::GraphicsState.interpolates_at_sample	pub interpolates_at_sample: bool
 field	metal2vulkan::pipeline::GraphicsState.line_band	pub line_band: Option<LineBandState>
 field	metal2vulkan::pipeline::GraphicsState.logic_op	pub logic_op: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::GraphicsState.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
@@ -3038,7 +3034,6 @@ field	metal2vulkan::pipeline::GraphicsState.rasterization_order_attachment_acces
 field	metal2vulkan::pipeline::GraphicsState.rasterization_samples	pub rasterization_samples: vk::SampleCountFlags
 field	metal2vulkan::pipeline::GraphicsState.rasterizer_discard	pub rasterizer_discard: bool
 field	metal2vulkan::pipeline::GraphicsState.reads_barycentric_coord	pub reads_barycentric_coord: bool
-field	metal2vulkan::pipeline::GraphicsState.reads_position_depth	pub reads_position_depth: bool
 field	metal2vulkan::pipeline::GraphicsState.reads_primitive_id	pub reads_primitive_id: bool
 field	metal2vulkan::pipeline::GraphicsState.region_fan_out	pub region_fan_out: Option<FanOutState>
 field	metal2vulkan::pipeline::GraphicsState.sample_mask	pub sample_mask: Option<u32>
@@ -3052,7 +3047,6 @@ field	metal2vulkan::pipeline::GraphicsState.topology	pub topology: vk::Primitive
 field	metal2vulkan::pipeline::GraphicsState.vertex_writes_memory	pub vertex_writes_memory: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_depth	pub writes_depth: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_point_size	pub writes_point_size: bool
-field	metal2vulkan::pipeline::GraphicsState.writes_sample_mask	pub writes_sample_mask: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_viewport_index	pub writes_viewport_index: bool
 field	metal2vulkan::pipeline::ImageHandleClass.access	pub access: ImageAccess
 field	metal2vulkan::pipeline::ImageHandleClass.arrayed	pub arrayed: bool

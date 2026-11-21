@@ -190,7 +190,6 @@ fn the_vertex_function_writes_the_id_its_fragment_function_reads() {
         }
         let p = compile(&dev, &d).unwrap_or_else(|e| panic!("{vertex}: {e}"));
         assert!(reads_layout(&p), "{vertex}");
-        assert!(p.graphics.flat_fragment_inputs, "{vertex}");
         validate(&p, &dev);
         let present = device("lavapipe");
         let q = compile(&present, &d).unwrap_or_else(|e| panic!("{vertex}: {e}"));

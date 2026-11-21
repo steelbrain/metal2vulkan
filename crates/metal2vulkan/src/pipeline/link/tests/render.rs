@@ -2575,60 +2575,6 @@ fn the_graphics_state_states_whether_the_fragment_function_reads_barycentric_coo
     assert!(!reads(&va, None), "no fragment function");
 }
 
-/// The graphics state states whether the fragment function may read its position's z or w lanes,
-/// from the fragment stage's `FragCoord` builtin and `position_depth`: the position read for its
-/// depth does; read for its x and y alone, it does not, nor a function that reads no position, nor
-/// a pipeline without a fragment function.
-#[test]
-fn the_graphics_state_states_whether_the_fragment_function_reads_its_position_s_depth() {
-    use crate::pipeline::stage_io::StageBuiltin;
-    let p = profile("lavapipe");
-    let inputs = LinkInputs::Render(Box::default());
-    let f4 = io_ty(IoNumeric::Float, 4);
-    let stage = |stage: Stage, io: StageIo| {
-        let mut i = iface(stage, vec![], vec![]);
-        i.io = positioned(stage, io);
-        artifact(i, None)
-    };
-    let reads = |va: &FunctionArtifact, fa: Option<&FunctionArtifact>| {
-        let stages: Vec<&FunctionArtifact> = std::iter::once(va).chain(fa).collect();
-        link(&stages, &inputs, &p)
-            .unwrap()
-            .graphics
-            .expect("graphics")
-            .reads_position_depth
-    };
-    let va = stage(
-        Stage::Vertex,
-        stage_io(vec![], vec![varying("v", f4, None)]),
-    );
-    let with = |builtins: Vec<StageBuiltin>, position_depth: bool| StageIo {
-        builtins,
-        position_depth,
-        ..stage_io(vec![varying("v", f4, Some(Interpolation::Flat))], vec![])
-    };
-    let cases = [
-        (
-            "its position's depth",
-            vec![StageBuiltin::FragCoord],
-            true,
-            true,
-        ),
-        (
-            "its position's x and y",
-            vec![StageBuiltin::FragCoord],
-            false,
-            false,
-        ),
-        ("no position", vec![], false, false),
-    ];
-    for (name, builtins, position_depth, want) in cases {
-        let fa = stage(Stage::Fragment, with(builtins, position_depth));
-        assert_eq!(reads(&va, Some(&fa)), want, "{name}");
-    }
-    assert!(!reads(&va, None), "no fragment function");
-}
-
 /// The graphics state states whether the fragment function writes memory, from the fragment stage's
 /// interface: a function that writes does, one that does not, or a pipeline without a fragment
 /// function, does not; the vertex function's writes are its own fact.
@@ -2704,67 +2650,6 @@ fn the_graphics_state_masks_the_colors_the_fragment_function_writes() {
     );
     assert_eq!(outputs(Some(vec![])), 0, "no output");
     assert_eq!(outputs(None), 0, "no fragment function");
-}
-
-/// The graphics state states whether the fragment function reads a flat input, from the fragment
-/// stage's inputs: a flat varying does; a smooth one, perspective-correct or not, does not, nor a
-/// function of no inputs, nor a pipeline without a fragment function; the render target array index
-/// the vertex function writes, read as the `Layer` builtin, does.
-#[test]
-fn the_graphics_state_states_whether_the_fragment_function_reads_a_flat_input() {
-    use crate::pipeline::stage_io::StageBuiltin;
-    let p = profile("lavapipe");
-    let inputs = LinkInputs::Render(Box::default());
-    let f4 = io_ty(IoNumeric::Float, 4);
-    let stage = |stage: Stage, io: StageIo| {
-        let mut i = iface(stage, vec![], vec![]);
-        i.io = positioned(stage, io);
-        artifact(i, None)
-    };
-    let flat = |va: &FunctionArtifact, fa: Option<&FunctionArtifact>| {
-        let stages: Vec<&FunctionArtifact> = std::iter::once(va).chain(fa).collect();
-        link(&stages, &inputs, &p)
-            .unwrap()
-            .graphics
-            .expect("graphics")
-            .flat_fragment_inputs
-    };
-    let va = stage(
-        Stage::Vertex,
-        stage_io(vec![], vec![varying("v", f4, None)]),
-    );
-    let smooth = |perspective| {
-        Some(Interpolation::Smooth {
-            sampling: Sampling::Center,
-            perspective,
-        })
-    };
-    let cases = [
-        ("flat", Some(Interpolation::Flat), true),
-        ("perspective", smooth(true), false),
-        ("no perspective", smooth(false), false),
-    ];
-    for (name, interpolation, want) in cases {
-        let io = stage_io(vec![varying("v", f4, interpolation)], vec![]);
-        assert_eq!(flat(&va, Some(&stage(Stage::Fragment, io))), want, "{name}");
-    }
-    let none = stage(Stage::Fragment, StageIo::default());
-    assert!(!flat(&va, Some(&none)), "no inputs");
-    assert!(!flat(&va, None), "no fragment function");
-    let layered = |io: StageIo| StageIo {
-        builtins: vec![StageBuiltin::Layer],
-        ..io
-    };
-    let vl = stage(
-        Stage::Vertex,
-        layered(stage_io(vec![], vec![varying("v", f4, None)])),
-    );
-    let fl = stage(Stage::Fragment, layered(StageIo::default()));
-    assert!(flat(&vl, Some(&fl)), "the layer builtin");
-    assert!(
-        !flat(&vl, Some(&none)),
-        "a layer the fragment function does not read"
-    );
 }
 
 /// Refusal `u` tied to render pipeline attachment `attachment`, as link refuses that

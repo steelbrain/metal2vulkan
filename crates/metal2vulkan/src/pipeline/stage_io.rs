@@ -278,7 +278,7 @@ pub struct StageIo {
     /// stencil tests before it, and runs it only for the fragments that pass them (under a depth
     /// compare of `Never` it never runs, a probe). What the function declares, not what the module
     /// does (a framebuffer fetch's form may add early tests, `lower::fragment`); false for every
-    /// other function. Link states it as `GraphicsState::early_fragment_tests`.
+    /// other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub early_fragment_tests: bool,
     /// The colors the fragment function writes and stores nowhere, its render pipeline having
