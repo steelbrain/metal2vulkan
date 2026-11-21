@@ -2873,7 +2873,8 @@ pub struct Gauges {
     /// Bytes of the preprocess regions executions of indirect command buffers hold: each taken
     /// at an execution's record and given back when its command buffer completes.
     pub preprocess_used_bytes: u64,
-    /// Bytes of the preprocess regions no execution holds, kept for the next ones, at most 128
-    /// MiB; zero once the device is dropped.
+    /// Bytes of the preprocess regions no execution holds, kept for the next ones, at most 64 MiB.
+    /// A region idle for a quarter of a second is freed, so this falls to zero at rest; zero once
+    /// the device is dropped.
     pub preprocess_idle_bytes: u64,
 }
