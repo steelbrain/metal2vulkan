@@ -39,18 +39,16 @@ use metal2vulkan::device::Requirements;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, EnableSet};
 use metal2vulkan::error::{DescriptorError, Error, RuntimeInput};
 use metal2vulkan::library::{FunctionConstantValues, Library};
-use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::Stage;
 use metal2vulkan::pipeline::{
     ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, FunctionHandle, LinkedFunction,
-    LinkedFunctions, PrecisionNote, RenderPipeline, RenderPipelineDescriptor, StageInputDescriptor,
-    StageModule, StageSource,
+    LinkedFunctions, PrecisionNote, RenderPipeline, RenderPipelineDescriptor, StageModule,
+    StageSource,
 };
 use metal2vulkan::vk;
 use metal2vulkan::Budget;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -278,18 +276,9 @@ pub enum PipelineRequest {
         shape: BindShape,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dispatch: Option<Dispatch>,
-        /// The compute pipeline's stage-input descriptor, which the kernel compiles under.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stage_input: Option<StageInputDescriptor>,
-        /// A tile function's color attachment formats by color index: the kernel compiles as
-        /// a tile function under them, into `Device::compile_tile_pipeline`'s pipeline
-        /// (`variants::compile_tile_for_shape`). A tile pipeline has no stage-input descriptor.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tile: Option<BTreeMap<u32, PixelFormat>>,
         /// The kernel compiles as a device-replay variant (`LoweringInputs::replay_bindings`,
         /// `variants::compile_replay_for_shape`): a replayed template's pipeline, its buffers read
-        /// through the slot table the replay's preprocess writes per command. A replay variant has
-        /// no stage-input descriptor and no tile pass.
+        /// through the slot table the replay's preprocess writes per command.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         replay: bool,
     },
@@ -514,9 +503,7 @@ pub enum PipelineCompileError {
     /// descriptor or companion, [`row`]): a modelled limit of the tool.
     Unmodelled(row::Unmodelled),
     /// The host's tooling failed while building the request's inputs (`llvm-as` assembling an L4
-    /// fragment row's generated companion), or the request names inputs no pipeline takes
-    /// together (a tile pipeline's attachments with a stage-input descriptor): neither a product
-    /// outcome nor a modelled limit.
+    /// fragment row's generated companion): neither a product outcome nor a modelled limit.
     Tooling(String),
 }
 
@@ -808,52 +795,15 @@ fn compile_counted(
             function: kernel,
             shape,
             dispatch,
-            stage_input,
-            tile,
             replay,
         } => {
+            use crate::candidate::engine::variants;
             let (kernel, handles) = function(0, Stage::Kernel, kernel, linked(0))?;
-            let (pipeline, _) = match (tile, stage_input) {
-                (None, None) if *replay => {
-                    crate::candidate::engine::variants::compile_replay_for_shape(
-                        device,
-                        &kernel,
-                        shape,
-                        dispatch.as_ref(),
-                        &budget,
-                    )?
-                }
-                _ if *replay => {
-                    return Err(PipelineCompileError::Tooling(
-                        "a replay variant has no stage-input descriptor and no tile pass".into(),
-                    ))
-                }
-                (Some(formats), None) => {
-                    crate::candidate::engine::variants::compile_tile_for_shape(
-                        device,
-                        &kernel,
-                        shape,
-                        dispatch.as_ref(),
-                        formats,
-                        &budget,
-                    )?
-                }
-                (Some(_), Some(_)) => {
-                    return Err(PipelineCompileError::Tooling(
-                        "a tile pipeline has no stage-input descriptor".into(),
-                    ))
-                }
-                (None, stage_input) => {
-                    crate::candidate::engine::variants::compile_compute_for_shape(
-                        device,
-                        &kernel,
-                        shape,
-                        dispatch.as_ref(),
-                        stage_input.as_ref(),
-                        &budget,
-                    )?
-                }
+            let compile = match replay {
+                true => variants::compile_replay_for_shape,
+                false => variants::compile_compute_for_shape,
             };
+            let (pipeline, _) = compile(device, &kernel, shape, dispatch.as_ref(), &budget)?;
             CompiledRequest {
                 pipeline: AcceptancePipeline::Compute(Box::new(pipeline)),
                 handles: vec![handles],
@@ -1292,6 +1242,7 @@ pub fn unmet_device_facts(
 mod tests {
     use super::*;
     use metal2vulkan::library::FunctionConstantValue;
+    use metal2vulkan::metal::PixelFormat;
     use metal2vulkan::vk;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
@@ -1783,8 +1734,6 @@ mod tests {
             },
             shape: BindShape::default(),
             dispatch: None,
-            stage_input: None,
-            tile: None,
             replay: false,
         };
         let library = |names: &[&str]| LinkedLibrary {
@@ -1875,8 +1824,6 @@ mod tests {
             function: function("k", 2),
             shape: BindShape::default(),
             dispatch: None,
-            stage_input: None,
-            tile: None,
             replay: false,
         };
         assert_eq!(kernel.linked_ranges(), vec![Range { start: 1, end: 3 }]);

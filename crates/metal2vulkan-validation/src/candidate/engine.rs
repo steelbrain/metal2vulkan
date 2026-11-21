@@ -10,16 +10,12 @@
 //! table, per-region specialization and group counts. A vertex case compiles and draws through
 //! one `RenderPipeline` the same way, a fragment case and an observed vertex case with their
 //! generated companion stage ([`graphics`]). The case's own function links the functions its
-//! visible-function references and tables name, from the modules the Metal oracle links
-//! ([`linked_modules`]), and each visible-function table is a buffer of the function's stage
-//! holding the product's table words with the handles the compile gave those functions
-//! ([`tables`]). Each element of a texture array is the texture at its own Metal slot
+//! visible-function references name, from the modules the Metal oracle links
+//! ([`linked_modules`]). Each element of a texture array is the texture at its own Metal slot
 //! ([`resources::bound_textures`]), and an argument-buffer buffer of either executor is a used
 //! resource whose address its owner holds ([`argument_buffers`]); an argument-buffer texture is a
 //! used texture whose resource id its owner holds, a member of the plan's heap, and a command
-//! buffer an opaque id in its owner. A tile kernel over render targets compiles through
-//! `compile_tile_pipeline` and dispatches over the render area's tiles, its attachments bound as
-//! the plan's tile attachments ([`TilePass`]). Nothing about the layout is re-derived here.
+//! buffer an opaque id in its owner. Nothing about the layout is re-derived here.
 //!
 //! Safety and evidence rules, in the order they apply:
 //!
@@ -44,12 +40,10 @@
 
 use crate::acceptance::{LinkedLibrary, PipelineRequest, RequestFunction};
 use crate::c3::{VenueProfile, Venues, VENUE_PROFILE};
-use crate::case::indirect_commands::{CommandBufferResource, HostStageInRegion};
+use crate::case::indirect_commands::CommandBufferResource;
 use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{
-    AccelerationStructureKind, ArgumentBufferSamplerResource, AuthoredCase,
-    ImplicitImageblockCoverage, IntersectionFunctionTableEntry, IntersectionFunctionTableResource,
-    OutputSelection, RateMapLiteral, ResourceRole, SamplerResource, Stage, TextureType,
+    ArgumentBufferSamplerResource, AuthoredCase, OutputSelection, SamplerResource, Stage,
 };
 use crate::check::admission::{
     admit, AdmittedCase, ExecutionRequest, ExecutorError, NotSupported, VenueMismatch,
@@ -60,7 +54,6 @@ use crate::companion::{Companion, Spelling};
 use crate::coverage::ExecutedCensus;
 use crate::engine::{bounded_detail, Outcome, RowSource};
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun, TargetRun};
-use crate::executor_contract::stage_inputs;
 use crate::gpu::wait::wait_timeout;
 use crate::gpu::DeviceType;
 use crate::hash::sha256_bytes;
@@ -76,23 +69,22 @@ use crate::refusal::{Refusal, RefusalObservation};
 use crate::requirement::{Executor, ToolingRequirement};
 use crate::store::CorpusStore;
 use crate::worker::compile::{
-    compile_compute_request, compile_render_request, CompileWorker, NotCompiled, WorkerDevice,
+    compile_compute_request, compile_render_request, CompileWorker, NotCompiled, WorkerCompile,
+    WorkerDevice,
 };
 use crate::worker::device::{DeviceInput, DeviceOutcome, DeviceRun, OpenedDevice, VenueRun};
 use crate::worker::WorkerFailure;
 use base64::Engine as _;
 use metal2vulkan::bind::{
-    BindShape, BindState, BoundAccelerationStructure, BoundBuffer, BufferRanges, Dispatch,
-    DrawCall, ExecutionStatus, FunctionTableWords, ImageblockSize, MetalInstance, ReplayVariant,
-    StageTable, StatusReport,
+    BindShape, BindState, BoundBuffer, BufferRanges, Dispatch, DrawCall, ExecutionStatus,
+    ReplayVariant, StageTable, StatusReport,
 };
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
 use metal2vulkan::error::{BindError, Error};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-use metal2vulkan::metal::{PixelFormat, RenderStages};
+use metal2vulkan::metal::RenderStages;
 use metal2vulkan::pipeline::Stage as ShaderStage;
-use metal2vulkan::pipeline::StageInputDescriptor;
 use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -104,17 +96,13 @@ pub mod argument_buffers;
 pub mod artifact;
 pub mod graphics;
 pub mod guards;
-pub mod imageblock;
 pub mod mesh;
 #[cfg(test)]
 mod public_cases;
 pub mod resources;
-pub mod tables;
 #[cfg(test)]
 pub(crate) mod tests;
 pub mod variants;
-
-use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 
 /// The executor ABI of engine candidate observations. Every recorded candidate row, the
 /// authored compile census and the C3 records key on it, so a bump makes every recorded row stale.
@@ -123,14 +111,13 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v203";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v204";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
-/// buffers and pipeline states, textures, texture buffers, texture arrays, samplers, visible-function tables,
-/// threadgroup lengths, an explicit imageblock's size, stage inputs, function constants, a
-/// `dispatchThreads` grid or a tile pass's tiles, and a buffer, argument-buffer buffer, texture,
-/// argument-buffer texture, or tile pass render-target output).
+/// buffers and pipeline states, textures, texture arrays, samplers, threadgroup lengths, function
+/// constants, a `dispatchThreads` grid, and a buffer, argument-buffer buffer, texture or
+/// argument-buffer texture output).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComputeCase {
     pub entry: String,
@@ -141,19 +128,12 @@ pub struct ComputeCase {
     /// buffer table. An argument buffer's owner covers each of its embedded pointer fields
     /// ([`ComputeCase::argument_buffer_buffers`]).
     pub buffers: BTreeMap<u32, Vec<u8>>,
-    /// Each bound buffer holding a rasterization-rate map's parameter data, by Metal buffer index:
-    /// its bytes in [`ComputeCase::buffers`] are the product's data of the map, which the executor
-    /// binds.
-    pub rate_maps: BTreeMap<u32, RateMapLiteral>,
     /// Initial bytes of each argument-buffer buffer, by `(owner Metal index, field offset)`:
     /// a buffer the owner's argument buffer points to (loaded pointers). The run writes its guest
     /// address into the owner's bytes at the field offset, the pointer Metal's argument encoder
     /// writes there ([`argument_buffers::owner_bytes`]), and lists it as a used resource
     /// (`useResource`, read and write, as the oracle does), so the resident set reaches it.
     pub argument_buffer_buffers: BTreeMap<(u32, u32), Vec<u8>>,
-    /// Each argument-buffer buffer holding a rasterization-rate map's parameter data, by `(owner
-    /// Metal index, field offset)`, as [`ComputeCase::rate_maps`] is for a bound buffer.
-    pub argument_buffer_rate_maps: BTreeMap<(u32, u32), RateMapLiteral>,
     /// Each argument-buffer texture (initial contents included), by `(owner Metal index, field
     /// offset)`: a used texture whose resource id the run writes into the owner at the field, the
     /// `gpuResourceID` Metal's argument encoder writes there ([`argument_buffers::field_words`]),
@@ -181,37 +161,8 @@ pub struct ComputeCase {
     pub textures: BTreeMap<u32, LiteralTexture>,
     /// Each bound sampler, by Metal sampler index.
     pub samplers: BTreeMap<u32, SamplerResource>,
-    /// Each visible-function table, by Metal buffer index: bound as a buffer of
-    /// [`FunctionTable::byte_len`] bytes, whose words the compile's handles decide
-    /// ([`CompiledCase::tables`]).
-    pub function_tables: BTreeMap<u32, FunctionTable>,
-    /// Each acceleration structure, by Metal buffer index: built on the device as the Metal oracle
-    /// builds it, and bound as the plan's `WriteSource::AccelerationStructure` names it. An
-    /// intersection function table is a buffer of [`ComputeCase::buffers`] holding the product's
-    /// table words ([`intersection_table_words`]).
-    pub acceleration_structures: BTreeMap<u32, CaseStructure>,
     /// `setThreadgroupMemoryLength:atIndex:`.
     pub threadgroup_lengths: BTreeMap<u32, u32>,
-    /// `setImageblockWidth:height:`: the dimensions of the case's explicit imageblock, which the
-    /// kernel stages in threadgroup memory; a tile pass's tile size.
-    pub imageblock: Option<[u32; 2]>,
-    /// The render pass of a tile kernel over render targets: the kernel compiles as a tile function
-    /// under its attachments' formats, and [`ComputeCase::dispatch`] covers its render area in
-    /// tiles of [`ComputeCase::imageblock`].
-    pub tile: Option<TilePass>,
-    /// The compute pipeline's stage-input descriptor when the case has stage inputs: the kernel
-    /// compiles under it, and the dispatch's stage-in region is [`ComputeCase::stage_in_region`] or
-    /// the grid's (`executor_contract::stage_inputs`). Each input's data is in
-    /// [`ComputeCase::buffers`] at its slot.
-    pub stage_input: Option<StageInputDescriptor>,
-    /// The case's authored stage-in region (`Dispatch::stage_in_region`), which a dispatch with
-    /// stage inputs sets in place of its grid's; `None` for the grid's, and for an executed
-    /// command's child, whose region is its own grid's.
-    pub stage_in_region: Option<HostStageInRegion>,
-    /// The stride each stage input of a dynamic layout's data is bound with, by its slot
-    /// (`stage_inputs::bound_strides`): the stride form's, as the oracle binds it; every other
-    /// buffer is bound with the plain form.
-    pub attribute_strides: BTreeMap<u32, u32>,
     pub dispatch: Dispatch,
     pub output: ComputeOutput,
     /// The case's out-of-bounds targets: each buffer target is allocated inside a guard of its
@@ -222,90 +173,6 @@ pub struct ComputeCase {
     /// (`budgets::creation_within`): the case's declared one (`AuthoredCase::creation_bound`), or
     /// the shared ceiling. An executed command's pipelines, its templates', keep the ceiling.
     pub creation_bound: Duration,
-}
-
-/// The render pass a tile kernel runs in, as the Metal oracle encodes it (`metal::platform::tile`):
-/// a pass of `area` (`renderTargetWidth`/`renderTargetHeight`, the dispatch grid's width and
-/// height) whose color attachments load and store, single-sampled and unlayered.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TilePass {
-    pub area: [u32; 2],
-    /// The whole tiles over `area`: the render area the tile function specializes
-    /// (`BindState::render_area`), as the runtime's dispatch takes it.
-    pub tiles: [u32; 2],
-    /// Each color attachment with its initial contents, by color index: a 2D texture of the
-    /// attachment's authored format and extent (the render area).
-    pub attachments: BTreeMap<u32, LiteralTexture>,
-    /// Each of `attachments` over the whole tiles, as the executor binds it: its texels from the
-    /// origin and each texel past them the nearest one, clamped to their edge, as Metal's tile
-    /// memory holds a loaded attachment's cells past it when the pass begins. The tile function's
-    /// cells past `area` are this texture's texels there; a render-target output selects its rows
-    /// from the origin, as the oracle selects them from the attachment.
-    pub tiled: BTreeMap<u32, LiteralTexture>,
-}
-
-impl TilePass {
-    /// Each attachment's pixel format by color index: the tile pipeline's
-    /// `color_attachment_formats`.
-    pub fn formats(&self) -> BTreeMap<u32, PixelFormat> {
-        self.attachments
-            .iter()
-            .map(|(&index, texture)| (index, resources::pixel_format(texture.format)))
-            .collect()
-    }
-}
-
-/// One acceleration structure of a case, as the Metal oracle builds it
-/// (`metal::platform::acceleration`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CaseStructure {
-    /// A primitive structure of one triangle geometry (opaque, duplicate intersection function
-    /// calls allowed: Metal's defaults) over `vertices`: tightly packed little-endian `float3`
-    /// vertices, three per triangle.
-    Primitive { vertices: Vec<u8> },
-    /// An instance structure of `instances` instances of the primitive structure of
-    /// [`AccelerationStructureKind::INSTANCED_TRIANGLE`], each with the identity transform, the
-    /// opaque option, mask `0xFFFFFFFF`, table offset 0, and no user id.
-    Instances { instances: u32 },
-}
-
-impl CaseStructure {
-    /// The Metal instance every instance of [`CaseStructure::Instances`] is.
-    pub fn instance() -> MetalInstance {
-        let mut instance = MetalInstance::new();
-        instance.options = INSTANCE_OPTION_OPAQUE;
-        instance.mask = u32::MAX;
-        instance
-    }
-}
-
-/// `MTLAccelerationStructureInstanceOptionOpaque`.
-const INSTANCE_OPTION_OPAQUE: u32 = 4;
-
-/// The words of intersection function table `table`: the product's table layout
-/// (`FunctionTableWords`), each opaque triangle entry the reserved word the translation accepts.
-/// A linked intersection function is not implemented: the product refuses a stage that may link
-/// one.
-pub fn intersection_table_words(
-    table: &IntersectionFunctionTableResource,
-) -> Result<Vec<u8>, String> {
-    let mut words = FunctionTableWords::new(table.size);
-    for entry in &table.entries {
-        match entry {
-            IntersectionFunctionTableEntry::OpaqueTriangle { index, .. } => {
-                if !words.set_opaque_triangle(*index) {
-                    return Err(format!(
-                        "intersection function table {} entry {index} is past its size {}",
-                        table.binding, table.size
-                    ));
-                }
-            }
-            IntersectionFunctionTableEntry::Linked { .. } => {
-                return Err("linked intersection functions".into())
-            }
-        }
-    }
-    Ok(words.words().iter().flat_map(|w| w.to_le_bytes()).collect())
 }
 
 /// Which bytes of the run are the observation.
@@ -341,13 +208,6 @@ pub enum ComputeOutput {
         field_offset: u32,
         origin: [u32; 3],
         dimensions: [u32; 3],
-    },
-    /// A region of the tile pass's color attachment `index`, tightly packed rows as the Metal
-    /// oracle reads a render target.
-    RenderTarget {
-        index: u32,
-        origin: [u32; 2],
-        dimensions: [u32; 2],
     },
 }
 
@@ -404,22 +264,16 @@ impl RunAttempt {
 
 /// Map `case` onto what this executor runs, or name what it does not implement yet. The families of
 /// the shared vocabulary that stop this executor for a kernel case
-/// (`executor_contract::case_requirements`: argument-buffer intersection-function tables and linked
-/// intersection functions) are `NotSupported::Requirements`; it runs buffers, device buffer arrays,
-/// argument-buffer buffers and textures, command buffers and the indirect compute commands they
-/// record, pipeline states (each the case's token in its owner), textures (texture buffers
-/// included), texture arrays, samplers, visible-function tables, acceleration structures,
-/// intersection function tables of opaque triangle entries, threadgroup lengths, an explicit
-/// imageblock, stage inputs, and a tile kernel's render pass ([`TilePass`]), and a case whose
-/// literals do not map onto them is `NotSupported::NotImplemented` (graphics stages are
-/// `candidate::engine::graphics`). `interface` is the checked entry's AIR-layer interface,
-/// whose stage inputs take the slots the Metal oracle binds their data at
-/// (`executor_contract::stage_inputs`). A case has no indirect dispatch to map: its dispatch is a
-/// `dispatchThreads` grid, and indirect work is authored only as indirect command buffers.
-pub fn compute_case(
-    case: &AuthoredCase,
-    interface: &AirInterface,
-) -> Result<ComputeCase, NotSupported> {
+/// (`executor_contract::case_requirements`: among them function tables, acceleration structures and
+/// intersection-function tables, imageblocks, stage inputs, rate maps, sparse textures and texture
+/// buffers, the runtime's limits) are `NotSupported::Requirements`; it runs buffers, device buffer
+/// arrays, argument-buffer buffers and textures, command buffers and the indirect compute commands
+/// they record, pipeline states (each the case's token in its owner), textures, texture arrays,
+/// samplers and threadgroup lengths, and a case whose literals do not map onto them is
+/// `NotSupported::NotImplemented` (graphics stages are `candidate::engine::graphics`). A case has no
+/// indirect dispatch to map: its dispatch is a `dispatchThreads` grid, and indirect work is
+/// authored only as indirect command buffers.
+pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
     let gap = |what: &str| NotSupported::NotImplemented(format!("engine candidate: {what}"));
     if case.stage != Stage::Kernel {
         return Err(gap(&format!(
@@ -507,43 +361,14 @@ pub fn compute_case(
                 origin,
                 dimensions,
             },
-            OutputSelection::RenderTarget {
-                index,
-                origin,
-                dimensions,
-            } => ComputeOutput::RenderTarget {
-                index,
-                origin,
-                dimensions,
-            },
             _ => return Err(gap(
                 "an output other than a buffer range, an argument-buffer buffer range, a region \
-                 of a texture, a texture-array element, or an argument-buffer texture, or a tile \
-                 pass's render target",
+                 of a texture, a texture-array element, or an argument-buffer texture",
             )),
         };
     let resources =
         LiteralResources::prepare(case).map_err(|error| gap(&format!("resources: {error}")))?;
-    let tile = tile_pass(case, &resources)?;
-    if matches!(output, ComputeOutput::RenderTarget { .. }) && tile.is_none() {
-        return Err(gap(
-            "a render-target output of a kernel that runs in no tile pass",
-        ));
-    }
     let constants = function_constants(&resources)?;
-    let rate_maps = resources
-        .buffers
-        .iter()
-        .filter_map(|buffer| Some((buffer.binding, buffer.rasterization_rate_map.clone()?)))
-        .collect();
-    let argument_buffer_rate_maps = resources
-        .argument_buffer_buffers
-        .iter()
-        .filter_map(|buffer| {
-            let map = buffer.rasterization_rate_map.clone()?;
-            Some(((buffer.buffer_binding, buffer.field_offset), map))
-        })
-        .collect();
     let mut buffers = BTreeMap::new();
     let elements = resources
         .device_buffer_arrays
@@ -590,128 +415,28 @@ pub fn compute_case(
             return Err(gap(&format!("sampler {} bound twice", sampler.binding)));
         }
     }
-    for table in &case.intersection_function_tables {
-        let words = intersection_table_words(table).map_err(|error| gap(&error))?;
-        if buffers.insert(table.binding, words).is_some() {
-            return Err(gap(&format!(
-                "buffer {} is also an intersection function table",
-                table.binding
-            )));
-        }
-    }
-    let mut acceleration_structures = BTreeMap::new();
-    for structure in &case.acceleration_structures {
-        let mapped = match structure.kind {
-            AccelerationStructureKind::Primitive => CaseStructure::Primitive {
-                vertices: base64::engine::general_purpose::STANDARD
-                    .decode(
-                        structure
-                            .primitive_triangles_b64
-                            .as_deref()
-                            .unwrap_or_default(),
-                    )
-                    .map_err(|error| gap(&format!("structure {}: {error}", structure.binding)))?,
-            },
-            AccelerationStructureKind::Instance => CaseStructure::Instances {
-                instances: u32::try_from(structure.child_references.len())
-                    .map_err(|_| gap(&format!("structure {} instances", structure.binding)))?,
-            },
-        };
-        if buffers.contains_key(&structure.binding)
-            || acceleration_structures
-                .insert(structure.binding, mapped)
-                .is_some()
-        {
-            return Err(gap(&format!(
-                "acceleration structure {} bound twice",
-                structure.binding
-            )));
-        }
-    }
-    let function_tables = function_tables(&case.visible_function_tables)?;
-    if let Some(binding) = function_tables
-        .keys()
-        .find(|binding| buffers.contains_key(binding))
-    {
-        return Err(gap(&format!(
-            "buffer {binding} is also a visible function table"
-        )));
-    }
     let mut threadgroup_lengths = BTreeMap::new();
     for memory in &case.threadgroup_memory {
         threadgroup_lengths.insert(memory.binding, memory.length);
-    }
-    // Each stage input's data is its own buffer, at the slot the oracle binds it at.
-    let fetches = stage_inputs::authored(&case.kernel_stage_inputs, interface)
-        .map_err(|error| gap(&format!("stage inputs: {error}")))?;
-    if tile.is_some() && !fetches.is_empty() {
-        return Err(gap(
-            "stage inputs of a tile function (a tile pipeline has no stage-input descriptor)",
-        ));
-    }
-    for fetch in &fetches {
-        let bytes = resources
-            .kernel_stage_inputs
-            .iter()
-            .find(|input| input.location == fetch.location)
-            .map(|input| input.bytes.clone())
-            .ok_or_else(|| gap(&format!("stage input {} has no data", fetch.location)))?;
-        if buffers.insert(fetch.slot, bytes).is_some() || function_tables.contains_key(&fetch.slot)
-        {
-            return Err(gap(&format!(
-                "stage input {}'s buffer {} is bound twice",
-                fetch.location, fetch.slot
-            )));
-        }
     }
     Ok(ComputeCase {
         entry: case.entry.clone(),
         constants,
         buffers,
-        rate_maps,
         argument_buffer_buffers,
-        argument_buffer_rate_maps,
         argument_buffer_textures,
         argument_buffer_samplers,
         objects: objects.pipeline_tokens,
         command_buffers: objects.command_buffers,
         textures,
         samplers,
-        function_tables,
-        acceleration_structures,
         threadgroup_lengths,
-        imageblock: case.imageblock.as_ref().map(|i| i.dimensions),
-        stage_input: stage_inputs::descriptor(&fetches),
-        stage_in_region: dispatch.stage_in_region,
-        attribute_strides: stage_inputs::bound_strides(&fetches),
-        dispatch: match &tile {
-            // One threadgroup per tile of the render area (`dispatchThreadsPerTile:`).
-            Some(pass) => {
-                let [tile_width, tile_height] = case
-                    .imageblock
-                    .as_ref()
-                    .map(|imageblock| imageblock.dimensions)
-                    .ok_or_else(|| gap("a tile pass without a tile size"))?;
-                if tile_width == 0 || tile_height == 0 {
-                    return Err(gap("a tile pass of an empty tile"));
-                }
-                Dispatch::Threadgroups {
-                    groups: [
-                        pass.area[0].div_ceil(tile_width),
-                        pass.area[1].div_ceil(tile_height),
-                        1,
-                    ],
-                    threads_per_group: dispatch.threads_per_threadgroup,
-                }
-            }
-            // `dispatch.grid` is in threads: the Metal oracle calls
-            // `dispatchThreads:threadsPerThreadgroup:`.
-            None => Dispatch::Threads {
-                threads: dispatch.grid,
-                threads_per_group: dispatch.threads_per_threadgroup,
-            },
+        // `dispatch.grid` is in threads: the Metal oracle calls
+        // `dispatchThreads:threadsPerThreadgroup:`.
+        dispatch: Dispatch::Threads {
+            threads: dispatch.grid,
+            threads_per_group: dispatch.threads_per_threadgroup,
         },
-        tile,
         output,
         out_of_bounds: case
             .out_of_bounds
@@ -722,122 +447,21 @@ pub fn compute_case(
     })
 }
 
-/// The render pass of `case` when it is a tile kernel (its implicit imageblock's
-/// `implicit_coverage`), as the Metal oracle encodes it (`metal::platform::tile`): a single-sample,
-/// unlayered pass of the dispatch grid's width and height, each render target a color attachment
-/// that loads and stores, of its authored format, extent, and contents (`resources`, the case's
-/// prepared literals). Render targets of another kernel are not implemented, and neither is a grid
-/// of more than one plane (the oracle's pass has none).
-fn tile_pass(
-    case: &AuthoredCase,
-    resources: &LiteralResources,
-) -> Result<Option<TilePass>, NotSupported> {
-    let gap = |what: &str| NotSupported::NotImplemented(format!("engine candidate: {what}"));
-    let coverage = case
-        .imageblock
-        .as_ref()
-        .and_then(|imageblock| imageblock.implicit_coverage);
-    match coverage {
-        None if case.render_targets.is_empty() => return Ok(None),
-        None => return Err(gap("render targets of a kernel that is no tile function")),
-        // The oracle's coverage prepass writes no color, so each attachment's authored contents
-        // are its initial pixels.
-        Some(ImplicitImageblockCoverage::FullSingleSample) => {}
-    }
-    let grid = case
-        .dispatch
-        .as_ref()
-        .ok_or_else(|| gap("a tile kernel without a dispatch"))?
-        .grid;
-    if grid[2] != 1 {
-        return Err(gap("a tile pass of a grid of more than one plane"));
-    }
-    let area = [grid[0], grid[1]];
-    let tile = case
-        .imageblock
-        .as_ref()
-        .map(|imageblock| imageblock.dimensions)
-        .filter(|&[width, height]| width > 0 && height > 0)
-        .ok_or_else(|| gap("a tile pass of no tile size"))?;
-    if area.contains(&0) {
-        return Err(gap("a tile pass of no pixels"));
-    }
-    let tiles = [0, 1].map(|axis| area[axis].div_ceil(tile[axis]).saturating_mul(tile[axis]));
-    let mut attachments = BTreeMap::new();
-    let mut tiled = BTreeMap::new();
-    for target in &resources.render_targets {
-        if target.dimensions != area {
-            return Err(gap(&format!(
-                "render target {} of {:?} in a pass of {area:?}",
-                target.index, target.dimensions
-            )));
-        }
-        let texture = LiteralTexture {
-            binding: target.index,
-            role: ResourceRole::InOut,
-            texture_type: TextureType::D2,
-            format: target.format,
-            dimensions: [area[0], area[1], 1],
-            sample_count: 1,
-            bytes: target.bytes.clone(),
-            sparse: None,
-            mip_levels: 1,
-        };
-        let over_tiles = LiteralTexture {
-            dimensions: [tiles[0], tiles[1], 1],
-            bytes: clamped_to_edge(&target.bytes, target.format.bytes_per_pixel(), area, tiles)
-                .ok_or_else(|| gap(&format!("render target {}'s bytes", target.index)))?,
-            ..texture.clone()
-        };
-        tiled.insert(target.index, over_tiles);
-        if attachments.insert(target.index, texture).is_some() {
-            return Err(gap(&format!("render target {} bound twice", target.index)));
-        }
-    }
-    Ok(Some(TilePass {
-        area,
-        tiles,
-        attachments,
-        tiled,
-    }))
-}
-
-/// `bytes`, the rows of `from` texels of `texel` bytes, as an image of `to` texels (each axis at
-/// least `from`'s): each texel past `from` the nearest one inside, clamped to its edge. `None`
-/// where `bytes` is not that image.
-fn clamped_to_edge(bytes: &[u8], texel: usize, from: [u32; 2], to: [u32; 2]) -> Option<Vec<u8>> {
-    let [width, height] = from.map(|n| n as usize);
-    if width == 0 || height == 0 || bytes.len() != width * height * texel {
-        return None;
-    }
-    let [across, down] = to.map(|n| n as usize);
-    let mut out = Vec::with_capacity(across * down * texel);
-    for y in 0..down {
-        let row = y.min(height - 1) * width;
-        for x in 0..across {
-            let at = (row + x.min(width - 1)) * texel;
-            out.extend_from_slice(bytes.get(at..at + texel)?);
-        }
-    }
-    Some(out)
-}
-
 /// Refuse the families of `case`'s own literals that stop this executor
 /// (`executor_contract::case_requirements`): argument-buffer intersection-function tables, linked
-/// intersection functions, and the render executor's own (device buffer arrays, acceleration
-/// structures and intersection function tables, a vertex case's depth/stencil attachment, a
-/// rasterization-disabled vertex case's render targets; it draws a tessellation case's patches, and
-/// runs a fragment function's explicit imageblock). The checker computed them with the source's
+/// intersection functions, the runtime's limits (function tables, acceleration structures and
+/// intersection-function tables, imageblocks, stage inputs, rate maps, sparse textures, texture
+/// buffers and dynamic vertex strides among them), and the render executor's own (device buffer
+/// arrays, a vertex case's depth/stencil attachment, a rasterization-disabled vertex case's render
+/// targets; it draws a tessellation case's patches). The checker computed them with the source's
 /// families ([`crate::check::CheckedShader::requirements`]), which [`prepare_case`] refuses; this
 /// check keeps a case mapped without the checker to the same rule. (The compute executor binds
-/// device buffer arrays, runs kernel stage inputs, [`compute_case`], and builds acceleration
-/// structures and binds intersection function tables of opaque triangle entries. Both executors
-/// bind argument-buffer buffers, [`argument_buffers`], and texture arrays, each element the texture
-/// at its slot, [`resources::bound_textures`], argument-buffer textures and command buffers, each
-/// command buffer its record storage, and pipeline states, each its token in its owner; the compute
-/// executor executes a kernel case's commands. Visible-function references are no resource: the
-/// case's function links them, [`linked_modules`]. Both executors bind visible-function tables,
-/// [`tables`].)
+/// device buffer arrays, [`compute_case`]. Both executors bind argument-buffer buffers,
+/// [`argument_buffers`], and texture arrays, each element the texture at its slot,
+/// [`resources::bound_textures`], argument-buffer textures and command buffers, each command buffer
+/// its record storage, and pipeline states, each its token in its owner; the compute executor
+/// executes a kernel case's commands. Visible-function references are no resource: the case's
+/// function links them, [`linked_modules`].)
 pub fn require_case_families(case: &AuthoredCase) -> Result<(), NotSupported> {
     crate::executor_contract::require_executor(
         &crate::executor_contract::case_requirements(case),
@@ -899,11 +523,9 @@ pub fn views_told_apart(mut state: BindState, ranges: BufferRanges) -> BindState
 }
 
 /// The `BindState` of `case`: each buffer bound at offset 0 with its length, its guest address,
-/// and its host device address when the device has one (`addresses` by Metal index), each
-/// visible-function table the same way as a buffer of its table words' length (`bind::table`), each
-/// texture and sampler ([`resources`]), the threadgroup lengths, the imageblock size (a tile pass's
-/// tile size), a tile pass's render area, the stage-in region of a case with stage inputs, each
-/// instance structure's instance count, each argument-buffer buffer as a used buffer (`embedded` by
+/// and its host device address when the device has one (`addresses` by Metal index), each texture
+/// and sampler ([`resources`]), the threadgroup lengths, each argument-buffer buffer as a used
+/// buffer (`embedded` by
 /// `(owner, field offset)`; its consumer token is its position in
 /// [`ComputeCase::argument_buffer_buffers`]), and each argument-buffer texture as a used texture
 /// with its resource id (its token follows the buffers', [`argument_buffers::texture_tokens`]),
@@ -918,27 +540,16 @@ pub fn bind_state(
     ranges: BufferRanges,
 ) -> Result<BindState, String> {
     let mut table = StageTable::default();
-    let lengths = case
-        .buffers
-        .iter()
-        .map(|(&index, bytes)| (index, bytes.len() as u64))
-        .chain(
-            case.function_tables
-                .iter()
-                .map(|(&index, function_table)| (index, function_table.byte_len())),
-        );
-    for (index, length) in lengths {
+    for (&index, bytes) in &case.buffers {
         let address = addresses.get(&index).copied().unwrap_or_default();
         let bound = BoundBuffer::Buffer {
-            length,
+            length: bytes.len() as u64,
             offset: 0,
             gpu_address: address.guest,
             device_address: address.host,
-            attribute_stride: case.attribute_strides.get(&index).copied(),
+            attribute_stride: None,
         };
-        if table.buffers.insert(index, bound).is_some() {
-            return Err(format!("buffer {index} is also a visible function table"));
-        }
+        table.buffers.insert(index, bound);
     }
     for (&index, texture) in &case.textures {
         table
@@ -951,30 +562,8 @@ pub fn bind_state(
             .insert(index, resources::bound_sampler(sampler));
     }
     table.threadgroup_lengths = case.threadgroup_lengths.clone();
-    // The instance count of each instance structure, as the oracle builds it: what a function's
-    // `get_instance_count()` reads.
-    for (&index, structure) in &case.acceleration_structures {
-        if let CaseStructure::Instances { instances } = structure {
-            table
-                .acceleration_structures
-                .insert(index, BoundAccelerationStructure::new(*instances));
-        }
-    }
     let mut state = BindState::default();
     state.stages.insert(ShaderStage::Kernel, table);
-    if let Some([width, height]) = case.imageblock {
-        state.imageblock_size = ImageblockSize::new(width, height);
-    }
-    // The pass the oracle encodes the tile dispatch in: unlayered, so its render target array
-    // length stays the default.
-    if let Some(pass) = &case.tile {
-        state.render_area = pass.tiles;
-    }
-    // The oracle sets the stage-in region of a case with stage inputs, the case's or its
-    // grid's, and no other.
-    if let (Some(_), Dispatch::Threads { threads, .. }) = (&case.stage_input, case.dispatch) {
-        state.stage_in_region = Some(stage_inputs::region(case.stage_in_region, threads));
-    }
     for (token, (key, bytes)) in case.argument_buffer_buffers.iter().enumerate() {
         let address = embedded.get(key).copied().unwrap_or_default();
         state.used_resources.push(argument_buffers::used_buffer(
@@ -1146,79 +735,42 @@ pub fn runtime_fingerprint() -> String {
     sha256_bytes(&bytes)
 }
 
-/// Whether `case`, mapped from `authored`, runs through the runtime (`metal2vulkan-runtime`'s
-/// public API, `platform::execute_runtime`) in place of the executor's own context: a kernel
-/// case of buffers (each device buffer array's elements among them), bound textures the runtime
-/// makes (`runtime_texture`) and bound samplers, argument buffers of buffers, such textures and
-/// samplers, threadgroup memory lengths, function constants and linked functions, dispatched by
-/// `dispatchThreads` or `dispatchThreadgroups`, observing a buffer, a texture, an
-/// argument-buffer buffer or texture, or nothing, its out-of-bounds targets among them
-/// (`platform::runtime_bounds`). Decided by the case's structure alone: every field the mapping
-/// fills is named here, so a new one is decided when it is added.
-pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool {
+/// Whether `case` runs through the runtime (`metal2vulkan-runtime`'s public API,
+/// `platform::execute_runtime`) in place of the executor's own context: a kernel case of buffers
+/// (each device buffer array's elements among them), bound textures and samplers, made as the
+/// Metal oracle makes them (`platform::runtime_textures`: a 32-bit float depth, whose bytes the
+/// runtime takes no upload of, filled by a draw, `platform::runtime_depth`, and a multisampled
+/// texture by a draw per slice, `platform::runtime_multisample`; a texture buffer and a sparse
+/// texture are the runtime's limits, which stop the candidate first), argument buffers of buffers,
+/// textures and samplers, threadgroup memory lengths, function constants and linked functions,
+/// dispatched by
+/// `dispatchThreads` or `dispatchThreadgroups`, observing any output the mapping makes, its
+/// out-of-bounds targets among them (`platform::runtime_bounds`). Decided by the case's structure
+/// alone: every field the mapping fills is named here, so a new one is decided when it is added.
+pub fn runs_through_runtime(case: &ComputeCase) -> bool {
     let ComputeCase {
         entry: _,
         constants: _,
         buffers: _,
-        rate_maps,
         argument_buffer_buffers: _,
-        argument_buffer_rate_maps,
-        argument_buffer_textures,
+        argument_buffer_textures: _,
         argument_buffer_samplers: _,
         objects,
         command_buffers,
-        textures,
+        textures: _,
         samplers: _,
-        function_tables,
-        acceleration_structures,
         threadgroup_lengths: _,
-        imageblock,
-        tile,
-        stage_input,
-        stage_in_region,
-        attribute_strides,
         dispatch,
-        output,
+        output: _,
         out_of_bounds: _,
         creation_bound: _,
     } = case;
-    rate_maps.is_empty()
-        && argument_buffer_rate_maps.is_empty()
-        && argument_buffer_textures.values().all(runtime_texture)
-        && objects.is_empty()
+    objects.is_empty()
         && command_buffers.is_empty()
-        && textures.values().all(runtime_texture)
-        && function_tables.is_empty()
-        && acceleration_structures.is_empty()
-        && imageblock.is_none()
-        && tile.is_none()
-        && stage_input.is_none()
-        && stage_in_region.is_none()
-        && attribute_strides.is_empty()
         && matches!(
             dispatch,
             Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
         )
-        && matches!(
-            output,
-            ComputeOutput::None
-                | ComputeOutput::Buffer { .. }
-                | ComputeOutput::Texture { .. }
-                | ComputeOutput::ArgumentBufferBuffer { .. }
-                | ComputeOutput::ArgumentBufferTexture { .. }
-        )
-        && authored.intersection_function_tables.is_empty()
-}
-
-/// Whether the runtime makes `texture` as the Metal oracle makes it: no sparse mapping (a sparse
-/// texture stays on the executor's own context), and no texture buffer, which the runtime does not
-/// build (`Gap::TextureBuffer`). A cube array is a cube-compatible image of its cubes' faces, as
-/// any cube. A 32-bit float depth, whose bytes the runtime takes no upload of
-/// (`Gap::FloatDepthUpload`), is filled by a draw, as a guest fills one
-/// (`platform::runtime_depth`), and a multisampled texture, which neither Metal nor the runtime
-/// uploads, by a draw per slice that writes it sample by sample (`platform::runtime_multisample`).
-fn runtime_texture(texture: &LiteralTexture) -> bool {
-    texture.sparse.is_none() && texture.texture_type != TextureType::Buffer
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
@@ -1387,25 +939,25 @@ pub struct RuntimeKernel<'a> {
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 
-/// Whether `case`, mapped from `authored`, draws through the runtime
+/// Whether `case` draws through the runtime
 /// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
 /// fragment case of any sample count (`raster_sample_count`; each attachment of more samples
 /// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
-/// buffers, bound textures the runtime makes (`runtime_texture`) and bound samplers, function
-/// constants and linked functions, its vertex buffers at static strides, its color targets and a
-/// depth/stencil attachment of one aspect, or none (a fragment case's pass of no attachment is
-/// the oracle's 1x1 at its samples), the encoder's depth-stencil state, cull mode and winding, and
+/// buffers, bound textures (as [`runs_through_runtime`] makes them) and bound samplers, function
+/// constants and linked functions, its vertex buffers, its color targets and a depth/stencil
+/// attachment of one aspect, or none (a fragment case's pass of no attachment is the oracle's 1x1
+/// at its samples), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
 /// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
 /// buffer), observing a buffer, a texture, a color target, the depth/stencil attachment's aspect
 /// or nothing, whose out-of-bounds targets, if any, are attribute buffers
 /// (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
-pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::RenderCase) -> bool {
+pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
     let graphics::RenderCase {
         vertex,
         fragment,
-        vertex_buffers,
+        vertex_buffers: _,
         color_targets: _,
         depth_stencil,
         depth_stencil_state: _,
@@ -1415,10 +967,8 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         index_buffer: _,
         out_of_bounds,
         cull_mode: _,
-        imageblock,
         output,
         companion: _,
-        rate_map_pass,
         raster_sample_count: _,
     } = case;
     let bound = |function: &graphics::RenderFunction| {
@@ -1429,17 +979,14 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
             argument_buffer_samplers,
             objects,
             command_buffers,
-            textures,
+            textures: _,
             samplers: _,
-            function_tables,
         } = &function.resources;
         argument_buffer_buffers.is_empty()
             && argument_buffer_textures.is_empty()
             && argument_buffer_samplers.is_empty()
             && objects.is_empty()
             && command_buffers.is_empty()
-            && textures.values().all(runtime_texture)
-            && function_tables.is_empty()
     };
     // The runtime renders into no separate depth and stencil textures in one pass
     // (`Gap::RenderPass` of `DepthStencilViews`), which the oracle makes of an attachment of both.
@@ -1448,7 +995,6 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
     };
     bound(vertex)
         && fragment.as_ref().is_none_or(bound)
-        && vertex_buffers.iter().all(|buffer| !buffer.dynamic)
         && depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
         && matches!(
@@ -1468,7 +1014,6 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         && out_of_bounds
             .iter()
             .all(|target| matches!(target.resource, OutOfBoundsResource::AttributeBuffer { .. }))
-        && imageblock.is_none()
         && matches!(
             output,
             graphics::RenderOutput::None
@@ -1478,8 +1023,6 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
                 | graphics::RenderOutput::Depth { .. }
                 | graphics::RenderOutput::Stencil { .. }
         )
-        && rate_map_pass.is_none()
-        && authored.intersection_function_tables.is_empty()
 }
 
 /// A draw through the runtime ([`runs_render_through_runtime`]) of `prepared`'s render case
@@ -1772,8 +1315,7 @@ fn linking(
 /// The compile request for `case`'s kernel from `library` (its source row's,
 /// [`RowSource::of_row`]; the worker assembles a row that retains no bitcode) with the lowering
 /// inputs the bind shape `shape` and the case's dispatch decide (`PipelineRequest::BoundCompute`),
-/// a tile kernel's as a tile pipeline under its attachments' formats, linking the functions of
-/// `linked`, and its libraries in [`PipelineRequest::libraries`] order: `library`, then each of
+/// linking the functions of `linked`, and its libraries in [`PipelineRequest::libraries`] order: `library`, then each of
 /// `linked`'s.
 pub fn compute_request<'a>(
     library: &RowSource<'a>,
@@ -1785,8 +1327,6 @@ pub fn compute_request<'a>(
         function: linking(&case.entry, &case.constants, linked),
         shape: shape.clone(),
         dispatch: Some(case.dispatch),
-        stage_input: case.stage_input.clone(),
-        tile: case.tile.as_ref().map(TilePass::formats),
         replay: false,
     };
     (request, with_linked(&[library], linked))
@@ -1854,8 +1394,7 @@ pub fn replay_dispatch(threads_per_group: [u32; 3]) -> Dispatch {
 /// The compile request for the device-replay variant of the template `case` (its dispatch a
 /// [`replay_dispatch`]) for the bind shape `shape`, which binds no kernel buffer:
 /// [`compute_request`] with `replay` set, so the kernel compiles with
-/// `LoweringInputs::replay_bindings`. A replayed template has no stage input and no tile pass
-/// ([`replay_templates`]).
+/// `LoweringInputs::replay_bindings`.
 pub fn replay_request<'a>(
     library: &RowSource<'a>,
     linked: &[LinkedModule],
@@ -1866,8 +1405,6 @@ pub fn replay_request<'a>(
         function: linking(&case.entry, &case.constants, linked),
         shape: shape.clone(),
         dispatch: Some(case.dispatch),
-        stage_input: None,
-        tile: None,
         replay: true,
     };
     (request, with_linked(&[library], linked))
@@ -1879,26 +1416,19 @@ pub fn replay_request<'a>(
 pub enum RunAllocation {
     /// The case buffer at this Metal index.
     Buffer(u32),
-    /// The buffer of the visible-function table at this Metal index.
-    FunctionTable(u32),
     /// The argument-buffer buffer at this key (its owner's index and field offset).
     ArgumentBuffer((u32, u32)),
 }
 
 /// Every allocation of `case`'s run that a replayed command may bind or reach, in the order the
 /// run lists them, each its token in the device replay's resident set ([`replay_resident`]):
-/// each case buffer, each visible-function table's buffer, then each argument-buffer buffer,
+/// each case buffer, then each argument-buffer buffer,
 /// with the length the guest sees (not the padding). The compute executor's run lists its
 /// allocations by it, and the authored compile census its variants' resident set.
 pub fn run_allocations(case: &ComputeCase) -> Vec<(RunAllocation, u64)> {
     case.buffers
         .iter()
         .map(|(&index, bytes)| (RunAllocation::Buffer(index), bytes.len() as u64))
-        .chain(
-            case.function_tables
-                .iter()
-                .map(|(&index, table)| (RunAllocation::FunctionTable(index), table.byte_len())),
-        )
         .chain(
             case.argument_buffer_buffers
                 .iter()
@@ -2032,20 +1562,10 @@ fn not_compiled(refusal: NotCompiled) -> ExecutorError {
     }
 }
 
-/// A case's compiled pipeline and the bytes of its visible-function tables' buffers
-/// ([`tables::table_buffers`] of the handles the compile gave the linked functions), which the run
-/// binds at their stages and Metal buffer indices.
-#[derive(Clone, Debug)]
-pub struct CompiledCase<P> {
-    pub pipeline: P,
-    pub tables: TableBuffers,
-}
-
 /// Compile `case`'s kernel from `library` for `device` in a killable compile worker, as
-/// [`compute_request`] asks, and encode its tables with the handles the worker returned: the
-/// product's typed refusal is [`outcome_refusal`]'s, and a stop at the worker boundary (the
-/// deadline, the memory limit, a crashed worker, an artifact that does not load for `device`,
-/// handles that do not answer the request) fails the run.
+/// [`compute_request`] asks: the product's typed refusal is [`outcome_refusal`]'s, and a stop at
+/// the worker boundary (the deadline, the memory limit, a crashed worker, an artifact that does not
+/// load for `device`, handles that do not answer the request) fails the run.
 pub fn compile_case(
     worker: &CompileWorker,
     device: &WorkerDevice,
@@ -2053,30 +1573,26 @@ pub fn compile_case(
     linked: &[LinkedModule],
     case: &ComputeCase,
     shape: &BindShape,
-) -> Result<CompiledCase<ComputePipeline>, ExecutorError> {
+) -> Result<ComputePipeline, ExecutorError> {
     let (request, libraries) = compute_request(library, linked, case, shape);
-    compile_request(worker, device, &libraries, &request, case, linked)
+    compile_request(worker, device, &libraries, &request)
 }
 
-/// Compile `request` (of `case`'s kernel, linking `linked`) from `libraries` in `worker`, with
-/// its visible-function tables' bytes.
+/// Compile `request`, a kernel's, from `libraries` in `worker`.
 fn compile_request(
     worker: &CompileWorker,
     device: &WorkerDevice,
     libraries: &[RowSource<'_>],
     request: &PipelineRequest,
-    case: &ComputeCase,
-    linked: &[LinkedModule],
-) -> Result<CompiledCase<ComputePipeline>, ExecutorError> {
-    compute_attempt(worker, device, libraries, request, case, linked)
+) -> Result<ComputePipeline, ExecutorError> {
+    compute_attempt(worker, device, libraries, request)
         .result
         .map_err(ExecutorError::from)
 }
 
 /// Why a compile of one of a case's pipelines in a compile worker gave no pipeline: a stop at the
-/// worker boundary, the worker's refusal, or table handles that do not encode. The executor reads
-/// each as its [`ExecutorError`] ([`From`]: `worker_stopped`, `not_compiled`); the authored compile
-/// census keeps them typed.
+/// worker boundary, or the worker's refusal. The executor reads each as its [`ExecutorError`]
+/// ([`From`]: `worker_stopped`, `not_compiled`); the authored compile census keeps them typed.
 #[derive(Debug)]
 pub enum CompileFailure {
     /// The worker boundary stopped the compile (the deadline, the memory limit, a crashed
@@ -2086,8 +1602,6 @@ pub enum CompileFailure {
     /// The worker compiled nothing: the product's typed outcome, or inputs the tool does not
     /// build.
     NotCompiled(NotCompiled),
-    /// The handles the compile returned do not encode the case's visible-function tables.
-    Tables(ExecutorError),
     /// The compile's digest could not be made ([`artifact::CaseArtifact::record`]).
     Artifact(ExecutorError),
 }
@@ -2097,16 +1611,35 @@ impl From<CompileFailure> for ExecutorError {
         match failure {
             CompileFailure::Stopped(failure) => worker_stopped(failure),
             CompileFailure::NotCompiled(refusal) => not_compiled(refusal),
-            CompileFailure::Tables(error) | CompileFailure::Artifact(error) => error,
+            CompileFailure::Artifact(error) => error,
         }
     }
 }
 
-/// One compile of a case's pipeline in a compile worker: the pipeline with its tables, or why
-/// there is none, and what the parent measured (`None` when no worker was spawned).
+/// One compile of a case's pipeline in a compile worker: the pipeline, or why there is none, and
+/// what the parent measured (`None` when no worker was spawned).
 pub struct CompileAttempt<P> {
-    pub result: Result<CompiledCase<P>, CompileFailure>,
+    pub result: Result<P, CompileFailure>,
     pub measured: Option<crate::worker::Measured>,
+}
+
+impl<P> CompileAttempt<P> {
+    /// The attempt a worker compile `compiled` gave.
+    fn of(compiled: Result<WorkerCompile<P>, WorkerFailure>) -> Self {
+        match compiled {
+            Err(failure) => CompileAttempt {
+                measured: failure.measured(),
+                result: Err(CompileFailure::Stopped(failure)),
+            },
+            Ok(compiled) => CompileAttempt {
+                measured: Some(compiled.measured),
+                result: compiled
+                    .result
+                    .map(|compiled| compiled.pipeline)
+                    .map_err(CompileFailure::NotCompiled),
+            },
+        }
+    }
 }
 
 /// [`compile_request`] with its failure typed and its measure ([`CompileAttempt`]).
@@ -2115,28 +1648,8 @@ fn compute_attempt(
     device: &WorkerDevice,
     libraries: &[RowSource<'_>],
     request: &PipelineRequest,
-    case: &ComputeCase,
-    linked: &[LinkedModule],
 ) -> CompileAttempt<ComputePipeline> {
-    match compile_compute_request(worker, device, libraries, request) {
-        Err(failure) => CompileAttempt {
-            measured: failure.measured(),
-            result: Err(CompileFailure::Stopped(failure)),
-        },
-        Ok(compiled) => CompileAttempt {
-            measured: Some(compiled.measured),
-            result: compiled
-                .result
-                .map_err(CompileFailure::NotCompiled)
-                .and_then(|compiled| {
-                    Ok(CompiledCase {
-                        tables: compute_tables(case, linked, &compiled.handles)
-                            .map_err(CompileFailure::Tables)?,
-                        pipeline: compiled.pipeline,
-                    })
-                }),
-        },
-    }
+    CompileAttempt::of(compile_compute_request(worker, device, libraries, request))
 }
 
 /// [`compile_render`] with its failure typed and its measure ([`CompileAttempt`]).
@@ -2145,81 +1658,13 @@ fn render_attempt(
     device: &WorkerDevice,
     request: &PipelineRequest,
     libraries: &[RowSource<'_>],
-    case: &graphics::RenderCase,
-    linked: &[LinkedModule],
 ) -> CompileAttempt<RenderPipeline> {
-    match compile_render_request(worker, device, libraries, request) {
-        Err(failure) => CompileAttempt {
-            measured: failure.measured(),
-            result: Err(CompileFailure::Stopped(failure)),
-        },
-        Ok(compiled) => CompileAttempt {
-            measured: Some(compiled.measured),
-            result: compiled
-                .result
-                .map_err(CompileFailure::NotCompiled)
-                .and_then(|compiled| {
-                    Ok(CompiledCase {
-                        tables: render_tables(case, linked, &compiled.handles)
-                            .map_err(CompileFailure::Tables)?,
-                        pipeline: compiled.pipeline,
-                    })
-                }),
-        },
-    }
+    CompileAttempt::of(compile_render_request(worker, device, libraries, request))
 }
 
-/// The table buffers of `case`'s kernel, whose request function (the one of a
-/// `PipelineRequest::BoundCompute`) linked `linked` with `handles`.
-pub fn compute_tables(
-    case: &ComputeCase,
-    linked: &[LinkedModule],
-    handles: &[crate::acceptance::LinkedHandles],
-) -> Result<TableBuffers, ExecutorError> {
-    let kernel = handles
-        .first()
-        .ok_or("the kernel's compile returned no handles")?;
-    table_buffers(ShaderStage::Kernel, &case.function_tables, linked, kernel)
-}
-
-/// The table buffers of `case`'s stages, whose request functions (in stage order, as
-/// [`render_request`] builds them) linked with `handles`: the case's own function links `linked`,
-/// a generated companion nothing.
-pub fn render_tables(
-    case: &graphics::RenderCase,
-    linked: &[LinkedModule],
-    handles: &[crate::acceptance::LinkedHandles],
-) -> Result<TableBuffers, ExecutorError> {
-    let stages = case.stages().collect::<Vec<_>>();
-    if stages.len() != handles.len() {
-        return Err(format!(
-            "the draw's compile returned handles for {} functions, not {}",
-            handles.len(),
-            stages.len()
-        )
-        .into());
-    }
-    let mut buffers = TableBuffers::new();
-    for ((stage, function), handles) in stages.into_iter().zip(handles) {
-        let links = if case.companion_stage() == Some(stage) {
-            &[][..]
-        } else {
-            linked
-        };
-        buffers.extend(table_buffers(
-            stage,
-            &function.resources.function_tables,
-            links,
-            handles,
-        )?);
-    }
-    Ok(buffers)
-}
-
-/// Compile `case`'s pipeline for `device` in a killable compile worker, as [`render_request`] asks,
-/// and encode its tables with the handles the worker returned ([`render_tables`]); the worker
-/// assembles a source that retains no bitcode (the companion's text, a public fixture's). Refusals
-/// and stops are classified as for [`compile_case`].
+/// Compile `case`'s pipeline for `device` in a killable compile worker, as [`render_request`]
+/// asks; the worker assembles a source that retains no bitcode (the companion's text, a public
+/// fixture's). Refusals and stops are classified as for [`compile_case`].
 pub fn compile_render_case(
     worker: &CompileWorker,
     device: &WorkerDevice,
@@ -2228,26 +1673,22 @@ pub fn compile_render_case(
     linked: &[LinkedModule],
     case: &graphics::RenderCase,
     shape: &BindShape,
-) -> Result<CompiledCase<RenderPipeline>, ExecutorError> {
+) -> Result<RenderPipeline, ExecutorError> {
     let (request, libraries) = render_request(library, companion, linked, case, shape)?;
-    compile_render(worker, device, &request, &libraries, case, linked)
+    compile_render(worker, device, &request, &libraries)
 }
 
-/// Compile `request`, a draw of `case` whose own function links `linked`, from `libraries` (in
-/// [`PipelineRequest::libraries`] order) for `device` in a killable compile worker, and encode
-/// its tables with the handles the worker returned ([`render_tables`]). [`compile_render_case`]
-/// asks for [`render_request`]'s draw; the owned device tests ask for a vertex and a fragment
-/// function of two owned libraries, which no authored case draws. Refusals and stops are
-/// classified as for [`compile_case`].
+/// Compile `request`, a draw, from `libraries` (in [`PipelineRequest::libraries`] order) for
+/// `device` in a killable compile worker. [`compile_render_case`] asks for [`render_request`]'s
+/// draw; the owned device tests ask for a vertex and a fragment function of two owned libraries,
+/// which no authored case draws. Refusals and stops are classified as for [`compile_case`].
 pub fn compile_render(
     worker: &CompileWorker,
     device: &WorkerDevice,
     request: &PipelineRequest,
     libraries: &[RowSource<'_>],
-    case: &graphics::RenderCase,
-    linked: &[LinkedModule],
-) -> Result<CompiledCase<RenderPipeline>, ExecutorError> {
-    render_attempt(worker, device, request, libraries, case, linked)
+) -> Result<RenderPipeline, ExecutorError> {
+    render_attempt(worker, device, request, libraries)
         .result
         .map_err(ExecutorError::from)
 }
@@ -2268,7 +1709,6 @@ pub fn compute_shape(
     let addresses = case
         .buffers
         .keys()
-        .chain(case.function_tables.keys())
         .map(|&index| (index, with_host(BufferAddress::synthetic(index))))
         .collect();
     let embedded = synthetic_used_addresses(case)?
@@ -2399,8 +1839,8 @@ pub enum ChildCommand {
 /// A template compiled for one replayed command: a compute pipeline for a dispatch, and for a
 /// draw the template's render case (with the command's draw) and its pipeline.
 pub enum CompiledChild {
-    Compute(Box<CompiledCase<ComputePipeline>>),
-    Render(Box<graphics::RenderCase>, Box<CompiledCase<RenderPipeline>>),
+    Compute(Box<ComputePipeline>),
+    Render(Box<graphics::RenderCase>, Box<RenderPipeline>),
 }
 
 /// A replay template's case in the terms of the executor that runs it: a compute template a
@@ -2417,7 +1857,7 @@ pub enum TemplateCase {
 /// template only when render commands do, as the checker requires of render templates only then
 /// (`check::check_render_replay_templates`): a command never selects a template of the other
 /// family, so such a literal is no template here. A replayed compute template binds buffers and
-/// threadgroup memory only, and runs no stage input; a replayed render template is a
+/// threadgroup memory only; a replayed render template is a
 /// rasterization-disabled vertex function (which the checker requires) that binds buffers only,
 /// with no vertex input. A template with any other resource of its own refuses the case, before
 /// any device ([`ToolingRequirement::ReplayedTemplateResources`]), and so does an object or mesh
@@ -2458,17 +1898,13 @@ pub fn replay_templates(
         }
         let mapped = match template.case.stage {
             Stage::Kernel => {
-                let mapped = compute_case(&template.case, &template.interface)?;
+                let mapped = compute_case(&template.case)?;
                 let replayable = mapped.textures.is_empty()
                     && mapped.samplers.is_empty()
-                    && mapped.function_tables.is_empty()
-                    && mapped.acceleration_structures.is_empty()
                     && mapped.argument_buffer_buffers.is_empty()
                     && mapped.argument_buffer_textures.is_empty()
                     && mapped.argument_buffer_samplers.is_empty()
-                    && mapped.objects.is_empty()
-                    && mapped.imageblock.is_none()
-                    && mapped.stage_input.is_none();
+                    && mapped.objects.is_empty();
                 if !replayable {
                     return Err(NotSupported::Requirements(
                         [ToolingRequirement::ReplayedTemplateResources].into(),
@@ -2483,7 +1919,6 @@ pub fn replay_templates(
                     &template.interface,
                     template.entry_ll(),
                     template.companion.as_ref(),
-                    template.reflection.fragment_imageblock.as_ref(),
                 )?;
                 let resources = &mapped.vertex.resources;
                 // An index buffer or an out-of-bounds target is the template's own draw's; the
@@ -2494,11 +1929,9 @@ pub fn replay_templates(
                     && mapped.index_buffer.is_none()
                     && mapped.out_of_bounds.is_empty()
                     && mapped.depth_stencil.is_none()
-                    && mapped.imageblock.is_none()
                     && matches!(mapped.assembly, graphics::Assembly::Primitives(_))
                     && resources.textures.is_empty()
                     && resources.samplers.is_empty()
-                    && resources.function_tables.is_empty()
                     && resources.argument_buffer_buffers.is_empty()
                     && resources.argument_buffer_textures.is_empty()
                     && resources.argument_buffer_samplers.is_empty()
@@ -2773,13 +2206,12 @@ fn prepare(
         .map_err(NotSupported::Requirements)?;
     let case = &checked.primary.case;
     let mapped = match case.stage {
-        Stage::Kernel => Mapped::Compute(Box::new(compute_case(case, &checked.primary.interface)?)),
+        Stage::Kernel => Mapped::Compute(Box::new(compute_case(case)?)),
         Stage::Vertex | Stage::Fragment => Mapped::Render(Box::new(graphics::render_case(
             case,
             &checked.primary.interface,
             checked.primary.entry_ll(),
             checked.primary.companion.as_ref(),
-            checked.primary.reflection.fragment_imageblock.as_ref(),
         )?)),
         Stage::Object | Stage::Mesh => Mapped::Mesh(Box::new(mesh::mesh_case(
             case,
@@ -2817,26 +2249,16 @@ pub struct CaseCompile<'a> {
     pipeline: PlannedPipeline<'a>,
 }
 
-/// A planned compile's request, its libraries in [`PipelineRequest::libraries`] order, what its
-/// tables are encoded from, and the bind shape the run plans it for.
+/// A planned compile's request, its libraries in [`PipelineRequest::libraries`] order, and the
+/// bind shape the run plans it for: a kernel's, or a draw's (a case's own, or a mesh draw's,
+/// `mesh::mesh_request`).
 enum PlannedPipeline<'a> {
     Compute {
         request: PipelineRequest,
         libraries: Vec<RowSource<'a>>,
-        // Boxed: a mapped case is large beside a render case's reference.
-        case: Box<Cow<'a, ComputeCase>>,
-        linked: &'a [LinkedModule],
         shape: BindShape,
     },
     Render {
-        request: PipelineRequest,
-        libraries: Vec<RowSource<'a>>,
-        case: &'a graphics::RenderCase,
-        linked: &'a [LinkedModule],
-        shape: BindShape,
-    },
-    /// A mesh draw's pipeline, whose functions link nothing (`mesh::mesh_request`).
-    Mesh {
         request: PipelineRequest,
         libraries: Vec<RowSource<'a>>,
         shape: BindShape,
@@ -2844,65 +2266,40 @@ enum PlannedPipeline<'a> {
 }
 
 impl CaseCompile<'_> {
-    /// Compile in `worker` for `device` as the executor compiles it (its tables encoded from the
-    /// handles the worker returned) and record it in `artifact` as the executor's run records it
-    /// (the pipeline's content, its plan for the run's bind shape, its tables), keeping only
-    /// whether it compiled and what the worker measured: the pipeline is dropped here.
+    /// Compile in `worker` for `device` as the executor compiles it and record it in `artifact` as
+    /// the executor's run records it (the pipeline's content and its plan for the run's bind
+    /// shape), keeping only whether it compiled and what the worker measured: the pipeline is
+    /// dropped here.
     pub fn compile(
         &self,
         worker: &CompileWorker,
         device: &WorkerDevice,
         artifact: &mut artifact::CaseArtifact,
     ) -> (Result<(), CompileFailure>, Option<crate::worker::Measured>) {
-        let mut record = |pipeline: &dyn artifact::Planned, tables: &TableBuffers, shape| {
+        let mut record = |pipeline: &dyn artifact::Planned, shape| {
             artifact
-                .record(self.subject, pipeline, tables, device.device(), shape)
+                .record(self.subject, pipeline, device.device(), shape)
                 .map_err(CompileFailure::Artifact)
         };
         match &self.pipeline {
             PlannedPipeline::Compute {
                 request,
                 libraries,
-                case,
-                linked,
                 shape,
             } => {
-                let attempt = compute_attempt(worker, device, libraries, request, case, linked);
-                let result = attempt
-                    .result
-                    .and_then(|compiled| record(&compiled.pipeline, &compiled.tables, shape));
+                let attempt = compute_attempt(worker, device, libraries, request);
+                let result = attempt.result.and_then(|pipeline| record(&pipeline, shape));
                 (result, attempt.measured)
             }
             PlannedPipeline::Render {
                 request,
                 libraries,
-                case,
-                linked,
                 shape,
             } => {
-                let attempt = render_attempt(worker, device, request, libraries, case, linked);
-                let result = attempt
-                    .result
-                    .and_then(|compiled| record(&compiled.pipeline, &compiled.tables, shape));
+                let attempt = render_attempt(worker, device, request, libraries);
+                let result = attempt.result.and_then(|pipeline| record(&pipeline, shape));
                 (result, attempt.measured)
             }
-            PlannedPipeline::Mesh {
-                request,
-                libraries,
-                shape,
-            } => match compile_render_request(worker, device, libraries, request) {
-                Err(failure) => {
-                    let measured = failure.measured();
-                    (Err(CompileFailure::Stopped(failure)), measured)
-                }
-                Ok(compiled) => {
-                    let result = compiled
-                        .result
-                        .map_err(CompileFailure::NotCompiled)
-                        .and_then(|c| record(&c.pipeline, &TableBuffers::new(), shape));
-                    (result, Some(compiled.measured))
-                }
-            },
         }
     }
 }
@@ -2958,8 +2355,6 @@ pub fn case_compiles<'a>(
                 pipeline: PlannedPipeline::Compute {
                     request,
                     libraries,
-                    case: Box::new(Cow::Borrowed(compute.as_ref())),
-                    linked,
                     shape,
                 },
             });
@@ -3010,7 +2405,7 @@ pub fn case_compiles<'a>(
                     let token = variant.pipeline.get();
                     let threads_per_group = variant.threads_per_threadgroup;
                     let shape = replay_variant_state(&resident, variant).shape();
-                    let variant =
+                    let (request, libraries) =
                         replay_variant_request(prepared, token, threads_per_group, &shape)?;
                     compiles.push(CaseCompile {
                         subject: CompileSubject::ReplayVariant {
@@ -3018,10 +2413,8 @@ pub fn case_compiles<'a>(
                             threads_per_group,
                         },
                         pipeline: PlannedPipeline::Compute {
-                            request: variant.request,
-                            libraries: variant.libraries,
-                            case: Box::new(Cow::Owned(variant.child)),
-                            linked: variant.linked,
+                            request,
+                            libraries,
                             shape,
                         },
                     });
@@ -3039,8 +2432,6 @@ pub fn case_compiles<'a>(
                 pipeline: PlannedPipeline::Render {
                     request,
                     libraries,
-                    case: render.as_ref(),
-                    linked,
                     shape,
                 },
             });
@@ -3058,7 +2449,7 @@ pub fn case_compiles<'a>(
             let (request, libraries) = mesh::mesh_request(&library, companion, mesh, &shape)?;
             compiles.push(CaseCompile {
                 subject: CompileSubject::Case,
-                pipeline: PlannedPipeline::Mesh {
+                pipeline: PlannedPipeline::Render {
                     request,
                     libraries,
                     shape,
@@ -3200,12 +2591,12 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
     // restriction. It records no artifact: the runtime keeps what it compiled to
     // itself.
     if let Mapped::Compute(compute) = &prepared.mapped {
-        if runs_through_runtime(case, compute) && super::requested_restriction().is_none() {
+        if runs_through_runtime(compute) && super::requested_restriction().is_none() {
             return run_on_runtime(prepared, compute);
         }
     }
     if let Mapped::Render(render) = &prepared.mapped {
-        if runs_render_through_runtime(case, render) && super::requested_restriction().is_none() {
+        if runs_render_through_runtime(render) && super::requested_restriction().is_none() {
             return run_render_on_runtime(prepared, render);
         }
     }
@@ -3237,8 +2628,7 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
                     let compiled = compile_case(worker, target, &library, linked, compute, shape)?;
                     artifact.borrow_mut().record(
                         CompileSubject::Case,
-                        &compiled.pipeline,
-                        &compiled.tables,
+                        &compiled,
                         target.device(),
                         shape,
                     )?;
@@ -3266,8 +2656,7 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
                     )?;
                     artifact.borrow_mut().record(
                         CompileSubject::Case,
-                        &compiled.pipeline,
-                        &compiled.tables,
+                        &compiled,
                         target.device(),
                         shape,
                     )?;
@@ -3310,8 +2699,7 @@ fn record_child(
                     token,
                     threads_per_group,
                 },
-                &compiled.pipeline,
-                &compiled.tables,
+                compiled.as_ref(),
                 target.device(),
                 shape,
             )?;
@@ -3351,37 +2739,23 @@ fn compile_child(
             ));
         };
         *formed = form;
-        let compiled = compile_render(
-            worker,
-            target,
-            &request,
-            &libraries,
-            &child,
-            &template.linked,
-        )?;
+        let compiled = compile_render(worker, target, &request, &libraries)?;
         Ok(CompiledChild::Render(Box::new(child), Box::new(compiled)))
     };
     match (&template.mapped, command) {
         (TemplateCase::Compute(mapped), ChildCommand::Dispatch(dispatch)) => {
             let child = ComputeCase {
                 dispatch: *dispatch,
-                stage_in_region: None,
                 ..(**mapped).clone()
             };
             compile_case(worker, target, &source, &template.linked, &child, shape)
                 .map(|c| CompiledChild::Compute(Box::new(c)))
         }
         (TemplateCase::Compute(_), &ChildCommand::ReplayVariant { threads_per_group }) => {
-            let variant = replay_variant_request(prepared, token, threads_per_group, shape)?;
-            compile_request(
-                worker,
-                target,
-                &variant.libraries,
-                &variant.request,
-                &variant.child,
-                variant.linked,
-            )
-            .map(|c| CompiledChild::Compute(Box::new(c)))
+            let (request, libraries) =
+                replay_variant_request(prepared, token, threads_per_group, shape)?;
+            compile_request(worker, target, &libraries, &request)
+                .map(|c| CompiledChild::Compute(Box::new(c)))
         }
         // In the large-buffer form, as the runtime's host step draws an executed render command.
         (TemplateCase::Render(mapped), &ChildCommand::Draw { draw, .. }) => {
@@ -3412,19 +2786,12 @@ fn compile_child(
 /// [`replay_dispatch`], and [`replay_request`]'s request and libraries for it. The executor's
 /// compile of a variant ([`compile_child`]) and the authored compile census ([`case_compiles`])
 /// build it here. A token without a template, or with a render template, fails the run.
-struct VariantRequest<'a> {
-    child: ComputeCase,
-    request: PipelineRequest,
-    libraries: Vec<RowSource<'a>>,
-    linked: &'a [LinkedModule],
-}
-
 fn replay_variant_request<'a>(
     prepared: &'a PreparedCase,
     token: u64,
     threads_per_group: [u32; 3],
     shape: &BindShape,
-) -> Result<VariantRequest<'a>, ExecutorError> {
+) -> Result<(PipelineRequest, Vec<RowSource<'a>>), ExecutorError> {
     let template = prepared.templates.get(&token).ok_or_else(|| {
         ExecutorError::Failed(format!(
             "an executed command's pipeline token {token} names no template"
@@ -3439,16 +2806,9 @@ fn replay_variant_request<'a>(
     let source = RowSource::of_row(&prepared.checked.pipeline_templates[&template.case_id].source);
     let child = ComputeCase {
         dispatch: replay_dispatch(threads_per_group),
-        stage_in_region: None,
         ..(**mapped).clone()
     };
-    let (request, libraries) = replay_request(&source, &template.linked, &child, shape);
-    Ok(VariantRequest {
-        child,
-        request,
-        libraries,
-        linked: &template.linked,
-    })
+    Ok(replay_request(&source, &template.linked, &child, shape))
 }
 
 /// [`execute_case`] of a case [`prepare_case`] accepted: the device half in a device worker
@@ -3598,35 +2958,16 @@ pub fn execute_prepared(
 }
 
 /// The bytes of `output` from the final buffer contents and the final texture contents, by Metal
-/// index, the final argument-buffer buffer and texture contents, by `(owner, field offset)`, and
-/// the final contents of a tile pass's color attachments, by color index.
+/// index, and the final argument-buffer buffer and texture contents, by `(owner, field offset)`.
 pub fn select_output(
     output: ComputeOutput,
     buffers: &BTreeMap<u32, Vec<u8>>,
     embedded: &BTreeMap<(u32, u32), Vec<u8>>,
     textures: &BTreeMap<u32, LiteralTexture>,
     embedded_textures: &BTreeMap<(u32, u32), LiteralTexture>,
-    attachments: &BTreeMap<u32, LiteralTexture>,
 ) -> Result<Vec<u8>, String> {
     match output {
         ComputeOutput::None => Ok(Vec::new()),
-        // Rows as the Metal oracle reads a render target (`LiteralRenderTarget::select`).
-        ComputeOutput::RenderTarget {
-            index,
-            origin,
-            dimensions,
-        } => {
-            let attachment = attachments
-                .get(&index)
-                .ok_or_else(|| format!("output render target {index} is not attached"))?;
-            crate::literal::select_tightly_packed_2d(
-                &attachment.bytes,
-                [attachment.dimensions[0], attachment.dimensions[1]],
-                origin,
-                dimensions,
-                attachment.format.bytes_per_pixel(),
-            )
-        }
         ComputeOutput::Texture {
             binding,
             origin,

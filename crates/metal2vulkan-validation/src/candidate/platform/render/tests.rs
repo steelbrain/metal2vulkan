@@ -1,65 +1,22 @@
-//! The render executor's draws (no device): the whole target, and a rate-mapped pass's regions,
-//! flipped as the module docs flip the viewport.
+//! The render executor's draw area (no device), and its targets' attachment forms.
 
 use super::*;
-use metal2vulkan::bind::{RasterizationRateMap, RateMapAxis, RegionLimits};
 
-/// A draw as plain values: the viewport's `[x, y, width, height, min_depth, max_depth]` and the
-/// scissor's offset and extent (`ash`'s types compare and print nothing).
-type Draw = ([f32; 6], [i32; 2], [u32; 2]);
-
-fn plain(draws: Vec<(vk::Viewport, vk::Rect2D)>) -> Vec<Draw> {
-    draws
-        .into_iter()
-        .map(|(v, s)| {
-            (
-                [v.x, v.y, v.width, v.height, v.min_depth, v.max_depth],
-                [s.offset.x, s.offset.y],
-                [s.extent.width, s.extent.height],
-            )
-        })
-        .collect()
-}
-
-fn extent(width: u32, height: u32) -> vk::Extent2D {
-    vk::Extent2D { width, height }
-}
-
+/// The draw covers the whole target, its viewport flipped as the module docs flip it: compared as
+/// plain values (`ash`'s types compare and print nothing).
 #[test]
-fn a_pass_without_a_map_draws_once_over_the_whole_target() {
+fn a_draw_covers_the_whole_target() {
+    let (v, s) = draw_area(vk::Extent2D {
+        width: 37,
+        height: 23,
+    });
     assert_eq!(
-        plain(draws(extent(37, 23), None)),
-        [([0.0, 23.0, 37.0, -23.0, 0.0, 1.0], [0, 0], [37, 23])]
-    );
-}
-
-/// Each region is one recording of the draw: its viewport, Metal's convention flipped to a
-/// negative height from its bottom edge, and its scissor in physical pixels.
-#[test]
-fn a_rate_mapped_pass_draws_once_per_region() {
-    let axis = |tiles: &[(u32, u32)]| RateMapAxis::from_tiles(32, tiles).unwrap();
-    // Apple M3's compile of 37x23 at [0.5, 1] by [1, 0.5]: 33 screen pixels to 32, then 4 to 4, by
-    // one tile of 23.
-    let map = RasterizationRateMap::from_layers(
-        [37, 23],
-        vec![[axis(&[(33, 32), (4, 4)]), axis(&[(23, 23)])]],
-    )
-    .unwrap();
-    let plan = map
-        .regions(
-            0,
-            [0.0, 0.0, 37.0, 23.0],
-            None,
-            &RegionLimits::new([4096, 4096], [-8192.0, 8191.0]),
-        )
-        .unwrap();
-    let width = (37.0f64 * 32.0 / 33.0) as f32;
-    assert_eq!(
-        plain(draws(extent(37, 23), Some(&plan))),
-        [
-            ([0.0, 23.0, width, -23.0, 0.0, 1.0], [0, 0], [32, 23]),
-            ([-1.0, 23.0, 37.0, -23.0, 0.0, 1.0], [32, 0], [4, 23]),
-        ]
+        (
+            [v.x, v.y, v.width, v.height, v.min_depth, v.max_depth],
+            [s.offset.x, s.offset.y],
+            [s.extent.width, s.extent.height],
+        ),
+        ([0.0, 23.0, 37.0, -23.0, 0.0, 1.0], [0, 0], [37, 23])
     );
 }
 
@@ -129,9 +86,5 @@ fn every_state_a_render_pipeline_makes_dynamic_is_recorded() {
             state.as_raw()
         );
     }
-    assert_eq!(
-        DynamicRecord::of(D::VERTEX_INPUT_BINDING_STRIDE),
-        Some(DynamicRecord::Strides)
-    );
     assert_eq!(DynamicRecord::of(D::LINE_WIDTH), None);
 }

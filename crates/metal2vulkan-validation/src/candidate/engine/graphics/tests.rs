@@ -56,18 +56,6 @@ pub(crate) fn checked_companion(
     (interface, companion)
 }
 
-/// The product's declared fragment imageblock of `entry` in the module text `ll`: the reflection
-/// the checker validates a case's planes against, whose master the render executor's cells
-/// follow.
-pub(crate) fn reflected_imageblock(
-    ll: &str,
-    entry: &str,
-) -> Option<crate::air::reflect::FragmentImageblock> {
-    crate::air::reflect::inspect(ll, crate::case::Stage::Fragment, entry, &[])
-        .unwrap()
-        .fragment_imageblock
-}
-
 /// A fragment case's authored aspect is its depth/stencil attachment (the oracle's `Stencil8` here,
 /// as its `Depth32Float` for a depth), its depth-stencil state is the one its outputs imply, and
 /// each aspect is an observable output; an attachment of both aspects, the oracle's two textures,
@@ -101,20 +89,12 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
             &authored,
             &interface,
             WITHOUT_SLICE,
-            companion.as_ref(),
-            None
+            companion.as_ref()
         )),
         [crate::requirement::ToolingRequirement::SeparateDepthStencil].into()
     );
     authored.depth_stencil.as_mut().unwrap().initial_depth_b64 = None;
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     assert!(render.color_targets.is_empty());
     assert_eq!(
         render.depth_stencil,
@@ -177,7 +157,7 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
     vertex.stage = Stage::Vertex;
     vertex.output = OutputSelection::None;
     assert!(
-        requirements(render_case(&vertex, &interface, WITHOUT_SLICE, None, None))
+        requirements(render_case(&vertex, &interface, WITHOUT_SLICE, None))
             .contains(&crate::requirement::ToolingRequirement::VertexDepthStencilAttachment)
     );
 
@@ -194,8 +174,7 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
             &traced,
             &interface,
             WITHOUT_SLICE,
-            companion.as_ref(),
-            None
+            companion.as_ref()
         )),
         [crate::requirement::ToolingRequirement::RenderAccelerationStructure].into()
     );
@@ -229,14 +208,7 @@ fn a_stencil_output_case_plans_through_stencil_export() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &bitcode);
-    let mut render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
+    let mut render = render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     // Both aspects are the runtime's limit (`SeparateDepthStencil`), which stops such a case
     // before the engine plans it; the plan below is the translator's for both, so the case maps
     // with its stencil and takes its depth after.
@@ -299,14 +271,7 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &bitcode);
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     assert_eq!(render.color_targets[&0].bytes, 3.0f32.to_le_bytes());
     let companion_bitcode = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
     let libraries = RenderLibraries {
@@ -385,14 +350,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &fragment);
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     assert_eq!(
         render.vertex.entry,
         crate::companion::PASSTHROUGH_VERTEX_ENTRY
@@ -428,14 +386,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
         offset: 0,
         length: 4,
     };
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     assert_eq!(
         render.fragment.as_ref().unwrap().resources.buffers[&3],
         vec![0; 4]
@@ -462,14 +413,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
         dimensions: [1, 1],
     };
     let (interface, observer) = checked_companion(&observed, &triangle);
-    let render = render_case(
-        &observed,
-        &interface,
-        WITHOUT_SLICE,
-        observer.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&observed, &interface, WITHOUT_SLICE, observer.as_ref()).unwrap();
     assert_eq!(render.vertex.entry, "vertex_varying_triangle");
     assert_eq!(
         render.fragment.as_ref().map(|f| f.entry.as_str()),
@@ -480,7 +424,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
 
     // A companion that does not complete the case's stage is the executor's failure, not a gap.
     for (authored, companion) in [(&observed, None), (&authored, observer.as_ref())] {
-        match render_case(authored, &interface, WITHOUT_SLICE, companion, None) {
+        match render_case(authored, &interface, WITHOUT_SLICE, companion) {
             Err(ExecutorError::Failed(why)) => assert!(why.contains("has companion"), "{why}"),
             other => panic!("a mismatched companion mapped: {other:?}"),
         }
@@ -491,7 +435,6 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
         &kernel,
         &vertex_buffers_at(&[]),
         WITHOUT_SLICE,
-        None,
         None
     ))
     .contains("not a render case"));
@@ -503,7 +446,6 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
             &vertex,
             &vertex_buffers_at(&[0]),
             WITHOUT_SLICE,
-            None,
             None
         )),
         [crate::requirement::ToolingRequirement::RasterizationDisabledRenderTarget].into()
@@ -515,7 +457,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
 #[test]
 fn a_rasterization_disabled_vertex_case_maps_onto_the_oracles_draw() {
     let case = crate::case::narrow_vertex_test_case(String::new(), "v".into());
-    let render = render_case(&case, &vertex_buffers_at(&[0]), WITHOUT_SLICE, None, None).unwrap();
+    let render = render_case(&case, &vertex_buffers_at(&[0]), WITHOUT_SLICE, None).unwrap();
     assert_eq!(render.fragment, None);
     assert_eq!(render.companion, None);
     assert_eq!(
@@ -708,14 +650,12 @@ pub(crate) fn two_stage_case(
         },
         index_buffer: None,
         out_of_bounds: Vec::new(),
-        imageblock: None,
         output: RenderOutput::RenderTarget {
             index: 0,
             origin: [0, 0],
             dimensions: [1, 1],
         },
         companion: None,
-        rate_map_pass: None,
         raster_sample_count: None,
     }
 }
@@ -759,13 +699,7 @@ fn planned_draw(
     };
     let addresses = case
         .stages()
-        .flat_map(|(stage, f)| {
-            f.resources
-                .buffers
-                .keys()
-                .chain(f.resources.function_tables.keys())
-                .map(move |&index| (stage, index))
-        })
+        .flat_map(|(stage, f)| f.resources.buffers.keys().map(move |&index| (stage, index)))
         .chain(
             case.vertex_buffers
                 .iter()
@@ -857,14 +791,7 @@ fn a_tessellation_case_maps_onto_the_oracles_patch_draw() {
     });
     let draw = authored.tessellation.clone().unwrap();
     let (interface, observer) = checked_companion(&authored, &bitcode);
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        observer.as_ref(),
-        None,
-    )
-    .unwrap();
+    let render = render_case(&authored, &interface, WITHOUT_SLICE, observer.as_ref()).unwrap();
     let bytes = shared::factor_bytes(&factors);
     assert_eq!(bytes.len(), 16);
     // The case's partition mode, winding, and cull mode.
@@ -1007,7 +934,6 @@ fn owned_render_pipelines_plan_without_variants_or_diagnostics() {
             buffer_index: 30,
             format: AttributeFormat::Float2,
             stride: 8,
-            dynamic: false,
             step: metal::VertexStepFunction::PerVertex,
             bytes: vec![0; 24],
         },
@@ -1016,7 +942,6 @@ fn owned_render_pipelines_plan_without_variants_or_diagnostics() {
             buffer_index: 29,
             format: AttributeFormat::Float2,
             stride: 8,
-            dynamic: false,
             step: metal::VertexStepFunction::PerVertex,
             bytes: vec![0; 24],
         },
@@ -1076,7 +1001,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         .unwrap_or_else(|errors| panic!("{}: {errors:?}", case.name));
     let interface = &checked.primary.interface;
     let companion = checked.primary.companion.as_ref();
-    let render = render_case(&case, interface, &row.air_ll, companion, None).unwrap();
+    let render = render_case(&case, interface, &row.air_ll, companion).unwrap();
     let own = render.fragment.as_ref().expect("a fragment case");
     let key = (
         case.argument_buffer_buffers[0].buffer_binding,
@@ -1235,7 +1160,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         origin: [0, 0, 0],
         dimensions: [1, 1, 1],
     };
-    let render = render_case(&arrays, interface, &row.air_ll, companion, None).unwrap();
+    let render = render_case(&arrays, interface, &row.air_ll, companion).unwrap();
     let textures = &render.fragment.as_ref().unwrap().resources.textures;
     assert_eq!(
         textures
@@ -1321,7 +1246,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         origin: [1, 0, 0],
         dimensions: [1, 1, 1],
     };
-    let render = render_case(&members, interface, &row.air_ll, companion, None).unwrap();
+    let render = render_case(&members, interface, &row.air_ll, companion).unwrap();
     let fragment = &render.fragment.as_ref().unwrap().resources;
     assert!(fragment.buffers[&key.0].len() >= sampler_field as usize + 8);
     assert_eq!(
@@ -1481,7 +1406,6 @@ fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
         interface,
         &row.air_ll,
         checked.primary.companion.as_ref(),
-        checked.primary.reflection.fragment_imageblock.as_ref(),
     )
     .unwrap();
     assert_eq!(
@@ -1571,7 +1495,6 @@ fn public_render_cases_plan_or_refuse_typed() {
                 &checked.primary.interface,
                 &row.air_ll,
                 checked.primary.companion.as_ref(),
-                checked.primary.reflection.fragment_imageblock.as_ref(),
             ) {
                 Ok(render) => render,
                 Err(ExecutorError::NotSupported(
@@ -1656,7 +1579,6 @@ fn public_tessellation_cases_plan_their_patch_draws() {
                 &checked.primary.interface,
                 &row.air_ll,
                 checked.primary.companion.as_ref(),
-                checked.primary.reflection.fragment_imageblock.as_ref(),
             )
             .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
             let factors = shared::factor_bytes(&draw.factors);
@@ -1819,7 +1741,6 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
                 &checked.primary.interface,
                 &row.air_ll,
                 checked.primary.companion.as_ref(),
-                checked.primary.reflection.fragment_imageblock.as_ref(),
             )
             .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
             for color in &colors {
@@ -1994,7 +1915,6 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
                     &checked.primary.interface,
                     &row.air_ll,
                     checked.primary.companion.as_ref(),
-                    checked.primary.reflection.fragment_imageblock.as_ref(),
                 )
                 .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
                 let companion = render
@@ -2075,210 +1995,6 @@ fn a_draw_restarts_exactly_its_strips_within_its_class() {
     }
 }
 
-/// The render executor's cells follow the checked reflection's master, the one the checker
-/// validates the planes against and the Metal oracle's initializer writes and resolver reads, each
-/// member at its reflected offset with its reflected size. `imageblock_two_masters` reads `a`
-/// through an input view of `Master` (`a` at byte 0 of 16) and writes it through an output view of
-/// `Swapped` (`a` at byte 2 of 4): the reflection, and so the cells, follow the larger master,
-/// `Master`, whose cell both views reach, not the output view's. Every owned function's cell covers
-/// its reflected data size.
-#[test]
-fn the_cells_follow_the_reflected_master() {
-    let views = std::fs::read_to_string(
-        metal2vulkan_devtools::engine_dir().join("fragment_imageblock_views.ll"),
-    )
-    .unwrap();
-    let custom =
-        std::fs::read_to_string(fixtures_dir().join("fragment_custom_imageblock.ll")).unwrap();
-    let mut compared = 0;
-    for (ll, entries) in [
-        (&custom, &["fragment_custom_imageblock"][..]),
-        (
-            &views,
-            &[
-                "imageblock_transition",
-                "imageblock_accumulate",
-                "imageblock_clear_odd",
-                "imageblock_resolve",
-                "imageblock_masked",
-                "imageblock_two_masters",
-            ][..],
-        ),
-    ] {
-        for &entry in entries {
-            let reflected = reflected_imageblock(ll, entry)
-                .unwrap_or_else(|| panic!("{entry} reflects an imageblock"));
-            let layout = super::imageblock::layout(&reflected).unwrap();
-            for member in &reflected.members {
-                assert_eq!(
-                    layout.members[&member.semantic],
-                    super::imageblock::Member {
-                        offset: member.offset,
-                        size: member.size,
-                    },
-                    "{entry}: {}",
-                    member.semantic
-                );
-            }
-            assert_eq!(layout.members.len(), reflected.members.len(), "{entry}");
-            assert!(
-                layout.cell_bytes >= reflected.sample_size && layout.cell_bytes.is_multiple_of(4),
-                "{entry}: a {}-byte cell of a {}-byte imageblock",
-                layout.cell_bytes,
-                reflected.sample_size
-            );
-            compared += 1;
-        }
-    }
-    assert_eq!(compared, 7);
-    // `Master` is the master: `a` at byte 0 and `b` at byte 2 of a 16-byte cell, beside `tag`,
-    // `sum`, and `n`.
-    let two =
-        super::imageblock::layout(&reflected_imageblock(&views, "imageblock_two_masters").unwrap())
-            .unwrap();
-    let at = |offset, size| super::imageblock::Member { offset, size };
-    assert_eq!(
-        two.members,
-        BTreeMap::from([
-            ("user(a)".into(), at(0, 2)),
-            ("user(b)".into(), at(2, 2)),
-            ("user(tag)".into(), at(4, 4)),
-            ("user(sum)".into(), at(8, 4)),
-            ("user(n)".into(), at(12, 2)),
-        ])
-    );
-    assert_eq!(two.cell_bytes, 16);
-}
-
-/// The graphics state of the public fixture `fragment_rate_map_position` drawn by its generated
-/// fullscreen vertex function, compiled for lavapipe; `None` without `llvm-as`.
-fn rate_map_position_graphics() -> Option<metal2vulkan::pipeline::GraphicsState> {
-    let ll = metal2vulkan_devtools::fixtures_dir().join("fragment_rate_map_position.ll");
-    let bitcode = assembled(&ll)?;
-    let mut authored = crate::companion::tests::case(
-        Stage::Fragment,
-        "fragment_rate_map_position",
-        TextureFormat::Rgba32Float,
-    );
-    authored.buffers = vec![crate::case::BufferResource {
-        binding: 0,
-        role: crate::case::ResourceRole::Input,
-        bytes_b64: Some(b64(&[0; 8])),
-        initial_bytes_b64: None,
-        rasterization_rate_map: None,
-    }];
-    let (interface, companion) = checked_companion(&authored, &bitcode);
-    let render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
-    let vertex = render
-        .companion
-        .as_ref()
-        .expect("a fragment case's generated vertex function")
-        .opaque_bitcode()
-        .unwrap();
-    let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
-    let pipeline = compile_in_process(
-        &device("lavapipe"),
-        &render,
-        RenderLibraries {
-            vertex: &vertex,
-            fragment: Some(&bitcode),
-        },
-        &shape,
-    )
-    .unwrap();
-    Some(pipeline.graphics)
-}
-
-/// A rate-mapped pass is planned region by region with the product's compile of its map, for the
-/// map's screen, on every device: its census states the compile's physical size and the region
-/// count; a plan the device's viewport limits cannot hold, and a vertex function that writes memory
-/// in a plan of several regions, are the binder's refusals.
-#[test]
-fn a_rate_mapped_pass_is_planned_region_by_region() {
-    use metal2vulkan::bind::{
-        RasterizationRateMap, RateMapDescriptor, RateMapLayerDescriptor, RegionLimits,
-    };
-    let compile = |screen: [u32; 2], horizontal: Vec<f32>, vertical: Vec<f32>| {
-        let mut descriptor = RateMapDescriptor::new(screen);
-        descriptor.layers = vec![RateMapLayerDescriptor::new(horizontal, vertical)];
-        RasterizationRateMap::new(&descriptor).unwrap()
-    };
-    let limits = RegionLimits::new([4096, 4096], [-8192.0, 8191.0]);
-    // The graphics state of the position fixture drawn by its generated vertex function, which
-    // writes no memory; and the same state as if its vertex function wrote memory.
-    let Some(pure) = rate_map_position_graphics() else {
-        return;
-    };
-    assert!(!pure.vertex_writes_memory);
-    let graphics = |vertex_writes_memory: bool| {
-        let mut state = pure.clone();
-        state.vertex_writes_memory = vertex_writes_memory;
-        state
-    };
-    // The crate compiles this map to 36x23, as Apple M3 does: 33 screen pixels to 32, then 4 to 4,
-    // across.
-    let skewed = compile([37, 23], vec![0.5, 1.0], vec![1.0, 0.5]);
-    let plan = rate_map_regions(&skewed, &limits, &graphics(false)).unwrap();
-    assert_eq!(plan.physical_size(), [36, 23]);
-    assert_eq!(
-        rate_map_pass_census(&skewed, &plan),
-        RateMapPassRun {
-            screen_size: [37, 23],
-            compiled_physical_size: [36, 23],
-            regions: 2,
-            precision: [PrecisionNote::RasterizationRateMap].into(),
-        }
-    );
-    let mut layered = graphics(false);
-    layered.declares_layer = true;
-    for refused in [
-        rate_map_regions(&skewed, &limits, &graphics(true)),
-        rate_map_regions(&skewed, &limits, &layered),
-        rate_map_regions(
-            &skewed,
-            &RegionLimits::new([16, 4096], [-8192.0, 8191.0]),
-            &graphics(false),
-        ),
-    ] {
-        match refused {
-            Err(ExecutorError::NotSupported(NotSupported::Bind(why))) => {
-                assert!(why.starts_with("rate-mapped render pass: "), "{why}");
-            }
-            other => panic!("expected the binder's refusal, got {other:?}"),
-        }
-    }
-    // 32x32 at half quality compiles to the identity, as Apple M3 compiles it: one region, which
-    // admits a vertex function that writes memory.
-    let identity = compile([32, 32], vec![0.5], vec![0.5]);
-    assert!(identity.is_identity());
-    let plan = rate_map_regions(&identity, &limits, &graphics(true)).unwrap();
-    assert_eq!(plan.regions().len(), 1);
-    // The identity is Metal's pass exactly; every other map's pass is the decoder's
-    // near-equivalent.
-    assert!(rate_map_pass_census(&identity, &plan).precision.is_empty());
-    // 0.25 compiles 126 screen pixels to 32 and the last 2 to 1, across, and 32 rows to 16: a
-    // pass of tiles more than twice as wide as their physical pixels is drawn by regions too.
-    let quarter = compile([128, 32], vec![0.25], vec![0.25]);
-    let plan = rate_map_regions(&quarter, &limits, &graphics(false)).unwrap();
-    assert_eq!((plan.physical_size(), plan.regions().len()), ([33, 16], 2));
-    // The other authored cases' maps, whose outputs are these physical regions: 80x40 at 0.5 (63:32
-    // then 17:16 across, 40 rows to 32), and a graded 120x60 map (32:32, 53:32, then 32:32 and 3:3
-    // on one line across; 41:32 and 19:19 down).
-    let half = compile([80, 40], vec![0.5], vec![0.5]);
-    let plan = rate_map_regions(&half, &limits, &graphics(false)).unwrap();
-    assert_eq!((plan.physical_size(), plan.regions().len()), ([48, 32], 2));
-    let graded = compile([120, 60], vec![1.0, 0.25, 1.0], vec![0.25, 1.0]);
-    let plan = rate_map_regions(&graded, &limits, &graphics(false)).unwrap();
-    assert_eq!((plan.physical_size(), plan.regions().len()), ([99, 51], 6));
-}
-
 /// A render case of one sample draws as before: its template names no sample count (so the pipeline
 /// keeps Metal's default of one, and the template crosses the compile worker's exchange in the
 /// bytes it always did), and its attachments are uploaded and read back by copies. A multisampled
@@ -2315,22 +2031,4 @@ fn a_render_case_of_one_sample_draws_as_it_always_did() {
     assert_eq!(template.raster_sample_count, Some(4));
     let text = serde_json::to_string(&template).unwrap();
     assert!(text.contains("\"raster_sample_count\":4"), "{text}");
-}
-
-/// A vertex buffer of a dynamic layout: its layout's stride is `MTLBufferLayoutStrideDynamic`, so
-/// the fetch reads the stride the buffer is bound with; a fixed layout's is its stride.
-#[test]
-fn a_dynamic_vertex_layout_takes_the_bound_stride() {
-    let buffer = |location, buffer_index, dynamic| VertexBuffer {
-        location,
-        buffer_index,
-        format: AttributeFormat::Uint,
-        stride: 8,
-        dynamic,
-        step: metal::VertexStepFunction::PerVertex,
-        bytes: vec![0; 32],
-    };
-    let descriptor = vertex_descriptor(&[buffer(0, 30, true), buffer(1, 29, false)]).unwrap();
-    assert_eq!(descriptor.layouts[&30].stride, None);
-    assert_eq!(descriptor.layouts[&29].stride, Some(8));
 }

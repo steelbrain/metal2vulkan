@@ -280,7 +280,7 @@ pub fn mesh_shape(
                 attribute_stride: None,
             }
         };
-        let table = graphics::stage_table(stage, function, bound).map_err(ExecutorError::Failed)?;
+        let table = graphics::stage_table(function, bound).map_err(ExecutorError::Failed)?;
         state.stages.insert(stage, table);
     }
     Ok(views_told_apart(state, ranges).shape())

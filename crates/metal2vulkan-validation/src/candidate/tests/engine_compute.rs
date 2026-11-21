@@ -26,20 +26,11 @@ pub(crate) fn case(entry: &str, buffer: Vec<u8>, dispatch: Dispatch) -> ComputeC
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        rate_maps: BTreeMap::new(),
-        argument_buffer_rate_maps: BTreeMap::new(),
         objects: std::collections::BTreeMap::new(),
         command_buffers: std::collections::BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
-        function_tables: BTreeMap::new(),
-        acceleration_structures: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
-        imageblock: None,
-        tile: None,
-        stage_input: None,
-        stage_in_region: None,
-        attribute_strides: BTreeMap::new(),
         dispatch,
         output: ComputeOutput::Buffer {
             binding: 0,
@@ -226,75 +217,6 @@ fn a_kernel_runs_with_the_public_linked_modules() {
         .flat_map(f32::to_le_bytes)
         .collect::<Vec<_>>();
     assert_eq!(words, expected);
-}
-
-/// A kernel calls through its visible-function table: the table's buffer holds the product's words
-/// with the handles the compile gave the linked functions, so entry `tid % 4` of `[table_add,
-/// table_mul, null, table_sub]` computes what the MSL states with `(tid, 3)` (a null entry writes
-/// `0xfffffffd`), and a table the case does not bind reads the zero neutral as a null table
-/// (`0xffffffff`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_kernel_calls_through_its_visible_function_table() {
-    use crate::candidate::engine::tables::{FunctionTable, TableFunction};
-    let caller = llvm_assemble(&engine_dir().join("visible_table_caller.ll")).unwrap();
-    let functions = llvm_assemble(&engine_dir().join("visible_table_functions.ll")).unwrap();
-    let linked = [LinkedModule {
-        module_sha256: "functions".into(),
-        bitcode: functions,
-        library: LinkedLibrary {
-            functions: ["table_add", "table_mul", "table_sub"]
-                .map(str::to_owned)
-                .to_vec(),
-        },
-    }];
-    const THREADS: u32 = 12;
-    let mut kernel = case(
-        "visible_table_dispatch",
-        vec![0; 4 * THREADS as usize],
-        Dispatch::Threads {
-            threads: [THREADS, 1, 1],
-            threads_per_group: [THREADS, 1, 1],
-        },
-    );
-    let entry = |function: &str| TableFunction {
-        module_sha256: "functions".into(),
-        function: function.into(),
-    };
-    kernel.function_tables = BTreeMap::from([(
-        1,
-        FunctionTable {
-            size: 4,
-            entries: BTreeMap::from([
-                (0, entry("table_add")),
-                (1, entry("table_mul")),
-                (3, entry("table_sub")),
-            ]),
-        },
-    )]);
-    let expected = (0..THREADS)
-        .flat_map(|tid| {
-            match tid % 4 {
-                0 => tid + 3,
-                1 => tid * 3,
-                2 => 0xffff_fffd,
-                _ => tid.wrapping_sub(3),
-            }
-            .to_le_bytes()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        run_linked(&kernel, &caller, &linked).unwrap().output,
-        expected
-    );
-    kernel.function_tables.clear();
-    let unbound = (0..THREADS)
-        .flat_map(|_| 0xffff_ffffu32.to_le_bytes())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        run_linked(&kernel, &caller, &linked).unwrap().output,
-        unbound
-    );
 }
 
 /// A loop runs to completion as compiled, with no execution bound, on both lanes.
@@ -517,42 +439,6 @@ fn a_device_buffer_accessed_past_its_end_is_contained_through_the_runtime() {
             "{ran:?}"
         );
         assert_eq!((ran.escaped, ran.past_end), (Some(0), Some(0)), "{ran:?}");
-    }
-}
-
-/// An instance structure is built as the Metal oracle builds it, each instance with mask
-/// `0xFFFFFFFF`, which Vulkan's 8-bit instance mask cannot hold: the binder's refusal is the
-/// run's typed refusal, never a run. CPU lane only: lavapipe traces rays, and MoltenVK has no ray
-/// queries.
-#[cfg(all(m2v_cpu_icd, any(target_os = "linux", target_os = "macos")))]
-#[test]
-fn an_oracle_instance_mask_is_refused_typed() {
-    use crate::candidate::engine::CaseStructure;
-    let fixture = metal2vulkan_devtools::fixtures_dir().join("kernel_instance_as_intersect.ll");
-    let bitcode = llvm_assemble(&fixture).unwrap();
-    let mut trace = case("instance_as_intersect", vec![0; 36], one_thread());
-    trace
-        .acceleration_structures
-        .insert(5, CaseStructure::Instances { instances: 1 });
-    // An intersection function table of one null entry: bound, size 1.
-    trace.buffers.insert(
-        6,
-        [1u32, 1, 0]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect(),
-    );
-    use crate::check::admission::NotSupported;
-    use crate::engine::{Outcome, UnsupportedReason};
-    match run(&trace, &bitcode) {
-        Err(ExecutorError::NotSupported(NotSupported::Product { outcome, .. })) => assert_eq!(
-            outcome,
-            Outcome::Unsupported {
-                reason: UnsupportedReason::NotRepresentable,
-                feature: "RayTracing".into(),
-            }
-        ),
-        other => panic!("{other:?}"),
     }
 }
 

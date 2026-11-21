@@ -521,7 +521,6 @@ fn run(
                 &embedded,
                 &BTreeMap::new(),
                 &BTreeMap::new(),
-                &BTreeMap::new(),
             )
             .map_err(ExecutorError::Failed)?
         }
@@ -529,7 +528,10 @@ fn run(
     // What the dispatch changed around each guarded target.
     let escaped: BTreeMap<OutOfBoundsResource, GuardCount> = (buffers.iter())
         .filter_map(|(&index, placed)| {
-            Some((guards::buffer_target(case, index), placed.escaped()?))
+            Some((
+                OutOfBoundsResource::Buffer { binding: index },
+                placed.escaped()?,
+            ))
         })
         .chain(members.iter().filter_map(|(&(owner, field), placed)| {
             let resource = OutOfBoundsResource::ArgumentBufferBuffer {

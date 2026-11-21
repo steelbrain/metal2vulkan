@@ -100,7 +100,7 @@ fn command_buffer_literals_participate_in_identity_and_validate_resources() {
     assert!(crate::executor_contract::require_case(&case, "test").is_ok());
     assert_engine_refuses(&case, "without its owner buffer");
     case.command_buffers[0].buffer_binding = case.buffers[0].binding;
-    let mapped = crate::candidate::engine::compute_case(&case, &kernel_interface()).unwrap();
+    let mapped = crate::candidate::engine::compute_case(&case).unwrap();
     let key = (case.buffers[0].binding, 0);
     assert!(mapped.objects.is_empty());
     assert_eq!(
@@ -117,21 +117,8 @@ fn command_buffer_literals_participate_in_identity_and_validate_resources() {
     );
 }
 
-/// The AIR-layer interface of a kernel without parameters.
-fn kernel_interface() -> crate::check::interface::AirInterface {
-    crate::check::interface::AirInterface::synthetic(
-        metal2vulkan_air::abi::Stage::Kernel {
-            max_total_threads: None,
-            work_group_size: None,
-        },
-        vec![],
-        vec![],
-        vec![],
-    )
-}
-
 fn assert_engine_refuses(case: &AuthoredCase, what: &str) {
-    match crate::candidate::engine::compute_case(case, &kernel_interface()) {
+    match crate::candidate::engine::compute_case(case) {
         Err(crate::check::admission::NotSupported::NotImplemented(detail)) => {
             assert!(detail.contains(what), "{detail}")
         }
@@ -179,7 +166,7 @@ fn pipeline_handles_require_unique_tokens_and_hash_the_template() {
     assert!(crate::executor_contract::require_case(&case, "test").is_ok());
     // The engine candidate maps a pipeline state as its authored token in its owner, the
     // word a command's pipeline field records, and refuses one whose owner is not bound.
-    let mapped = crate::candidate::engine::compute_case(&case, &kernel_interface()).unwrap();
+    let mapped = crate::candidate::engine::compute_case(&case).unwrap();
     assert_eq!(
         mapped.objects.into_iter().collect::<Vec<_>>(),
         [((case.buffers[0].binding, 0), 1)]
@@ -1489,7 +1476,7 @@ fn executed_command_buffers_run_in_identity_order() {
     assert_eq!(keys(&reversed), keys(&case));
     // The candidate's map iterates the same keys in the same order.
     for listing in [&case, &reversed] {
-        let mapped = crate::candidate::engine::compute_case(listing, &kernel_interface()).unwrap();
+        let mapped = crate::candidate::engine::compute_case(listing).unwrap();
         assert_eq!(
             mapped
                 .command_buffers

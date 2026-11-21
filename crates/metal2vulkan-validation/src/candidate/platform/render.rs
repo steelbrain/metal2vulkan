@@ -8,11 +8,7 @@
 //!
 //! - the viewport is the whole target with a negative height, so framebuffer rows, `FragCoord`,
 //!   and derivative signs match Metal's y-up clip space without touching the shader (spec
-//!   "Y-flip"); the scissor is the whole target. A rate-mapped pass is drawn on the product's
-//!   region path, on every device (Metal's pass over the identity, a near-equivalent over any other
-//!   map): the draw is recorded once per region of the map's plan for the map's screen
-//!   (`graphics::rate_map_regions`), each with its region's viewport, flipped the same way, and its
-//!   scissor, into the targets, which hold the screen and so the compile's physical size;
+//!   "Y-flip"); the scissor is the whole target;
 //! - the front face is the case's front-facing winding (`graphics::RenderCase::
 //!   depth_stencil_state`; Metal's default is clockwise, [`super::METAL_DEFAULT_FRONT_FACE`]), and
 //!   culling is the case's (`graphics::RenderCase::cull_mode`: a tessellation case's authored one,
@@ -23,9 +19,7 @@
 //!   would otherwise take statically: the case's culling and front face, the draw's topology, and
 //!   the depth-stencil state below, through Vulkan 1.3's core commands in a context at 1.3 or later
 //!   (one restricted to a profile of that version), else `VK_EXT_extended_dynamic_state`'s
-//!   (`device::ExtendedDynamicState`); a per-bind vertex stride (`VERTEX_INPUT_BINDING_STRIDE`, a
-//!   layout of `MTLBufferLayoutStrideDynamic`) is recorded as the vertex buffers are bound, every
-//!   binding's stride the binder's (`DrawCommands::vertex_strides`);
+//!   (`device::ExtendedDynamicState`);
 //! - every color attachment, and a fragment case's depth/stencil attachment (one Vulkan
 //!   attachment for Metal's separate depth and stencil ones, holding each authored aspect), is
 //!   loaded before and stored after the draw, and the depth-stencil state is the one the Metal
@@ -41,11 +35,7 @@
 //! - a patch draw binds its factor buffer where the plan's `WriteSource::TessellationFactors` names
 //!   it, over the draw's range, and draws a patch list: the tessellation pipeline's synthesized
 //!   vertex and control stages bind nothing of Metal's, and its evaluation stage binds the vertex
-//!   function's resources;
-//! - a fragment case's explicit imageblock holds the cells the Metal oracle's initializer
-//!   defines. The product compiles no fragment function that reads or writes an imageblock
-//!   (`Feature::Imageblocks`), so a pipeline that draws reaches none (the function dropped every
-//!   view) and leaves the cells as the initializer left them, as Metal's pass does.
+//!   function's resources.
 //!
 //! The run obeys the compute executor's rules (status before output, the validation layer); a
 //! pipeline whose modules loop draws once, as compiled, like any other.
@@ -55,7 +45,7 @@ use super::buffers::{create_host_buffer, HostBuffer};
 use super::compute::{
     allocate, allocate_in, attempt, command_replay, environment, executed_census,
     incompatible_binding, module_censuses, opened_device, refused_attempt, replay_commands,
-    table_bytes, upload_root_table, Allocation, CompileChild, Live, OnDevice, Replay, ReplayPath,
+    upload_root_table, Allocation, CompileChild, Live, OnDevice, Replay, ReplayPath,
 };
 use super::device::{with_validated_context, ExtendedDynamicState, VulkanContext};
 use super::graphics_pipeline::{self, GraphicsError};
@@ -69,7 +59,7 @@ use crate::candidate::engine::graphics::{
 use crate::candidate::engine::guards::{declared_reach, with_escaped, GuardCount};
 use crate::candidate::engine::{
     bind_refusal, draw_out_of_bounds_run, engine_fingerprint, resources, status_verdict,
-    BufferAddress, CompiledCase, ComputeRun, RunAttempt,
+    BufferAddress, ComputeRun, RunAttempt,
 };
 use crate::candidate::engine::{index_padding_agrees, ChildCommand, CompiledChild};
 use crate::case::out_of_bounds::OutOfBoundsResource;
@@ -84,7 +74,7 @@ use crate::worker::compile::WorkerDevice;
 use ash::vk;
 use metal2vulkan::bind::{
     BindShape, BindState, BindingPlan, BufferRanges, DrawCommands, ExecutionStatus, PushHole,
-    RateMapRegions, SamplerDescriptor, StatusReport, DRAW_ARGUMENT_BYTES,
+    SamplerDescriptor, StatusReport, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::device::VkFeature;
@@ -99,7 +89,7 @@ fn not_implemented(what: impl Into<String>) -> ExecutorError {
 
 /// Compile `case` for the device `device_type` opens with `compile` (given the opened device's
 /// description and policy and the bind shape the draw binds, `graphics::render_shape`; the tools'
-/// compile worker; it returns the pipeline and its visible-function tables' bytes), plan and
+/// compile worker; it returns the pipeline), plan and
 /// execute its draw, and read the status before the output. Every refusal is typed; only a device,
 /// driver, or tool failure is `Failed`. `children` compiles the template each command the case
 /// executes runs, in a compile worker.
@@ -107,10 +97,7 @@ pub fn execute_engine_render(
     device_type: DeviceType,
     case_id: &str,
     case: &RenderCase,
-    compile: impl FnOnce(
-        &WorkerDevice,
-        &BindShape,
-    ) -> Result<CompiledCase<RenderPipeline>, ExecutorError>,
+    compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<RenderPipeline, ExecutorError>,
     children: impl FnMut(
         &WorkerDevice,
         u64,
@@ -133,7 +120,7 @@ fn run(
     case_id: &str,
     case: &RenderCase,
     (compile, mut children): (
-        impl FnOnce(&WorkerDevice, &BindShape) -> Result<CompiledCase<RenderPipeline>, ExecutorError>,
+        impl FnOnce(&WorkerDevice, &BindShape) -> Result<RenderPipeline, ExecutorError>,
         impl FnMut(
             &WorkerDevice,
             u64,
@@ -149,19 +136,12 @@ fn run(
         .contains(&VkFeature::BufferDeviceAddress);
     let ranges = BufferRanges::of(target.device().profile().limits());
     let shape = graphics::render_shape(case, addressed, ranges).map_err(ExecutorError::Failed)?;
-    let compiled = compile(&target, &shape)?;
-    let pipeline = &compiled.pipeline;
+    let pipeline = &compile(&target, &shape)?;
     let device = target.device();
     let missing = unmet_requirements(context, &pipeline.requirements);
     if !missing.is_empty() {
         return Err(NotSupported::NotEnabled(missing).into());
     }
-    // A rate-mapped pass's regions, planned for the device's viewport limits and this pipeline
-    // before anything is allocated.
-    let rate_map = case.rate_map_pass.as_ref();
-    let regions = rate_map
-        .map(|map| graphics::rate_map_regions(map, &context.region_limits(), &pipeline.graphics))
-        .transpose()?;
     // How the Metal vertex function's module contains each out-of-bounds target on this device,
     // decided before anything runs; a target checked nowhere is refused, never run.
     let out_of_bounds = draw_out_of_bounds_run(device, pipeline, case)?;
@@ -194,8 +174,8 @@ fn run(
         execute(
             context,
             device,
-            (&compiled, &shape),
-            (case, regions.as_ref()),
+            (pipeline, &shape),
+            case,
             out_of_bounds.as_ref(),
             &mut compile_child,
         )
@@ -226,14 +206,11 @@ fn run(
     let planned = pipeline.plan(device, &shape).ok();
     let mut modules = module_censuses(&pipeline.stages, device.profile(), planned.as_ref())?;
     modules.extend(children);
-    let mut census = executed_census(
+    let census = executed_census(
         context,
         modules,
         out_of_bounds.map(|run| with_escaped(run, &escaped)),
     );
-    census.rate_map_pass = rate_map
-        .zip(regions.as_ref())
-        .map(|(map, plan)| graphics::rate_map_pass_census(map, plan));
     let mut environment = environment(context, device, "engine-render");
     command_replay(&mut environment, &replayed);
     super::device::record_withheld(&mut environment, withheld);
@@ -251,8 +228,7 @@ fn run(
 /// Allocate the case's buffers (argument-buffer buffers first, so each owner is created with
 /// their addresses, its textures' and samplers' resource ids, and its command buffers',
 /// [`field_words`],
-/// [`owner_bytes`]), visible-function tables (holding the compile's table bytes), and vertex
-/// buffers, write the commands the host encodes into their record storage, plan and instantiate
+/// [`owner_bytes`]) and vertex buffers, write the commands the host encodes into their record storage, plan and instantiate
 /// its draw, create what every plan write names (argument-buffer textures, heap arrays, and
 /// handle tables included), the color targets, and the pipeline, record and submit the draw,
 /// wait, read the status, check the records, execute the commands the case executes (`compile`
@@ -262,12 +238,11 @@ fn run(
 fn execute(
     context: &VulkanContext,
     device: &Device,
-    (compiled, compiled_for): (&CompiledCase<RenderPipeline>, &BindShape),
-    (case, regions): (&RenderCase, Option<&RateMapRegions>),
+    (pipeline, compiled_for): (&RenderPipeline, &BindShape),
+    case: &RenderCase,
     out_of_bounds: Option<&OutOfBoundsRun>,
     compile: &mut CompileChild<'_>,
 ) -> Result<Drawn, ExecutorError> {
-    let CompiledCase { pipeline, tables } = compiled;
     let addressed = context
         .enabled
         .features
@@ -337,21 +312,6 @@ fn execute(
             buffers.insert((stage, index), allocation);
         }
     }
-    let mut table_buffers: BTreeMap<(Stage, u32), Allocation> = BTreeMap::new();
-    for (stage, function) in case.stages() {
-        for (&index, table) in &function.resources.function_tables {
-            let bytes = table_bytes(tables, stage, index, table.byte_len())?;
-            let label = format!("{stage:?} visible function table {index}");
-            let allocation = allocate(
-                context,
-                &label,
-                bytes,
-                addressed,
-                vk::BufferUsageFlags::empty(),
-            )?;
-            table_buffers.insert((stage, index), allocation);
-        }
-    }
     // A patch draw's factors, read by the control stage as a storage buffer.
     let factors = match &case.assembly {
         Assembly::Patches { factors, .. } => Some(allocate(
@@ -392,7 +352,6 @@ fn execute(
     }
     let addresses: BTreeMap<(Stage, u32), BufferAddress> = buffers
         .iter()
-        .chain(&table_buffers)
         .map(|(&(stage, index), allocation)| {
             let address = own_guest(allocation, graphics::synthetic_address(stage, index))?;
             Ok(((stage, index), address))
@@ -475,7 +434,6 @@ fn execute(
     )?;
     let guest_buffers: BTreeMap<SlotRef, vk::Buffer> = buffers
         .iter()
-        .chain(&table_buffers)
         .map(|(&(stage, index), allocation)| {
             (
                 slot(stage, SlotClass::Buffer, index),
@@ -531,8 +489,7 @@ fn execute(
         | RenderOutput::ArgumentBufferBuffer { .. }
         | RenderOutput::RenderTarget { .. }
         | RenderOutput::Depth { .. }
-        | RenderOutput::Stencil { .. }
-        | RenderOutput::Imageblock { .. } => None,
+        | RenderOutput::Stencil { .. } => None,
     };
     // The attachments first: a framebuffer-fetch input's descriptor views its color attachment.
     let targets = Targets::create(context, &pipeline.graphics, case)?;
@@ -550,20 +507,14 @@ fn execute(
         &Guest {
             buffers: &guest_buffers,
             textures: &textures,
-            // A render case's out-of-bounds targets are attribute and index buffers, none a texture
-            // buffer.
-            texel_guards: &BTreeMap::new(),
             used_textures: &used_textures,
             samplers: &samplers,
             argument_samplers: &state.argument_samplers,
             constant_blobs: &constant_blobs,
             descriptor_ranges: &commands.descriptor_ranges,
             descriptor_bytes: &commands.descriptor_bytes,
-            // `graphics::render_case` refuses a case's acceleration structures.
-            structures: &BTreeMap::new(),
             tessellation_factors: factors.as_ref().map(|factors| factors.buffer.buffer),
             attachments: &attachments,
-            tile_attachments: &BTreeMap::new(),
             status: Some(status.buffer.buffer),
         },
         observed,
@@ -608,10 +559,6 @@ fn execute(
         encoder,
     )?;
     let sets = resources.write_sets(context, &objects.layout)?;
-    // Where the pipeline's strides are dynamic state, every binding is bound with its stride.
-    let dynamic_strides = pipeline.graphics.dynamic_states.iter().any(|&state| {
-        vk::DynamicState::from(state) == vk::DynamicState::VERTEX_INPUT_BINDING_STRIDE
-    });
     let vertex_buffers: Vec<VertexBinding> = plan
         .vertex_buffers
         .iter()
@@ -627,21 +574,9 @@ fn execute(
                 .find(|(binding, _)| *binding == bind.binding)
                 .map(|&(_, offset)| offset)
                 .ok_or_else(|| format!("no offset for vertex binding {}", bind.binding))?;
-            let stride = if dynamic_strides {
-                let stride = commands
-                    .vertex_strides
-                    .iter()
-                    .find(|(binding, _)| *binding == bind.binding)
-                    .map(|&(_, stride)| u64::from(stride))
-                    .ok_or_else(|| format!("no stride for vertex binding {}", bind.binding))?;
-                Some(stride)
-            } else {
-                None
-            };
-            Ok((bind.binding, buffer.buffer.buffer, offset, stride))
+            Ok((bind.binding, buffer.buffer.buffer, offset))
         })
         .collect::<Result<_, ExecutorError>>()?;
-    let draws = draws(targets.extent, regions);
     record_and_submit(
         context,
         &mut objects,
@@ -649,7 +584,7 @@ fn execute(
             resources: &resources,
             targets: &targets,
             readers: readers.as_ref(),
-            draws: &draws,
+            area: draw_area(targets.extent),
             sets: &sets,
             push: &push,
             vertex_buffers: &vertex_buffers,
@@ -729,20 +664,11 @@ fn execute(
                     .resources
                     .buffers
                     .get(&index)
-                    .map(|bytes| bytes.len() as u64)
-                    .or_else(|| {
-                        function
-                            .resources
-                            .function_tables
-                            .get(&index)
-                            .map(|table| table.byte_len())
-                    })
-                    .unwrap_or(0)
+                    .map_or(0, |bytes| bytes.len() as u64)
             })
         };
         let live = buffers
             .iter()
-            .chain(&table_buffers)
             .filter(|(&(stage, index), _)| lengths(stage, index) != 0)
             .map(|(&(stage, index), allocation)| {
                 (
@@ -842,10 +768,6 @@ fn execute(
     }
     // SAFETY: as for the status buffer.
     finals.depth_stencil = unsafe { targets.final_depth_stencil()? };
-    // No write reaches the imageblock: the cells are the initializer's.
-    if let (RenderOutput::Imageblock { .. }, Some(cells)) = (case.output, &case.imageblock) {
-        finals.imageblock = Some(cells.clone());
-    }
     let output =
         graphics::select_render_output(case.output, &finals).map_err(ExecutorError::Failed)?;
     drop(objects);
@@ -1033,18 +955,14 @@ fn draw_child(
         &Guest {
             buffers: guest,
             textures: &BTreeMap::new(),
-            // A replayed command declares no out-of-bounds target.
-            texel_guards: &BTreeMap::new(),
             used_textures: &BTreeMap::new(),
             samplers: &BTreeMap::new(),
             argument_samplers: &state.argument_samplers,
             constant_blobs: &constant_blobs,
             descriptor_ranges: &commands.descriptor_ranges,
             descriptor_bytes: &commands.descriptor_bytes,
-            structures: &BTreeMap::new(),
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            tile_attachments: &BTreeMap::new(),
             status: Some(status.buffer.buffer),
         },
         None,
@@ -1091,8 +1009,7 @@ fn draw_child(
             resources: &resources,
             targets: &targets,
             readers: readers.as_ref(),
-            // A replayed draw's pass is its template's, which has no rate map.
-            draws: &draws(targets.extent, None),
+            area: draw_area(targets.extent),
             sets: &sets,
             push: &push,
             vertex_buffers: &[],
@@ -1919,13 +1836,8 @@ fn create_pipeline(
 /// draw's own state (its topology, primitive restart and depth-stencil state).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DynamicRecord {
-    /// The viewport and scissor, set for each recording of the draw ([`draws`]).
+    /// The viewport and scissor, set with the draw ([`draw_area`]).
     PerDraw,
-    /// The per-bind vertex strides (`VERTEX_INPUT_BINDING_STRIDE`, a vertex layout of
-    /// `MTLBufferLayoutStrideDynamic` where the profile makes strides dynamic), recorded with the
-    /// vertex buffers at the strides the case binds them with, through
-    /// [`VulkanContext::extended_dynamic_state`].
-    Strides,
     /// A Vulkan 1.0 command of the bound pipeline.
     Core,
     /// A state `VK_EXT_extended_dynamic_state` defines (core in Vulkan 1.3), or the primitive
@@ -1940,7 +1852,6 @@ impl DynamicRecord {
         use vk::DynamicState as D;
         Some(match state {
             D::VIEWPORT | D::SCISSOR => DynamicRecord::PerDraw,
-            D::VERTEX_INPUT_BINDING_STRIDE => DynamicRecord::Strides,
             D::DEPTH_BIAS
             | D::BLEND_CONSTANTS
             | D::STENCIL_COMPARE_MASK
@@ -1961,7 +1872,7 @@ impl DynamicRecord {
 
     /// Whether the draw records it through [`VulkanContext::extended_dynamic_state`].
     fn needs_extended(self) -> bool {
-        matches!(self, DynamicRecord::Strides | DynamicRecord::Extended)
+        matches!(self, DynamicRecord::Extended)
     }
 }
 
@@ -1996,8 +1907,8 @@ struct Recording<'r> {
     /// The per-sample fill and readback of a multisampled pass's attachments; `None` for one
     /// sample, whose attachments `targets` copies.
     readers: Option<&'r multisampled::SampleReaders<'r>>,
-    /// The draw's viewport and scissor, once per recording of it ([`draws`]).
-    draws: &'r [(vk::Viewport, vk::Rect2D)],
+    /// The draw's viewport and scissor ([`draw_area`]).
+    area: (vk::Viewport, vk::Rect2D),
     sets: &'r [vk::DescriptorSet],
     push: &'r [(vk::ShaderStageFlags, u32, Vec<u8>)],
     /// Each vertex buffer's binding.
@@ -2023,52 +1934,26 @@ struct Recording<'r> {
     replayed: Option<&'r ReplayedDraws<'r>>,
 }
 
-/// A vertex buffer's `(binding, buffer, offset, stride)`, the stride where the pipeline's
-/// strides are dynamic state (`VERTEX_INPUT_BINDING_STRIDE`), every binding's then.
-type VertexBinding = (u32, vk::Buffer, u64, Option<u64>);
+/// A vertex buffer's `(binding, buffer, offset)`.
+type VertexBinding = (u32, vk::Buffer, u64);
 
-/// The draw's `(viewport, scissor)`, once per recording of it: the whole target `extent` with a
-/// negative height (the module docs), or, for a rate-mapped pass, each region of its plan, whose
-/// Metal-convention viewport `[x, y, width, height]` (y down) is flipped the same way, `y + height`
-/// and `-height`, with the region's scissor.
-fn draws(
-    extent: vk::Extent2D,
-    regions: Option<&RateMapRegions>,
-) -> Vec<(vk::Viewport, vk::Rect2D)> {
-    let flipped = |[x, y, width, height]: [f32; 4]| vk::Viewport {
-        x,
-        y: y + height,
-        width,
-        height: -height,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    };
-    let Some(plan) = regions else {
-        return vec![(
-            flipped([0.0, 0.0, extent.width as f32, extent.height as f32]),
-            vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent,
-            },
-        )];
-    };
-    plan.regions()
-        .iter()
-        .map(|region| {
-            let [x, y] = region.scissor_offset();
-            let [width, height] = region.scissor_extent();
-            (
-                flipped(region.viewport()),
-                vk::Rect2D {
-                    offset: vk::Offset2D {
-                        x: x as i32,
-                        y: y as i32,
-                    },
-                    extent: vk::Extent2D { width, height },
-                },
-            )
-        })
-        .collect()
+/// The draw's `(viewport, scissor)`: the whole target `extent`, the viewport with a negative height
+/// (the module docs).
+fn draw_area(extent: vk::Extent2D) -> (vk::Viewport, vk::Rect2D) {
+    (
+        vk::Viewport {
+            x: 0.0,
+            y: extent.height as f32,
+            width: extent.width as f32,
+            height: -(extent.height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        },
+    )
 }
 
 /// Whether `state` belongs to the fragment shader or fragment output state, which a pipeline
@@ -2431,20 +2316,8 @@ fn record_and_submit(
                 bytes,
             );
         }
-        for &(binding, buffer, offset, stride) in recording.vertex_buffers {
-            match (stride, &context.extended_dynamic_state) {
-                // `create_pipeline` refused dynamic strides without the extension's commands.
-                (Some(stride), Some(extended)) => (extended.bind_vertex_buffers2)(
-                    command,
-                    binding,
-                    1,
-                    &buffer,
-                    &offset,
-                    std::ptr::null(),
-                    &stride,
-                ),
-                _ => device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]),
-            }
+        for &(binding, buffer, offset) in recording.vertex_buffers {
+            device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
         }
         for state in recording
             .dynamic
@@ -2455,9 +2328,8 @@ fn record_and_submit(
                 continue;
             }
             match (DynamicRecord::of(state), state) {
-                // Set per draw, below; the strides with the vertex buffers, above;
-                // `create_pipeline` refused every state without a record.
-                (None | Some(DynamicRecord::PerDraw | DynamicRecord::Strides), _) => {}
+                // Set with the draw, below; `create_pipeline` refused every state without a record.
+                (None | Some(DynamicRecord::PerDraw), _) => {}
                 // `create_pipeline` refused these without the extension's commands.
                 (Some(DynamicRecord::Extended), state) => {
                     if let Some(extended) = &context.extended_dynamic_state {
@@ -2499,69 +2371,65 @@ fn record_and_submit(
             dynamic(vk::DynamicState::VIEWPORT),
             dynamic(vk::DynamicState::SCISSOR),
         );
-        // One draw per recording of it: the whole target, or each region of a rate-mapped pass.
         // A fetch ordered between draws alone records after the barrier of the subpass's
-        // dependency on itself before each: the pass is `create_render_pass`'s of the pipeline's
-        // graphics state, whose subpass then reads input attachments.
-        let between_draws = graphics_pipeline::fetches_between_draws(recording.graphics);
-        for (viewport, scissor) in recording.draws {
-            if between_draws {
-                graphics_pipeline::fetch_between_draws(device, command);
-            }
-            if set_viewport {
-                device.cmd_set_viewport(command, 0, std::slice::from_ref(viewport));
-            }
-            if set_scissor {
-                device.cmd_set_scissor(command, 0, std::slice::from_ref(scissor));
-            }
-            match (draw, recording.index_buffer) {
-                (
-                    metal2vulkan::vk::DrawCommand::DrawIndexed {
-                        index_type,
-                        index_buffer_offset,
-                        index_count,
-                        instance_count,
-                        first_index,
-                        vertex_offset,
-                        first_instance,
-                    },
-                    Some(index_buffer),
-                ) => {
-                    device.cmd_bind_index_buffer(
-                        command,
-                        index_buffer,
-                        index_buffer_offset,
-                        vk::IndexType::from_raw(index_type.as_raw()),
-                    );
-                    device.cmd_draw_indexed(
-                        command,
-                        index_count,
-                        instance_count,
-                        first_index,
-                        vertex_offset,
-                        first_instance,
-                    );
-                }
-                (
-                    metal2vulkan::vk::DrawCommand::Draw {
-                        vertex_count,
-                        instance_count,
-                        first_vertex,
-                        first_instance,
-                    },
-                    _,
-                ) => device.cmd_draw(
+        // dependency on itself before the draw: the pass is `create_render_pass`'s of the
+        // pipeline's graphics state, whose subpass then reads input attachments.
+        let (viewport, scissor) = &recording.area;
+        if graphics_pipeline::fetches_between_draws(recording.graphics) {
+            graphics_pipeline::fetch_between_draws(device, command);
+        }
+        if set_viewport {
+            device.cmd_set_viewport(command, 0, std::slice::from_ref(viewport));
+        }
+        if set_scissor {
+            device.cmd_set_scissor(command, 0, std::slice::from_ref(scissor));
+        }
+        match (draw, recording.index_buffer) {
+            (
+                metal2vulkan::vk::DrawCommand::DrawIndexed {
+                    index_type,
+                    index_buffer_offset,
+                    index_count,
+                    instance_count,
+                    first_index,
+                    vertex_offset,
+                    first_instance,
+                },
+                Some(index_buffer),
+            ) => {
+                device.cmd_bind_index_buffer(
                     command,
+                    index_buffer,
+                    index_buffer_offset,
+                    vk::IndexType::from_raw(index_type.as_raw()),
+                );
+                device.cmd_draw_indexed(
+                    command,
+                    index_count,
+                    instance_count,
+                    first_index,
+                    vertex_offset,
+                    first_instance,
+                );
+            }
+            (
+                metal2vulkan::vk::DrawCommand::Draw {
                     vertex_count,
                     instance_count,
                     first_vertex,
                     first_instance,
-                ),
-                // A draw replay's draws, each of one draw at its arguments.
-                (metal2vulkan::vk::DrawCommand::DrawIndirect { .. }, _) => {
-                    let Some(replayed) = recording.replayed else {
-                        continue;
-                    };
+                },
+                _,
+            ) => device.cmd_draw(
+                command,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            ),
+            // A draw replay's draws, each of one draw at its arguments.
+            (metal2vulkan::vk::DrawCommand::DrawIndirect { .. }, _) => {
+                if let Some(replayed) = recording.replayed {
                     for draw in replayed.draws {
                         for (stages, offset, bytes) in &draw.push {
                             device.cmd_push_constants(
@@ -2581,9 +2449,9 @@ fn record_and_submit(
                         );
                     }
                 }
-                // Refused before recording began.
-                _ => {}
             }
+            // Refused before recording began.
+            _ => {}
         }
         device.cmd_end_render_pass(command);
         if recording.replayed.is_some() {

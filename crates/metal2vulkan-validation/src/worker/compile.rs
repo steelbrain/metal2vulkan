@@ -788,9 +788,7 @@ mod tests {
             entry: "read_write_fence".into(),
             constants: FunctionConstantValues::defaults(),
             buffers: Default::default(),
-            rate_maps: Default::default(),
             argument_buffer_buffers: Default::default(),
-            argument_buffer_rate_maps: Default::default(),
             argument_buffer_textures: Default::default(),
             argument_buffer_samplers: Default::default(),
             objects: Default::default(),
@@ -811,14 +809,7 @@ mod tests {
             )]
             .into(),
             samplers: Default::default(),
-            function_tables: Default::default(),
-            acceleration_structures: Default::default(),
             threadgroup_lengths: Default::default(),
-            imageblock: None,
-            tile: None,
-            stage_input: None,
-            stage_in_region: None,
-            attribute_strides: Default::default(),
             dispatch: metal2vulkan::bind::Dispatch::Threads {
                 threads: [2, 2, 1],
                 threads_per_group: [1, 1, 1],
@@ -830,8 +821,6 @@ mod tests {
             function: RequestFunction::new(case.entry.as_str(), case.constants.clone()),
             shape: shape.clone(),
             dispatch: None,
-            stage_input: None,
-            tile: None,
             replay: false,
         };
         let (bytes, digest) = input(&device, &bitcode, request.clone());
@@ -857,7 +846,6 @@ mod tests {
             device.device(),
             &function,
             &shape,
-            None,
             None,
             &metal2vulkan::Budget::standard(),
         )
@@ -888,7 +876,6 @@ mod tests {
             &authored,
             &crate::check::interface::tests::vertex_buffers_at(&[0]),
             crate::candidate::engine::graphics::tests::WITHOUT_SLICE,
-            None,
             None,
         )
         .unwrap();
@@ -1030,8 +1017,6 @@ mod tests {
             },
             shape: BindShape::default(),
             dispatch: None,
-            stage_input: None,
-            tile: None,
             replay: false,
         };
         let libraries = [caller.as_slice(), functions.as_slice(), caller.as_slice()];

@@ -88,8 +88,8 @@ impl Capture {
 /// What a device described by `description` supports, as a chain: every member the description
 /// lists, and every member the engine's vocabulary does not name as `capture`, the device's own,
 /// states it. Claiming the latter supported would model a device no profile describes:
-/// `moltenvk-m3` states `sparseBinding` and every line-rasterization member false, and
-/// `swiftshader` states `textureCompressionASTC_HDR` false.
+/// `moltenvk-m3` states every line-rasterization member false, and `swiftshader` states
+/// `textureCompressionASTC_HDR` false.
 fn supported_by(description: &DeviceDescription, capture: &Capture) -> FeatureChain {
     let mut chain = FeatureChain::default();
     for member in MEMBERS {
@@ -168,9 +168,8 @@ fn listed_at(version: ApiVersion, description: &DeviceDescription, capture: &Cap
 /// Every member the engine's vocabulary does not name carries its registry name, and no member it
 /// names carries one. That name is the only way a model of a device can read what the device
 /// states about the member, so a `None` row without one is a member nothing can report
-/// unsupported. The executor's own names are those rows' ([`ExecutorFeature::name`]), and every
-/// name is one some committed capture states, so a misspelling cannot read as an unsupported
-/// member on every device.
+/// unsupported. Every name is one some committed capture states, so a misspelling cannot read as
+/// an unsupported member on every device.
 #[test]
 fn a_member_the_vocabulary_does_not_name_carries_its_registry_name() {
     let mut unnamed = 0;
@@ -190,17 +189,8 @@ fn a_member_the_vocabulary_does_not_name_carries_its_registry_name() {
                 unnamed += 1;
             }
         }
-        if let Some(executor) = member.executor {
-            assert_eq!(
-                Some(executor.name()),
-                member.registry,
-                "{:?}.{}",
-                member.structure,
-                member.name
-            );
-        }
     }
-    assert_eq!(unnamed, 14, "members the vocabulary does not name");
+    assert_eq!(unnamed, 11, "members the vocabulary does not name");
     // Every one of them is a name some committed capture states: a misspelled name would read as
     // a device that does not support the member, on every device.
     let captures: Vec<Capture> = committed_profiles()
@@ -792,51 +782,6 @@ fn a_disagreeing_description_is_refused() {
     .err()
     .unwrap();
     assert!(error.contains("ExtRobustness2"), "{error}");
-}
-
-/// An engine context enables sparse binding and 2D and 3D sparse residency where the device
-/// supports them, for the executor's sparse case textures. The vocabulary does not name them, so
-/// the opened profile does not move; the old engine's list enables none, and a device without them
-/// gets none.
-#[test]
-fn the_new_list_enables_sparse_images_where_the_device_supports_them() {
-    for member in MEMBERS.iter().filter(|member| member.executor.is_some()) {
-        assert_eq!(member.structure, Structure::Core);
-        assert!(member.feature.is_none());
-    }
-    let description = at_1_2(load_description("lavapipe").unwrap());
-    let (supported, available) = modelled("lavapipe", &description, ApiVersion::V1_2);
-    assert!(executor_features(&old_engine_list(&supported, &available)).is_empty());
-    let list = |supported: &FeatureChain| {
-        engine_list(
-            old_engine_list(supported, &available),
-            &description,
-            supported,
-            &available,
-        )
-        .unwrap()
-    };
-    let enables = list(&supported);
-    assert_eq!(
-        executor_features(&enables),
-        BTreeSet::from([
-            ExecutorFeature::SparseBinding,
-            ExecutorFeature::SparseResidencyImage2D,
-            ExecutorFeature::SparseResidencyImage3D,
-        ])
-    );
-    assert_eq!(enables.chain.core.sparse_binding, vk::TRUE);
-    assert_eq!(enables.chain.core.sparse_residency_image2_d, vk::TRUE);
-    assert_eq!(enables.chain.core.sparse_residency_image3_d, vk::TRUE);
-    let mut without = supported;
-    without.core.sparse_binding = vk::FALSE;
-    without.core.sparse_residency_image3_d = vk::FALSE;
-    let enables = list(&without);
-    assert_eq!(
-        executor_features(&enables),
-        BTreeSet::from([ExecutorFeature::SparseResidencyImage2D])
-    );
-    assert_eq!(enabled_set(&enables), enabled_set(&list(&supported)));
 }
 
 /// The executor's MoltenVK device (the Q1 refusals): the old list dropped subgroup size control and

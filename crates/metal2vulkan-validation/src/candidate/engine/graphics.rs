@@ -14,9 +14,8 @@
 //!   draw: the vertex function alone, its stage-in attributes fed by vertex buffers at the
 //!   oracle's slots ([`vertex_input_slots`]), the oracle's 1×1 `R8Unorm` color attachment as API
 //!   scaffolding, and the case's buffers, textures (texture-array elements at their slots),
-//!   samplers, visible-function tables ([`super::tables`]), argument-buffer buffers
-//!   ([`super::argument_buffers`]), and argument-buffer textures and command buffers bound to the
-//!   vertex stage;
+//!   samplers, argument-buffer buffers ([`super::argument_buffers`]), and argument-buffer textures
+//!   and command buffers bound to the vertex stage;
 //! - a fragment case draws through its generated passthrough vertex companion, with the case's
 //!   resources bound to the fragment stage and its render targets attached;
 //! - a vertex case observed through its position or a varying draws into its generated observer
@@ -26,11 +25,7 @@
 //!   partition mode and output winding), its control points and patch attributes fed per patch
 //!   control point and per patch at the oracle's slots, its factors in one buffer, the case's cull
 //!   mode, and one patch draw through its observer, or with rasterization disabled and no observer
-//!   when the case has no vertex observation;
-//! - a fragment case's explicit imageblock is the pass's cells as the Metal oracle's initializer
-//!   defines them, each authored plane at its offset in the checked reflection's master
-//!   ([`super::imageblock`]), and an imageblock output is the oracle resolver's plane of the
-//!   selected member.
+//!   when the case has no vertex observation.
 //!
 //! The companion is the checker's ([`crate::companion`], derived from the entry's AIR): the Metal
 //! oracle draws with the same generated module, so both sides run the same companion semantics.
@@ -38,13 +33,10 @@
 //! functions of two libraries through one pipeline with derived expectations.
 
 use super::argument_buffers::{self, FieldKey};
-use super::imageblock::{self, Cells};
-use super::tables::{function_tables, FunctionTable};
 use super::{
     function_constants, require_case_families, resources, select_range, views_told_apart,
     BufferAddress,
 };
-use crate::air::reflect::FragmentImageblock;
 use crate::case::indirect_commands::CommandBufferResource;
 use crate::case::out_of_bounds::OutOfBoundsTarget;
 use crate::case::{
@@ -54,7 +46,6 @@ use crate::case::{
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::check::interface::AirInterface;
 use crate::companion::Companion;
-use crate::coverage::RateMapPassRun;
 use crate::executor_contract::buffer_slots::vertex_input_slots;
 use crate::executor_contract::multisample::AttachmentTransfer;
 use crate::executor_contract::render_target_array::render_target_array_length;
@@ -62,9 +53,8 @@ use crate::executor_contract::tessellation as patches;
 use crate::executor_contract::DrawDepthStencil;
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralStageInput, LiteralTexture};
 use metal2vulkan::bind::{
-    BindShape, BindState, BoundBuffer, BufferRanges, DrawCall, IndexBufferRef,
-    RasterizationRateMap, RateMapRegions, RegionLimits, StageTable, TessellationFactorBuffer,
-    TessellationFactors,
+    BindShape, BindState, BoundBuffer, BufferRanges, DrawCall, IndexBufferRef, StageTable,
+    TessellationFactorBuffer, TessellationFactors,
 };
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
@@ -103,12 +93,10 @@ pub struct StageResources {
     /// ([`records_ids`]); the run checks its final records
     /// ([`argument_buffers::validate_records`]).
     pub command_buffers: BTreeMap<FieldKey, CommandBufferResource>,
-    /// Each bound texture (texture buffers and texture-array elements included, each element at
-    /// its own slot, [`resources::bound_textures`]) with its initial contents.
+    /// Each bound texture (texture-array elements included, each element at its own slot,
+    /// [`resources::bound_textures`]) with its initial contents.
     pub textures: BTreeMap<u32, LiteralTexture>,
     pub samplers: BTreeMap<u32, SamplerResource>,
-    /// Each visible-function table, by Metal buffer index: a buffer of its table words.
-    pub function_tables: BTreeMap<u32, FunctionTable>,
 }
 
 /// One stage's function and what it binds.
@@ -129,9 +117,6 @@ pub struct VertexBuffer {
     pub buffer_index: u32,
     pub format: AttributeFormat,
     pub stride: u32,
-    /// The layout's stride is `MTLBufferLayoutStrideDynamic`: the buffer is bound with the
-    /// stride form at `stride`, as the oracle binds it.
-    pub dynamic: bool,
     pub step: metal::VertexStepFunction,
     pub bytes: Vec<u8>,
 }
@@ -199,13 +184,6 @@ pub enum RenderOutput {
         origin: [u32; 2],
         dimensions: [u32; 2],
     },
-    /// A region of the plane of one member of the fragment imageblock's master, at `member`'s
-    /// offset in each pixel's cell.
-    Imageblock {
-        member: imageblock::Member,
-        origin: [u32; 2],
-        dimensions: [u32; 2],
-    },
 }
 
 /// What a draw assembles.
@@ -254,20 +232,11 @@ pub struct RenderCase {
     /// (`executor_contract::tessellation::cull_mode`), and otherwise Metal's default, none. The
     /// front face is [`RenderCase::depth_stencil_state`]'s winding.
     pub cull_mode: metal::CullMode,
-    /// A fragment case's explicit imageblock: the pass's cells when the case's draw begins, as
-    /// the Metal oracle's initializer leaves them ([`Cells::initial`]). A draw leaves them so: the
-    /// product compiles no fragment function that reads or writes them.
-    pub imageblock: Option<Cells>,
     pub output: RenderOutput,
     /// The generated stage that completes the case: `vertex` is its passthrough vertex function, or
     /// `fragment` its observer fragment function. `None` for a rasterization-disabled vertex case
     /// and for owned two-stage fixtures.
     pub companion: Option<Companion>,
-    /// The render pass's rasterization-rate map, the product's compile of it (Apple M3's rule),
-    /// whose parameter data every map literal of the case binds (`RateMapLiteral::parameter_data`):
-    /// the render executor draws the pass region by region into its physical size
-    /// ([`rate_map_regions`]), on every device.
-    pub rate_map_pass: Option<RasterizationRateMap>,
     /// The render pass's sample count, the case's: `None` for one sample, as every case drew before
     /// the count was authorable; the pipeline's `rasterSampleCount`
     /// ([`RenderTemplate::raster_sample_count`]), and every attachment holds that many samples
@@ -424,7 +393,6 @@ pub fn vertex_buffers(
                 buffer_index,
                 format: input.format,
                 stride: input.stride,
-                dynamic: input.dynamic_stride,
                 step,
                 bytes: input.bytes.clone(),
             })
@@ -434,8 +402,9 @@ pub fn vertex_buffers(
 
 /// Map `case` onto what the render executor runs, or name what it does not implement yet: the
 /// families of the shared vocabulary that stop it ([`require_case_families`], among them device
-/// buffer arrays, acceleration structures and intersection function tables, a vertex case's
-/// depth/stencil attachment, and a rasterization-disabled vertex case's render targets) are
+/// buffer arrays, function tables, rate maps, fragment imageblocks, dynamic vertex strides, a
+/// vertex case's depth/stencil attachment, and a rasterization-disabled vertex case's render
+/// targets) are
 /// `NotSupported::Requirements`, and a case whose literals do not map is
 /// `NotSupported::NotImplemented`. A tessellation case draws its patches as the oracle does
 /// ([`patch_draw`]). `interface` is the checked entry's AIR-layer interface, whose buffer slots the
@@ -444,15 +413,12 @@ pub fn vertex_buffers(
 /// oracle's does ([`render_target_array_length`]); `companion` is the checked entry's generated
 /// companion ([`crate::check::CheckedShader::companion`]), which a fragment case and an observed
 /// vertex case draw with. A companion that does not complete the case's stage is a failure: the
-/// checker derives exactly one for exactly those cases. `fragment_imageblock` is the checked
-/// reflection's (`CheckedShader::reflection`), whose master a fragment case's imageblock cells and
-/// output follow, as the checker's and the oracle's do ([`imageblock::layout`]).
+/// checker derives exactly one for exactly those cases.
 pub fn render_case(
     case: &AuthoredCase,
     interface: &AirInterface,
     air_ll: &str,
     companion: Option<&Companion>,
-    fragment_imageblock: Option<&FragmentImageblock>,
 ) -> Result<RenderCase, ExecutorError> {
     let gap = |what: &str| NotSupported::NotImplemented(format!("engine candidate: {what}"));
     let generated = |companion: &Companion| RenderFunction {
@@ -525,14 +491,6 @@ pub fn render_case(
         }
         _ => return Err(gap("a render case without exactly one draw").into()),
     };
-    // The reflected master layout of the function's imageblock, which its authored planes and
-    // imageblock output name members of.
-    let imageblock_layout = match (stage, fragment_imageblock) {
-        (ShaderStage::Fragment, Some(reflected)) => {
-            Some(imageblock::layout(reflected).map_err(|error| gap(&error))?)
-        }
-        _ => None,
-    };
     let output = match stage_output(&case.output, stage).map_err(|error| gap(&error))? {
         Some(output) => output,
         None => match case.output {
@@ -551,32 +509,10 @@ pub fn render_case(
             OutputSelection::Stencil { origin, dimensions } if stage == ShaderStage::Fragment => {
                 RenderOutput::Stencil { origin, dimensions }
             }
-            OutputSelection::FragmentImageblock {
-                ref semantic,
-                origin,
-                dimensions,
-            } if stage == ShaderStage::Fragment => {
-                let member = imageblock_layout
-                    .as_ref()
-                    .and_then(|layout| layout.members.get(semantic))
-                    .copied()
-                    .ok_or_else(|| {
-                        gap(&format!(
-                            "imageblock output {semantic}, which no master member of the \
-                             function's views names"
-                        ))
-                    })?;
-                RenderOutput::Imageblock {
-                    member,
-                    origin,
-                    dimensions,
-                }
-            }
             _ => return Err(gap(
                 "a render output other than a buffer or argument-buffer buffer range, a region of \
                  a texture, a texture-array element, or an argument-buffer texture, or a region of \
-                 a rasterized render target, of a fragment case's depth/stencil attachment, or of \
-                 its imageblock",
+                 a rasterized render target or of a fragment case's depth/stencil attachment",
             )
             .into()),
         },
@@ -589,15 +525,6 @@ pub fn render_case(
     }
     let vertex_buffers = vertex_buffers(case, &literal, interface)?;
     let color_targets = color_targets(&literal, generated.is_some());
-    let imageblock = match (&literal.fragment_imageblock, &imageblock_layout) {
-        (None, _) => None,
-        (Some(authored), Some(layout)) => {
-            Some(Cells::initial(layout, authored).map_err(|error| gap(&error))?)
-        }
-        (Some(_), None) => {
-            return Err(gap("an authored imageblock of a function that reflects none").into())
-        }
-    };
     let own = RenderFunction {
         entry: case.entry.clone(),
         constants: function_constants(&literal)?,
@@ -639,15 +566,8 @@ pub fn render_case(
             .tessellation
             .as_ref()
             .map_or(metal::CullMode::None, patches::cull_mode),
-        imageblock,
         output,
         companion: companion.cloned(),
-        rate_map_pass: case
-            .render_pass_rate_map
-            .as_ref()
-            .map(|map| map.compiled())
-            .transpose()
-            .map_err(|error| gap(&error))?,
         raster_sample_count: case.raster_sample_count,
     })
 }
@@ -687,7 +607,7 @@ pub fn color_targets(literal: &LiteralResources, rasterizes: bool) -> BTreeMap<u
 /// The output `output` selects of the case's own function at `stage`, when it is a resource of that
 /// function's (a buffer range, a region of a texture or a texture-array element, an argument
 /// buffer's buffer range or texture region) or no output; `None` for an output of the pass (a
-/// render target, the depth/stencil attachment, an imageblock). The one mapping a render case's
+/// render target, the depth/stencil attachment). The one mapping a render case's
 /// and a mesh case's own stage share.
 pub fn stage_output(
     output: &OutputSelection,
@@ -759,8 +679,7 @@ pub fn stage_output(
 /// What the case's own function binds, from its literals `literal`: its buffers (an argument
 /// buffer's owner covering each pointer field), its argument buffers' members, the pipeline states
 /// and command buffers its argument buffers hold, its textures (texture-array elements each at its
-/// own slot), samplers and visible-function tables. The one mapping a render case's and a mesh
-/// case's own stage share.
+/// own slot) and samplers. The one mapping a render case's and a mesh case's own stage share.
 pub fn stage_resources(
     case: &AuthoredCase,
     literal: &LiteralResources,
@@ -805,56 +724,7 @@ pub fn stage_resources(
             return Err(gap(&format!("sampler {} bound twice", sampler.binding)).into());
         }
     }
-    resources.function_tables = function_tables(&case.visible_function_tables)?;
-    if let Some(binding) = resources
-        .function_tables
-        .keys()
-        .find(|binding| resources.buffers.contains_key(binding))
-    {
-        return Err(gap(&format!(
-            "buffer {binding} is also a visible function table"
-        ))
-        .into());
-    }
     Ok(resources)
-}
-
-/// The region plan the render executor draws a rate-mapped pass of `map` with: the map's screen as
-/// the guest's viewport and no guest scissor (the Metal oracle sets neither), within the device's
-/// viewport `limits`, for a pipeline of `graphics`. A refusal of the planner (a viewport the device
-/// cannot set, a layered or viewport-selecting pipeline, or a vertex function that writes memory in
-/// a pass of several regions) is the binder's on this device (`not_supported{bind}`).
-pub fn rate_map_regions(
-    map: &RasterizationRateMap,
-    limits: &RegionLimits,
-    graphics: &metal2vulkan::pipeline::GraphicsState,
-) -> Result<RateMapRegions, ExecutorError> {
-    let [width, height] = map.screen_size();
-    let refused = |error: metal2vulkan::bind::RegionError| {
-        ExecutorError::from(NotSupported::Bind(format!(
-            "rate-mapped render pass: {error}"
-        )))
-    };
-    let plan = map
-        .regions(
-            0,
-            [0.0, 0.0, f64::from(width), f64::from(height)],
-            None,
-            limits,
-        )
-        .map_err(refused)?;
-    plan.admits(graphics).map_err(refused)?;
-    Ok(plan)
-}
-
-/// The census of a rate-mapped pass of `map` drawn by `plan`, with the plan's near-equivalent.
-pub fn rate_map_pass_census(map: &RasterizationRateMap, plan: &RateMapRegions) -> RateMapPassRun {
-    RateMapPassRun {
-        screen_size: map.screen_size(),
-        compiled_physical_size: plan.physical_size(),
-        regions: plan.regions().len() as u32,
-        precision: plan.precision().into_iter().collect(),
-    }
 }
 
 /// The consumer token of an indexed draw's index buffer (`IndexBufferRef::token`): the one index
@@ -1136,8 +1006,7 @@ pub fn vertex_descriptor(buffers: &[VertexBuffer]) -> Option<VertexDescriptor> {
     }
     let mut layout = VertexDescriptor::new();
     for buffer in buffers {
-        let mut buffer_layout =
-            VertexBufferLayoutDescriptor::new((!buffer.dynamic).then_some(buffer.stride));
+        let mut buffer_layout = VertexBufferLayoutDescriptor::new(Some(buffer.stride));
         buffer_layout.step_function = buffer.step;
         layout.layouts.insert(buffer.buffer_index, buffer_layout);
         layout.attributes.insert(
@@ -1209,9 +1078,8 @@ pub fn synthetic_address(stage: ShaderStage, index: u32) -> BufferAddress {
 }
 
 /// The `BindState` of `case`: each stage's buffers at offset 0 with their lengths and addresses
-/// (`addresses` by stage and Metal index), its visible-function tables the same way as buffers of
-/// their table words' length (`bind::table`), textures, and samplers; the vertex buffers bound to
-/// the vertex stage at their slots (static strides come from the descriptor); each argument-buffer
+/// (`addresses` by stage and Metal index), textures, and samplers; the vertex buffers bound to the
+/// vertex stage at their slots (their strides come from the descriptor); each argument-buffer
 /// buffer as a used buffer at its address (`embedded` by stage, owner, and field offset; its
 /// consumer token is its position in [`RenderCase::argument_buffer_buffers`]) and each
 /// argument-buffer texture as a used texture with its resource id (its token follows the buffers',
@@ -1228,14 +1096,14 @@ pub fn bind_state(
     embedded: &BTreeMap<(ShaderStage, u32, u32), BufferAddress>,
     ranges: BufferRanges,
 ) -> Result<BindState, String> {
-    let bound = |stage: ShaderStage, index: u32, length: u64, attribute_stride: Option<u32>| {
+    let bound = |stage: ShaderStage, index: u32, length: u64| {
         let address = addresses.get(&(stage, index)).copied().unwrap_or_default();
         BoundBuffer::Buffer {
             length,
             offset: 0,
             gpu_address: address.guest,
             device_address: address.host,
-            attribute_stride,
+            attribute_stride: None,
         }
     };
     let mut state = BindState::default();
@@ -1251,19 +1119,15 @@ pub fn bind_state(
         );
     }
     for (stage, function) in case.stages() {
-        let table = stage_table(stage, function, |index, length| {
-            bound(stage, index, length, None)
-        })?;
+        let table = stage_table(function, |index, length| bound(stage, index, length))?;
         state.stages.insert(stage, table);
     }
     let table = state.stages.entry(ShaderStage::Vertex).or_default();
     for buffer in &case.vertex_buffers {
-        // A dynamic layout's buffer is bound with the stride form.
         let slot = bound(
             ShaderStage::Vertex,
             buffer.buffer_index,
             buffer.bytes.len() as u64,
-            buffer.dynamic.then_some(buffer.stride),
         );
         if table.buffers.insert(buffer.buffer_index, slot).is_some() {
             return Err(format!(
@@ -1294,33 +1158,17 @@ pub fn bind_state(
     Ok(views_told_apart(state, ranges))
 }
 
-/// The bind table of `function`'s own resources at `stage`: its buffers and visible function
-/// tables, each bound as `bound` binds a buffer of its index and length, its textures and its
-/// samplers.
+/// The bind table of `function`'s own resources: its buffers, each bound as `bound` binds a buffer
+/// of its index and length, its textures and its samplers.
 pub fn stage_table(
-    stage: ShaderStage,
     function: &RenderFunction,
     bound: impl Fn(u32, u64) -> BoundBuffer,
 ) -> Result<StageTable, String> {
     let mut table = StageTable::default();
-    let lengths = function
-        .resources
-        .buffers
-        .iter()
-        .map(|(&index, bytes)| (index, bytes.len() as u64))
-        .chain(
-            function
-                .resources
-                .function_tables
-                .iter()
-                .map(|(&index, function_table)| (index, function_table.byte_len())),
-        );
-    for (index, length) in lengths {
-        if table.buffers.insert(index, bound(index, length)).is_some() {
-            return Err(format!(
-                "{stage:?} buffer {index} is also a visible function table"
-            ));
-        }
+    for (&index, bytes) in &function.resources.buffers {
+        table
+            .buffers
+            .insert(index, bound(index, bytes.len() as u64));
     }
     for (&index, texture) in &function.resources.textures {
         table
@@ -1386,13 +1234,7 @@ pub fn render_shape(
     };
     let addresses = case
         .stages()
-        .flat_map(|(stage, f)| {
-            f.resources
-                .buffers
-                .keys()
-                .chain(f.resources.function_tables.keys())
-                .map(move |&index| (stage, index))
-        })
+        .flat_map(|(stage, f)| f.resources.buffers.keys().map(move |&index| (stage, index)))
         .chain(
             case.vertex_buffers
                 .iter()
@@ -1419,8 +1261,6 @@ pub struct RenderFinals {
     pub targets: BTreeMap<u32, ColorTarget>,
     /// The depth/stencil attachment's final aspects.
     pub depth_stencil: Option<LiteralDepthStencil>,
-    /// The fragment imageblock's final cells.
-    pub imageblock: Option<Cells>,
 }
 
 /// The bytes of `output` from a run's final contents.
@@ -1509,15 +1349,6 @@ pub fn select_render_output(
                 dimensions,
             )
         }
-        RenderOutput::Imageblock {
-            member,
-            origin,
-            dimensions,
-        } => finals
-            .imageblock
-            .as_ref()
-            .ok_or("the output imageblock's cells were not read")?
-            .select(member, origin, dimensions),
     }
 }
 

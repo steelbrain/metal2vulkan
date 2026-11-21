@@ -1,6 +1,5 @@
 use ash::vk;
 
-mod acceleration;
 mod acceptance;
 mod buffers;
 mod compute;
@@ -22,7 +21,6 @@ mod runtime_multisample;
 mod runtime_probe;
 mod runtime_render;
 mod runtime_textures;
-mod sparse_images;
 pub use acceptance::create_acceptance_pipeline;
 pub use compute::execute_engine;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

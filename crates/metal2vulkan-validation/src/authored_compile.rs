@@ -759,9 +759,7 @@ fn compile_outcome(failure: CompileFailure) -> Result<CellOutcome, CellFailure> 
             key: "unmodelled".into(),
             detail: bounded_detail(&format!("the compile worker built no inputs: {why:?}")),
         }),
-        CompileFailure::Tables(error) | CompileFailure::Artifact(error) => {
-            executor_outcome(error, FailureClass::Tool)
-        }
+        CompileFailure::Artifact(error) => executor_outcome(error, FailureClass::Tool),
     }
 }
 

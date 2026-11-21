@@ -402,7 +402,7 @@ fn compiled(
     compile: &mut CompileChild<'_>,
 ) -> Result<Option<(RenderCase, RenderPipeline)>, ExecutorError> {
     match compile(token, &state.shape(), &ChildCommand::DrawReplay { merged }) {
-        Ok(CompiledChild::Render(case, compiled)) => Ok(Some((*case, compiled.pipeline))),
+        Ok(CompiledChild::Render(case, pipeline)) => Ok(Some((*case, *pipeline))),
         Ok(CompiledChild::Compute(_)) => Err(ExecutorError::Failed(format!(
             "an executed command's pipeline token {token} names a compute template for render \
              commands"

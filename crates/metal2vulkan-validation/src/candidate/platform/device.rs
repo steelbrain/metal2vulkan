@@ -283,9 +283,6 @@ pub(super) struct ExtendedDynamicState {
     pub(super) depth_compare_op: vk::PFN_vkCmdSetDepthCompareOp,
     pub(super) stencil_test_enable: vk::PFN_vkCmdSetStencilTestEnable,
     pub(super) stencil_op: vk::PFN_vkCmdSetStencilOp,
-    /// Binds vertex buffers with their strides, for a pipeline whose strides are dynamic state
-    /// (`VERTEX_INPUT_BINDING_STRIDE`).
-    pub(super) bind_vertex_buffers2: vk::PFN_vkCmdBindVertexBuffers2,
     /// `vkCmdSetPrimitiveRestartEnable`, Vulkan 1.3's core command or
     /// `VK_EXT_extended_dynamic_state2`'s where the context enabled it, for a pipeline that makes
     /// the topology and restart dynamic.
@@ -305,7 +302,6 @@ impl ExtendedDynamicState {
             depth_compare_op: f.cmd_set_depth_compare_op,
             stencil_test_enable: f.cmd_set_stencil_test_enable,
             stencil_op: f.cmd_set_stencil_op,
-            bind_vertex_buffers2: f.cmd_bind_vertex_buffers2,
             primitive_restart_enable: Some(f.cmd_set_primitive_restart_enable),
         }
     }
@@ -326,7 +322,6 @@ impl ExtendedDynamicState {
             depth_compare_op: f.cmd_set_depth_compare_op_ext,
             stencil_test_enable: f.cmd_set_stencil_test_enable_ext,
             stencil_op: f.cmd_set_stencil_op_ext,
-            bind_vertex_buffers2: f.cmd_bind_vertex_buffers2_ext,
             primitive_restart_enable: second.map(|s| s.fp().cmd_set_primitive_restart_enable_ext),
         }
     }
@@ -384,8 +379,6 @@ pub(super) struct VulkanContext {
     /// The robustness features the context could not enable
     /// (`enables::Enables::unmet_robustness`): every run on the context is refused naming them.
     pub(super) unmet_robustness: BTreeSet<VkFeature>,
-    /// What the context can do with a sparse case texture.
-    pub(super) sparse_images: SparseImages,
     /// Whether the context enabled `VK_EXT_device_generated_commands` with its
     /// `deviceGeneratedCommands` ([`enables::enable_generated_commands`]).
     pub(super) generated_commands: bool,
@@ -399,16 +392,6 @@ pub(super) struct VulkanContext {
     /// The loader's word at the start of [`VulkanContext::device`]'s handle, as `vkCreateDevice`
     /// left it, put back before every call the loader serves itself ([`LoaderWord`]).
     loader_word: LoaderWord,
-}
-
-/// What a context can do with a sparse case texture: the executor features it enabled
-/// (`sparseBinding`, `sparseResidencyImage2D`, `sparseResidencyImage3D`, each where the device
-/// supports it, on an engine context only), and whether its queue binds sparse memory.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct SparseImages {
-    pub(super) features: BTreeSet<enables::ExecutorFeature>,
-    /// The context's queue family has `VK_QUEUE_SPARSE_BINDING_BIT`.
-    pub(super) queue: bool,
 }
 
 /// Which Vulkan implementation a context opened: rows from different ICDs are different backends,
@@ -1824,14 +1807,6 @@ impl VulkanContext {
         // (false where the device lists no subset).
         let multisample_array_image = available.has(ash::khr::portability_subset::NAME)
             && on(supported.portability_subset.multisample_array_image);
-        // SAFETY: `physical` belongs to the live instance.
-        let families = unsafe { instance.get_physical_device_queue_family_properties(physical) };
-        let sparse_images = SparseImages {
-            features: enables::executor_features(&enables),
-            queue: families
-                .get(queue_family as usize)
-                .is_some_and(|family| family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING)),
-        };
         Ok(Self {
             backend: SubmissionBackend::vulkan(device_type),
             _entry: entry,
@@ -1857,7 +1832,6 @@ impl VulkanContext {
             restriction,
             hidden,
             unmet_robustness: enables.unmet_robustness,
-            sparse_images,
             generated_commands,
             runtime_probe,
             messenger,
@@ -1941,20 +1915,6 @@ impl VulkanContext {
                 vk::PFN_vkGetMemoryHostPointerPropertiesEXT,
             >(command)
         })
-    }
-
-    /// `VK_KHR_acceleration_structure`'s commands, loaded through the loader's
-    /// `vkGetDeviceProcAddr`, which reads the device's loader word ([`LoaderWord`]): the word is
-    /// put back first. The commands work only where the context enabled the extension; otherwise
-    /// each loads as a stub that panics when called.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the one call site, after the loader word is put back"
-    )]
-    pub(super) fn acceleration_structure(&self) -> ash::khr::acceleration_structure::Device {
-        // SAFETY: the device is live, and its context is used by its own thread only.
-        unsafe { self.loader_word.restore() };
-        ash::khr::acceleration_structure::Device::new(&self.instance, &self.device)
     }
 
     /// Everything the validation layer reported since the last call, and clear the sink.
@@ -2063,17 +2023,6 @@ impl VulkanContext {
     /// Wait, under the hang protocol, for `fence` of a submission `operation` just made.
     pub(super) fn wait_for_fence(&self, fence: vk::Fence, operation: &str) -> Result<(), String> {
         wait::vulkan::wait_for_fence(&self.device, fence, self.backend, operation)
-    }
-
-    /// The device's viewport limits, which each region of a rate-mapped pass's plan must respect:
-    /// `maxViewportDimensions` and `viewportBoundsRange`.
-    pub(super) fn region_limits(&self) -> metal2vulkan::bind::RegionLimits {
-        // SAFETY: `physical` was enumerated from `instance`, which is live.
-        let limits = unsafe { self.instance.get_physical_device_properties(self.physical) }.limits;
-        metal2vulkan::bind::RegionLimits::new(
-            limits.max_viewport_dimensions,
-            limits.viewport_bounds_range,
-        )
     }
 }
 
@@ -2323,13 +2272,11 @@ mod tests {
     }
 
     /// The loader's own entry points the context calls after a driver overwrote the loader's word
-    /// of the device still run. They are `vkAllocateCommandBuffers`, `vkGetDeviceProcAddr`
-    /// (`VK_KHR_acceleration_structure`'s commands, which load whether or not the extension is
-    /// enabled: an absent command loads as one that panics), and `vkDestroyDevice` when the context
-    /// drops. Without the context putting the word back, the loader reads `ICD_LOADER_MAGIC` as its
-    /// dispatch table and faults at `0x1cdc0de`. Our probe measured this at 9caf79a2, before
-    /// the `vkGetDeviceProcAddr` step was added: the test passed on lavapipe and on MoltenVK, and
-    /// on lavapipe a build without the allocation's and `Drop`'s restores failed it by `SIGSEGV`.
+    /// of the device still run. They are `vkAllocateCommandBuffers`, and `vkDestroyDevice` when the
+    /// context drops. Without the context putting the word back, the loader reads
+    /// `ICD_LOADER_MAGIC` as its dispatch table and faults at `0x1cdc0de`. Our probe measured this
+    /// at 9caf79a2: the test passed on lavapipe and on MoltenVK, and on lavapipe a build without the
+    /// allocation's and `Drop`'s restores failed it by `SIGSEGV`.
     /// Other drivers are expected to behave the same, since the context has no layer and no driver
     /// reads the word, so the overwrite reaches only the loader.
     #[test]
@@ -2348,9 +2295,6 @@ mod tests {
         assert_eq!(buffers.len(), 1);
         // SAFETY: nothing was recorded into or submitted from the pool's buffer.
         unsafe { context.device.destroy_command_pool(pool, None) };
-        overwrite_loader_word(&context);
-        let commands = context.acceleration_structure();
-        assert_eq!(commands.device(), context.device.handle());
         overwrite_loader_word(&context);
         drop(context);
     }

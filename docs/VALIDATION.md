@@ -488,7 +488,7 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   the executor's own context records a format its query lacks. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, function constants and linked functions, its
-  generated companion, its vertex buffers at static strides, its color targets (Shared 2D
+  generated companion, its vertex buffers, its color targets (Shared 2D
   textures, loaded and stored by the pass), a depth/stencil attachment of one aspect as the oracle
   makes it (a Shared `Depth32Float` filled by a draw of its depths, as a 32-bit float depth texture
   is, or a Shared `Stencil8` written from its bytes, loaded and stored by the pass; in a pass of

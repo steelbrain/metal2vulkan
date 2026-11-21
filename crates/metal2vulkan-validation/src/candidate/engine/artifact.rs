@@ -4,10 +4,9 @@
 //! device-replay variant, the compiles [`super::case_compiles`] lists) contributes one compile
 //! digest: its subject, the pipeline's content digest (`ComputePipeline::content_digest`, every
 //! field but the cache identity), the content digest of the binding plan the run makes of it for
-//! its bind shape (`BindingPlan::content_digest`, or the refusal of that plan), and the bytes of
-//! its visible-function tables. A run that replays its compute commands on the device adds the
-//! preprocess module's words. The case's artifact is the SHA-256 over those, in subject order, so
-//! the order the run compiled them in does not enter.
+//! its bind shape (`BindingPlan::content_digest`, or the refusal of that plan). A run that replays
+//! its compute commands on the device adds the preprocess module's words. The case's artifact is
+//! the SHA-256 over those, in subject order, so the order the run compiled them in does not enter.
 //!
 //! The executor records it ([`ExecutedArtifact`]) with the product's
 //! `cache::RUNTIME_VERSION`; the authored compile census computes it the same way, device-free,
@@ -25,7 +24,6 @@ use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::tables::TableBuffers;
 use super::CompileSubject;
 use crate::check::admission::ExecutorError;
 
@@ -112,14 +110,12 @@ pub struct CaseArtifact {
 const REPLAY_MODULE: &str = "replay-preprocess-module";
 
 impl CaseArtifact {
-    /// Record the compile of `subject`: `pipeline` (with its visible-function `tables`) planned
-    /// for `shape` on `device`. A plan the binder refuses is part of the digest as its refusal.
+    /// Record the compile of `subject`: `pipeline` planned for `shape` on `device`. A plan the binder refuses is part of the digest as its refusal.
     /// A subject compiled twice (a variant the run asked for again) must be the same compile.
     pub fn record(
         &mut self,
         subject: CompileSubject,
         pipeline: &dyn Planned,
-        tables: &TableBuffers,
         device: &Device,
         shape: &BindShape,
     ) -> Result<(), ExecutorError> {
@@ -139,12 +135,6 @@ impl CaseArtifact {
                 h.update([0]);
                 put(&mut h, format!("{refusal:?}").as_bytes());
             }
-        }
-        h.update((tables.len() as u64).to_le_bytes());
-        for ((stage, index), bytes) in tables {
-            put(&mut h, format!("{stage:?}").as_bytes());
-            h.update(index.to_le_bytes());
-            put(&mut h, bytes);
         }
         self.insert(label, h.finalize().into())
     }

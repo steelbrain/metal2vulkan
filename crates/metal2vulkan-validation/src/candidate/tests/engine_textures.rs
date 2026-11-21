@@ -71,8 +71,6 @@ fn kernel(
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        rate_maps: BTreeMap::new(),
-        argument_buffer_rate_maps: BTreeMap::new(),
         objects: std::collections::BTreeMap::new(),
         command_buffers: std::collections::BTreeMap::new(),
         textures: textures
@@ -80,14 +78,7 @@ fn kernel(
             .map(|texture| (texture.binding, texture))
             .collect(),
         samplers: BTreeMap::new(),
-        function_tables: BTreeMap::new(),
-        acceleration_structures: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
-        imageblock: None,
-        tile: None,
-        stage_input: None,
-        stage_in_region: None,
-        attribute_strides: Default::default(),
         dispatch: Dispatch::Threads {
             threads,
             threads_per_group: [1, 1, 1],
@@ -163,104 +154,6 @@ fn a_texture_array_element_is_the_texture_at_its_slot() {
     for (name, run) in runs() {
         let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(run.output, words(&[7]), "{name}");
-    }
-}
-
-/// A uniform texel buffer read and a storage texel buffer written and observed.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn texel_buffers_read_one_view_and_write_the_other() {
-    let source = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let case = kernel(
-        "texel_buffers",
-        vec![
-            texture(
-                0,
-                TextureType::Buffer,
-                TextureFormat::Rgba32Float,
-                [2, 1, 1],
-                floats(&source),
-            ),
-            texture(
-                1,
-                TextureType::Buffer,
-                TextureFormat::Rgba32Float,
-                [2, 1, 1],
-                vec![0xab; 32],
-            ),
-        ],
-        Vec::new(),
-        [2, 1, 1],
-        ComputeOutput::Texture {
-            binding: 1,
-            origin: [0, 0, 0],
-            dimensions: [2, 1, 1],
-        },
-    );
-    let run = run(&case, &fixture("texture_ops.ll")).unwrap();
-    let doubled: Vec<f32> = source.iter().map(|value| value * 2.0).collect();
-    assert_eq!(run.output, floats(&doubled));
-}
-
-/// The public out-of-bounds texture-buffer case (`ob1_texel_buffer`): reads and writes past two
-/// 4-texel `r32_uint` texture buffers. Each is host-visible buffer memory, which the candidate
-/// allocates inside a guard of the case's reach, so the census counts the guard bytes each run
-/// changed: none, and the written buffer's own texels are the in-bounds writes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_texture_buffer_written_past_its_end_is_guarded() {
-    use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
-    let idx = [0u32, 1, 2, 3, 4, 5, 64, 1000, 3, 2, 1, 0, 4, 8, 100, 4096];
-    let mut case = kernel(
-        "ob1_texel_buffer",
-        vec![
-            texture(
-                0,
-                TextureType::Buffer,
-                TextureFormat::R32Uint,
-                [4, 1, 1],
-                words(&[0xF100_0001, 0xF100_0002, 0xF100_0003, 0xF100_0004]),
-            ),
-            texture(
-                1,
-                TextureType::Buffer,
-                TextureFormat::R32Uint,
-                [4, 1, 1],
-                vec![0xab; 16],
-            ),
-        ],
-        Vec::new(),
-        [8, 1, 1],
-        ComputeOutput::Texture {
-            binding: 1,
-            origin: [0, 0, 0],
-            dimensions: [4, 1, 1],
-        },
-    );
-    case.buffers = BTreeMap::from([(0, words(&idx)), (1, vec![0xab; 32])]);
-    case.out_of_bounds = [(0, 4000), (1, 16384)]
-        .into_iter()
-        .map(|(binding, reach_after)| OutOfBoundsTarget {
-            resource: OutOfBoundsResource::Texture { binding },
-            form: ContainmentForm::TexelBuffer,
-            reach_before: 0,
-            reach_after,
-        })
-        .collect();
-    let run = run(&case, &fixture("ob1_texel_buffer.ll")).unwrap();
-    assert_eq!(
-        run.output,
-        words(&[0xA000_0003, 0xA000_0002, 0xA000_0001, 0xA000_0000])
-    );
-    let targets = run
-        .census
-        .out_of_bounds
-        .expect("an out-of-bounds case's census records its targets")
-        .targets;
-    assert_eq!(targets.len(), 2);
-    for target in targets {
-        assert_eq!(target.escaped, Some(0), "{target:?}");
-        assert!(target.past_end.is_some(), "{target:?}");
     }
 }
 

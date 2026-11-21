@@ -4,7 +4,7 @@
 //! each target in an allocation of its own).
 
 use super::ComputeCase;
-use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
+use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun};
 use std::collections::BTreeMap;
 
@@ -43,26 +43,13 @@ pub fn declared_reach(
     })
 }
 
-/// The out-of-bounds target the buffer at Metal index `index` holds in `case`: the buffer
-/// itself, or the stage input whose data the buffer binds.
-pub fn buffer_target(case: &ComputeCase, index: u32) -> OutOfBoundsResource {
-    let stage_input = case.stage_input.as_ref().and_then(|descriptor| {
-        descriptor
-            .attributes
-            .iter()
-            .find(|(_, attribute)| attribute.buffer_index == index)
-            .map(|(&location, _)| location)
-    });
-    match stage_input {
-        Some(location) => OutOfBoundsResource::AttributeBuffer { location },
-        None => OutOfBoundsResource::Buffer { binding: index },
-    }
-}
-
-/// The guard reach of the buffer at Metal index `index` when `case` declares it, or the stage
-/// input it binds, an out-of-bounds target.
+/// The guard reach of the buffer at Metal index `index` when `case` declares it an out-of-bounds
+/// target.
 pub fn guard_reach(case: &ComputeCase, index: u32) -> Option<GuardReach> {
-    declared_reach(&case.out_of_bounds, buffer_target(case, index))
+    declared_reach(
+        &case.out_of_bounds,
+        OutOfBoundsResource::Buffer { binding: index },
+    )
 }
 
 /// The guard reach of the argument-buffer buffer at `(owner, field offset)` when `case` declares
@@ -78,20 +65,6 @@ pub fn embedded_guard_reach(
             field_offset,
         },
     )
-}
-
-/// The guard reach of the texture at Metal slot `binding` when `case` declares it an
-/// out-of-bounds target of the texel-buffer form: a texture buffer, whose texels are buffer
-/// memory. An image's memory is opaque and has no guard.
-pub fn texel_guard_reach(case: &ComputeCase, binding: u32) -> Option<GuardReach> {
-    case.out_of_bounds.iter().find_map(|target| {
-        (target.resource == OutOfBoundsResource::Texture { binding }
-            && target.form == ContainmentForm::TexelBuffer)
-            .then_some(GuardReach {
-                before: target.reach_before,
-                after: target.reach_after,
-            })
-    })
 }
 
 /// `run` with the guard and padding bytes the run changed around each target it guarded (a

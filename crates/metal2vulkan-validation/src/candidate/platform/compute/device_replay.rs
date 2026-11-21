@@ -586,8 +586,6 @@ impl Prepared {
             &Guest {
                 buffers: &BTreeMap::new(),
                 textures: &BTreeMap::new(),
-                texel_guards: &BTreeMap::new(),
-                tile_attachments: &BTreeMap::new(),
                 status: None,
                 used_textures: &BTreeMap::new(),
                 samplers: &BTreeMap::new(),
@@ -597,7 +595,6 @@ impl Prepared {
                 constant_blobs: &self.constant_blobs(),
                 descriptor_ranges: &self.commands.descriptor_ranges,
                 descriptor_bytes: &self.commands.descriptor_bytes,
-                structures: &BTreeMap::new(),
                 tessellation_factors: None,
                 attachments: &BTreeMap::new(),
             },
@@ -643,7 +640,7 @@ fn prepare(
         threads_per_group: variant.threads_per_threadgroup,
     };
     let pipeline = match compile(token, &shape, &child)? {
-        CompiledChild::Compute(compiled) => compiled.pipeline,
+        CompiledChild::Compute(pipeline) => *pipeline,
         CompiledChild::Render(..) => return Err(fail("the token names a render template".into())),
     };
     require_enabled(context, &pipeline.requirements)?;

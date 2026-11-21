@@ -18,15 +18,13 @@ use crate::candidate::engine::argument_buffers::{
     field_words, owner_bytes, records_storage, validate_records,
 };
 use crate::candidate::engine::guards::{
-    buffer_target, embedded_guard_reach, guard_reach, texel_guard_reach, with_escaped, GuardCount,
-    GuardReach,
+    embedded_guard_reach, guard_reach, with_escaped, GuardCount, GuardReach,
 };
-use crate::candidate::engine::tables::TableBuffers;
 use crate::candidate::engine::{
     bind_refusal, bind_state, compute_shape, engine_fingerprint, out_of_bounds_run,
     product_refusal, records_ids, resources, run_allocations, sampler_ids, select_output,
-    status_verdict, synthetic_used_addresses, texture_tokens, BufferAddress, CaseStructure,
-    CompiledCase, ComputeCase, ComputeOutput, ComputeRun, RunAllocation, RunAttempt,
+    status_verdict, synthetic_used_addresses, texture_tokens, BufferAddress, ComputeCase,
+    ComputeOutput, ComputeRun, RunAllocation, RunAttempt,
 };
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::check::admission::{ExecutorError, NotSupported};
@@ -67,7 +65,7 @@ type PushWrites = Vec<(vk::ShaderStageFlags, u32, Vec<u8>)>;
 
 /// Compile `case` for the device `device_type` opens with `compile` (given the opened device's
 /// description and policy, and the shape the dispatch binds, which decides the lowering inputs; it
-/// returns the pipeline and its visible-function tables' bytes), plan and execute its dispatch, and
+/// returns the pipeline), plan and execute its dispatch, and
 /// read the status before the output. The commands of each executed command buffer run after it,
 /// compiled with `children`: on the device over the `registered` replay variants where the product
 /// sets the device replay up, by the host replay elsewhere. Every refusal is typed; only a device,
@@ -77,10 +75,7 @@ pub fn execute_engine(
     device_type: DeviceType,
     case_id: &str,
     case: &ComputeCase,
-    compile: impl FnOnce(
-        &WorkerDevice,
-        &BindShape,
-    ) -> Result<CompiledCase<ComputePipeline>, ExecutorError>,
+    compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<ComputePipeline, ExecutorError>,
     children: impl FnMut(
         &WorkerDevice,
         u64,
@@ -233,7 +228,7 @@ fn run(
     case_id: &str,
     case: &ComputeCase,
     (compile, mut children): (
-        impl FnOnce(&WorkerDevice, &BindShape) -> Result<CompiledCase<ComputePipeline>, ExecutorError>,
+        impl FnOnce(&WorkerDevice, &BindShape) -> Result<ComputePipeline, ExecutorError>,
         impl FnMut(
             &WorkerDevice,
             u64,
@@ -252,22 +247,21 @@ fn run(
     let shape = compute_shape(case, addressed, ranges).map_err(ExecutorError::Failed)?;
     // The census and the precision notes come from the artifact the compile worker returned and
     // this process decoded (`pipeline.stage`), never from a compile of its own.
-    let CompiledCase { pipeline, tables } = compile(&target, &shape)?;
+    let pipeline = compile(&target, &shape)?;
     let device = target.device();
     let missing = unmet_requirements(context, &pipeline.requirements);
     if !missing.is_empty() {
         return Err(NotSupported::NotEnabled(missing).into());
     }
     // How the compiled module contains each out-of-bounds target on this device, decided before
-    // anything runs; a target checked nowhere is refused, never run. A kernel fetches each stage
-    // input as the descriptor it was compiled under says.
-    let attributes = out_of_bounds::Fetch::of_stage_input(case.stage_input.as_ref());
+    // anything runs; a target checked nowhere is refused, never run. The kernel fetches no stage
+    // input.
     let out_of_bounds = out_of_bounds_run(
         device.profile(),
         &out_of_bounds::ModuleFacts {
             stage: Stage::Kernel,
             slots: &pipeline.interface.slots,
-            attributes: &attributes,
+            attributes: &BTreeMap::new(),
             resident_roots: pipeline.interface.needs_pointer_translation,
             handle_table: pipeline.interface.needs_handle_translation,
             policy: *device.policy(),
@@ -287,7 +281,7 @@ fn run(
         execute(
             context,
             device,
-            (&pipeline, &tables, &shape),
+            (&pipeline, &shape),
             case,
             (&mut compile_child, registered),
         )
@@ -446,9 +440,8 @@ impl Drop for Objects<'_> {
 }
 
 /// What [`execute`] read after the run: the output, the status, the census of each module a
-/// replayed command executed, the guard and padding bytes that changed around each guarded buffer
-/// and texture buffer, by out-of-bounds target, and which replay ran each executed command buffer,
-/// in key order.
+/// replayed command executed, the guard and padding bytes that changed around each guarded buffer,
+/// by out-of-bounds target, and which replay ran each executed command buffer, in key order.
 struct Executed {
     output: Vec<u8>,
     status: metal2vulkan::bind::StatusReport,
@@ -511,16 +504,15 @@ fn not_implemented(what: impl Into<String>) -> ExecutorError {
 
 /// Allocate the case's buffers (argument-buffer buffers first, so each owner is created with their
 /// addresses, its textures' and samplers' resource ids, and its command buffers', [`field_words`],
-/// [`owner_bytes`]) and its visible-function tables' buffers (holding `tables`' bytes), plan and
-/// instantiate its dispatch, create what every plan write names (`plan_resources`: textures,
-/// argument-buffer textures, heap arrays, handle tables, samplers, texel buffers, acceleration
-/// structures, and neutrals included), record and submit it, wait, and read the status and then
+/// [`owner_bytes`]), plan and instantiate its dispatch, create what every plan write names
+/// (`plan_resources`: textures, argument-buffer textures, heap arrays, handle tables, samplers, and
+/// neutrals included), record and submit it, wait, and read the status and then
 /// the output ([`Executed`]). `compile` compiles the children the case's executed command
 /// buffers dispatch, each in a compile worker: on the device, the `registered` replay variants.
 fn execute(
     context: &VulkanContext,
     device: &Device,
-    (pipeline, tables, compiled_for): (&ComputePipeline, &TableBuffers, &BindShape),
+    (pipeline, compiled_for): (&ComputePipeline, &BindShape),
     case: &ComputeCase,
     (compile, registered): (&mut CompileChild<'_>, &[ReplayVariant]),
 ) -> Result<Executed, ExecutorError> {
@@ -579,21 +571,8 @@ fn execute(
         )?;
         buffers.insert(index, allocation);
     }
-    let mut table_buffers = BTreeMap::new();
-    for (&index, table) in &case.function_tables {
-        let bytes = table_bytes(tables, Stage::Kernel, index, table.byte_len())?;
-        let allocation = allocate(
-            context,
-            &format!("visible function table {index}"),
-            bytes,
-            addressed,
-            vk::BufferUsageFlags::empty(),
-        )?;
-        table_buffers.insert(index, allocation);
-    }
     let addresses: BTreeMap<u32, BufferAddress> = buffers
         .iter()
-        .chain(&table_buffers)
         .map(|(&index, allocation)| {
             Ok((
                 index,
@@ -656,21 +635,12 @@ fn execute(
     };
     let guest_buffers: BTreeMap<SlotRef, vk::Buffer> = buffers
         .iter()
-        .chain(&table_buffers)
         .map(|(&index, allocation)| (slot(SlotClass::Buffer, index), allocation.buffer.buffer))
         .collect();
     let textures: BTreeMap<SlotRef, &LiteralTexture> = case
         .textures
         .iter()
         .map(|(&index, texture)| (slot(SlotClass::Texture, index), texture))
-        .collect();
-    let texel_guards: BTreeMap<SlotRef, GuardReach> = case
-        .textures
-        .keys()
-        .filter_map(|&binding| {
-            let reach = texel_guard_reach(case, binding)?;
-            Some((slot(SlotClass::Texture, binding), reach))
-        })
         .collect();
     let used_textures: BTreeMap<u32, &LiteralTexture> = case
         .argument_buffer_textures
@@ -686,11 +656,6 @@ fn execute(
                 resources::sampler_descriptor(sampler),
             )
         })
-        .collect();
-    let structures: BTreeMap<SlotRef, CaseStructure> = case
-        .acceleration_structures
-        .iter()
-        .map(|(&index, structure)| (slot(SlotClass::Buffer, index), structure.clone()))
         .collect();
     let constant_blobs: BTreeMap<Stage, Arc<[u8]>> = pipeline
         .stage
@@ -710,16 +675,10 @@ fn execute(
             .get(&(owner, field_offset))
             .copied()
             .map(TextureKey::Used),
-        ComputeOutput::RenderTarget { index, .. } => Some(TextureKey::TileAttachment(index)),
         ComputeOutput::None
         | ComputeOutput::Buffer { .. }
         | ComputeOutput::ArgumentBufferBuffer { .. } => None,
     };
-    let no_attachments = BTreeMap::new();
-    let tile_attachments = case
-        .tile
-        .as_ref()
-        .map_or(&no_attachments, |pass| &pass.tiled);
     let mut resources = PlanResources::create(
         context,
         device,
@@ -727,18 +686,15 @@ fn execute(
         &Guest {
             buffers: &guest_buffers,
             textures: &textures,
-            texel_guards: &texel_guards,
             used_textures: &used_textures,
             samplers: &samplers,
             argument_samplers: &state.argument_samplers,
             constant_blobs: &constant_blobs,
             descriptor_ranges: &commands.descriptor_ranges,
             descriptor_bytes: &commands.descriptor_bytes,
-            structures: &structures,
             // A dispatch draws no patches and has no attachments.
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            tile_attachments,
             status: Some(status.buffer.buffer),
         },
         observed,
@@ -821,7 +777,6 @@ fn execute(
         .map(|(held, length)| {
             let (address, allocation) = match held {
                 RunAllocation::Buffer(index) => (addresses[&index], &buffers[&index]),
-                RunAllocation::FunctionTable(index) => (addresses[&index], &table_buffers[&index]),
                 RunAllocation::ArgumentBuffer(key) => (embedded_addresses[&key], &embedded[&key]),
             };
             Live {
@@ -858,7 +813,7 @@ fn execute(
         finals.insert(index, bytes);
         // SAFETY: as for the status buffer.
         if let Some(count) = unsafe { allocation.buffer.escaped()? } {
-            escaped.insert(buffer_target(case, index), count);
+            escaped.insert(OutOfBoundsResource::Buffer { binding: index }, count);
         }
     }
     let mut embedded_finals = BTreeMap::new();
@@ -878,28 +833,9 @@ fn execute(
             );
         }
     }
-    // SAFETY: as for the status buffer.
-    for (slot, count) in unsafe { resources.texel_guard_counts()? } {
-        escaped.insert(
-            OutOfBoundsResource::Texture {
-                binding: slot.index,
-            },
-            count,
-        );
-    }
     let mut final_textures = BTreeMap::new();
     let mut embedded_final_textures = BTreeMap::new();
-    let mut final_attachments = BTreeMap::new();
     match (observed, case.output) {
-        // An attachment no plan write reaches keeps its contents, as the pass loads and stores
-        // it (`final_texture`).
-        (Some(key @ TextureKey::TileAttachment(index)), _) => {
-            if let Some(attachment) = tile_attachments.get(&index) {
-                // SAFETY: as for the status buffer.
-                let attachment = unsafe { resources.final_texture(key, attachment)? };
-                final_attachments.insert(index, attachment);
-            }
-        }
         (Some(key @ TextureKey::Slot(observed)), _) => {
             if let Some(texture) = textures.get(&observed) {
                 // SAFETY: as for the status buffer.
@@ -929,7 +865,6 @@ fn execute(
         &embedded_finals,
         &final_textures,
         &embedded_final_textures,
-        &final_attachments,
     )
     .map_err(ExecutorError::Failed)?;
     drop(objects);
@@ -941,25 +876,6 @@ fn execute(
         escaped,
         replayed,
     })
-}
-
-/// The bytes of the visible-function table at `index` of `stage` (the compile's), which must be the
-/// `length` its bind state binds.
-pub(super) fn table_bytes(
-    tables: &TableBuffers,
-    stage: Stage,
-    index: u32,
-    length: u64,
-) -> Result<&[u8], ExecutorError> {
-    match tables.get(&(stage, index)) {
-        Some(bytes) if bytes.len() as u64 == length => Ok(bytes),
-        Some(bytes) => Err(format!(
-            "the {stage:?} visible function table {index} has {} bytes, not {length}",
-            bytes.len()
-        )
-        .into()),
-        None => Err(format!("the {stage:?} visible function table {index} has no words").into()),
-    }
 }
 
 /// Upload a resident root table with its sink entry filled: `(table, sink)`; the table's device

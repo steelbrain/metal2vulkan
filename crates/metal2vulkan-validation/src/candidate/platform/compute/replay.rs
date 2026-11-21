@@ -44,8 +44,8 @@ pub(in crate::candidate) type CompileChild<'a> =
 /// What a replay executed: each child's module census, for the run's census.
 pub(in crate::candidate::platform) type Executed = Vec<ModuleCensus>;
 
-/// What a replay runs over: the run's allocations `live` (every case buffer, function table, and
-/// argument-buffer buffer), the final records `records` (by command-buffer key), the guest
+/// What a replay runs over: the run's allocations `live` (every case buffer and argument-buffer
+/// buffer), the final records `records` (by command-buffer key), the guest
 /// address of each case buffer of a command buffer's owner (`addresses`, by its key and the
 /// buffer's Metal index, for the parent's bindings), and the compile of each child.
 pub(in crate::candidate::platform) struct Replay<'a, 'b, K> {
@@ -197,18 +197,16 @@ pub(in crate::candidate::platform) fn execute_commands<'c, K: Ord + Copy + std::
             }
             let shape = state.shape();
             let stages = match (compile(token, &shape, &child)?, child) {
-                (CompiledChild::Compute(compiled), ChildCommand::Dispatch(dispatch)) => {
-                    let pipeline = &compiled.pipeline;
+                (CompiledChild::Compute(pipeline), ChildCommand::Dispatch(dispatch)) => {
                     require_enabled(context, &pipeline.requirements)?;
-                    submit_child(context, device, pipeline, &state, &dispatch, &guest)
+                    submit_child(context, device, &pipeline, &state, &dispatch, &guest)
                         .map_err(|error| refine(error, &fail))?;
                     vec![pipeline.stage.clone()]
                 }
-                (CompiledChild::Render(case, compiled), ChildCommand::Draw { primitive, .. }) => {
-                    let pipeline = &compiled.pipeline;
+                (CompiledChild::Render(case, pipeline), ChildCommand::Draw { primitive, .. }) => {
                     require_enabled(context, &pipeline.requirements)?;
                     super::super::render::submit_draw_child(
-                        context, device, &case, pipeline, &state, primitive, &guest,
+                        context, device, &case, &pipeline, &state, primitive, &guest,
                     )
                     .map_err(|error| refine(error, &fail))?;
                     pipeline.stages.clone()
@@ -354,9 +352,6 @@ fn submit_child(
         &Guest {
             buffers: guest,
             textures: &BTreeMap::new(),
-            // A replayed command declares no out-of-bounds target.
-            texel_guards: &BTreeMap::new(),
-            tile_attachments: &BTreeMap::new(),
             status: Some(status.buffer.buffer),
             used_textures: &BTreeMap::new(),
             samplers: &BTreeMap::new(),
@@ -364,7 +359,6 @@ fn submit_child(
             constant_blobs: &constant_blobs,
             descriptor_ranges: &commands.descriptor_ranges,
             descriptor_bytes: &commands.descriptor_bytes,
-            structures: &BTreeMap::new(),
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
         },

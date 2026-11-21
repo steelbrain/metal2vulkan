@@ -53,10 +53,10 @@ use crate::observation_contract::{ComparisonClass, ObservationLanes};
 use base64::Engine as _;
 use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDomain, Robustness};
 use metal2vulkan::library::CompiledFunction;
+use metal2vulkan::pipeline::VertexInputState;
 use metal2vulkan::pipeline::{AttributeFetch, StrategyCensus};
 use metal2vulkan::pipeline::{BufferForm, DescriptorView, SlotInterface};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage as SymStage};
-use metal2vulkan::pipeline::{StageInputDescriptor, VertexInputState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -315,23 +315,6 @@ impl Fetch {
                     AttributeFetch::Pulled { buffer_index } => Fetch::Pulled { buffer_index },
                 };
                 (index, fetch)
-            })
-            .collect()
-    }
-
-    /// Each stage input a kernel compiled under stage-input descriptor `descriptor` fetches, by
-    /// Metal attribute index: in the shader, from the buffer its attribute names.
-    pub fn of_stage_input(descriptor: Option<&StageInputDescriptor>) -> BTreeMap<u32, Fetch> {
-        descriptor
-            .iter()
-            .flat_map(|descriptor| &descriptor.attributes)
-            .map(|(&location, attribute)| {
-                (
-                    location,
-                    Fetch::Pulled {
-                        buffer_index: attribute.buffer_index,
-                    },
-                )
             })
             .collect()
     }

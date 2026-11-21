@@ -164,9 +164,10 @@ pub enum ToolingRequirement {
     MeshRenderPipeline,
     /// A replayed pipeline template the engine's candidate does not replay
     /// (`candidate::engine::replay_templates`): a compute template that binds more than buffers
-    /// and threadgroup memory or runs a stage input, or a render template that is not a
-    /// rasterization-disabled vertex function binding buffers only. A case's templates raise it,
-    /// never a source's structure, so no census row carries it.
+    /// and threadgroup memory, or a render template that is not a rasterization-disabled vertex
+    /// function binding buffers only (a template of a family the runtime does not build is refused
+    /// as that family first). A case's templates raise it, never a source's structure, so no census
+    /// row carries it.
     ReplayedTemplateResources,
     /// A sequentially consistent fence its entry's pipeline compiles
     /// (`executor_contract::seq_cst_fence`): an `atomic_thread_fence` of `memory_order_seq_cst`

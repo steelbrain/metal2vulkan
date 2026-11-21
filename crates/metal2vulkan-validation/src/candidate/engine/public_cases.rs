@@ -3,7 +3,6 @@
 //! decides (`variants`), and planned by the binder, or refused typed. No device is opened.
 
 use super::*;
-use crate::check::loop_free::DecodedModule;
 use crate::source::public_sources;
 use metal2vulkan::bind::{ImageSource, WriteSource};
 use metal2vulkan::device::FormatUsage;
@@ -85,19 +84,6 @@ fn lacks_a_bound_format(device: &Device, case: &AuthoredCase, sets: &[Vec<Capabi
     })
 }
 
-/// The AIR-layer interface of `case`'s entry in `bitcode`, as the checker derives it.
-fn interface(case: &AuthoredCase, bitcode: &[u8]) -> AirInterface {
-    let decoded = DecodedModule::from_bitcode(&case.entry, bitcode).unwrap();
-    let constants = crate::check::case_constants(case).unwrap();
-    AirInterface::new(
-        decoded.module(),
-        decoded.abi().unwrap(),
-        &case.entry,
-        &constants,
-    )
-    .unwrap()
-}
-
 fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRow) -> Planned {
     let scratch = crate::ScratchDir::new("public-texture-case").unwrap();
     let ll = scratch.path().join("case.ll");
@@ -107,7 +93,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
         Err(AssembleError::Missing(why)) => return Planned::NoAssembler(why),
         Err(AssembleError::Rejected(why)) => return Planned::Unassembled(why),
     };
-    let Ok(compute) = compute_case(case, &interface(case, &bitcode)) else {
+    let Ok(compute) = compute_case(case) else {
         return Planned::Refused;
     };
     let library = Library::from_air(&bitcode).unwrap();
@@ -119,7 +105,6 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
         &function,
         &shape,
         Some(&compute.dispatch),
-        compute.stage_input.as_ref(),
         &Budget::standard(),
     ) {
         Ok(compiled) => compiled,
@@ -338,7 +323,7 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
                 panic!("{}: llvm-as rejected it: {why}", case.name)
             }
         };
-        let compute = compute_case(case, &interface(case, &bitcode)).unwrap();
+        let compute = compute_case(case).unwrap();
         let slots = case
             .texture_arrays
             .iter()
@@ -362,7 +347,6 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
                 &device,
                 &function,
                 &shape,
-                None,
                 None,
                 &Budget::standard(),
             );
@@ -459,7 +443,7 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
                 panic!("{}: llvm-as rejected it: {why}", case.name)
             }
         };
-        let compute = compute_case(case, &interface(case, &bitcode)).unwrap();
+        let compute = compute_case(case).unwrap();
         assert_eq!(
             compute.argument_buffer_buffers.len(),
             case.argument_buffer_buffers.len(),
@@ -495,7 +479,6 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
                 &function,
                 &shape,
                 Some(&compute.dispatch),
-                None,
                 &Budget::standard(),
             )
             .unwrap_or_else(|error| panic!("{} {stem}: compile: {error:?}", case.name));

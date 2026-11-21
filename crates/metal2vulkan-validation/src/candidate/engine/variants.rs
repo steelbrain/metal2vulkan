@@ -16,8 +16,7 @@
 //!
 //! One loop ([`compile_for_bind_state`]) serves both pipeline kinds, in terms of the pipeline's
 //! `VariantKey`: a kernel compiles its function under the key's kernel inputs
-//! ([`compile_compute_for_shape`]; a tile function the same way, under its attachments' formats
-//! too, into a tile pipeline, [`compile_tile_for_shape`]), a render pipeline both stages under the
+//! ([`compile_compute_for_shape`]), a render pipeline both stages under the
 //! key (`Device::compile_render_variant`, [`compile_render_for_shape`]), so a storage texture of
 //! either the vertex or the fragment stage gets its format, and a render plan's pulled vertex
 //! buffers are compiled for too. These are what the compile worker runs for the engine
@@ -28,20 +27,16 @@
 use metal2vulkan::bind::{draw_replay_vertex_layouts, BindShape, Dispatch, TextureShape};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{Device, DeviceProfile};
-use metal2vulkan::error::{
-    DescriptorError, Error, InternalError, InternalKind, MetalAnswer, RuntimeInput,
-};
+use metal2vulkan::error::{Error, InternalError, InternalKind, RuntimeInput};
 use metal2vulkan::metal::format::storage_image_choice;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, MeshPipelineDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, StageInputDescriptor, StageSource,
-    TileRenderPipelineDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, StageSource,
 };
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use metal2vulkan::Budget;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 /// Whether a pipeline compiled under `compiled` is the one `variant` asks for.
 pub fn compiled_for(compiled: &VariantKey, variant: &VariantKey) -> bool {
@@ -114,23 +109,19 @@ pub fn compile_for_bind_state<P>(
 
 /// Compile `function` into a compute pipeline for `device` under `budget` with the inputs the
 /// bind shape `shape` decides, and those `dispatch` runs on when given (its plan's
-/// `dispatch_variant`) ([`compile_for_bind_state`], the key's kernel inputs), in a pipeline of
-/// stage-input descriptor `stage_input`, which the kernel compiles under too; returns the pipeline
+/// `dispatch_variant`) ([`compile_for_bind_state`], the key's kernel inputs); returns the pipeline
 /// and that key.
 pub fn compile_compute_for_shape(
     device: &Device,
     function: &FunctionDescriptor,
     shape: &BindShape,
     dispatch: Option<&Dispatch>,
-    stage_input: Option<&StageInputDescriptor>,
     budget: &Budget,
 ) -> Result<(ComputePipeline, VariantKey), Error> {
     compile_kernel_for_shape(device, shape, dispatch, |key| {
-        let mut inputs = key.lowering_inputs(Stage::Kernel);
-        inputs.stage_input = stage_input.cloned();
+        let inputs = key.lowering_inputs(Stage::Kernel);
         let compiled = device.compile_function(function, &inputs, budget)?;
-        let mut descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
-        descriptor.stage_input = stage_input.cloned();
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
         device.compile_compute_pipeline(&descriptor, budget)
     })
 }
@@ -152,39 +143,6 @@ pub fn compile_replay_for_shape(
         let compiled = device.compile_function(function, &inputs, budget)?;
         let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
         device.compile_compute_pipeline(&descriptor, budget)
-    })
-}
-
-/// Compile the tile function `function` into a tile pipeline (`Device::compile_tile_pipeline`)
-/// for `device` under `budget`, its color attachments of `formats` by color index, with the
-/// inputs the bind shape `shape` and `dispatch` decide as for [`compile_compute_for_shape`]: the
-/// function compiles under the key's kernel inputs and the attachments' formats
-/// (`LoweringInputs::tile_attachments`), and the pipeline links it under the same formats. Returns
-/// the pipeline and that key.
-pub fn compile_tile_for_shape(
-    device: &Device,
-    function: &FunctionDescriptor,
-    shape: &BindShape,
-    dispatch: Option<&Dispatch>,
-    formats: &BTreeMap<u32, PixelFormat>,
-    budget: &Budget,
-) -> Result<(ComputePipeline, VariantKey), Error> {
-    compile_kernel_for_shape(device, shape, dispatch, |key| {
-        let mut inputs = key.lowering_inputs(Stage::Kernel);
-        inputs.tile_attachments = Some(formats.clone());
-        let compiled = device.compile_function(function, &inputs, budget)?;
-        let mut descriptor = TileRenderPipelineDescriptor::new(StageSource::Compiled(compiled));
-        for (&index, &format) in formats {
-            let attachment = usize::try_from(index)
-                .ok()
-                .and_then(|index| descriptor.color_attachment_formats.get_mut(index))
-                .ok_or(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-                    index,
-                    metal: MetalAnswer::EndsProcess,
-                }))?;
-            *attachment = Some(format);
-        }
-        device.compile_tile_pipeline(&descriptor, budget)
     })
 }
 
@@ -500,15 +458,9 @@ mod tests {
         };
         let budget = Budget::standard();
         for n in [1, 4, 16] {
-            let (pipeline, key) = compile_compute_for_shape(
-                &device,
-                &function,
-                &shape,
-                Some(&dispatch(n)),
-                None,
-                &budget,
-            )
-            .unwrap();
+            let (pipeline, key) =
+                compile_compute_for_shape(&device, &function, &shape, Some(&dispatch(n)), &budget)
+                    .unwrap();
             assert!(key.emulated_simdgroups, "{n}");
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(compiled_for(&key, &plan.variant), "{n}");
@@ -519,8 +471,7 @@ mod tests {
         }
         for d in [Some(dispatch(32)), None] {
             let (pipeline, key) =
-                compile_compute_for_shape(&device, &function, &shape, d.as_ref(), None, &budget)
-                    .unwrap();
+                compile_compute_for_shape(&device, &function, &shape, d.as_ref(), &budget).unwrap();
             assert!(key.is_empty(), "{d:?}");
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(plan.instantiate_dispatch(&state, &dispatch(32)).is_ok());

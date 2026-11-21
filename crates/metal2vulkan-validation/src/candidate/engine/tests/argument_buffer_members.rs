@@ -388,7 +388,6 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
         &function,
         &shape,
         Some(&mapped.dispatch),
-        None,
         &Budget::standard(),
     )
     .unwrap();
@@ -567,7 +566,6 @@ fn a_pipeline_state_whose_bytes_a_kernel_reads_never_reaches_a_comparison() {
                     &function,
                     &shape,
                     Some(&mapped.dispatch),
-                    None,
                     &Budget::standard(),
                 );
                 match (compiled, compiles) {
@@ -703,7 +701,6 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
         &function,
         &shape,
         Some(&mapped.dispatch),
-        None,
         &Budget::standard(),
     )
     .unwrap();

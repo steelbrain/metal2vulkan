@@ -22,7 +22,7 @@ use metal2vulkan_devtools::{fixtures_dir, llvm_assemble};
 use std::collections::BTreeMap;
 
 /// Draw `case`, compiled in the device tests' compile worker ([`compile_worker`]) by the request
-/// the tools send it. Owned draws link nothing, so they bind no visible-function tables.
+/// the tools send it.
 fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, ExecutorError> {
     platform::execute_engine_render(
         crate::gpu::TEST_DEVICE,
@@ -34,7 +34,7 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
                 .into_iter()
                 .map(crate::acceptance::retained)
                 .collect::<Vec<_>>();
-            compile_render(compile_worker(), device, &request, &sources, case, &[])
+            compile_render(compile_worker(), device, &request, &sources)
         },
         |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
     )
@@ -95,7 +95,6 @@ fn triangle_inputs(positions: &[[f32; 2]], uv: [f32; 2]) -> Vec<VertexBuffer> {
             buffer_index: 30,
             format: AttributeFormat::Float2,
             stride: 8,
-            dynamic: false,
             step: metal2vulkan::metal::VertexStepFunction::PerVertex,
             bytes: floats(&positions.concat()),
         },
@@ -104,7 +103,6 @@ fn triangle_inputs(positions: &[[f32; 2]], uv: [f32; 2]) -> Vec<VertexBuffer> {
             buffer_index: 29,
             format: AttributeFormat::Float2,
             stride: 8,
-            dynamic: false,
             step: metal2vulkan::metal::VertexStepFunction::PerVertex,
             bytes: floats(&uv.repeat(count)),
         },
@@ -261,7 +259,7 @@ fn a_vertex_varying_reaches_the_fragment_stage() {
 /// libraries its two stages come from: the companion's opaque spelling assembled, in stage order.
 fn with_companion(case: &AuthoredCase, bitcode: &[u8]) -> (RenderCase, Vec<u8>) {
     let (interface, companion) = checked_companion(case, bitcode);
-    let render = render_case(case, &interface, WITHOUT_SLICE, companion.as_ref(), None).unwrap();
+    let render = render_case(case, &interface, WITHOUT_SLICE, companion.as_ref()).unwrap();
     let companion = companion.expect("a graphics case with a companion");
     (render, companion.opaque_bitcode().unwrap())
 }
@@ -317,9 +315,7 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
     );
     #[cfg(target_os = "linux")]
     {
-        assert!(crate::candidate::engine::runs_render_through_runtime(
-            &authored, &case
-        ));
+        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
         let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
         assert_eq!(through.output, floats(&expected));
         assert_eq!(through.status, None);
@@ -362,13 +358,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
     authored.depth_stencil = depth_stencil(true, true);
     authored.output = stencil.clone();
     let (interface, companion) = checked_companion(&authored, &fragment);
-    match render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    ) {
+    match render_case(&authored, &interface, WITHOUT_SLICE, companion.as_ref()) {
         Err(ExecutorError::NotSupported(crate::check::admission::NotSupported::Requirements(
             requirements,
         ))) => assert_eq!(
@@ -401,9 +391,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             authored.depth_stencil = depth_stencil(aspect, !aspect);
             authored.output = output;
             let (case, companion) = with_companion(&authored, &own);
-            assert!(crate::candidate::engine::runs_render_through_runtime(
-                &authored, &case
-            ));
+            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
             let drawn = run(
                 &case,
                 RenderLibraries {
@@ -420,9 +408,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
         }
         authored.depth_stencil = depth_stencil(false, true);
         let (case, companion) = with_companion(&authored, &fragment);
-        assert!(crate::candidate::engine::runs_render_through_runtime(
-            &authored, &case
-        ));
+        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
         match run_on_runtime(&case, &fragment, Some(&companion)) {
             Ok(through) => {
                 let drawn = run(
@@ -506,9 +492,7 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
         assert_eq!(run.output, expected, "{observation:?}");
         #[cfg(target_os = "linux")]
         {
-            assert!(crate::candidate::engine::runs_render_through_runtime(
-                &authored, &case
-            ));
+            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
             let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
             assert_eq!(
                 through.output, expected,
@@ -546,9 +530,7 @@ fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
     let expected = floats(&[written, sample(1.0), written, sample(3.0)].concat());
     #[cfg(target_os = "linux")]
     {
-        assert!(crate::candidate::engine::runs_render_through_runtime(
-            &authored, &case
-        ));
+        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
         let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
         assert_eq!(through.output, expected, "through the runtime");
     }
@@ -621,9 +603,7 @@ fn a_fragment_pass_of_no_attachment_runs_each_sample_once() {
         }
         #[cfg(target_os = "linux")]
         {
-            assert!(crate::candidate::engine::runs_render_through_runtime(
-                &authored, &case
-            ));
+            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
             let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
             assert_eq!(
                 through.output, drawn.output,
@@ -707,9 +687,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
         .output;
         #[cfg(target_os = "linux")]
         {
-            assert!(crate::candidate::engine::runs_render_through_runtime(
-                authored, &case
-            ));
+            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
             let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
             assert_eq!(through.output, output, "through the runtime");
         }
@@ -819,7 +797,6 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
         &crate::check::interface::tests::vertex_buffers_at(&[0]),
         WITHOUT_SLICE,
         None,
-        None,
     )
     .unwrap();
     let vertex = public("vertex_narrow_attributes.ll");
@@ -834,9 +811,7 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     assert_eq!(run.output, (2u32 + 3 + 4).to_le_bytes());
     #[cfg(target_os = "linux")]
     {
-        assert!(crate::candidate::engine::runs_render_through_runtime(
-            &authored, &case
-        ));
+        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
         let through = run_on_runtime(&case, &vertex, None).unwrap();
         assert_eq!(through.output, (2u32 + 3 + 4).to_le_bytes());
     }

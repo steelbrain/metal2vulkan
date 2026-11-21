@@ -171,10 +171,7 @@ mod platform {
         _compile: impl FnOnce(
             &crate::worker::compile::WorkerDevice,
             &metal2vulkan::bind::BindShape,
-        ) -> Result<
-            super::engine::CompiledCase<metal2vulkan::pipeline::ComputePipeline>,
-            ExecutorError,
-        >,
+        ) -> Result<metal2vulkan::pipeline::ComputePipeline, ExecutorError>,
         _children: impl FnMut(
             &crate::worker::compile::WorkerDevice,
             u64,
@@ -195,10 +192,7 @@ mod platform {
         _compile: impl FnOnce(
             &crate::worker::compile::WorkerDevice,
             &metal2vulkan::bind::BindShape,
-        ) -> Result<
-            super::engine::CompiledCase<metal2vulkan::pipeline::RenderPipeline>,
-            ExecutorError,
-        >,
+        ) -> Result<metal2vulkan::pipeline::RenderPipeline, ExecutorError>,
         _children: impl FnMut(
             &crate::worker::compile::WorkerDevice,
             u64,

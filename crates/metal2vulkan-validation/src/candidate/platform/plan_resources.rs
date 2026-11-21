@@ -18,35 +18,28 @@
 //!   image per texture whatever writes view it (every view of one member takes one layout); each
 //!   stage's handle table is a buffer of exactly the bytes instantiation gave it, bound over
 //!   exactly its planned length;
-//! - a texel-buffer write views the slot's buffer with the plan's format over the plan's range;
 //! - a sampler (plain, or the sampler half of a combined write) is `bind::sampler_desc` of the
 //!   bound descriptor for the write's use, and the image format for a combined write; an
 //!   immutable one is the layout's;
 //! - a neutral image is created once per kind, cleared to zero, and left in the layout its
 //!   descriptor type reads (`GENERAL` for storage, `SHADER_READ_ONLY_OPTIMAL` otherwise); a
 //!   neutral texel buffer is 16 zero bytes; the neutral sampler is nearest and clamped;
-//! - an acceleration-structure write binds the top-level structure of the case's structure at
-//!   the write's slot, built before the work ([`Structures`]);
 //! - a tessellation-factor write binds the draw's factor buffer over exactly the plan's range;
 //! - an input-attachment write views the draw's color attachment of its index in `GENERAL`, the
-//!   layout the render pass keeps a framebuffer-fetch attachment in;
-//! - a tile-attachment write views the tile pass's color attachment of its index, one 2D image of
-//!   the attachment's format, extent, and contents, as a storage image in `GENERAL`: uploaded
-//!   before the work and read back after it like a bound texture.
+//!   layout the render pass keeps a framebuffer-fetch attachment in.
 //!
-//! The run keeps no imageblock storage: an imageblock write fails. Inline bytes are typed
+//! The run keeps no imageblock storage: an imageblock write fails. A write of a source the runtime
+//! does not build (a texture buffer, an acceleration structure, a tile pass's attachment, a sparse
+//! texture's tile map), which the case's requirements refuse first, and inline bytes are typed
 //! `NotImplemented`. Descriptor sets come from one
 //! pool sized from the layout's bindings, update-after-bind when the layout has the heap's set
 //! ([`PlanResources::write_sets`]).
 
-use super::acceleration::Structures;
 use super::acceptance::LayoutObjects;
-use super::buffers::{create_guarded_host_buffer, create_host_buffer, HostBuffer};
+use super::buffers::{create_host_buffer, HostBuffer};
 use super::device::VulkanContext;
 use super::multisample::initialize_multisample_image;
-use super::sparse_images::{create_sparse_image, create_tile_mapped_image};
-use crate::candidate::engine::guards::{GuardCount, GuardReach};
-use crate::candidate::engine::{bind_refusal, CaseStructure};
+use crate::candidate::engine::bind_refusal;
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::literal::{texture_layout, LiteralTexture, TextureLayout};
 use ash::vk;
@@ -59,7 +52,7 @@ use metal2vulkan::device::Device;
 use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse};
 use metal2vulkan::pipeline::{SlotRef, Stage};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Bytes of a neutral texel buffer: one texel of any format the core declares.
@@ -69,14 +62,12 @@ fn not_implemented(what: impl Into<String>) -> ExecutorError {
     NotSupported::NotImplemented(format!("engine candidate: {}", what.into())).into()
 }
 
-/// A texture a plan write views: the texture bound at a slot, the used texture with a consumer
-/// token (a heap member; an argument-buffer texture), or the color attachment of an index that a
-/// tile pass stages.
+/// A texture a plan write views: the texture bound at a slot, or the used texture with a consumer
+/// token (a heap member; an argument-buffer texture).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum TextureKey {
     Slot(SlotRef),
     Used(u32),
-    TileAttachment(u32),
 }
 
 impl TextureKey {
@@ -93,7 +84,6 @@ impl TextureKey {
         match self {
             TextureKey::Slot(slot) => format!("texture {}", slot.index),
             TextureKey::Used(token) => format!("used texture {token}"),
-            TextureKey::TileAttachment(index) => format!("storage attachment {index}"),
         }
     }
 }
@@ -102,11 +92,8 @@ impl TextureKey {
 pub(super) struct Guest<'a> {
     /// Each bound buffer's allocation, by slot.
     pub(super) buffers: &'a BTreeMap<SlotRef, vk::Buffer>,
-    /// Each bound texture (texture buffers included) with its initial contents, by slot.
+    /// Each bound texture with its initial contents, by slot.
     pub(super) textures: &'a BTreeMap<SlotRef, &'a LiteralTexture>,
-    /// The guard reach of each texture buffer the case declares an out-of-bounds target, by slot:
-    /// its buffer is allocated inside a guard of that reach.
-    pub(super) texel_guards: &'a BTreeMap<SlotRef, GuardReach>,
     /// Each used texture (an argument-buffer texture) with its initial contents, by consumer
     /// token.
     pub(super) used_textures: &'a BTreeMap<u32, &'a LiteralTexture>,
@@ -119,16 +106,11 @@ pub(super) struct Guest<'a> {
     pub(super) constant_blobs: &'a BTreeMap<Stage, Arc<[u8]>>,
     pub(super) descriptor_ranges: &'a [DescriptorRange],
     pub(super) descriptor_bytes: &'a [DescriptorBytes],
-    /// Each bound acceleration structure, by slot.
-    pub(super) structures: &'a BTreeMap<SlotRef, CaseStructure>,
     /// The encoder's tessellation factor buffer of a patch draw.
     pub(super) tessellation_factors: Option<vk::Buffer>,
     /// Each color target's view of a draw's pass, by Metal index: what an input-attachment write
     /// reads (framebuffer fetch), in `GENERAL`. A dispatch has none.
     pub(super) attachments: &'a BTreeMap<u32, vk::ImageView>,
-    /// A tile pass's color attachments with their initial contents, by color index: 2D textures
-    /// the tile-attachment writes view. A draw, and a dispatch of no tile function, have none.
-    pub(super) tile_attachments: &'a BTreeMap<u32, LiteralTexture>,
     /// The run's `ExecutionStatus` buffer, which a stage binds on a device that does not address
     /// buffers (`WriteSource::ExecutionStatus`). A device replay, which needs the addresses,
     /// has none.
@@ -140,7 +122,6 @@ enum Info {
     Buffer(vk::DescriptorBufferInfo),
     Image(vk::DescriptorImageInfo),
     Texel(vk::BufferView),
-    AccelerationStructure(vk::AccelerationStructureKHR),
 }
 
 /// One resolved descriptor write.
@@ -166,8 +147,7 @@ struct SlotImage {
     /// The authored contents, uploaded before the work; `None` for a multisampled image, which
     /// its own initializer submission wrote per sample and left in `GENERAL`.
     staging: Option<HostBuffer>,
-    /// The copies from `staging` that upload the image: each level's whole extent, or a sparse
-    /// image's mapped texels alone.
+    /// The copies from `staging` that upload the image: each level's whole extent.
     copies: Vec<vk::BufferImageCopy>,
     /// The final contents, when the texture is the observed output.
     readback: Option<HostBuffer>,
@@ -206,10 +186,6 @@ pub(super) struct PlanResources<'a> {
     descriptor_pool: vk::DescriptorPool,
     /// Buffers this module allocated (neutrals, tables, blobs).
     buffers: Vec<HostBuffer>,
-    /// Each bound texture buffer's allocation.
-    texel_buffers: BTreeMap<SlotRef, HostBuffer>,
-    /// The acceleration structures the writes bind.
-    structures: Structures,
 }
 
 impl Drop for PlanResources<'_> {
@@ -291,8 +267,6 @@ impl<'a> PlanResources<'a> {
             samplers: Vec::new(),
             descriptor_pool: vk::DescriptorPool::null(),
             buffers: Vec::new(),
-            texel_buffers: BTreeMap::new(),
-            structures: Structures::new(context),
         };
         // Every view of each texture first: its image serves all of them.
         let mut uses: BTreeMap<TextureKey, TextureUse> = BTreeMap::new();
@@ -307,14 +281,6 @@ impl<'a> PlanResources<'a> {
                 WriteSource::HeapEntry { source, view, .. } => {
                     (TextureKey::of_heap(*source)?, ViewUse::from(view))
                 }
-                // In the plan's view format, which makes the image mutable to it.
-                WriteSource::TileAttachment {
-                    color_index,
-                    format,
-                } => (
-                    TextureKey::TileAttachment(*color_index),
-                    tile_attachment_view(guest, *color_index, *format)?,
-                ),
                 _ => continue,
             };
             let entry = uses.entry(key).or_default();
@@ -325,30 +291,18 @@ impl<'a> PlanResources<'a> {
                 entry.sampled = true;
             }
         }
-        // The slots whose sparse texture the plan answers from a tile map: made as the runtime
-        // makes them (`create_slot_image`).
-        let tiled: BTreeSet<SlotRef> = descriptors
-            .iter()
-            .filter_map(|write| match &write.source {
-                WriteSource::TileMap { slot } => Some(*slot),
-                _ => None,
-            })
-            .collect();
         for (&key, texture_use) in &uses {
             let texture: &LiteralTexture = match key {
                 TextureKey::Slot(slot) => guest.textures.get(&slot).copied(),
                 TextureKey::Used(token) => guest.used_textures.get(&token).copied(),
-                TextureKey::TileAttachment(index) => guest.tile_attachments.get(&index),
             }
             .ok_or_else(|| format!("the plan views {} that is not bound", key.label()))?;
-            let emulated = matches!(key, TextureKey::Slot(slot) if tiled.contains(&slot));
             let image = create_slot_image(
                 context,
                 &key.label(),
                 texture,
                 texture_use,
                 observed == Some(key),
-                emulated,
             )?;
             resources.images.insert(key, image);
         }
@@ -569,35 +523,6 @@ impl<'a> PlanResources<'a> {
                         .image_layout(layout),
                 )
             }
-            WriteSource::TexelBuffer { slot, format, .. } => {
-                let texture = guest
-                    .textures
-                    .get(slot)
-                    .ok_or_else(|| format!("the plan views unbound texture buffer {slot:?}"))?;
-                let range = range(key)?;
-                let usage = if is_storage(ty) {
-                    vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER
-                } else {
-                    vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER
-                };
-                if self.texel_buffers.contains_key(slot) {
-                    return Err(not_implemented("one texture buffer behind two descriptors"));
-                }
-                let label = format!("texture buffer {}", slot.index);
-                let guard = guest.texel_guards.get(slot).copied();
-                let view = (range.offset, range.range);
-                let bytes = texel_buffer_bytes(&texture.bytes, view, guard.is_some())
-                    .map_err(|error| format!("{label}: {error}"))?;
-                let buffer = match guard {
-                    Some(reach) => {
-                        create_guarded_host_buffer(context, &label, &bytes, usage, reach)?
-                    }
-                    None => create_host_buffer(context, &label, &bytes, usage)?,
-                };
-                let view = self.buffer_view(context, buffer.buffer, (*format).into(), view)?;
-                self.texel_buffers.insert(*slot, buffer);
-                Info::Texel(view)
-            }
             WriteSource::Neutral(NeutralResource::TexelBuffer { format }) => {
                 let usage = if is_storage(ty) {
                     vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER
@@ -656,55 +581,8 @@ impl<'a> PlanResources<'a> {
                         .image_layout(vk::ImageLayout::GENERAL),
                 )
             }
-            WriteSource::AccelerationStructure { slot, level } => Info::AccelerationStructure(
-                self.structures
-                    .top_level(context, *slot, *level, guest.structures.get(slot))?,
-            ),
             WriteSource::Imageblock => {
                 return Err("the plan binds an imageblock storage the run does not keep".into())
-            }
-            // A tile pass's color attachment, a storage image in the plan's view format in
-            // `GENERAL`.
-            WriteSource::TileAttachment {
-                color_index,
-                format,
-            } => {
-                let key = TextureKey::TileAttachment(*color_index);
-                let (image, layout) = self.image(key)?;
-                let format = tile_attachment_view(guest, *color_index, *format)?.format;
-                let info = vk::ImageViewCreateInfo::default()
-                    .image(image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(format)
-                    .subresource_range(self::range(vk::ImageAspectFlags::COLOR, 1));
-                // SAFETY: `info` names a live image of this run.
-                let view = unsafe { context.device.create_image_view(&info, None) }
-                    .map_err(|error| format!("create the {} view: {error}", key.label()))?;
-                self.views.push(view);
-                Info::Image(
-                    vk::DescriptorImageInfo::default()
-                        .image_view(view)
-                        .image_layout(layout),
-                )
-            }
-            // A sparse texture's tile map: the map of the case's mappings, as the consumer keeps
-            // it, over exactly its bytes.
-            WriteSource::TileMap { slot } => {
-                use crate::executor_contract::sparse::{tile_map, tile_map_tiling};
-                let texture = guest
-                    .textures
-                    .get(slot)
-                    .ok_or_else(|| format!("the plan reads the tile map of unbound {slot:?}"))?;
-                let map = tile_map(texture, tile_map_tiling(texture)?)?.ok_or_else(|| {
-                    format!("the plan reads the tile map of {slot:?}, not sparse")
-                })?;
-                let buffer = self.buffer(context, "tile map", &map.to_bytes())?;
-                Info::Buffer(
-                    vk::DescriptorBufferInfo::default()
-                        .buffer(buffer.buffer)
-                        .offset(0)
-                        .range(map.byte_len()),
-                )
             }
             other => return Err(not_implemented(format!("the descriptor source {other:?}"))),
         })
@@ -945,8 +823,8 @@ impl<'a> PlanResources<'a> {
         Ok((view, layout))
     }
 
-    /// Record, before the work: every acceleration structure's build, and every bound texture's
-    /// upload and every neutral image's clear, each left in the layout its descriptors name.
+    /// Record, before the work: every bound texture's upload and every neutral image's clear, each
+    /// left in the layout its descriptors name.
     ///
     /// # Safety
     ///
@@ -954,8 +832,6 @@ impl<'a> PlanResources<'a> {
     /// until its submission completes.
     pub(super) unsafe fn record_uploads(&self, command: vk::CommandBuffer) {
         let device = self.device;
-        // SAFETY: the caller's contract.
-        unsafe { self.structures.record(command) };
         let to_transfer: Vec<vk::ImageMemoryBarrier<'_>> = self
             .images
             .values()
@@ -1096,8 +972,8 @@ impl<'a> PlanResources<'a> {
         }
     }
 
-    /// Record, after the work: the observed texture's copy into its host readback, and a
-    /// shader-to-host dependency for texture buffers.
+    /// Record, after the work: a shader-to-host dependency, and the observed texture's copy into its
+    /// host readback.
     ///
     /// # Safety
     ///
@@ -1166,8 +1042,8 @@ impl<'a> PlanResources<'a> {
         }
     }
 
-    /// `texture` (the texture `key`) with its final contents: the observed image's readback, a
-    /// texture buffer's bytes, or its authored bytes when no descriptor of the plan reaches it.
+    /// `texture` (the texture `key`) with its final contents: the observed image's readback, or its
+    /// authored bytes when no descriptor of the plan reaches it.
     ///
     /// # Safety
     ///
@@ -1177,10 +1053,6 @@ impl<'a> PlanResources<'a> {
         key: TextureKey,
         texture: &LiteralTexture,
     ) -> Result<LiteralTexture, String> {
-        let texel_buffer = match key {
-            TextureKey::Slot(slot) => self.texel_buffers.get(&slot),
-            TextureKey::Used(_) | TextureKey::TileAttachment(_) => None,
-        };
         let bytes = if let Some(image) = self.images.get(&key) {
             let readback = image
                 .readback
@@ -1188,9 +1060,6 @@ impl<'a> PlanResources<'a> {
                 .ok_or_else(|| format!("{} was not read back", key.label()))?;
             // SAFETY: the caller's contract.
             unsafe { readback.map()? }.bytes[..texture.bytes.len()].to_vec()
-        } else if let Some(buffer) = texel_buffer {
-            // SAFETY: the caller's contract.
-            unsafe { buffer.map()? }.bytes[..texture.bytes.len()].to_vec()
         } else {
             texture.bytes.clone()
         };
@@ -1198,25 +1067,6 @@ impl<'a> PlanResources<'a> {
             bytes,
             ..texture.clone()
         })
-    }
-
-    /// The guard and padding bytes each guarded texture buffer's run changed, by slot
-    /// ([`HostBuffer::escaped`]).
-    ///
-    /// # Safety
-    ///
-    /// The submission that used the resources has completed.
-    pub(super) unsafe fn texel_guard_counts(
-        &self,
-    ) -> Result<BTreeMap<SlotRef, GuardCount>, String> {
-        let mut counts = BTreeMap::new();
-        for (&slot, buffer) in &self.texel_buffers {
-            // SAFETY: the caller's contract.
-            if let Some(count) = unsafe { buffer.escaped()? } {
-                counts.insert(slot, count);
-            }
-        }
-        Ok(counts)
     }
 
     /// Allocate one descriptor set per layout set, from one pool sized from the layout's
@@ -1244,19 +1094,6 @@ impl<'a> PlanResources<'a> {
         // SAFETY: the pool and the layouts are live; the sets are freed with the pool.
         let sets = unsafe { context.device.allocate_descriptor_sets(&allocate_info) }
             .map_err(|error| format!("allocate descriptor sets: {error}"))?;
-        // Each acceleration-structure write's chained structure list, one per such write in order.
-        let mut chained: Vec<vk::WriteDescriptorSetAccelerationStructureKHR<'_>> = self
-            .writes
-            .iter()
-            .filter_map(|write| match &write.info {
-                Info::AccelerationStructure(structure) => Some(
-                    vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                        .acceleration_structures(std::slice::from_ref(structure)),
-                ),
-                _ => None,
-            })
-            .collect();
-        let mut chained = chained.iter_mut();
         let mut vk_writes = Vec::with_capacity(self.writes.len());
         for write in &self.writes {
             let set = *sets
@@ -1271,34 +1108,12 @@ impl<'a> PlanResources<'a> {
                 Info::Buffer(info) => base.buffer_info(std::slice::from_ref(info)),
                 Info::Image(info) => base.image_info(std::slice::from_ref(info)),
                 Info::Texel(view) => base.texel_buffer_view(std::slice::from_ref(view)),
-                Info::AccelerationStructure(_) => base
-                    .descriptor_count(1)
-                    .push_next(chained.next().ok_or("an unchained structure write")?),
             });
         }
         // SAFETY: every set, buffer, view, sampler, and info array is live for the call.
         unsafe { context.device.update_descriptor_sets(&vk_writes, &[]) };
         Ok(sets)
     }
-}
-
-/// The view of color attachment `index` of a tile pass in the plan's `format`, in `GENERAL`: the
-/// attachment's own format for an integer one and the unsigned-integer format of the same channels
-/// for a float one, which [`create_slot_image`] makes the image `MUTABLE_FORMAT` for.
-fn tile_attachment_view(
-    guest: &Guest<'_>,
-    index: u32,
-    format: metal2vulkan::vk::Format,
-) -> Result<ViewUse, ExecutorError> {
-    if !guest.tile_attachments.contains_key(&index) {
-        return Err(
-            format!("the plan views storage attachment {index}, which the pass lacks").into(),
-        );
-    }
-    Ok(ViewUse {
-        layout: vk::ImageLayout::GENERAL,
-        format: format.into(),
-    })
 }
 
 /// The descriptor of the sampler bound at `slot`.
@@ -1318,31 +1133,6 @@ pub(super) fn padded(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     out.resize(bytes.len().next_multiple_of(16).max(16), 0);
     out
-}
-
-/// The bytes a texture buffer's host buffer is created from, for its `view` (offset, range).
-/// An unguarded one is [`padded`]. A guarded one (an out-of-bounds target) is exactly its view, so
-/// every byte past the view is the memory requirement's padding or the guard, and a write there is
-/// counted ([`HostBuffer::escaped`]); bytes padded inside the buffer would be neither. The view
-/// must then cover the authored bytes from offset 0, as the case checker makes it.
-fn texel_buffer_bytes(
-    bytes: &[u8],
-    view: (vk::DeviceSize, vk::DeviceSize),
-    guarded: bool,
-) -> Result<Vec<u8>, String> {
-    if !guarded {
-        return Ok(padded(bytes));
-    }
-    if view != (0, bytes.len() as vk::DeviceSize) {
-        return Err(format!(
-            "a guarded texture buffer is exactly its view, but the view [{}, +{}) is not its {} \
-             authored bytes",
-            view.0,
-            view.1,
-            bytes.len()
-        ));
-    }
-    Ok(bytes.to_vec())
 }
 
 fn sample_count(samples: u32) -> Result<vk::SampleCountFlags, ExecutorError> {
@@ -1621,18 +1411,13 @@ pub(super) fn multisample_initializer_support(
 /// texture's own (a storage alias), the one layout every view names, and a host readback when it
 /// is the `observed` output. Each level is uploaded whole from its bytes ([`level_uploads`]). A
 /// mipmapped texture is one the case checker admits (`case::mips`): single-sample, not sparse,
-/// and an input, which no executor reads back. A sparse texture is a sparse resident image, or,
-/// where the plan answers its residency from a tile map (`emulated`), what the runtime makes of
-/// it: a sparse resident image with each block that holds a mapped tile bound, its unmapped
-/// texels zero, where the context makes one, else an ordinary image holding its mapped texels and
-/// zero elsewhere.
+/// and an input, which no executor reads back.
 fn create_slot_image(
     context: &VulkanContext,
     label: &str,
     texture: &LiteralTexture,
     texture_use: &TextureUse,
     observed: bool,
-    emulated: bool,
 ) -> Result<SlotImage, ExecutorError> {
     use crate::case::TextureType as T;
     let pixel_format = crate::candidate::engine::resources::pixel_format(texture.format);
@@ -1652,11 +1437,11 @@ fn create_slot_image(
     let (image_type, extent) = image_shape(texture.texture_type, &literal)
         .ok_or_else(|| format!("{label} is a texture buffer, not an image"))?;
     let multisampled = literal.sample_count != 1;
-    // Levels only where the checker admits them: a multisampled or sparse image is made and
-    // uploaded one level, and a readback copies one.
-    if texture.mip_levels != 1 && (multisampled || texture.sparse.is_some() || observed) {
+    // Levels only where the checker admits them: a multisampled image is made and uploaded one
+    // level, and a readback copies one.
+    if texture.mip_levels != 1 && (multisampled || observed) {
         return Err(not_implemented(format!(
-            "{label}: a mipmapped texture ({} levels) that is multisampled, sparse, or read back",
+            "{label}: a mipmapped texture ({} levels) that is multisampled or read back",
             texture.mip_levels
         )));
     }
@@ -1696,54 +1481,8 @@ fn create_slot_image(
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED);
-    // A sparse texture is a sparse resident image with the case's regions bound, and uploads its
-    // mapped texels alone. One whose plan answers its residency from a tile map is what the runtime
-    // makes of it: where the context makes a sparse resident image, one with each block that holds
-    // a mapped tile bound and uploaded whole, its unmapped texels zero; elsewhere an ordinary image
-    // holding its mapped texels and zero elsewhere. Any other image is bound whole and uploaded
-    // whole.
-    let mapped = match (&texture.sparse, emulated) {
-        (Some(_), true) => {
-            use crate::executor_contract::sparse::{
-                device_mappings, mapped_bytes, mapped_texels, tile_map_tiling,
-            };
-            // A region the emulation's tiles do not divide is refused as a device's own tiles
-            // refuse it, before anything is made.
-            let refused = |why: String| ExecutorError::from(NotSupported::NotEnabled(vec![why]));
-            let tiling = tile_map_tiling(texture).map_err(refused)?;
-            let mappings = device_mappings(texture, tiling)
-                .map_err(refused)?
-                .unwrap_or_default();
-            let regions = mapped_texels(texture, tiling, &mappings)?;
-            Some((mapped_bytes(texture, &regions)?, regions))
-        }
-        _ => None,
-    };
-    let tile_mapped = match &mapped {
-        Some((_, regions)) if !multisampled => {
-            create_tile_mapped_image(context, label, texture, info, regions)?
-        }
-        _ => None,
-    };
-    let (level_bytes, level_copies) = level_uploads(texture, aspect)?;
-    let upload: &[u8] = match &mapped {
-        Some((bytes, _)) => bytes,
-        None => &level_bytes,
-    };
-    let (image, memory, copies) = if let Some(sparse) = tile_mapped {
-        (sparse.image, sparse.memory, sparse.copies)
-    } else if texture.sparse.is_some() && !emulated {
-        if multisampled {
-            return Err(not_implemented(format!(
-                "{label}: a multisampled sparse texture"
-            )));
-        }
-        let sparse = create_sparse_image(context, label, texture, info)?;
-        (sparse.image, sparse.memory, sparse.copies)
-    } else {
-        let (image, memory) = create_image(context, label, &info)?;
-        (image, memory, level_copies)
-    };
+    let (upload, copies) = level_uploads(texture, aspect)?;
+    let (image, memory) = create_image(context, label, &info)?;
     let destroy = || {
         // SAFETY: the image and memory were created above and are unused.
         unsafe {
@@ -1769,7 +1508,7 @@ fn create_slot_image(
         match create_host_buffer(
             context,
             &format!("{label} staging"),
-            upload,
+            &upload,
             vk::BufferUsageFlags::TRANSFER_SRC,
         ) {
             Ok(staging) => Some(staging),
@@ -1883,25 +1622,4 @@ fn level_uploads(
         staged[start..start + bytes.len()].copy_from_slice(bytes);
     }
     Ok((Cow::Owned(staged), copies))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::texel_buffer_bytes;
-
-    /// A guarded texture buffer is created from exactly its view: five `r8_uint` texels make a
-    /// 5-byte buffer, so a write to texel 5 lands in the memory requirement's padding or the guard,
-    /// where it is counted, not in bytes the buffer pads itself to 16 with. An unguarded one is
-    /// still padded to 16, and a guarded view that is not its authored bytes is refused.
-    #[test]
-    fn a_guarded_texture_buffer_is_exactly_its_view() {
-        let texels = [1, 2, 3, 4, 5];
-        assert_eq!(texel_buffer_bytes(&texels, (0, 5), true).unwrap(), texels);
-        let padded = texel_buffer_bytes(&texels, (0, 5), false).unwrap();
-        assert_eq!(padded.len(), 16);
-        assert_eq!(&padded[..5], &texels);
-        assert!(texel_buffer_bytes(&texels, (0, 4), true)
-            .unwrap_err()
-            .contains("is exactly its view"));
-    }
 }

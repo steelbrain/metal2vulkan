@@ -22,9 +22,7 @@
 //!   (`coverage::ROBUSTNESS_FEATURES`), so the opened profile compiles the robust containment
 //!   encodings the device states. Extended dynamic state is enabled where
 //!   the device lists it: a render pipeline states it as a requirement, and the render executor
-//!   records its states. The [`ExecutorFeature`]s (sparse binding and residency) are enabled where
-//!   the device supports them, for the executor's own sparse case textures: no pipeline requires
-//!   them, so the opened profile does not see them.
+//!   records its states.
 //!
 //! What a context enabled is read back from the enabled chain, member by member, through the
 //! one table ([`MEMBERS`]) that also writes it: [`enabled_set`] in the engine's vocabulary
@@ -895,31 +893,6 @@ impl FeatureChain {
     }
 }
 
-/// A feature an engine context enables for this executor's own objects rather than for any
-/// pipeline: no module requires it, and neither engine's vocabulary names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum ExecutorFeature {
-    /// `sparseBinding`: a sparse case texture's image binds its memory on the queue.
-    SparseBinding,
-    /// `sparseResidencyImage2D`: a 2D (or 2D array) sparse case texture is a sparse resident
-    /// image.
-    SparseResidencyImage2D,
-    /// `sparseResidencyImage3D`: a 3D sparse case texture is a sparse resident image.
-    SparseResidencyImage3D,
-}
-
-impl ExecutorFeature {
-    /// The member's name in the Vulkan registry, from its row ([`Member::registry`]): no
-    /// `ExecutorFeature` is in the engine's vocabulary, so its row carries the name.
-    pub(super) fn name(self) -> &'static str {
-        MEMBERS
-            .iter()
-            .find(|member| member.executor == Some(self))
-            .and_then(|member| member.registry)
-            .expect("every executor feature has a row carrying its registry name")
-    }
-}
-
 /// One `VkBool32` member of a [`FeatureChain`] structure.
 pub(super) struct Member {
     pub(super) structure: Structure,
@@ -929,13 +902,11 @@ pub(super) struct Member {
     pub(super) feature: Option<VkFeature>,
     /// The member's name in the Vulkan registry, carried for exactly the members the engine's
     /// vocabulary does not name ([`Member::feature`] is `None`). A device states such a member by
-    /// this name alone: no `DeviceDescription` can carry it, so a model of a device reads it from
-    /// the device's own capture by this name (`tests::Capture`), and a `None` row without one
-    /// would be a member nothing could ever report as unsupported.
+    /// this name alone: no `DeviceDescription` can carry it, so the tests' model of a device reads
+    /// it from the device's own capture by this name (`tests::Capture`), and a `None` row without
+    /// one would be a member nothing could ever report as unsupported.
+    #[cfg(test)]
     pub(super) registry: Option<&'static str>,
-    /// The executor's own name for it, when an engine context enables it for the executor's
-    /// objects ([`ExecutorFeature`]).
-    pub(super) executor: Option<ExecutorFeature>,
     read: fn(&FeatureChain) -> vk::Bool32,
     write: fn(&mut FeatureChain) -> &mut vk::Bool32,
 }
@@ -951,20 +922,18 @@ impl Member {
 }
 
 /// Defines [`MEMBERS`] from `structure.field.member => feature` rows. A row whose feature is
-/// `None` carries `, registry = "<its Vulkan name>"` ([`Member::registry`]), and one an engine
-/// context enables for the executor's own objects carries `, executor = <name>` after it.
+/// `None` carries `, registry = "<its Vulkan name>"` (`Member::registry`, read by the tests).
 macro_rules! members {
     ($($structure:ident . $field:ident . $member:ident => $feature:expr
-        $(, registry = $registry:literal)?
-        $(, executor = $executor:expr)?;)*) => {
+        $(, registry = $registry:literal)?;)*) => {
         /// Every member a context reads or writes, each once: the one table that enables a
         /// feature and names what was enabled.
         pub(super) const MEMBERS: &[Member] = &[$(Member {
             structure: Structure::$structure,
             name: stringify!($member),
             feature: $feature,
+            #[cfg(test)]
             registry: members!(@optional $($registry)?),
-            executor: members!(@optional $($executor)?),
             read: {
                 fn read(chain: &FeatureChain) -> vk::Bool32 {
                     chain.$field.$member
@@ -987,7 +956,6 @@ macro_rules! members {
     };
 }
 
-use ExecutorFeature as X;
 use VkFeature as F;
 
 members! {
@@ -1036,11 +1004,6 @@ members! {
     Core.core.full_draw_index_uint32 => Some(F::FullDrawIndexUint32);
     Core.core.shader_tessellation_and_geometry_point_size =>
         Some(F::ShaderTessellationAndGeometryPointSize);
-    Core.core.sparse_binding => None, registry = "sparseBinding", executor = X::SparseBinding;
-    Core.core.sparse_residency_image2_d => None, registry = "sparseResidencyImage2D",
-        executor = X::SparseResidencyImage2D;
-    Core.core.sparse_residency_image3_d => None, registry = "sparseResidencyImage3D",
-        executor = X::SparseResidencyImage3D;
     V11.v11.storage_buffer16_bit_access => Some(F::StorageBuffer16BitAccess);
     V11.v11.uniform_and_storage_buffer16_bit_access => Some(F::UniformAndStorageBuffer16BitAccess);
     V11.v11.storage_push_constant16 => Some(F::StoragePushConstant16);
@@ -1682,9 +1645,8 @@ pub(super) fn enable_runtime_probe(
 /// ([`ROBUSTNESS_FEATURES`]) the description states. Each recommended extension is enabled by the
 /// first name the device lists for it, each recommended feature by its member (chaining its
 /// structure through an enabled extension), and each member no vocabulary names
-/// (`textureCompressionASTC_HDR` and the rest, by their registry names, [`Member::registry`])
-/// where an enabled extension exposes its structure and the device supports it; and each
-/// [`ExecutorFeature`] where the device supports it.
+/// (`textureCompressionASTC_HDR` and the rest, by their registry names, `Member::registry`)
+/// where an enabled extension exposes its structure and the device supports it.
 ///
 /// A stated robustness feature the feature chain does not report, or whose structure no enabled
 /// extension exposes, is not an error: no robustness feature is enabled then, and the stated ones
@@ -1761,19 +1723,7 @@ pub(super) fn engine_list(
             member.set(&mut enables.chain);
         }
     }
-    for member in MEMBERS.iter().filter(|member| member.executor.is_some()) {
-        enables.copy(member, supported, available);
-    }
     Ok(enables)
-}
-
-/// The executor features `enables` enabled ([`ExecutorFeature`]).
-pub(super) fn executor_features(enables: &Enables) -> BTreeSet<ExecutorFeature> {
-    MEMBERS
-        .iter()
-        .filter(|member| enabled(enables, member))
-        .filter_map(|member| member.executor)
-        .collect()
 }
 
 /// Whether the enabled chain of `enables` sets `member`'s bit through a structure it chains.

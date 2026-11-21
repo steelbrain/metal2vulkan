@@ -119,7 +119,7 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
     )
     .unwrap_or_else(|error| panic!("admission: {error}"));
     let checked = admitted.checked();
-    let compute = compute_case(&checked.primary.case, &checked.primary.interface).unwrap();
+    let compute = compute_case(&checked.primary.case).unwrap();
     // Each module once, with the functions the Metal oracle links from it, in reference order.
     let linked = linked_modules(&checked.primary.linked_functions).unwrap();
     let names = |names: &[&str]| LinkedLibrary {
@@ -160,8 +160,7 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
             &compute,
             &shape,
         )
-        .unwrap_or_else(|error| panic!("{stem}: {error}"))
-        .pipeline;
+        .unwrap_or_else(|error| panic!("{stem}: {error}"));
         match check_words_l3(&pipeline.stage.spirv, &pipeline.requirements, profile) {
             Ok(()) => {}
             Err(L3Failure::Tooling(why)) => eprintln!("SKIPPED spirv-val on {stem}: {why}"),

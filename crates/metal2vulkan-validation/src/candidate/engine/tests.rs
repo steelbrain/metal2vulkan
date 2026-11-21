@@ -101,20 +101,7 @@ fn the_status_starts_zero_and_stops_non_evidence() {
 /// [`compute_case`] of a case whose entry declares no stage input: every case here but the
 /// stage-input ones, which map against their own interface.
 fn map_kernel(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
-    compute_case(case, &kernel_interface(vec![]))
-}
-
-/// The AIR-layer interface of a kernel with `params`.
-fn kernel_interface(params: Vec<crate::check::interface::Param>) -> AirInterface {
-    AirInterface::synthetic(
-        metal2vulkan_air::abi::Stage::Kernel {
-            max_total_threads: None,
-            work_group_size: None,
-        },
-        params,
-        vec![],
-        vec![],
-    )
+    compute_case(case)
 }
 
 fn kernel_case() -> AuthoredCase {
@@ -349,108 +336,6 @@ fn references_link_and_function_tables_are_typed_gaps() {
     assert_eq!(map_kernel(&encoded).map(|_| ()), encoded_table);
 }
 
-/// A table's buffer is the product's table words (`FunctionTableWords`): bound, its size, and each
-/// authored entry the handle the compile gave the function it holds, found by module and name among
-/// the function's linked libraries; every other entry is null. It is bound as a buffer of its
-/// words' length at its index, in the shape the compile is asked for. A function that is not
-/// linked, or that has no handle, fails the run.
-#[test]
-fn a_tables_words_are_its_size_and_the_handles_of_its_functions() {
-    use crate::acceptance::LinkedHandles;
-    use metal2vulkan::pipeline::FunctionHandle;
-    // The handles a compile of a kernel linking `[a, b]` of one module and `[c]` of another
-    // gives (`functions` numbered from 2), as they cross the worker exchange.
-    let handle = |word: u32| {
-        Some(serde_json::from_value::<FunctionHandle>(serde_json::json!(word)).unwrap())
-    };
-    let handles: LinkedHandles = vec![vec![handle(2), handle(3)], vec![handle(4)]];
-    let module = |sha: &str, names: &[&str]| LinkedModule {
-        module_sha256: sha.repeat(32),
-        bitcode: Vec::new(),
-        library: LinkedLibrary {
-            functions: names.iter().map(|name| (*name).to_owned()).collect(),
-        },
-    };
-    let linked = [module("aa", &["a", "b"]), module("bb", &["c"])];
-    let entry = |sha: &str, function: &str| tables::TableFunction {
-        module_sha256: sha.repeat(32),
-        function: function.into(),
-    };
-    let table = FunctionTable {
-        size: 5,
-        entries: BTreeMap::from([
-            (0, entry("bb", "c")),
-            (1, entry("aa", "a")),
-            (3, entry("aa", "b")),
-            (4, entry("bb", "c")),
-        ]),
-    };
-    let tables_at = BTreeMap::from([(7, table.clone())]);
-    let buffers = table_buffers(ShaderStage::Kernel, &tables_at, &linked, &handles).unwrap();
-    let words = |bytes: &[u8]| {
-        bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|word| u32::from_le_bytes(*word))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(buffers.len(), 1);
-    let bytes = &buffers[&(ShaderStage::Kernel, 7)];
-    assert_eq!(words(bytes), [1, 5, 4, 2, 0, 3, 4]);
-    assert_eq!(bytes.len() as u64, table.byte_len());
-
-    // The kernel's bind state binds the table as a buffer of that length, in the shape.
-    let mut case = map_kernel(&kernel_case()).unwrap();
-    case.function_tables = tables_at.clone();
-    let state = bind_state(
-        &case,
-        &BTreeMap::from([(7, BufferAddress::synthetic(7))]),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    match state.stages[&ShaderStage::Kernel].buffers.get(&7) {
-        Some(BoundBuffer::Buffer { length, .. }) => assert_eq!(*length, table.byte_len()),
-        other => panic!("{other:?}"),
-    }
-    let shape = compute_shape(&case, false, BufferRanges::default()).unwrap();
-    assert_eq!(state.shape(), shape);
-    assert_eq!(
-        compute_tables(&case, &linked, std::slice::from_ref(&handles)).unwrap(),
-        buffers
-    );
-    assert!(compute_tables(&case, &linked, &[]).is_err());
-
-    // An entry whose function is not linked, or which has no handle, fails the run.
-    let mut stray = tables_at.clone();
-    stray
-        .get_mut(&7)
-        .unwrap()
-        .entries
-        .insert(2, entry("cc", "c"));
-    match table_buffers(ShaderStage::Kernel, &stray, &linked, &handles) {
-        Err(ExecutorError::Failed(why)) => assert!(why.contains("not linked"), "{why}"),
-        other => panic!("{other:?}"),
-    }
-    let mut unhandled: LinkedHandles = handles.clone();
-    unhandled[1][0] = None;
-    match table_buffers(ShaderStage::Kernel, &tables_at, &linked, &unhandled) {
-        Err(ExecutorError::Failed(why)) => assert!(why.contains("no table handle"), "{why}"),
-        other => panic!("{other:?}"),
-    }
-    // Without entries the table is bound, sized, and all null.
-    let empty = BTreeMap::from([(
-        3,
-        FunctionTable {
-            size: 2,
-            entries: BTreeMap::new(),
-        },
-    )]);
-    let buffers = table_buffers(ShaderStage::Vertex, &empty, &[], &Vec::new()).unwrap();
-    assert_eq!(words(&buffers[&(ShaderStage::Vertex, 3)]), [1, 2, 0, 0]);
-}
-
 /// The case's own function links the functions of the case's linked modules, and its libraries
 /// follow the stage libraries in stage order: the kernel of a compute case, the vertex function of
 /// a rasterization-disabled vertex case, the fragment function a passthrough vertex companion draws
@@ -507,8 +392,6 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
             function: linking(&kernel.entry),
             shape: shape.clone(),
             dispatch: Some(kernel.dispatch),
-            stage_input: None,
-            tile: None,
             replay: false,
         }
     );
@@ -533,8 +416,6 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
             function: linking(&kernel.entry),
             shape: shape.clone(),
             dispatch: Some(replay_dispatch([8, 1, 1])),
-            stage_input: None,
-            tile: None,
             replay: true,
         }
     );
@@ -630,45 +511,10 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
         Err(ExecutorError::Failed(_))
     ));
 
-    // The tables of the case's own stage take its function's handles, in stage order; the
-    // generated companion links nothing.
+    // The generated companion is the stage the case's own function is not.
     assert_eq!(observed_case.companion_stage(), Some(ShaderStage::Fragment));
     assert_eq!(fragment_case.companion_stage(), Some(ShaderStage::Vertex));
     assert_eq!(vertex_case.companion_stage(), None);
-    let handle = |word: u32| {
-        Some(
-            serde_json::from_value::<metal2vulkan::pipeline::FunctionHandle>(serde_json::json!(
-                word
-            ))
-            .unwrap(),
-        )
-    };
-    let own = vec![vec![handle(2)], vec![handle(3), handle(4)]];
-    observed_case.vertex.resources.function_tables = BTreeMap::from([(
-        5,
-        FunctionTable {
-            size: 1,
-            entries: BTreeMap::from([(
-                0,
-                tables::TableFunction {
-                    module_sha256: "22".repeat(32),
-                    function: "c".into(),
-                },
-            )]),
-        },
-    )]);
-    let buffers = render_tables(&observed_case, &linked, &[own.clone(), Vec::new()]).unwrap();
-    assert_eq!(
-        buffers,
-        BTreeMap::from([(
-            (ShaderStage::Vertex, 5),
-            [1u32, 1, 4]
-                .iter()
-                .flat_map(|word| word.to_le_bytes())
-                .collect::<Vec<_>>()
-        )])
-    );
-    assert!(render_tables(&observed_case, &linked, &[own]).is_err());
 }
 
 #[test]
@@ -692,7 +538,6 @@ fn outputs_are_exact_ranges_of_the_bound_buffer() {
             &buffers,
             &BTreeMap::new(),
             textures,
-            &BTreeMap::new(),
             &BTreeMap::new(),
         )
     };
@@ -734,16 +579,7 @@ fn outputs_are_exact_ranges_of_the_bound_buffer() {
         offset,
         length,
     };
-    let selected = |output| {
-        select_output(
-            output,
-            &buffers,
-            &embedded,
-            &none,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-        )
-    };
+    let selected = |output| select_output(output, &buffers, &embedded, &none, &BTreeMap::new());
     assert_eq!(selected(pointee(1, 8, 1, 2)), Ok(vec![8, 7]));
     assert!(selected(pointee(1, 0, 0, 1)).is_err());
     assert!(selected(pointee(1, 8, 3, 2)).is_err());
@@ -767,54 +603,10 @@ fn outputs_are_exact_ranges_of_the_bound_buffer() {
         origin,
         dimensions: [1, 2, 1],
     };
-    let selected = |output| {
-        select_output(
-            output,
-            &buffers,
-            &embedded,
-            &none,
-            &member,
-            &BTreeMap::new(),
-        )
-    };
+    let selected = |output| select_output(output, &buffers, &embedded, &none, &member);
     assert_eq!(selected(region(16, [1, 0, 0])), Ok(vec![2, 4]));
     assert!(selected(region(8, [0, 0, 0])).is_err());
     assert!(selected(region(16, [2, 0, 0])).is_err());
-
-    // A tile pass's render target's region, rows tightly packed as the Metal oracle reads them.
-    let attachment = crate::literal::LiteralTexture {
-        binding: 2,
-        role: crate::case::ResourceRole::InOut,
-        texture_type: crate::case::TextureType::D2,
-        format: crate::case::TextureFormat::R16Uint,
-        dimensions: [3, 2, 1],
-        sample_count: 1,
-        bytes: (0u8..12).collect(),
-        sparse: None,
-        mip_levels: 1,
-    };
-    let attachments = BTreeMap::from([(2, attachment)]);
-    let target = |index, origin, dimensions| ComputeOutput::RenderTarget {
-        index,
-        origin,
-        dimensions,
-    };
-    let selected = |output| {
-        select_output(
-            output,
-            &buffers,
-            &embedded,
-            &none,
-            &BTreeMap::new(),
-            &attachments,
-        )
-    };
-    assert_eq!(
-        selected(target(2, [1, 0], [2, 2])),
-        Ok(vec![2, 3, 4, 5, 8, 9, 10, 11])
-    );
-    assert!(selected(target(1, [0, 0], [1, 1])).is_err());
-    assert!(selected(target(2, [2, 0], [2, 1])).is_err());
 }
 
 /// `bytes` as the base64 an authored case spells.
@@ -1089,7 +881,6 @@ fn texture_arrays_bind_each_element_at_its_slot() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &finals,
-            &BTreeMap::new(),
             &BTreeMap::new()
         ),
         Ok(99u32.to_le_bytes().to_vec())
@@ -1203,7 +994,6 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
             &function,
             &shape,
             Some(&compute.dispatch),
-            None,
             &Budget::standard(),
         )
         .unwrap_or_else(|error| panic!("{stem}: compile: {error:?}"));
@@ -1252,23 +1042,14 @@ fn the_binder_plans_the_executors_state() {
         entry: "count".into(),
         constants: FunctionConstantValues::defaults(),
         buffers: BTreeMap::from([(0, vec![0; 4])]),
-        rate_maps: BTreeMap::new(),
         argument_buffer_buffers: BTreeMap::new(),
-        argument_buffer_rate_maps: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
         objects: BTreeMap::new(),
         command_buffers: BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
-        function_tables: BTreeMap::new(),
-        acceleration_structures: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
-        imageblock: None,
-        tile: None,
-        stage_input: None,
-        stage_in_region: None,
-        attribute_strides: Default::default(),
         dispatch: Dispatch::Threads {
             threads: [5, 1, 1],
             threads_per_group: [2, 1, 1],
@@ -2066,23 +1847,14 @@ fn plain_kernel() -> ComputeCase {
         entry: "main".into(),
         constants: FunctionConstantValues::defaults(),
         buffers: BTreeMap::from([(0, vec![0; 4]), (1, vec![0; 16])]),
-        rate_maps: BTreeMap::new(),
         argument_buffer_buffers: BTreeMap::new(),
-        argument_buffer_rate_maps: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
         objects: BTreeMap::new(),
         command_buffers: BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
-        function_tables: BTreeMap::new(),
-        acceleration_structures: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::from([(0, 64)]),
-        imageblock: None,
-        tile: None,
-        stage_input: None,
-        stage_in_region: None,
-        attribute_strides: Default::default(),
         dispatch: Dispatch::Threads {
             threads: [5, 1, 1],
             threads_per_group: [2, 1, 1],
@@ -2101,18 +1873,15 @@ fn plain_kernel() -> ComputeCase {
 /// nothing, a 32-bit float depth or a multisampled texture among its textures (which the run
 /// fills by a draw), a cube array among them, and its out-of-bounds targets among them
 /// (`platform::runtime_bounds`); a case with anything else (a pipeline state in an argument
-/// buffer, an explicit imageblock, an indirect dispatch, a texture the runtime does not make:
-/// sparse or a texture buffer) stays on the executor's own context.
+/// buffer, an indirect dispatch) stays on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
-        sparse::SparseTextureResource, ArgumentBufferSamplerResource, ResourceRole,
-        SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource, TextureFormat,
-        TextureType,
+        ArgumentBufferSamplerResource, ResourceRole, SamplerAddressMode, SamplerFilter,
+        SamplerMipFilter, SamplerResource, TextureFormat, TextureType,
     };
-    let authored = kernel_case();
     let plain = plain_kernel();
-    assert!(runs_through_runtime(&authored, &plain));
+    assert!(runs_through_runtime(&plain));
     let groups = ComputeCase {
         dispatch: Dispatch::Threadgroups {
             groups: [2, 1, 1],
@@ -2121,7 +1890,7 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         output: ComputeOutput::None,
         ..plain.clone()
     };
-    assert!(runs_through_runtime(&authored, &groups));
+    assert!(runs_through_runtime(&groups));
     let texture = |texture_type, sample_count| LiteralTexture {
         binding: 0,
         role: ResourceRole::InOut,
@@ -2155,7 +1924,7 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
             normalized_coordinates: true,
         },
     );
-    assert!(runs_through_runtime(&authored, &sampled));
+    assert!(runs_through_runtime(&sampled));
     let mut members = plain.clone();
     members.argument_buffer_buffers.insert((0, 0), vec![0; 16]);
     members
@@ -2192,36 +1961,26 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
             output,
             ..members.clone()
         };
-        assert!(runs_through_runtime(&authored, &case));
+        assert!(runs_through_runtime(&case));
     }
-    let mut member_buffer = plain.clone();
-    member_buffer
-        .argument_buffer_textures
-        .insert((0, 8), texture(TextureType::Buffer, 1));
     let mut object = plain.clone();
     object.objects.insert((1, 0), 7);
-    let sparse = LiteralTexture {
-        sparse: Some(SparseTextureResource {
-            mappings: Vec::new(),
-        }),
-        ..texture(TextureType::D2, 1)
-    };
     let depth = LiteralTexture {
         format: TextureFormat::Depth32Float,
         bytes: vec![0; 64],
         ..texture(TextureType::D2, 1)
     };
-    assert!(runs_through_runtime(&authored, &textured(depth)));
-    assert!(runs_through_runtime(
-        &authored,
-        &textured(texture(TextureType::D2Multisample, 4))
-    ));
+    assert!(runs_through_runtime(&textured(depth)));
+    assert!(runs_through_runtime(&textured(texture(
+        TextureType::D2Multisample,
+        4
+    ))));
     let cube_array = LiteralTexture {
         dimensions: [4, 4, 12],
         bytes: vec![0; 768],
         ..texture(TextureType::CubeArray, 1)
     };
-    assert!(runs_through_runtime(&authored, &textured(cube_array)));
+    assert!(runs_through_runtime(&textured(cube_array)));
     let bounded = ComputeCase {
         out_of_bounds: vec![OutOfBoundsTarget {
             resource: OutOfBoundsResource::Buffer { binding: 0 },
@@ -2231,43 +1990,34 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         }],
         ..plain.clone()
     };
-    assert!(runs_through_runtime(&authored, &bounded));
+    assert!(runs_through_runtime(&bounded));
     let others = [
         object,
-        ComputeCase {
-            imageblock: Some([8, 8]),
-            ..plain.clone()
-        },
         ComputeCase {
             dispatch: replay_dispatch([2, 1, 1]),
             ..plain.clone()
         },
-        textured(sparse),
-        textured(texture(TextureType::Buffer, 1)),
-        member_buffer,
     ];
     for other in &others {
-        assert!(!runs_through_runtime(&authored, other), "{other:?}");
+        assert!(!runs_through_runtime(other), "{other:?}");
     }
 }
 
 /// The runtime draws a vertex or fragment case of any sample count, its own stage's buffers,
-/// textures and samplers, static vertex strides, color targets, and one direct or indexed draw
+/// textures and samplers, vertex buffers, color targets, and one direct or indexed draw
 /// of primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
 /// target or nothing; and a rasterization-disabled vertex case, which renders into the oracle's
 /// sink; a depth/stencil attachment of one aspect, of one sample or more, observed or not; a
 /// fragment pass with no attachment, of one sample or more; and an attribute buffer's
 /// out-of-bounds target. A case with anything else (a depth/stencil attachment of both aspects,
-/// layered rendering, a dynamic vertex stride, an argument-buffer member, an explicit imageblock,
-/// a patch draw through a patch index buffer, or an index buffer's out-of-bounds target) stays on
-/// the executor's own context.
+/// layered rendering, an argument-buffer member, a patch draw through a patch index buffer, or an
+/// index buffer's out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
-    use super::graphics::{ColorTarget, RenderCase, RenderOutput, VertexBuffer};
-    use crate::case::{AttributeFormat, TextureFormat};
+    use super::graphics::{ColorTarget, RenderCase, RenderOutput};
+    use crate::case::TextureFormat;
     use crate::literal::LiteralDepthStencil;
-    let authored = kernel_case();
     let target = ColorTarget {
         format: TextureFormat::Rgba8Unorm,
         dimensions: [2, 2],
@@ -2281,7 +2031,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         BTreeMap::from([(0, target.clone())]),
         3,
     );
-    assert!(runs_render_through_runtime(&authored, &plain));
+    assert!(runs_render_through_runtime(&plain));
     let indexed = RenderCase {
         draw: DrawCall::Indexed {
             index_type: metal2vulkan::vk::IndexType::UINT16,
@@ -2296,7 +2046,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         output: RenderOutput::None,
         ..plain.clone()
     };
-    assert!(runs_render_through_runtime(&authored, &indexed));
+    assert!(runs_render_through_runtime(&indexed));
     let unrasterized = RenderCase {
         fragment: None,
         color_targets: BTreeMap::new(),
@@ -2308,7 +2058,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         },
         ..plain.clone()
     };
-    assert!(runs_render_through_runtime(&authored, &unrasterized));
+    assert!(runs_render_through_runtime(&unrasterized));
     let patches = |patch_index| RenderCase {
         assembly: graphics::Assembly::Patches {
             tessellation: metal2vulkan::pipeline::TessellationDescriptor::default(),
@@ -2325,7 +2075,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         },
         ..plain.clone()
     };
-    assert!(runs_render_through_runtime(&authored, &patches(None)));
+    assert!(runs_render_through_runtime(&patches(None)));
     // An attribute buffer's out-of-bounds target draws through the runtime, whose facts refuse or
     // run it (`runtime_bounds::drawn`); no other target does (an index buffer's case carries the
     // runtime's limit, `index_buffer_past_end`, which stops it before either context).
@@ -2339,22 +2089,10 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         }],
         ..plain.clone()
     };
-    assert!(runs_render_through_runtime(
-        &authored,
-        &bounded(
-            OutOfBoundsResource::AttributeBuffer { location: 0 },
-            ContainmentForm::VertexInput
-        )
-    ));
-    let dynamic = VertexBuffer {
-        location: 0,
-        buffer_index: 30,
-        format: AttributeFormat::Float2,
-        stride: 8,
-        dynamic: true,
-        step: metal2vulkan::metal::VertexStepFunction::PerVertex,
-        bytes: vec![0; 24],
-    };
+    assert!(runs_render_through_runtime(&bounded(
+        OutOfBoundsResource::AttributeBuffer { location: 0 },
+        ContainmentForm::VertexInput
+    )));
     let mut member = plain.clone();
     if let Some(fragment) = &mut member.fragment {
         fragment
@@ -2390,7 +2128,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             depth_stencil: Some(attachment.clone()),
             ..plain.clone()
         };
-        assert!(runs_render_through_runtime(&authored, &attached));
+        assert!(runs_render_through_runtime(&attached));
         let observed = RenderCase {
             color_targets: BTreeMap::new(),
             output: match attachment.depth {
@@ -2405,7 +2143,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             },
             ..attached
         };
-        assert!(runs_render_through_runtime(&authored, &observed));
+        assert!(runs_render_through_runtime(&observed));
     }
     // A pass of more samples, its color target filled and read back sample by sample.
     let multisampled = RenderCase {
@@ -2420,7 +2158,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         )]),
         ..plain.clone()
     };
-    assert!(runs_render_through_runtime(&authored, &multisampled));
+    assert!(runs_render_through_runtime(&multisampled));
     // A fragment pass of no attachment, of one sample or more.
     for raster_sample_count in [None, Some(4)] {
         let attachmentless = RenderCase {
@@ -2429,7 +2167,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             raster_sample_count,
             ..plain.clone()
         };
-        assert!(runs_render_through_runtime(&authored, &attachmentless));
+        assert!(runs_render_through_runtime(&attachmentless));
     }
     let others = [
         RenderCase {
@@ -2443,19 +2181,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             render_target_array_length: 1,
             ..plain.clone()
         },
-        RenderCase {
-            vertex_buffers: vec![dynamic],
-            ..plain.clone()
-        },
         member,
-        RenderCase {
-            imageblock: Some(super::imageblock::Cells {
-                dimensions: [2, 2],
-                cell_bytes: 4,
-                bytes: vec![0; 16],
-            }),
-            ..plain.clone()
-        },
         bounded(
             OutOfBoundsResource::IndexBuffer,
             ContainmentForm::IndexBuffer,
@@ -2470,6 +2196,6 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         },
     ];
     for other in &others {
-        assert!(!runs_render_through_runtime(&authored, other), "{other:?}");
+        assert!(!runs_render_through_runtime(other), "{other:?}");
     }
 }
