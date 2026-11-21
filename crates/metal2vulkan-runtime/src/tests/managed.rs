@@ -1408,7 +1408,7 @@ pub(crate) mod on_device {
                     _ => {}
                 };
             let mut held = None;
-            let log = two_queues(name, &device, encode, |_, a_work| {
+            let log = two_queues(name, &device, (true, 2), encode, |_, a_work| {
                 held = Some(device.core().work.in_flight(a_work[0].queue()));
             });
             let rows = over_rows(&bytes);
