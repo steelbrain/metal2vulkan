@@ -37,6 +37,7 @@
 use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
+use crate::fault::RangeKind;
 use crate::floor;
 use crate::memory::{self, Internal, Mapping};
 use ash::vk;
@@ -361,7 +362,11 @@ fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
     core.counters.count(Metric::BlocksMade);
     let block = RingBlock { buffer, memory };
     match finish(device, &block) {
-        Ok((address, host)) => Ok((block, address, host)),
+        Ok((address, host)) => {
+            // Kept for the device's life: noted, and never freed before its teardown.
+            (core.spans).made(block.buffer, address, BLOCK, RangeKind::RingBlock);
+            Ok((block, address, host))
+        }
         Err(error) => {
             // SAFETY: nothing uses the block.
             unsafe {

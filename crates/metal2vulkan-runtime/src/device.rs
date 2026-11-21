@@ -356,6 +356,9 @@ pub(crate) struct Core {
     pub(crate) limits: EncoderLimits,
     /// The parameter ring.
     pub(crate) ring: Ring,
+    /// The device's own ranges a shader reaches by device address, live and lately freed, for a
+    /// lost device's fault report.
+    pub(crate) spans: crate::fault::Spans,
     /// Resource ids, for the hazard sets.
     pub(crate) ids: Ids,
     /// The heaps' ids in the hazard sets, which their resources take.
@@ -797,6 +800,7 @@ impl Device {
             copied_overs: AtomicUsize::new(0),
             limits,
             ring: Ring::new(),
+            spans: crate::fault::Spans::default(),
             ids: Ids::new(),
             heap_ids: HeapIds::default(),
             translator,

@@ -1529,6 +1529,63 @@ mod on_device {
         }
     }
 
+    /// A lost device's report places an address in the pool's allocation the idle rule freed: a
+    /// Shared block of 64 MiB, an allocation of its own, given back with nothing in flight and
+    /// freed at its idle age, is the one range that holds an address in it, freed with nothing in
+    /// flight and none waited for; a live block's allocation holds an address in it, live.
+    #[test]
+    fn every_device_places_an_address_in_an_allocation_freed_at_its_idle_age() {
+        const MIB: u64 = 1 << 20;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        let at = |address| crate::FaultAddress {
+            kind: vk::DeviceFaultAddressTypeEXT::READ_INVALID,
+            address,
+            precision: 0x1000,
+        };
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let live = (device.take_block(MemoryClass::Shared, MIB))
+                .unwrap_or_else(|error| panic!("{name}: a block of 1 MiB: {error}"));
+            let long = (device.take_block(MemoryClass::Shared, 64 * MIB))
+                .unwrap_or_else(|error| panic!("{name}: a block of 64 MiB: {error}"));
+            let (allocation, address) = (long.allocation, long.gpu_address);
+            device.release_block(long).expect("a release");
+            wait_until("the long allocation freed", || {
+                core.pool.frees().len() == 1 && !core.submit_calls.freeing()
+            });
+            let freed = core
+                .spans
+                .place(&at(address + 32 * MIB), crate::host_time());
+            let holders: Vec<_> = (freed.holders.iter())
+                .map(|range| {
+                    let free = range.freed.map(|free| (free.in_flight, free.waited_for));
+                    (range.kind, range.address, range.len, free)
+                })
+                .collect();
+            let kind = crate::RangeKind::Allocation(allocation, MemoryClass::Shared);
+            assert_eq!(
+                holders,
+                [(kind, address, 64 * MIB, Some((0, None)))],
+                "{name}: the freed allocation alone, nothing in flight at its free: {freed}"
+            );
+            let held = core.spans.place(&at(live.gpu_address), crate::host_time());
+            let kind = crate::RangeKind::Allocation(live.allocation, MemoryClass::Shared);
+            assert!(
+                matches!(held.holders.as_slice(),
+                    [range] if range.kind == kind && range.freed.is_none()),
+                "{name}: the live block's allocation, live: {held}"
+            );
+            device.release_block(live).expect("a release");
+            drop(device);
+            assert_each_unmapped_once(name, &hook);
+            println!("memory: {name}: {freed}; {held}");
+        }
+    }
+
     /// The bucket of [`Metrics::idle_reuses_by_age`](crate::Metrics::idle_reuses_by_age) an idle
     /// time of `nanos` counts in: the runtime's upper bounds, 50, 100, 250, 500, 1000 and
     /// 2000 ms.

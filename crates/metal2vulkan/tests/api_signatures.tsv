@@ -792,6 +792,7 @@ enum	metal2vulkan-runtime::MultisampleDepthResolveFilter	#[derive(Clone, Copy, D
 enum	metal2vulkan-runtime::MultisampleStencilResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleStencilResolveFilter
 enum	metal2vulkan-runtime::NumberedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumberedSampler
 enum	metal2vulkan-runtime::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
+enum	metal2vulkan-runtime::RangeKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RangeKind
 enum	metal2vulkan-runtime::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
 enum	metal2vulkan-runtime::RenderPassKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPassKind
 enum	metal2vulkan-runtime::RenderPipelineKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPipelineKind
@@ -1495,6 +1496,7 @@ field	metal2vulkan-runtime::DepthStencilDescriptor.front_face_stencil	pub front_
 field	metal2vulkan-runtime::DeviceFault.accesses	pub accesses: Vec<FaultAddress>
 field	metal2vulkan-runtime::DeviceFault.description	pub description: String
 field	metal2vulkan-runtime::DeviceFault.instructions	pub instructions: Vec<FaultAddress>
+field	metal2vulkan-runtime::DeviceFault.places	pub places: Vec<FaultPlace>
 field	metal2vulkan-runtime::DeviceFault.vendor	pub vendor: Vec<(String, u64, u64)>
 field	metal2vulkan-runtime::DeviceLoss.call	pub call: &'static str
 field	metal2vulkan-runtime::DeviceLoss.fault	pub fault: Option<DeviceFault>
@@ -1511,6 +1513,17 @@ field	metal2vulkan-runtime::Export.size	pub size: u64
 field	metal2vulkan-runtime::FaultAddress.address	pub address: u64
 field	metal2vulkan-runtime::FaultAddress.kind	pub kind: vk::DeviceFaultAddressTypeEXT
 field	metal2vulkan-runtime::FaultAddress.precision	pub precision: u64
+field	metal2vulkan-runtime::FaultPlace.above	pub above: Option<FaultRange>
+field	metal2vulkan-runtime::FaultPlace.address	pub address: u64
+field	metal2vulkan-runtime::FaultPlace.at	pub at: u64
+field	metal2vulkan-runtime::FaultPlace.below	pub below: Option<FaultRange>
+field	metal2vulkan-runtime::FaultPlace.holders	pub holders: Vec<FaultRange>
+field	metal2vulkan-runtime::FaultPlace.precision	pub precision: u64
+field	metal2vulkan-runtime::FaultRange.address	pub address: u64
+field	metal2vulkan-runtime::FaultRange.freed	pub freed: Option<RangeFreed>
+field	metal2vulkan-runtime::FaultRange.kind	pub kind: RangeKind
+field	metal2vulkan-runtime::FaultRange.len	pub len: u64
+field	metal2vulkan-runtime::FaultRange.made	pub made: u64
 field	metal2vulkan-runtime::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan-runtime::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan-runtime::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -1772,6 +1785,9 @@ field	metal2vulkan-runtime::PlaneLayout.row_pitch	pub row_pitch: u64
 field	metal2vulkan-runtime::PlaneSpec.descriptor	pub descriptor: TextureDescriptor
 field	metal2vulkan-runtime::PlaneSpec.index	pub index: Option<u32>
 field	metal2vulkan-runtime::PlaneSpec.rows_below	pub rows_below: u32
+field	metal2vulkan-runtime::RangeFreed.at	pub at: u64
+field	metal2vulkan-runtime::RangeFreed.in_flight	pub in_flight: u64
+field	metal2vulkan-runtime::RangeFreed.waited_for	pub waited_for: Option<u64>
 field	metal2vulkan-runtime::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-runtime::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-runtime::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -7653,6 +7669,8 @@ struct	metal2vulkan-runtime::DispatchVariant	#[derive(Clone, Copy, Debug, Partia
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event
 struct	metal2vulkan-runtime::Export	#[derive(Debug)] #[non_exhaustive] pub struct Export
 struct	metal2vulkan-runtime::FaultAddress	#[derive(Clone, Copy, PartialEq, Eq)] pub struct FaultAddress
+struct	metal2vulkan-runtime::FaultPlace	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FaultPlace
+struct	metal2vulkan-runtime::FaultRange	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FaultRange
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence
 struct	metal2vulkan-runtime::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan-runtime::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
@@ -7670,6 +7688,7 @@ struct	metal2vulkan-runtime::PhysicalDevice	#[derive(Clone)] pub struct Physical
 struct	metal2vulkan-runtime::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
 struct	metal2vulkan-runtime::PlaneLayout	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct PlaneLayout
 struct	metal2vulkan-runtime::PlaneSpec	#[derive(Clone, Copy, Debug)] pub struct PlaneSpec
+struct	metal2vulkan-runtime::RangeFreed	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct RangeFreed
 struct	metal2vulkan-runtime::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-runtime::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
 struct	metal2vulkan-runtime::RenderCommandEncoder	pub struct RenderCommandEncoder
@@ -8036,10 +8055,12 @@ trait-impl	metal2vulkan-runtime::Error impl From<Unmade>	impl From<Unmade> for E
 trait-impl	metal2vulkan-runtime::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-runtime::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-runtime::FaultAddress impl fmt::Debug	impl fmt::Debug for FaultAddress
+trait-impl	metal2vulkan-runtime::FaultPlace impl fmt::Display	impl fmt::Display for FaultPlace
 trait-impl	metal2vulkan-runtime::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-runtime::HostBytes impl From<&'a [u8]>	impl<'a> From<&'a [u8]> for HostBytes<'a>
 trait-impl	metal2vulkan-runtime::IndirectCommandType impl std::ops::BitOr	impl std::ops::BitOr for IndirectCommandType
 trait-impl	metal2vulkan-runtime::Limit impl fmt::Display	impl fmt::Display for Limit
+trait-impl	metal2vulkan-runtime::RangeKind impl fmt::Display	impl fmt::Display for RangeKind
 trait-impl	metal2vulkan-runtime::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-runtime::RenderCommandEncoder impl Drop	impl Drop for RenderCommandEncoder
 trait-impl	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor impl Default	impl Default for RenderPassDepthAttachmentDescriptor
@@ -9453,6 +9474,12 @@ variant	metal2vulkan-runtime::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetc
 variant	metal2vulkan-runtime::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
 variant	metal2vulkan-runtime::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
 variant	metal2vulkan-runtime::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
+variant	metal2vulkan-runtime::RangeKind::Allocation	Allocation(AllocationId, MemoryClass)
+variant	metal2vulkan-runtime::RangeKind::Export	Export
+variant	metal2vulkan-runtime::RangeKind::Import	Import
+variant	metal2vulkan-runtime::RangeKind::RingBlock	RingBlock
+variant	metal2vulkan-runtime::RangeKind::Sparse	Sparse
+variant	metal2vulkan-runtime::RangeKind::Surface	Surface
 variant	metal2vulkan-runtime::Refusal::ArgumentPlace	ArgumentPlace { place: u64, alignment: u64 }
 variant	metal2vulkan-runtime::Refusal::AttachmentFormat	AttachmentFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Refusal::AttachmentPlace	AttachmentPlace { level: u32, slice: u32 }

@@ -9,6 +9,7 @@
 use crate::counters::{Counters, Gauge, Metric, Part, Site};
 use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
+use crate::fault::RangeKind;
 use crate::floor;
 use crate::places::Ranges;
 use crate::reaper::{Free, Job};
@@ -105,6 +106,15 @@ impl Wait {
             }
         }
         matches!(*self, Wait::Progress(progress) if core.done.completed() >= progress)
+    }
+
+    /// The progress value of the submission it waits for: None where it waits for none, or has
+    /// not learned it yet.
+    fn progress(self) -> Option<u64> {
+        match self {
+            Wait::Progress(0) | Wait::Commits(_) => None,
+            Wait::Progress(progress) => Some(progress),
+        }
     }
 }
 
@@ -477,6 +487,7 @@ pub(crate) struct Block {
 
 impl Block {
     pub(crate) fn new(memory: Memory, core: Arc<Core>) -> Block {
+        note(&core, &memory);
         Block {
             memory,
             core,
@@ -488,6 +499,7 @@ impl Block {
 
     /// An import's block ([`import`]), whose `release` runs once its memory is freed.
     pub(crate) fn imported(memory: Memory, core: Arc<Core>, release: Option<Release>) -> Block {
+        note(&core, &memory);
         Block {
             memory,
             core,
@@ -499,6 +511,7 @@ impl Block {
 
     /// A surface's buffer on the allocation `under` holds ([`surface_view`]).
     fn over(memory: Memory, core: Arc<Core>, under: Arc<Block>) -> Block {
+        note(&core, &memory);
         Block {
             memory,
             core,
@@ -507,6 +520,24 @@ impl Block {
             _chunks: Vec::new(),
         }
     }
+}
+
+/// Notes an imported or exported block's allocation of its own, or an exported surface's buffer,
+/// among the device's ranges a shader reaches by device address (`crate::fault::Spans`), until
+/// [`free_own`] frees it. A block of the pool, whose allocation is noted, and a chunk under an
+/// import over several dma-bufs, which has no buffer, are not.
+fn note(core: &Core, memory: &Memory) {
+    let kind = match memory.own {
+        None => return,
+        Some(Own::Import { .. }) => RangeKind::Import,
+        Some(Own::Export(_)) => RangeKind::Export,
+        Some(Own::Surface { .. }) => RangeKind::Surface,
+        #[cfg(unix)]
+        Some(Own::Sparse { .. }) => RangeKind::Sparse,
+        #[cfg(unix)]
+        Some(Own::Chunk) => return,
+    };
+    (core.spans).made(memory.buffer, memory.address, memory.len, kind);
 }
 
 impl Drop for Block {
@@ -892,6 +923,11 @@ impl Pool {
     pub(crate) fn committed(&self, seq: u64) {
         self.in_flight.fetch_add(1, Ordering::SeqCst);
         self.commits.fetch_max(seq, Ordering::SeqCst);
+    }
+
+    /// The command buffers committed and not yet retired.
+    pub(crate) fn in_flight(&self) -> u64 {
+        self.in_flight.load(Ordering::SeqCst)
     }
 
     /// A command buffer committed retired, completed or ended.
@@ -1953,6 +1989,12 @@ fn make_allocation(
     let of = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     // SAFETY: the buffer has device-address usage and is bound.
     allocation.address = unsafe { device.get_buffer_device_address(&of) };
+    (core.spans).made(
+        buffer,
+        allocation.address,
+        len,
+        RangeKind::Allocation(id, class),
+    );
     if class == MemoryClass::Shared {
         // SAFETY: the memory type is host-visible, and the memory is not mapped.
         let mapped = unsafe {
@@ -2247,8 +2289,10 @@ pub(crate) fn sparse_block(
         None => Vec::new(),
     };
     let own = Own::Sparse { bind, space };
+    let memory = memory(vk::DeviceMemory::null(), len, buffer, address, own);
+    note(core, &memory);
     Block {
-        memory: memory(vk::DeviceMemory::null(), len, buffer, address, own),
+        memory,
         core: Arc::clone(core),
         release: Mutex::new(None),
         _under: None,
@@ -2522,6 +2566,7 @@ pub(crate) unsafe fn surface_view(
 /// buffer alone, once its bind completed, and of each of its chunks, the memory alone, the last
 /// one's release after it. The submissions made during the `vkFreeMemory` are counted.
 fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
+    (core.spans).freed(memory.buffer, core.pool.in_flight(), None);
     match memory.own {
         // An import over several dma-bufs' buffer: its bind, the one use of it no command buffer
         // held, completes before it goes (`VUID-vkDestroyBuffer-buffer-00922`), and its chunks,
@@ -2637,6 +2682,8 @@ fn free_idle(core: &Core, allocation: Allocation) {
 /// Frees an allocation and its buffer, whose blocks are all given back or gone with the device,
 /// and whose unmap has run. Freeing the memory also unmaps the runtime's own mapping of it.
 fn free_allocation(core: &Core, allocation: Allocation) {
+    let in_flight = core.pool.in_flight();
+    (core.spans).freed(allocation.buffer, in_flight, allocation.wait.progress());
     // SAFETY: no GPU work uses the buffer or the memory: a command buffer or upload that uses a
     // block holds it until it retires.
     unsafe {

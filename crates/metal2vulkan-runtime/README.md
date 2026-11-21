@@ -1843,8 +1843,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   so a guest's addresses cannot be kept across a new device. A failed `vkQueueSubmit2` of any
   result, out-of-memory included, ends the device; `Device::loss()` names the call and result,
   and, at the runtime's own `ERROR_DEVICE_LOST` on a device that lists `VK_EXT_device_fault`, the
-  driver's fault report as given (`DeviceLoss::fault`), whose addresses the consumer places among
-  its own blocks and buffers.
+  driver's fault report as given (`DeviceLoss::fault`), each address placed among the runtime's own
+  ranges (`DeviceFault::places`, under Fault reports), and the consumer places them among its own
+  blocks and buffers.
 - Command buffers committed while an earlier one of their queue runs are reported complete
   together, at the last one's end, where Metal reports each at its own. Measured with the harness
   row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,
@@ -4136,6 +4137,15 @@ the device's first loss of its own whose result is `ERROR_DEVICE_LOST`, the runt
 driver's report once (`vkGetDeviceFaultInfoEXT`) into `DeviceLoss::fault`. The RTX 3090 (NVIDIA
 620.70.06) lists it; after an MMU fault (Xid 13) of a read through a freed buffer's address it
 reported the read's page and an instruction pointer.
+
+The report places each address it gives (`DeviceFault::places`, one line each by `FaultPlace`'s
+`Display`) among the runtime's own ranges a shader reaches by device address: the pool's
+allocations, the parameter ring's blocks, imports, exports, surfaces' buffers and imports over
+several dma-bufs. It names the ranges that meet the address, live or among the last 1,024 freed
+(each free's time, the command buffers then in flight and, for the pool, the submission its free
+waited for), and the nearest range below and above. Each range is noted as it is made and as it
+is freed; nothing else runs before the loss. Images, which Vulkan gives no device address, and the
+zero source and staging memory, which only copies reach, are not placed.
 
 | Fault-report feature | Structure | Used for |
 |---|---|---|
