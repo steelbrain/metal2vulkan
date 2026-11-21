@@ -264,10 +264,12 @@ fn corpus_with_templates(name: &str) -> (ScratchDir, metal2vulkan_validation::ca
 /// The executor's requests for a case whose executed compute command buffer the device replay
 /// runs: on a profile with device addresses, the case's pipeline and each registered variant
 /// compile in the worker; on one without, the command buffer is host-replayed and only the case's
-/// own pipeline is compiled. A render command buffer is always host-replayed.
+/// own pipeline is compiled. A render command buffer is always host-replayed. Both devices take
+/// the resident-table domains, the executor's own context's, which run the command buffers the
+/// identity domains refuse.
 #[test]
 fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
-    use metal2vulkan_validation::authored_compile::{compile_prepared, CensusProfile};
+    use metal2vulkan_validation::authored_compile::compile_prepared;
     use metal2vulkan_validation::candidate::engine::{case_compiles, prepare_case, CompileSubject};
     use metal2vulkan_validation::check::admission::{admit, ExecutionRequest};
     use metal2vulkan_validation::gpu::DeviceType;
@@ -289,8 +291,14 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         .unwrap_or_else(|error| panic!("admission: {error}"));
         prepare_case(device, admitted).unwrap_or_else(|error| panic!("preparation: {error}"))
     };
-    let profile = |label: &str| CensusProfile::load(&ProfileStem::parse(label).unwrap()).unwrap();
-    let lavapipe = profile("lavapipe");
+    let resident = |description| {
+        metal2vulkan_validation::worker::compile::WorkerDevice::new(
+            description,
+            metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap()
+    };
+    let lavapipe = resident(metal2vulkan_validation::engine::load_description("lavapipe").unwrap());
     // A device without device addresses (`runtime-floor` without `bufferDeviceAddress`, below the
     // runtime's floor): the GPU-encoded command buffers replay on the host there.
     let floor = {
@@ -299,24 +307,20 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         assert!(description
             .features
             .remove(&metal2vulkan::device::VkFeature::BufferDeviceAddress));
-        metal2vulkan_validation::worker::compile::WorkerDevice::new(
-            description,
-            metal2vulkan::device::DevicePolicy::default(),
-        )
-        .unwrap()
+        resident(description)
     };
 
     let (scratch, case) =
         corpus_with_templates("gpu-encoded-buffers-keep-the-host-encoded-dispatches");
     let compute = prepared(scratch.path(), &case);
-    let on_device = case_compiles(&compute, &lavapipe.device).unwrap();
+    let on_device = case_compiles(&compute, &lavapipe).unwrap();
     assert_eq!(on_device.host_replayed, 0);
     assert_eq!(on_device.compiles[0].subject, CompileSubject::Case);
     assert!(on_device.compiles.len() > 1);
     assert!(on_device.compiles[1..]
         .iter()
         .all(|compile| matches!(compile.subject, CompileSubject::ReplayVariant { .. })));
-    let cell = compile_prepared(&compute, &worker, &lavapipe.device);
+    let cell = compile_prepared(&compute, &worker, &lavapipe);
     assert_eq!(cell.outcome, Ok(CellOutcome::Compiled), "{cell:?}");
     assert_eq!(cell.compiles, on_device.compiles.len());
     // What a run executes there is digested: the case, each variant, and the preprocess module; the
@@ -325,7 +329,7 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         .artifact
         .clone()
         .expect("a device-replayed case's digest");
-    let again = compile_prepared(&compute, &worker, &lavapipe.device);
+    let again = compile_prepared(&compute, &worker, &lavapipe);
     assert_eq!(again.artifact, Some(digest));
     let on_host = case_compiles(&compute, &floor).unwrap();
     assert_eq!(on_host.host_replayed, 1);
@@ -338,7 +342,7 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
     let (scratch, case) =
         corpus_with_templates("gpu-encoded-vertex-buffers-run-the-host-encoded-draws");
     let render = prepared(scratch.path(), &case);
-    let drawn = case_compiles(&render, &lavapipe.device).unwrap();
+    let drawn = case_compiles(&render, &lavapipe).unwrap();
     assert_eq!(drawn.host_replayed, 1);
     assert_eq!(drawn.compiles.len(), 1);
 }
@@ -346,10 +350,11 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
 /// An object or mesh case, which no candidate draws (`mesh_render_pipeline`), still compiles its
 /// mesh render pipeline in the census: a run's preparation refuses the committed public mesh and
 /// object cases by that requirement alone, the census's prepares them, and each one's pipeline,
-/// its partners' stages with it, compiles in the worker as its one compile.
+/// its partners' stages with it, compiles in the worker as its one compile. Under the resident-table
+/// domains: the identity domains refuse every stage but kernel, vertex and fragment.
 #[test]
 fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
-    use metal2vulkan_validation::authored_compile::{compile_case, CensusProfile};
+    use metal2vulkan_validation::authored_compile::compile_case;
     use metal2vulkan_validation::candidate::engine::{
         case_compiles, prepare_case, prepare_compile, CompileSubject,
     };
@@ -366,7 +371,11 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         let _ = Command::new(&program).arg("--help").output();
         CompileWorker::program(program)
     };
-    let lavapipe = CensusProfile::load(&ProfileStem::parse("lavapipe").unwrap()).unwrap();
+    let lavapipe = metal2vulkan_validation::worker::compile::WorkerDevice::new(
+        metal2vulkan_validation::engine::load_description("lavapipe").unwrap(),
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .unwrap();
     let device = DeviceType::Cpu;
     for name in [
         "a-mesh-grid-of-threadgroups-draws-through-its-fragment",
@@ -389,7 +398,7 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         );
         let prepared = prepare_compile(device, admitted())
             .unwrap_or_else(|error| panic!("{name}: preparation: {error}"));
-        let planned = case_compiles(&prepared, &lavapipe.device).unwrap();
+        let planned = case_compiles(&prepared, &lavapipe).unwrap();
         assert_eq!(planned.host_replayed, 0, "{name}");
         assert_eq!(
             planned
@@ -400,7 +409,7 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
             [CompileSubject::Case],
             "{name}"
         );
-        let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe.device]);
+        let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe]);
         assert_eq!(cells.len(), 1, "{name}");
         assert_eq!(
             cells[0].outcome,

@@ -184,7 +184,8 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
 /// executor's device-free checks, and its kernel, linked with the table's functions, compiles
 /// through a real compile worker, which returns the product's handles of those functions with
 /// the pipeline: the table's buffer is the product's table words, bound at the table's index in
-/// the shape the pipeline was compiled for. No device is opened.
+/// the shape the pipeline was compiled for. No device is opened. Under the resident-table
+/// domains, the executor's own context's, which runs visible-function tables.
 #[test]
 fn a_case_with_a_visible_function_table_binds_the_products_table_words() {
     use metal2vulkan::bind::BoundBuffer;
@@ -279,8 +280,11 @@ fn a_case_with_a_visible_function_table_binds_the_products_table_words() {
 
     let worker = worker();
     for stem in ["moltenvk-m3", "runtime-floor", "lavapipe"] {
-        let device =
-            WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
+        let device = WorkerDevice::new(
+            load_description(stem).unwrap(),
+            DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap();
         let profile = device.device().profile();
         let addressed = profile.descriptors().buffer_device_address;
         let shape = compute_shape(&compute, addressed, BufferRanges::of(profile.limits())).unwrap();

@@ -768,7 +768,8 @@ mod tests {
     /// A kernel with a storage texture crosses the exchange with the bind shape it is compiled
     /// for: the worker answers the texture's format input from the shape, and its pipeline is the
     /// one compiled in process, whose plan of that shape asks for exactly the inputs it was
-    /// compiled with.
+    /// compiled with. The format input and the plan are the resident-table domains', the
+    /// executor's own context's.
     #[test]
     fn a_bound_compute_request_crosses_the_exchange_with_its_shape() {
         use crate::candidate::engine::{compute_shape, variants, ComputeCase, ComputeOutput};
@@ -776,7 +777,11 @@ mod tests {
             return;
         };
         // SwiftShader reads storage images only with a format, so the texture needs its input.
-        let device = worker_device("runtime-floor");
+        let device = WorkerDevice::new(
+            crate::engine::load_description("runtime-floor").unwrap(),
+            DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap();
         let case = ComputeCase {
             out_of_bounds: Vec::new(),
             creation_bound: crate::budgets::PIPELINE_CREATION_CEILING,

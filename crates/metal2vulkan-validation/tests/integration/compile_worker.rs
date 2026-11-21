@@ -287,12 +287,17 @@ define void @blob(ptr addrspace(1) %out, i32 %t) {{
 
 /// Compile [`blob_kernel`] `depth` levels deep for `lavapipe` through `corpus-pipeline`'s compile
 /// worker (the child assembles the text): the compile, and its blob's length, `2^(depth+2)`.
+/// Under the resident-table domains: the identity domains refuse constant data over 64 KiB.
 fn compile_blob(depth: u32) -> (WorkerCompile<ComputePipeline>, u64) {
     let worker = worker(&bin_exe!("corpus-pipeline"));
     let text = blob_kernel(depth);
     let compiled = compile_compute(
         &worker,
-        &device("lavapipe"),
+        &WorkerDevice::new(
+            load_description("lavapipe").unwrap(),
+            DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap(),
         &RowSource::Text(text.as_str().into()),
         "blob",
         &FunctionConstantValues::defaults(),

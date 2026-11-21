@@ -867,7 +867,8 @@ fn an_integer_observation_takes_its_sign_from_the_target() {
 }
 
 /// Every companion links with the stage it completes in one engine render pipeline: by user
-/// key, at the types the two sides state.
+/// key, at the types the two sides state. Under the resident-table domains, the executor's own
+/// context's, which compile the mesh and object stages the identity domains refuse.
 #[test]
 fn generated_companions_link_with_their_cases_in_the_engine() {
     use metal2vulkan::library::Library;
@@ -882,7 +883,11 @@ fn generated_companions_link_with_their_cases_in_the_engine() {
     ) else {
         return;
     };
-    let device = crate::engine::load_device("lavapipe").unwrap();
+    let device = metal2vulkan::device::Device::from_queries(
+        crate::engine::load_description("lavapipe").unwrap(),
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .unwrap();
     let function = |bitcode: &[u8], entry: &str| {
         FunctionDescriptor::new(Library::from_air(bitcode).unwrap().function(entry).unwrap())
     };

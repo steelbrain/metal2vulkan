@@ -2596,20 +2596,27 @@ fn the_cases_that_meet_the_clipped_primitive_split_are_listed() {
 }
 
 /// The identity a profile document states, from whichever capability block holds each structure,
-/// and only from a `vulkaninfo` capture.
+/// and only from a `vulkaninfo` capture. The toy device states the device addresses and 64-bit
+/// integers the default policy's identity domains need.
 #[test]
 fn a_venue_profile_states_its_identity() {
     let document = |source: &str, driver: &str| {
         serde_json::json!({
             "provenance": {"source": source},
             "capabilities": {
-                "device": {"properties": {
-                    "VkPhysicalDeviceProperties": {
-                        "deviceName": "Toy GPU", "vendorID": 4098, "deviceID": 5567,
-                        "driverVersion": 109060100,
-                        "limits": {"maxPushConstantsSize": 256},
+                "device": {
+                    "features": {
+                        "VkPhysicalDeviceFeatures": {"shaderInt64": true},
+                        "VkPhysicalDeviceVulkan12Features": {"bufferDeviceAddress": true},
                     },
-                }},
+                    "properties": {
+                        "VkPhysicalDeviceProperties": {
+                            "deviceName": "Toy GPU", "vendorID": 4098, "deviceID": 5567,
+                            "driverVersion": 109060100,
+                            "limits": {"maxPushConstantsSize": 256},
+                        },
+                    },
+                },
                 "driver": {"properties": {
                     driver: {"driverID": "VK_DRIVER_ID_MESA_RADV", "driverInfo": "Mesa 26.2.4"},
                 }},

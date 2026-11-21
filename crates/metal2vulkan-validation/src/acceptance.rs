@@ -1311,13 +1311,18 @@ mod tests {
 
     /// A kernel row reading stage inputs compiles under the stage-input descriptor its AIR implies
     /// (each attribute its own buffer at the executors' slot), and the pipeline binds those
-    /// buffers.
+    /// buffers. Under the resident-table domains, the executor's own context's: the binder plans
+    /// the row, and the identity domains' binder refuses stage input's encoder values.
     #[test]
     fn a_stage_input_kernel_row_compiles_under_its_implied_descriptor() {
         let Some(bitcode) = fixture("kernel_stage_in.ll") else {
             return;
         };
-        let device = crate::engine::load_device("moltenvk-m3").unwrap();
+        let device = Device::from_queries(
+            crate::engine::load_description("moltenvk-m3").unwrap(),
+            DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap();
         let undefined = FunctionConstantValues::defaults();
         let implied = stage_inputs::implied_descriptor(&bitcode, "stage_in_fetch", &undefined)
             .unwrap()

@@ -50,8 +50,9 @@ impl TierProfile {
     }
 }
 
-/// A tier-table entry: a committed profile in one leg, and the profile lowering compiles for (the
-/// default policy, the runtime's, as every engine census row).
+/// A tier-table entry: a committed profile in one leg, and the profile lowering compiles for: the
+/// resident-table domains, whose containment mechanisms (the root table, descriptor views, the
+/// robustness legs) these tests check.
 pub struct CommittedProfile {
     pub tier: TierProfile,
     pub profile: DeviceProfile,
@@ -64,7 +65,7 @@ pub fn committed_profiles() -> Result<Vec<CommittedProfile>, String> {
     for stem in crate::engine::committed_profiles()? {
         let description = crate::engine::load_description(&stem)?;
         let derive = |description: DeviceDescription| {
-            Device::from_queries(description, DevicePolicy::default())
+            Device::from_queries(description, DevicePolicy::RESIDENT_TABLES)
                 .map(|device| device.profile().clone())
                 .map_err(|error| format!("{stem}: {error}"))
         };
@@ -262,8 +263,8 @@ pub fn compile_module(
         attributes: &attributes,
         resident_roots: function.reads_resident_roots(),
         handle_table: function.resolves_handles(),
-        // Every committed profile's device takes the default policy (`committed_profiles`).
-        policy: DevicePolicy::default(),
+        // Every committed profile's device takes the resident-table domains (`committed_profiles`).
+        policy: DevicePolicy::RESIDENT_TABLES,
         strategies: function.strategies(),
     };
     let out_of_bounds = inputs

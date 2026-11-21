@@ -358,7 +358,7 @@ fn a_compile_records_the_containment_it_compiled_under() {
         .remove(&VkFeature::ShaderStorageImageWriteWithoutFormat));
     let formatted = metal2vulkan::device::Device::from_queries(
         formatted,
-        metal2vulkan::device::DevicePolicy::default(),
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
     )
     .unwrap()
     .profile()
@@ -490,7 +490,7 @@ fn an_image_encoding_names_what_its_device_is_left() {
     let derive = |description: DeviceDescription| {
         metal2vulkan::device::Device::from_queries(
             description,
-            metal2vulkan::device::DevicePolicy::default(),
+            metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
         )
         .unwrap()
         .profile()

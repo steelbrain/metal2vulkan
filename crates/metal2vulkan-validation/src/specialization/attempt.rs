@@ -884,6 +884,21 @@ mod tests {
         replay_specialized(bitcode, entry, constants, &profile, None, None).attempt
     }
 
+    /// `description`'s profile under the resident-table domains, the executor's own context's: the
+    /// inputs the binder supplies (a storage texture's format, a tile function's member formats)
+    /// are theirs, and the identity domains refuse what needs them.
+    fn resident_tables(
+        description: metal2vulkan::device::DeviceDescription,
+    ) -> metal2vulkan::device::DeviceProfile {
+        metal2vulkan::device::Device::from_queries(
+            description,
+            metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap()
+        .profile()
+        .clone()
+    }
+
     fn row_plan(bitcode: &[u8], entry: &str) -> RowPlan {
         let mut meter = Meter::new(&Budget::standard());
         let decoded = metal2vulkan_air::decode(bitcode, &mut meter).unwrap();
@@ -961,18 +976,23 @@ mod tests {
         assert_eq!(result.supplied, vec![Supplied::StageInputDescriptor]);
     }
 
-    /// A tile function is supplied each implicit imageblock member's format.
+    /// A tile function is supplied each implicit imageblock member's format, under the
+    /// resident-table domains ([`resident_tables`]).
     #[test]
     fn a_tile_function_is_supplied_its_members_formats() {
         let Some(bitcode) = bitcode(engine_dir().join("k10ts_tile_order.ll")) else {
             return;
         };
-        let result = attempt(
+        let profile = resident_tables(crate::engine::load_description("moltenvk-m3").unwrap());
+        let result = replay_specialized(
             &bitcode,
             "k10ts_tile_order",
             &FunctionConstantValues::defaults(),
-            "moltenvk-m3",
-        );
+            &profile,
+            None,
+            None,
+        )
+        .attempt;
         assert_eq!(
             result.supplied,
             vec![Supplied::TileAttachments {
@@ -1052,7 +1072,7 @@ mod tests {
 
     /// A storage texture on a profile without formatless storage access (`runtime-floor` without
     /// `shaderStorageImageWriteWithoutFormat`, below the runtime's floor) is supplied the widest
-    /// format of its texel class.
+    /// format of its texel class, under the resident-table domains ([`resident_tables`]).
     #[test]
     fn a_storage_texture_is_supplied_the_widest_format_of_its_class() {
         let Some(bitcode) =
@@ -1064,13 +1084,7 @@ mod tests {
         assert!(description
             .features
             .remove(&metal2vulkan::device::VkFeature::ShaderStorageImageWriteWithoutFormat));
-        let profile = metal2vulkan::device::Device::from_queries(
-            description,
-            metal2vulkan::device::DevicePolicy::default(),
-        )
-        .unwrap()
-        .profile()
-        .clone();
+        let profile = resident_tables(description);
         let result = replay_specialized(
             &bitcode,
             "kernel_write_one_dimensional_textures",

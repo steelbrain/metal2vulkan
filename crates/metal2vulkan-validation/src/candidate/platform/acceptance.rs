@@ -530,13 +530,14 @@ mod tests {
     /// the owned `handles` fixture needs the sum of every binding's count by type, from an
     /// update-after-bind pool, its set-1 arrays each the heap capacity: the sampled float group's
     /// and its unsigned integer twin's (the class a float read reaches a raw member through) alike.
-    /// A kernel without a heap needs a plain pool.
+    /// A kernel without a heap needs a plain pool. The heap arrays are the resident-table
+    /// domains' handle table, which the executor's own context compiles under.
     #[test]
     fn descriptor_pools_hold_every_binding_of_the_layout() {
         let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
         let text = std::fs::read_to_string(path).unwrap();
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
+        let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
         let handles = match llvm_assemble(&engine_dir().join("handles.ll")) {
             Ok(bitcode) => bitcode,
             Err(AssembleError::Missing(why)) => {

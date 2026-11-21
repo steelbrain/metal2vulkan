@@ -958,7 +958,7 @@ fn workgroup_initializers_need_zero_initialize_workgroup_memory() {
     let floor = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::ShaderZeroInitializeWorkgroupMemory],
-        Default::default(),
+        crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     assert!(!floor

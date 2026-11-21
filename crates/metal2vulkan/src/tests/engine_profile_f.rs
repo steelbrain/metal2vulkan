@@ -59,7 +59,7 @@ fn no_int64() -> DeviceDescription {
 /// The formatless floor, then the Profile F devices this file checks: `runtime-floor` without
 /// device addresses, and [`NO_INT64`].
 fn profile_f() -> Vec<(&'static str, DeviceProfile)> {
-    let policy = DevicePolicy::default;
+    let policy = || DevicePolicy::RESIDENT_TABLES;
     let formatless = formatless_floor(policy()).expect("profile");
     let no_addresses = crate::pipeline::testing::device_f(policy()).expect("profile");
     let no_int64 = Device::from_queries(no_int64(), policy()).expect("profile");

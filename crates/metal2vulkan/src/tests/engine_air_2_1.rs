@@ -96,7 +96,7 @@ fn a_status_less_reads_alpha_is_observed_only_where_the_function_uses_it() {
     let checked = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[crate::device::requirements::VkFeature::RobustImageAccess2],
-        Default::default(),
+        crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     profiles.push((

@@ -3073,15 +3073,16 @@ mod tests {
     }
 
     /// A synthetic `vulkaninfo` venue profile of a Vulkan 1.3 device, edited by `edit`: what
-    /// [`crate::c3::VenueProfile::parse`] reads, owned by the test.
+    /// [`crate::c3::VenueProfile::parse`] reads, owned by the test. It states the device addresses
+    /// and 64-bit integers the default policy's identity domains need.
     fn venue_profile(edit: impl FnOnce(&mut serde_json::Value)) -> crate::c3::VenueProfile {
         let mut document = serde_json::json!({
             "provenance": {"source": "vulkaninfo"},
             "capabilities": {"device": {
                 "extensions": {"VK_KHR_format_feature_flags2": 2},
                 "features": {
-                    "VkPhysicalDeviceFeatures": {"shaderInt16": true},
-                    "VkPhysicalDeviceVulkan12Features": {"bufferDeviceAddress": false},
+                    "VkPhysicalDeviceFeatures": {"shaderInt16": true, "shaderInt64": true},
+                    "VkPhysicalDeviceVulkan12Features": {"bufferDeviceAddress": true},
                 },
                 "properties": {
                     "VkPhysicalDeviceProperties": {
