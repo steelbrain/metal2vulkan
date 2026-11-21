@@ -63,6 +63,7 @@ fn at_the_floor() -> Queried {
     features.core.alpha_to_one = vk::TRUE;
     features.core.logic_op = vk::TRUE;
     features.core.full_draw_index_uint32 = vk::TRUE;
+    features.core.depth_bias_clamp = vk::TRUE;
     features.core.shader_clip_distance = vk::TRUE;
     features.core.shader_tessellation_and_geometry_point_size = vk::TRUE;
     features.core.large_points = vk::TRUE;
