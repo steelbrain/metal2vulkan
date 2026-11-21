@@ -1,13 +1,12 @@
 //! Batched engine runs of the Metal-qualified authored cases on a Vulkan device
-//! (`corpus-vulkan --batch`), or on MoltenVK (`corpus-moltenvk --batch`); and, on the same driver,
-//! the Metal oracle's qualifications (`corpus-metal --batch`, [`metal`]): one [`Pass::Metal`] run
+//! (`corpus-vulkan --batch`); and, on the same driver, the Metal oracle's qualifications (`corpus-metal --batch`, [`metal`]): one [`Pass::Metal`] run
 //! per case, which records the case's Metal row, on the GPU only, with the same job stores,
 //! done-list, build record, tripwire, and stops.
 //!
 //! The batch selects every committed case with a current Metal observation in one Metal
 //! environment ([`qualified_cases`]: the row the executor compares against, by
 //! [`MetalObservation::dependency_matches`] under the current oracle) and runs it through its
-//! backend's executor (`corpus-vulkan` or `corpus-moltenvk`, the engine) with
+//! backend's executor (`corpus-vulkan`, the engine) with
 //! `--device-type TYPE`: one process per case, exactly
 //! the run a single-case invocation makes, so a row or a refusal it records is the executor's own.
 //! The batch never runs Metal: it reads the committed Metal rows. With a profile to restrict to,
@@ -39,7 +38,7 @@
 //!   build or venue started, or one whose runs predate that record, so no done-list of an older
 //!   build passes for this build's finished runs.
 //! - **Scratch only.** Each job runs in its own store under the temporary directory: links to the
-//!   corpus's cases, reviews, Metal rows, the other backend's rows, and private sources, and its
+//!   corpus's cases, reviews, Metal rows, and private sources, and its
 //!   own empty candidate and refusal shards of its backend, so concurrent runs never share a shard
 //!   and the corpus is never written. A row a run recorded is appended verbatim to [`ROWS`], and a refusal it recorded
 //!   (`crate::refusal`) to [`REFUSALS`]. [`install`] writes the evidence of each slot's last run
@@ -594,7 +593,6 @@ impl BatchDevice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchBackend {
-    Moltenvk,
     Vulkan,
     Metal,
 }
@@ -603,13 +601,12 @@ impl BatchBackend {
     /// The candidate backend, for a candidate batch.
     pub fn candidate(self) -> Option<Backend> {
         match self {
-            Self::Moltenvk => Some(Backend::Moltenvk),
             Self::Vulkan => Some(Backend::Vulkan),
             Self::Metal => None,
         }
     }
 
-    /// Its rows' directory under `observations/` (`moltenvk`, `vulkan`, `metal`).
+    /// Its rows' directory under `observations/` (`vulkan`, `metal`).
     pub fn directory(self) -> &'static str {
         match self.candidate() {
             Some(backend) => backend.directory(),
@@ -621,7 +618,6 @@ impl BatchBackend {
 impl From<Backend> for BatchBackend {
     fn from(backend: Backend) -> Self {
         match backend {
-            Backend::Moltenvk => Self::Moltenvk,
             Backend::Vulkan => Self::Vulkan,
         }
     }
@@ -630,7 +626,7 @@ impl From<Backend> for BatchBackend {
 /// What a batch runs and where.
 #[derive(Clone, Debug)]
 pub struct BatchConfig {
-    /// The executor of `backend` (`corpus-vulkan`, `corpus-moltenvk`, or `corpus-metal`).
+    /// The executor of `backend` (`corpus-vulkan` or `corpus-metal`).
     pub executor: PathBuf,
     /// Whose rows the runs record: the slots, shards, and record are this backend's.
     pub backend: BatchBackend,
@@ -678,7 +674,7 @@ pub struct BatchBuild {
     /// before it was recorded, which is no build's.
     #[serde(default)]
     pub validation: String,
-    /// Absent in a record of a batch before MoltenVK had one: those were Vulkan.
+    /// Absent in a record of a batch before the backend was recorded: those were Vulkan.
     #[serde(default = "vulkan")]
     pub backend: BatchBackend,
     pub metal_environment_id: String,
@@ -992,7 +988,7 @@ fn hang(
     };
     let submissions = match backend {
         BatchBackend::Metal => SubmissionBackend::Metal,
-        BatchBackend::Moltenvk | BatchBackend::Vulkan => SubmissionBackend::VulkanGpu,
+        BatchBackend::Vulkan => SubmissionBackend::VulkanGpu,
     };
     let record = HangRecord::now(
         kind,
@@ -1027,26 +1023,17 @@ fn hang(
 
 /// A job's store at `store`: links to `corpus`'s cases, reviews, private sources, and library
 /// modules (each that exists), and the rows `backend`'s runs read; and empty shard directories of
-/// its own for the rows they write. A candidate run reads the Metal rows and the other backend's,
-/// and writes `backend`'s rows and refusals; a Metal run reads no rows and writes Metal's.
+/// its own for the rows they write. A candidate run reads the Metal rows and writes `backend`'s
+/// rows and refusals; a Metal run reads no rows and writes Metal's.
 fn worker_store(corpus: &Path, store: &Path, backend: BatchBackend) -> Result<(), String> {
     let (own, read) = match backend.candidate() {
-        Some(backend) => {
-            let other = match backend {
-                Backend::Vulkan => Backend::Moltenvk,
-                Backend::Moltenvk => Backend::Vulkan,
-            };
-            (
-                vec![
-                    Path::new("observations").join(backend.directory()),
-                    refusal_directory(backend),
-                ],
-                vec![
-                    PathBuf::from("observations/metal"),
-                    Path::new("observations").join(other.directory()),
-                ],
-            )
-        }
+        Some(backend) => (
+            vec![
+                Path::new("observations").join(backend.directory()),
+                refusal_directory(backend),
+            ],
+            vec![PathBuf::from("observations/metal")],
+        ),
         None => (vec![PathBuf::from("observations/metal")], Vec::new()),
     };
     for own in own {

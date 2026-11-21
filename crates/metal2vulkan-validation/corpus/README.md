@@ -9,10 +9,9 @@ crates/metal2vulkan-validation/corpus/
   local/library-modules/shard_000.jsonl ...          # non-entry AIR dependencies, private
   cases/shard_000.jsonl ...                         # authored, no AIR bodies
   observations/metal/shard_000.jsonl ...
-  observations/moltenvk/shard_000.jsonl ...
   observations/vulkan/shard_000.jsonl ...
   observations/parity/<scenario>.jsonl              # Metal's records of the parity scenarios
-  authored-compile.tsv                              # each case's compile outcome per profile-leg
+  authored-compile.tsv                              # each case's compile outcome per profile
   .index.sqlite                                     # generated, gitignored
 ```
 
@@ -23,9 +22,9 @@ and that line records the crash in place of the seed's records. The sequences la
 seed of the line it compares with in its output.
 
 `authored-compile.tsv` is the authored compile census's expectation file: one line
-per committed case, its outcome on each profile-leg of its header, `compiled` or the executor's
+per committed case, its outcome on each profile of its header, `compiled` or the executor's
 refusal label. Only `corpus-triage --audit authored-compile` writes it: each train's gate adds new
-cases and venues' profile-legs and drops removed cases (`--bless-additions`), and a change that
+cases and venues' profiles and drops removed cases (`--bless-additions`), and a change that
 moves a case's outcome commits the file blessed with it (`--bless`; docs/VALIDATION.md, "Compile
 every committed authored case").
 
@@ -142,7 +141,7 @@ fixture is caught by its path even where the old AIR is in no shard.
 
 Within an AIR and an entry, `name` is a unique conceptual slot: a case's slot is its module, its
 entry, and its name, so a same-name case over another entry of a module is another
-slot. Replacing a slot removes the old case identity and only its Metal/MoltenVK/Vulkan
+slot. Replacing a slot removes the old case identity and only its Metal and Vulkan
 observations through a recoverable aligned-shard transaction. Explicit deletion uses
 `corpus-case-check --delete-air HASH --delete-name NAME [--delete-entry ENTRY]` (the entry is
 needed only when the module's cases use the name over several entries) and performs the same

@@ -2,8 +2,7 @@ use crate::gpu::DeviceType;
 use crate::observation::Backend;
 use std::sync::OnceLock;
 
-/// The exit statuses of the candidate executors' processes (`corpus-vulkan`, `corpus-moltenvk`):
-/// one per [`ExecutorError`](crate::check::admission::ExecutorError) kind that is not a failure, so a caller that runs them as processes
+/// The exit statuses of the candidate executor's processes (`corpus-vulkan`): one per [`ExecutorError`](crate::check::admission::ExecutorError) kind that is not a failure, so a caller that runs them as processes
 /// (`corpus-vulkan --batch`) reads the kind from the status. A failure exits 1, and so does a
 /// mismatch, whose row the store then holds; a timed-out device wait exits
 /// [`crate::gpu::wait::HANG_EXIT_CODE`].
@@ -116,14 +115,8 @@ pub(crate) fn echo_validation_messages() {
 }
 
 fn validate_backend_host(backend: Backend) -> Result<(), String> {
-    if backend == Backend::Moltenvk && !cfg!(target_os = "macos") {
-        return Err("MoltenVK candidate execution requires macOS".into());
-    }
     if backend == Backend::Vulkan && cfg!(target_os = "macos") {
-        return Err(
-            "native Vulkan candidate execution is not available on macOS; use corpus-moltenvk"
-                .into(),
-        );
+        return Err("Vulkan candidate execution is not available on macOS".into());
     }
     Ok(())
 }

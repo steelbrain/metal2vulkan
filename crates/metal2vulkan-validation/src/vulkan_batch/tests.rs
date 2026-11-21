@@ -676,97 +676,6 @@ exit 9
     assert!(rerun.is_empty(), "{rerun:?}");
 }
 
-/// A MoltenVK batch runs its executor in job stores of MoltenVK's own: their candidate and refusal
-/// shards are MoltenVK's, the Vulkan rows are linked like the Metal rows, and the rows and
-/// refusals it keeps are the MoltenVK slots'. A batch given a source index names it to every run,
-/// with each case's AIR.
-#[cfg(unix)]
-#[test]
-fn a_moltenvk_batch_records_moltenvk_rows() {
-    let scratch = ScratchDir::new("batch-moltenvk").unwrap();
-    let corpus = scratch.path().join("corpus");
-    let store = CorpusStore::new(&corpus);
-    let (matching, refused) = (case(1, "a"), case(3, "c"));
-    for case in [&matching, &refused] {
-        store.put_case(case.clone()).unwrap();
-    }
-    fs::create_dir_all(corpus.join("observations/vulkan")).unwrap();
-    let shard = |case: &AuthoredCase| shard_name_for_hash(&case.air_sha256).unwrap();
-    let index = scratch.path().join("corpus-index.sqlite");
-    let executor = scratch.path().join("fake-corpus-moltenvk");
-    executable(
-        &executor,
-        &format!(
-            r#"#!/bin/sh
-store= id= index= slot={ENV}@engine
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --corpus) store=$2; shift 2 ;;
-    --case-id) id=$2; shift 2 ;;
-    --source-index) index=$2; shift 2 ;;
-    --device-type) [ "$2" = gpu ] || exit 9; shift 2 ;;
-    --metal-environment-id|--environment-id|--gpu-wait-timeout|--air-sha256) shift 2 ;;
-    *) echo "unexpected $1" >&2; exit 9 ;;
-  esac
-done
-[ "$index" = {index} ] || {{ echo "source index '$index'" >&2; exit 9; }}
-[ -L "$store/observations/vulkan" ] && [ ! -e "$store/observations/refusals/vulkan" ] || exit 9
-[ -d "$store/observations/moltenvk" ] && [ ! -L "$store/observations/moltenvk" ] || exit 9
-[ -d "$store/observations/refusals/moltenvk" ] || exit 9
-case "$id" in
-  {m}) printf '{{"case_id":"%s","environment_id":"%s","status":"match"}}\n' "$id" "$slot" \
-    >> "$store/observations/moltenvk/{ms}"; echo "Match $id"; exit 0 ;;
-  {r}) printf '{{"case_id":"%s","environment_id":"%s"}}\n' "$id" "$slot" \
-    >> "$store/observations/refusals/moltenvk/{rs}"
-    echo "not_supported{{product: test}}"; exit 4 ;;
-esac
-exit 9
-"#,
-            m = matching.case_id,
-            ms = shard(&matching),
-            r = refused.case_id,
-            rs = shard(&refused),
-            index = index.display(),
-        ),
-    );
-    let config = BatchConfig {
-        backend: BatchBackend::Moltenvk,
-        source_index: Some(index.clone()),
-        ..gpu_config(scratch.path(), executor, Duration::from_secs(60))
-    };
-    let runs = plan(
-        &[matching.clone(), refused.clone()],
-        &[Pass::Engine],
-        &[],
-        None,
-    );
-    let finished = run_batch(&config, &runs, |_| {}).unwrap();
-    assert_eq!(
-        finished
-            .iter()
-            .map(|run| run.outcome)
-            .collect::<std::collections::BTreeSet<_>>(),
-        [Outcome::Match, Outcome::NotSupported].into()
-    );
-    assert_eq!(
-        fs::read_to_string(config.out.join(ROWS)).unwrap(),
-        format!(
-            "{{\"case_id\":\"{}\",\"environment_id\":\"{ENV}@engine\",\"status\":\"match\"}}\n",
-            matching.case_id
-        )
-    );
-    assert_eq!(
-        fs::read_to_string(config.out.join(REFUSALS)).unwrap(),
-        format!(
-            "{{\"case_id\":\"{}\",\"environment_id\":\"{ENV}@engine\"}}\n",
-            refused.case_id
-        )
-    );
-    let recorded = BatchBuild::read(&config.out).unwrap().unwrap();
-    assert_eq!(recorded.backend, BatchBackend::Moltenvk);
-    assert_eq!(recorded, BatchBuild::of(&config));
-}
-
 /// A restricted batch runs every case under `--profiles-layer P` and keeps the rows and refusals
 /// of the `ID@engine@P` slots, which its report reads.
 #[cfg(unix)]
@@ -1060,9 +969,9 @@ fn a_report_narrowed_to_requested_cases_counts_only_them() {
 /// Installing writes, for each case, the evidence of its last run that recorded any,
 /// through the store's validated writes: the slot's last row after a match or a mismatch, its last
 /// refusal after a typed refusal (which replaces a row the store held), nothing after a refusal
-/// before a device opened, and nothing no finished run lists. A row that is not of the backend
-/// installed is refused, and so is an out directory whose record names the other backend; the
-/// record comes back with what was installed (an out directory without one is Vulkan's).
+/// before a device opened, and nothing no finished run lists. An out directory whose record names
+/// another backend is refused; the record comes back with what was installed (an out directory
+/// without one is Vulkan's).
 #[test]
 fn installed_evidence_is_each_slots_last_run() {
     let scratch = ScratchDir::new("batch-install").unwrap();
@@ -1127,47 +1036,12 @@ fn installed_evidence_is_each_slots_last_run() {
     assert_eq!(installed, expected);
     assert_eq!(store.read_refusals(Backend::Vulkan).unwrap(), [refused]);
 
-    let mut moltenvk = row(&second, &stated, &[0; 4], &[0; 4]);
-    moltenvk.backend = Backend::Moltenvk;
-    fs::write(out.join(ROWS), line(&moltenvk)).unwrap();
-    assert!(install(&out, &store, Backend::Vulkan)
-        .unwrap_err()
-        .contains("not a vulkan row"));
-    // Without a record the runs are Vulkan's: MoltenVK installs none of them.
-    assert!(install(&out, &store, Backend::Moltenvk)
-        .unwrap_err()
-        .contains("runs of the vulkan backend"));
-
-    // A MoltenVK batch's record: its rows install as MoltenVK's, and Vulkan refuses them.
-    let build = BatchBuild::current(
-        BatchBackend::Moltenvk,
-        METAL_ENV,
-        ENV,
-        None,
-        DeviceType::Gpu,
-    );
+    // A Metal batch's record: the Vulkan backend installs none of its runs.
+    let build = BatchBuild::current(BatchBackend::Metal, METAL_ENV, ENV, None, DeviceType::Gpu);
     fs::write(out.join(BUILD), serde_json::to_vec(&build).unwrap()).unwrap();
-    fs::write(
-        out.join(DONE_LIST),
-        done(&second, Pass::Engine, Outcome::Match, 1.0, "").line(),
-    )
-    .unwrap();
-    fs::write(out.join(REFUSALS), "").unwrap();
     assert!(install(&out, &store, Backend::Vulkan)
         .unwrap_err()
-        .contains("runs of the moltenvk backend"));
-    assert_eq!(
-        install(&out, &store, Backend::Moltenvk).unwrap(),
-        Installed {
-            rows: 1,
-            refusals: 0,
-            build: Some(build),
-        }
-    );
-    assert_eq!(
-        store.read_candidates(Backend::Moltenvk).unwrap(),
-        [moltenvk]
-    );
+        .contains("runs of the metal backend"));
 }
 
 /// The store line of a row or a refusal.
@@ -1228,7 +1102,7 @@ fn an_out_directory_resumes_only_its_own_build() {
     };
     assert!(BatchBuild::claim(&other_device).is_err());
     let other_backend = BatchConfig {
-        backend: BatchBackend::Moltenvk,
+        backend: BatchBackend::Metal,
         ..config.clone()
     };
     assert!(BatchBuild::claim(&other_backend).is_err());

@@ -1,12 +1,10 @@
 use super::*;
 
 #[test]
-fn backend_names_cannot_relabel_the_hosts_vulkan_stack() {
+fn vulkan_candidates_run_off_macos_alone() {
     if cfg!(target_os = "macos") {
-        assert!(validate_backend_host(Backend::Moltenvk).is_ok());
         assert!(validate_backend_host(Backend::Vulkan).is_err());
     } else if cfg!(target_os = "linux") {
-        assert!(validate_backend_host(Backend::Moltenvk).is_err());
         assert!(validate_backend_host(Backend::Vulkan).is_ok());
     }
 }

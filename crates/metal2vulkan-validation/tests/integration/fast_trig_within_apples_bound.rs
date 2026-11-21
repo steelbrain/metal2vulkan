@@ -4,7 +4,7 @@
 //! device answers within Apple's fast-math bound (MSL Table 8.2: `sin` and `cos` within `2^-13`
 //! absolute on `[-pi, pi]`, `sinpi` and `cospi` on `[-1, 1]`, `tan` as `sin(x) * (1 / cos(x))` and
 //! `tanpi` as `tan(x * pi)`). This test holds that condition to the committed evidence instead of
-//! to prose. Every committed Vulkan and MoltenVK row of the
+//! to prose. Every committed Vulkan row of the
 //! fast math-library probe case (1,024 operands under Metal's default fast math; words `32t` to
 //! `32t + 4` are the fast `sin`, `cos`, `tan`, and `sincos` of operand `t`, and words `32t + 26`
 //! to `32t + 28` its fast `sinpi`, `cospi`, and `tanpi`) is judged by C3's bound check
@@ -114,19 +114,15 @@ fn fast_trig_differs_from_metal_only_within_apples_bound_or_where_it_states_none
         .read_metal_of_case(&case)
         .expect("the Metal rows read");
     let shard = shard_name_for_hash(&case.air_sha256).unwrap();
-    let mut rows = Vec::new();
-    for backend in ["vulkan", "moltenvk"] {
-        let path = root.join("observations").join(backend).join(&shard);
-        let shard_rows: Vec<CandidateObservation> =
-            read_jsonl_if_exists(&path).expect("the committed candidate shard reads");
-        rows.extend(
-            shard_rows
-                .into_iter()
-                .filter(|row| row.case_id == FAST_PROBE),
-        );
-    }
+    let path = root.join("observations/vulkan").join(&shard);
+    let rows: Vec<CandidateObservation> = read_jsonl_if_exists::<CandidateObservation>(&path)
+        .expect("the committed candidate shard reads")
+        .into_iter()
+        .filter(|row| row.case_id == FAST_PROBE)
+        .collect();
+    // One row of each C3 venue's engine slot.
     assert!(
-        rows.len() >= 10,
+        rows.len() >= 5,
         "only {} committed rows of the fast probe case",
         rows.len()
     );

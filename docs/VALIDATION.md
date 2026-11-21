@@ -442,14 +442,12 @@ cargo run -p metal2vulkan-validation --release --bin corpus-metal -- \
   --case-id CASE --environment-id METAL_ENV --device-type gpu
 cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   --case-id CASE --environment-id VENUE --device-type cpu|gpu
-cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
-  --case-id CASE --environment-id VENUE --device-type gpu     # macOS
 ```
 
 - **Metal qualification** (`corpus-metal`) runs the case three times through Metal and records its
   observation for the environment. `--prepare-only` does the CPU side and stops before a device
   opens, to screen cases.
-- **The Vulkan candidate** (`corpus-vulkan` on Linux, `corpus-moltenvk` on macOS) translates the
+- **The Vulkan candidate** (`corpus-vulkan`, on Linux) translates the
   case through the public API in a killable compile worker, executes exactly what the binder plans,
   and compares the observations with Metal's. Every context runs under the validation layer and
   enables every robustness feature the device states.
@@ -540,9 +538,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
 ### Venues
 
 `cutover/c3-venues.json` lists the venues the cases must pass on: each is one translation key under
-one driver, with its environment ID, committed profile and devices. Today:
-MoltenVK on Apple's M3 Max, lavapipe on arm64 and x86, the AMD Radeon 780M under RADV, Intel's
-Raptor Lake Xe graphics under ANV, and the NVIDIA GeForce RTX 5080 Laptop GPU.
+one driver, with its environment ID, committed profile and devices. Today: lavapipe on arm64 and
+x86 (the public cases), and the AMD Radeon 780M under RADV, Intel's Raptor Lake Xe graphics under
+ANV, and the NVIDIA GeForce RTX 5080 Laptop GPU (every Metal-qualified case).
 `cutover/c3-references.json` names the Metal environment that is the reference (the Apple M3 Max),
 with its declared identity; each case is judged against its row.
 

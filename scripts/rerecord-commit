@@ -7,16 +7,16 @@
 # rows.jsonl, refusals.jsonl), copied here as it is. Run it in a checkout of the ref the venues
 # were recorded at, or of a descendant that changes no product source:
 #
-#   1. The tracked tree must be clean. corpus-vulkan and corpus-moltenvk are built from it.
+#   1. The tracked tree must be clean. corpus-vulkan is built from it.
 #   2. Every OUT_DIR's record must be this build (`batch-build this_build=yes` from
 #      --batch-report: the executor ABI, the product's source fingerprint, the translation
 #      semantics, and the Metal oracle). A row is current only at the build that recorded it, so
 #      a product change between recording and this commit would commit stale rows; it is refused
 #      before anything is installed.
 #   3. Each OUT_DIR is installed into crates/metal2vulkan-validation/corpus by its backend's --batch-install (each
-#      (case, leg)'s last evidence, through the store's validated writes).
-#   4. Only candidate and refusal shards may have changed (crates/metal2vulkan-validation/corpus/observations/vulkan,
-#      moltenvk, refusals/vulkan, refusals/moltenvk); anything else stops it before the commit,
+#      (case, slot)'s last evidence, through the store's validated writes).
+#   4. Only candidate and refusal shards may have changed (crates/metal2vulkan-validation/corpus/observations/vulkan
+#      and refusals/vulkan); anything else stops it before the commit,
 #      with the tree left as it is for inspection.
 #   5. The shards are committed (unless --no-commit) with --subject (default: one naming the
 #      venues and the product) and a body listing each venue's installed rows and refusals. The
@@ -58,14 +58,14 @@ cd "$root" || exit 2
     fail "tracked files have changes: commit or remove them first"
 head=$(git rev-parse HEAD) || exit 2
 
-cargo build --release -p metal2vulkan-validation --bin corpus-vulkan --bin corpus-moltenvk ||
+cargo build --release -p metal2vulkan-validation --bin corpus-vulkan ||
     { echo "rerecord-commit: build failed" >&2; exit 1; }
 target=$(cargo metadata --format-version 1 --no-deps |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])') || exit 1
 # Copies, so no build in a shared target directory replaces them while they run.
 bin=$(mktemp -d) || exit 1
 trap 'rm -rf "$bin"' EXIT
-cp "$target/release/corpus-vulkan" "$target/release/corpus-moltenvk" "$bin/" || exit 1
+cp "$target/release/corpus-vulkan" "$bin/" || exit 1
 
 # record DIR: "backend metal_environment_id environment_id product executor_abi semantics oracle
 # restricted_to" (the last "-" for an unrestricted batch)
@@ -116,7 +116,7 @@ done
 
 # 4. Only candidate and refusal shards changed.
 other=$(git status --porcelain --untracked-files=all | cut -c4- | grep -v -E \
-    '^crates/metal2vulkan-validation/corpus/observations/(vulkan|moltenvk|refusals/vulkan|refusals/moltenvk)/[^/]+\.jsonl$')
+    '^crates/metal2vulkan-validation/corpus/observations/(vulkan|refusals/vulkan)/[^/]+\.jsonl$')
 [ -z "$other" ] || {
     echo "rerecord-commit: the install changed more than candidate and refusal shards:" >&2
     echo "$other" >&2
@@ -129,8 +129,8 @@ fi
 [ -n "$commit" ] || { echo "rerecord-commit: installed (not committed, --no-commit)"; exit 0; }
 
 # 5. Commit, rows only.
-git add -A -- crates/metal2vulkan-validation/corpus/observations/vulkan crates/metal2vulkan-validation/corpus/observations/moltenvk \
-    crates/metal2vulkan-validation/corpus/observations/refusals/vulkan crates/metal2vulkan-validation/corpus/observations/refusals/moltenvk ||
+git add -A -- crates/metal2vulkan-validation/corpus/observations/vulkan \
+    crates/metal2vulkan-validation/corpus/observations/refusals/vulkan ||
     exit 1
 [ -n "$subject" ] || subject="Record $venues at product ${product:0:12}"
 git commit -q -m "$subject" -m "Rows and refusals recorded by one build (executor $executor, product
@@ -139,6 +139,6 @@ scripts/rerecord-commit. Only candidate and refusal shards change, so the produc
 and every row installed here, stays current.
 $body" || exit 1
 changed=$(git diff --name-only HEAD^ HEAD | grep -v -E \
-    '^crates/metal2vulkan-validation/corpus/observations/(vulkan|moltenvk|refusals/vulkan|refusals/moltenvk)/')
+    '^crates/metal2vulkan-validation/corpus/observations/(vulkan|refusals/vulkan)/')
 [ -z "$changed" ] || { echo "rerecord-commit: the commit changed $changed" >&2; exit 1; }
 echo "rerecord-commit: committed $(git rev-parse HEAD) ($venues)"

@@ -10,8 +10,7 @@
 //! it recorded the declared identity. Every reader of a candidate row's Metal dependency (C3, the
 //! evidence census, coverage) judges by this one row, through the one currency rule
 //! (`index::candidate_staleness`): the rule checks the Metal row's input and output, not its
-//! environment. A C3 venue device that names its own Metal environment (an Apple GPU's MoltenVK,
-//! `VenueDevice::metal_environment_id`) must name the reference: the list declares no other.
+//! environment.
 //!
 //! **The declared identity is evidence about the machine**: the device, GPU cores, macOS version
 //! and build, Xcode build and Metal toolchain. A host of another identity cannot record under the

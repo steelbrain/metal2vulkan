@@ -218,14 +218,12 @@ pub struct CandidateObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
-    Moltenvk,
     Vulkan,
 }
 
 impl Backend {
     pub fn directory(self) -> &'static str {
         match self {
-            Self::Moltenvk => "moltenvk",
             Self::Vulkan => "vulkan",
         }
     }
@@ -839,11 +837,6 @@ mod tests {
         let changed_fingerprint = "66".repeat(32);
         let changed = CandidateDependencies {
             translator_fingerprint: &changed_fingerprint,
-            ..dependencies
-        };
-        assert!(!candidate.dependency_matches(&changed));
-        let changed = CandidateDependencies {
-            backend: Backend::Moltenvk,
             ..dependencies
         };
         assert!(!candidate.dependency_matches(&changed));

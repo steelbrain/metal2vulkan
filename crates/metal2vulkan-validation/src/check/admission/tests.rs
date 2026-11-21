@@ -34,11 +34,7 @@ done:
 }
 "#;
 
-const HOST_BACKEND: Backend = if cfg!(target_os = "macos") {
-    Backend::Moltenvk
-} else {
-    Backend::Vulkan
-};
+const HOST_BACKEND: Backend = Backend::Vulkan;
 
 /// A scratch corpus holding one installed case over `body`.
 fn corpus(body: &str, fuel: Option<u32>) -> (ScratchDir, AuthoredCase) {

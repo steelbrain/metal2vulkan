@@ -2,7 +2,7 @@
 //!
 //! Every validation path that compiles an engine pipeline for a device (L4 driver acceptance,
 //! `corpus-pipeline`, and the engine candidate executor behind
-//! `corpus-vulkan`/`corpus-moltenvk`) compiles in a killable child
+//! `corpus-vulkan`) compiles in a killable child
 //! process, never in the process that holds the Vulkan device. [`compile_compute`],
 //! [`compile_compute_request`], and [`compile_render_request`] run one child per pipeline
 //! through [`super::run_json`], so the 20-second

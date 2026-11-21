@@ -185,15 +185,14 @@ impl EvidenceState {
     }
 }
 
-/// One authored case's evidence. `moltenvk` and `vulkan` summarize the case's engine slots
-/// (`ENV@engine`) in each backend, judged by the one currency rule. The old engine's slots are
+/// One authored case's evidence. `vulkan` summarizes the case's engine slots (`ENV@engine`),
+/// judged by the one currency rule. The old engine's slots are
 /// not evidence: its executor is deleted, and the census omits them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceRow {
     pub case_id: String,
     pub name: String,
     pub metal: EvidenceState,
-    pub moltenvk: EvidenceState,
     pub vulkan: EvidenceState,
     pub translation_error: Option<String>,
     pub slots: Vec<EvidenceSlot>,
@@ -1752,19 +1751,18 @@ fn insert_compact_rows(
             )
             .map_err(|error| format!("index Metal observation: {error}"))?;
     }
-    for backend in [Backend::Moltenvk, Backend::Vulkan] {
-        for observation in store.read_candidates(backend)? {
-            if unavailable_cases.contains(&observation.case_id) {
-                unavailable.candidate_observations += 1;
-                continue;
-            }
-            transaction
-                .execute(
-                    "INSERT INTO candidate_observations (case_id, backend, environment_id, input_sha256, golden_output_sha256, spv_sha256, translator_fingerprint, executor_abi, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![observation.case_id, backend.directory(), observation.environment_id, observation.input_sha256, observation.golden_output_sha256, observation.spv_sha256.as_deref().unwrap_or_default(), observation.translator_fingerprint, observation.executor_abi, format!("{:?}", observation.status).to_ascii_lowercase()],
-                )
-                .map_err(|error| format!("index {} observation: {error}", backend.directory()))?;
+    let backend = Backend::Vulkan;
+    for observation in store.read_candidates(backend)? {
+        if unavailable_cases.contains(&observation.case_id) {
+            unavailable.candidate_observations += 1;
+            continue;
         }
+        transaction
+            .execute(
+                "INSERT INTO candidate_observations (case_id, backend, environment_id, input_sha256, golden_output_sha256, spv_sha256, translator_fingerprint, executor_abi, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![observation.case_id, backend.directory(), observation.environment_id, observation.input_sha256, observation.golden_output_sha256, observation.spv_sha256.as_deref().unwrap_or_default(), observation.translator_fingerprint, observation.executor_abi, format!("{:?}", observation.status).to_ascii_lowercase()],
+            )
+            .map_err(|error| format!("index {} observation: {error}", backend.directory()))?;
     }
     Ok(match public_keys {
         None => IndexScope::Complete,
@@ -2004,7 +2002,6 @@ pub fn evidence_status(
                 .collect::<Vec<_>>()
         })
     };
-    let moltenvk = engine_rows(Backend::Moltenvk)?;
     let vulkan = engine_rows(Backend::Vulkan)?;
     let (judge, _) = crate::c3::reference::Judge::new(references, &cases, &metals);
     let mut rows = Vec::new();
@@ -2050,11 +2047,8 @@ pub fn evidence_status(
         } else {
             EvidenceState::Stale
         };
-        let state = |backend, observations| {
-            candidate_state(&case, backend, &current_metals, observations, venues)
-        };
-        let moltenvk_state = state(Backend::Moltenvk, &moltenvk);
-        let vulkan_state = state(Backend::Vulkan, &vulkan);
+        let vulkan_state =
+            candidate_state(&case, Backend::Vulkan, &current_metals, &vulkan, venues);
         let mut slots = case_metals
             .iter()
             .map(|observation| EvidenceSlot {
@@ -2063,27 +2057,22 @@ pub fn evidence_status(
                 state: metal_state(observation),
             })
             .collect::<Vec<_>>();
-        for (backend, observations) in [
-            (Backend::Moltenvk, moltenvk.as_slice()),
-            (Backend::Vulkan, vulkan.as_slice()),
-        ] {
-            slots.extend(
-                observations
-                    .iter()
-                    .filter(|observation| observation.case_id == case.case_id)
-                    .map(|observation| EvidenceSlot {
-                        backend: backend.directory(),
-                        environment_id: observation.environment_id.clone(),
-                        state: candidate_slot_state(
-                            &case,
-                            backend,
-                            &current_metals,
-                            observation,
-                            venues,
-                        ),
-                    }),
-            );
-        }
+        slots.extend(
+            vulkan
+                .iter()
+                .filter(|observation| observation.case_id == case.case_id)
+                .map(|observation| EvidenceSlot {
+                    backend: Backend::Vulkan.directory(),
+                    environment_id: observation.environment_id.clone(),
+                    state: candidate_slot_state(
+                        &case,
+                        Backend::Vulkan,
+                        &current_metals,
+                        observation,
+                        venues,
+                    ),
+                }),
+        );
         slots.sort_by(|left, right| {
             left.backend
                 .cmp(right.backend)
@@ -2093,7 +2082,6 @@ pub fn evidence_status(
             case_id: case.case_id,
             name: case.name,
             metal,
-            moltenvk: moltenvk_state,
             vulkan: vulkan_state,
             translation_error: None,
             slots,
@@ -2512,8 +2500,8 @@ mod tests {
             translator_fingerprint: engine_fingerprint_of(&[7; 32]),
             candidate_output_sha256: output_sha256,
             output_b64: output_b64.into(),
-            backend: Backend::Moltenvk,
-            environment_id: engine_environment_id("moltenvk-env"),
+            backend: Backend::Vulkan,
+            environment_id: engine_environment_id("toy-env"),
             environment: serde_json::json!({
                 "profile_fingerprint": crate::hash::hex_encode([7; 32]),
             }),
@@ -2575,7 +2563,7 @@ mod tests {
     }
 
     /// A private checkout: a public case and a case over one private source,
-    /// each with a Metal and a MoltenVK row. Returns the root, the public case, and the private
+    /// each with a Metal and a Vulkan row. Returns the root, the public case, and the private
     /// case.
     fn private_checkout(name: &str) -> (ScratchDir, AuthoredCase, AuthoredCase) {
         let scratch = ScratchDir::new(name).unwrap();
@@ -3084,7 +3072,7 @@ mod tests {
         let state = |candidate: &CandidateObservation| {
             candidate_slot_state(
                 &case,
-                Backend::Moltenvk,
+                Backend::Vulkan,
                 &[&metal],
                 candidate,
                 &crate::c3::VenueKeys::default(),
@@ -3098,7 +3086,7 @@ mod tests {
     /// target facts, in its environment's bare slot.
     fn old_engine_row(case: &AuthoredCase) -> CandidateObservation {
         let (_, mut row) = synthetic_observations(case);
-        row.environment_id = "moltenvk-env".into();
+        row.environment_id = "toy-env".into();
         row.executor_abi = "vulkan-executed-pipeline-v64".into();
         row.translator_fingerprint = "55".repeat(32);
         row.environment = serde_json::json!({"vulkan_target": {"version": [1, 2]}});
@@ -3211,16 +3199,11 @@ mod tests {
         row.environment[crate::c3::VENUE_PROFILE] = base.record();
         let keys = |profile: &crate::c3::VenueProfile| {
             let mut keys = crate::c3::VenueKeys::default();
-            keys.insert(
-                "moltenvk-env",
-                Backend::Moltenvk,
-                &profile.fingerprint,
-                "toy",
-            );
+            keys.insert("toy-env", Backend::Vulkan, &profile.fingerprint, "toy");
             keys
         };
         let state = |row: &CandidateObservation, keys: &crate::c3::VenueKeys| {
-            candidate_slot_state(&case, Backend::Moltenvk, &[&metal], row, keys)
+            candidate_slot_state(&case, Backend::Vulkan, &[&metal], row, keys)
         };
         assert_eq!(state(&row, &keys(&base)), EvidenceState::Current);
         let refusal = crate::refusal::RefusalObservation {
@@ -3229,7 +3212,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: row.translator_fingerprint.clone(),
-            backend: Backend::Moltenvk,
+            backend: Backend::Vulkan,
             environment_id: row.environment_id.clone(),
             environment: row.environment.clone(),
             executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3240,7 +3223,7 @@ mod tests {
         };
         assert!(refusal_is_current(
             &case,
-            Backend::Moltenvk,
+            Backend::Vulkan,
             &refusal,
             &keys(&base)
         ));
@@ -3253,7 +3236,7 @@ mod tests {
                 "a row of the profile before {what} changed"
             );
             assert!(
-                !refusal_is_current(&case, Backend::Moltenvk, &refusal, &keys(&moved)),
+                !refusal_is_current(&case, Backend::Vulkan, &refusal, &keys(&moved)),
                 "a refusal of the profile before {what} changed"
             );
         }
@@ -3278,7 +3261,7 @@ mod tests {
         };
         assert_eq!(without(|_| {}), without(edits[3].1));
         assert_ne!(without(|_| {}), without(edits[2].1));
-        // A venue's record without the key, or of another backend's slot.
+        // A venue's record without the key.
         let mut unkeyed = row.clone();
         unkeyed
             .environment
@@ -3286,9 +3269,6 @@ mod tests {
             .unwrap()
             .remove(crate::c3::VENUE_PROFILE);
         assert_eq!(state(&unkeyed, &keys(&base)), EvidenceState::Stale);
-        let mut elsewhere = crate::c3::VenueKeys::default();
-        elsewhere.insert("moltenvk-env", Backend::Vulkan, &base.fingerprint, "toy");
-        assert_eq!(state(&unkeyed, &elsewhere), EvidenceState::Current);
         assert_eq!(
             state(&unkeyed, &crate::c3::VenueKeys::default()),
             EvidenceState::Current
@@ -3302,7 +3282,7 @@ mod tests {
         let state = |candidate: &CandidateObservation| {
             candidate_slot_state(
                 &case,
-                Backend::Moltenvk,
+                Backend::Vulkan,
                 &[&metal],
                 candidate,
                 &crate::c3::VenueKeys::default(),
@@ -3332,7 +3312,7 @@ mod tests {
         assert_eq!(
             candidate_staleness(
                 &case,
-                Backend::Moltenvk,
+                Backend::Vulkan,
                 &[&metal],
                 &old,
                 &crate::c3::VenueKeys::default()
@@ -3360,13 +3340,13 @@ mod tests {
         let none = crate::c3::VenueKeys::default();
         // The candidate's own slot held to a key it did not record.
         let mut keyed = crate::c3::VenueKeys::default();
-        keyed.insert("moltenvk-env", Backend::Moltenvk, &"77".repeat(32), "toy");
+        keyed.insert("toy-env", Backend::Vulkan, &"77".repeat(32), "toy");
         assert_eq!(
-            keyed.expected(Backend::Moltenvk, &candidate.environment_id),
+            keyed.expected(Backend::Vulkan, &candidate.environment_id),
             Some("77".repeat(32).as_str())
         );
         let staleness = |candidate: &CandidateObservation| {
-            candidate_staleness(&case, Backend::Moltenvk, &[&metal], candidate, &none)
+            candidate_staleness(&case, Backend::Vulkan, &[&metal], candidate, &none)
         };
         let only = |executor: bool, product: bool, venue: bool, other: bool| {
             Staleness::judge([
@@ -3378,11 +3358,11 @@ mod tests {
         };
         assert!(staleness(&candidate).is_current());
         assert_eq!(
-            candidate_slot_state(&case, Backend::Moltenvk, &[&metal], &candidate, &none),
+            candidate_slot_state(&case, Backend::Vulkan, &[&metal], &candidate, &none),
             EvidenceState::Current
         );
         assert_eq!(
-            candidate_staleness(&case, Backend::Moltenvk, &[&metal], &candidate, &keyed),
+            candidate_staleness(&case, Backend::Vulkan, &[&metal], &candidate, &keyed),
             only(false, false, true, false)
         );
         let mut executor = candidate.clone();
@@ -3396,7 +3376,7 @@ mod tests {
         assert_eq!(staleness(&both), only(true, true, false, false));
         for row in [&executor, &product, &both] {
             assert_eq!(
-                candidate_slot_state(&case, Backend::Moltenvk, &[&metal], row, &none),
+                candidate_slot_state(&case, Backend::Vulkan, &[&metal], row, &none),
                 EvidenceState::Stale
             );
         }
@@ -3417,7 +3397,7 @@ mod tests {
         assert_eq!(staleness(&censused), only(false, true, false, false));
         // No current Metal row: another dependency.
         assert_eq!(
-            candidate_staleness(&case, Backend::Moltenvk, &[], &candidate, &none),
+            candidate_staleness(&case, Backend::Vulkan, &[], &candidate, &none),
             only(false, false, false, true)
         );
 
@@ -3428,7 +3408,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: candidate.translator_fingerprint.clone(),
-            backend: Backend::Moltenvk,
+            backend: Backend::Vulkan,
             environment_id: candidate.environment_id.clone(),
             environment,
             executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3438,17 +3418,12 @@ mod tests {
             artifact: None,
         };
         let judged = |refusal: &crate::refusal::RefusalObservation| {
-            refusal_staleness(&case, Backend::Moltenvk, refusal, &none)
+            refusal_staleness(&case, Backend::Vulkan, refusal, &none)
         };
         assert!(judged(&refusal).is_current());
-        assert!(refusal_is_current(
-            &case,
-            Backend::Moltenvk,
-            &refusal,
-            &none
-        ));
+        assert!(refusal_is_current(&case, Backend::Vulkan, &refusal, &none));
         assert_eq!(
-            refusal_staleness(&case, Backend::Moltenvk, &refusal, &keyed),
+            refusal_staleness(&case, Backend::Vulkan, &refusal, &keyed),
             only(false, false, true, false)
         );
         let mut executor = refusal.clone();
@@ -3457,11 +3432,6 @@ mod tests {
         let mut product = refusal.clone();
         product.translator_fingerprint = "66".repeat(32);
         assert_eq!(judged(&product), only(false, true, false, false));
-        // A refusal recorded in another backend is another backend's record.
-        assert_eq!(
-            refusal_staleness(&case, Backend::Vulkan, &refusal, &none),
-            only(false, false, false, true)
-        );
     }
 
     /// Artifact-keyed currency, over a synthetic store and its census file at two builds. A venue's
@@ -3546,22 +3516,17 @@ mod tests {
         // What the binaries judge by: the venue's key, and the corpus's file at this build.
         let keys = || {
             let mut keys = crate::c3::VenueKeys::default();
-            keys.insert(
-                "moltenvk-env",
-                Backend::Moltenvk,
-                &profile.fingerprint,
-                "toy",
-            );
+            keys.insert("toy-env", Backend::Vulkan, &profile.fingerprint, "toy");
             keys.with_artifacts(CurrentArtifacts::load(root).unwrap())
         };
         let judged = || {
             evidence_status(root, &keys(), &references)
                 .unwrap()
                 .remove(0)
-                .moltenvk
+                .vulkan
         };
         let staleness = |row: &CandidateObservation| {
-            candidate_staleness(&case, Backend::Moltenvk, &[&metal], row, &keys())
+            candidate_staleness(&case, Backend::Vulkan, &[&metal], row, &keys())
         };
         let product = Staleness::of([Dependency::Product]);
 
@@ -3608,7 +3573,7 @@ mod tests {
 
         // The slot is judged on its profile's digest; a slot no venue keys, on its build alone.
         bless(&ArtifactBuild::this(), &digest);
-        let stated_slot = engine_environment_id("moltenvk-env");
+        let stated_slot = engine_environment_id("toy-env");
         let current = |slot: &str, backend: Backend, sha256: &str| {
             keys().artifact_is_current(
                 backend,
@@ -3617,10 +3582,9 @@ mod tests {
                 executed(Some(sha256), RUNTIME_VERSION).as_ref(),
             )
         };
-        assert!(current(&stated_slot, Backend::Moltenvk, &digest));
-        assert!(!current(&stated_slot, Backend::Moltenvk, &moved));
-        assert!(!current(&stated_slot, Backend::Vulkan, &digest));
-        assert!(!current("another-env@engine", Backend::Moltenvk, &digest));
+        assert!(current(&stated_slot, Backend::Vulkan, &digest));
+        assert!(!current(&stated_slot, Backend::Vulkan, &moved));
+        assert!(!current("another-env@engine", Backend::Vulkan, &digest));
 
         // A refusal the venue's run made after it compiled is held to the same digest.
         let mut refusal = crate::refusal::RefusalObservation {
@@ -3629,7 +3593,7 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: "66".repeat(32),
-            backend: Backend::Moltenvk,
+            backend: Backend::Vulkan,
             environment_id: stated_slot.clone(),
             environment: this_build.environment.clone(),
             executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3640,19 +3604,19 @@ mod tests {
         };
         assert!(refusal_is_current(
             &case,
-            Backend::Moltenvk,
+            Backend::Vulkan,
             &refusal,
             &keys()
         ));
         refusal.artifact = executed(Some(&moved), RUNTIME_VERSION);
         assert_eq!(
-            refusal_staleness(&case, Backend::Moltenvk, &refusal, &keys()),
+            refusal_staleness(&case, Backend::Vulkan, &refusal, &keys()),
             product
         );
         bless(&another_build, &moved);
         assert!(!refusal_is_current(
             &case,
-            Backend::Moltenvk,
+            Backend::Vulkan,
             &refusal,
             &keys()
         ));
@@ -3706,8 +3670,7 @@ mod tests {
         .unwrap()
         .remove(0);
         assert_eq!(row.metal, EvidenceState::Current);
-        assert_eq!(row.moltenvk, EvidenceState::Current);
-        assert_eq!(row.vulkan, EvidenceState::Missing);
+        assert_eq!(row.vulkan, EvidenceState::Current);
         let slots = row
             .slots
             .iter()
@@ -3722,7 +3685,7 @@ mod tests {
                     EvidenceState::Current
                 ),
                 (
-                    "moltenvk",
+                    "vulkan",
                     new.environment_id.as_str(),
                     EvidenceState::Current
                 ),
@@ -3739,7 +3702,7 @@ mod tests {
         )
         .unwrap()
         .remove(0);
-        assert_eq!(row.moltenvk, EvidenceState::Stale);
+        assert_eq!(row.vulkan, EvidenceState::Stale);
     }
 
     /// A reference gap is indexed in its own table: its source counts as `reference-gap`, its case

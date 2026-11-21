@@ -16,10 +16,7 @@
 //! apart: one driver build, and captures that derive one translation key, so its slots can be
 //! recorded on any of those machines. The Iris Xe of RPL-P and the UHD Graphics 770 of RPL-S are
 //! not such a pair: their captures differ in `maxMemoryAllocationSize`, and the Intel venue
-//! allows the RPL-P alone. A device Metal runs on (an Apple GPU under MoltenVK) names
-//! its own GPU's Metal reference environment ([`VenueDevice::metal_environment_id`]), and a run on
-//! it is compared with that environment's rows alone, since Metal's own answers differ between
-//! Apple GPUs.
+//! allows the RPL-P alone.
 //!
 //! **Profile drift**. A venue's committed profile is a `vulkaninfo` capture of its own device
 //! ([`VenueProfile`]), held to it in two halves. The list holds the profile to the venue's declared
@@ -51,9 +48,6 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VenueKind {
-    /// Apple's GPU through MoltenVK, on the host whose Metal is the oracle. Its rows are the
-    /// `moltenvk` backend's, and its driver is MoltenVK.
-    Moltenvk,
     /// A CPU Vulkan implementation (`VK_PHYSICAL_DEVICE_TYPE_CPU`, lavapipe), run with
     /// `--device-type cpu`.
     CpuIcd,
@@ -65,7 +59,6 @@ pub enum VenueKind {
 impl VenueKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Moltenvk => "moltenvk",
             Self::CpuIcd => "cpu_icd",
             Self::NativeGpu => "native_gpu",
         }
@@ -74,7 +67,6 @@ impl VenueKind {
     /// The store backend that holds the venue's rows.
     pub fn backend(self) -> Backend {
         match self {
-            Self::Moltenvk => Backend::Moltenvk,
             Self::CpuIcd | Self::NativeGpu => Backend::Vulkan,
         }
     }
@@ -84,11 +76,6 @@ impl VenueKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Population {
-    /// Every case whose old-engine row in the venue's own environment matched. The venue holds the
-    /// old engine's baseline: its unreviewed mismatches of cases the baseline did not record as a
-    /// mismatch are new mismatches, and the ledger judges old-engine rows of its backend against
-    /// it.
-    OldEngineMatched,
     /// Every case over a public fixture.
     Public,
     /// Every case with a Metal reference row (`c3::reference`).
@@ -98,7 +85,6 @@ pub enum Population {
 impl Population {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::OldEngineMatched => "old_engine_matched",
             Self::Public => "public",
             Self::MetalQualified => "metal_qualified",
         }
@@ -257,8 +243,8 @@ pub struct Venue {
     pub devices: Vec<VenueDevice>,
 }
 
-/// A device a venue allows ([`Venue::devices`]): its identity, the committed `vulkaninfo` capture
-/// of it, and, for an Apple GPU, the Metal environment its runs compare with.
+/// A device a venue allows ([`Venue::devices`]): its identity and the committed `vulkaninfo`
+/// capture of it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VenueDevice {
@@ -266,36 +252,11 @@ pub struct VenueDevice {
     pub profile: String,
     /// The device and driver, as a row records them.
     pub identity: DeviceIdentity,
-    /// The C3 Metal reference environment (`c3-references.json`) of the same GPU, when the
-    /// device is one Metal runs on (MoltenVK's Apple GPUs): a run on it compares with that
-    /// environment's Metal rows and no other's ([`Venue::identities_compared_with`]), since Metal's
-    /// own answers differ between Apple GPUs in some families. `None` for another vendor's GPU,
-    /// whose runs compare with the reference Metal rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metal_environment_id: Option<String>,
 }
 
 impl Venue {
     pub fn backend(&self) -> Backend {
         self.kind.backend()
-    }
-
-    /// The identities of the devices whose runs may compare with the Metal environment
-    /// `metal_environment_id`, in the list's order: each device whose own Metal environment it is
-    /// ([`VenueDevice::metal_environment_id`]), and each that states none. A run recorded under the
-    /// venue holds its device to these (`candidate::engine`), so an Apple GPU's MoltenVK run is
-    /// never compared with another Apple GPU's Metal answers.
-    pub fn identities_compared_with(&self, metal_environment_id: &str) -> Vec<DeviceIdentity> {
-        self.devices
-            .iter()
-            .filter(|device| {
-                device
-                    .metal_environment_id
-                    .as_deref()
-                    .is_none_or(|own| own == metal_environment_id)
-            })
-            .map(|device| device.identity.clone())
-            .collect()
     }
 
     /// Whether a record of `identity` ran on a device the venue allows.
@@ -741,18 +702,13 @@ impl Venues {
     /// At least one venue; each with an operator environment ID (not an engine slot) no other
     /// venue has, a committed profile, and at least one allowed device, its
     /// profile among the devices' captures; each device listed once, with a committed capture and
-    /// a declared identity with a device name and a driver info string, and a MoltenVK driver
-    /// exactly when the venue's kind is MoltenVK; at most one venue holding the old engine's
-    /// baseline per backend.
+    /// a declared identity with a device name and a driver info string.
     pub fn check(&self) -> Result<(), String> {
         if self.venues.is_empty() {
             return Err("C3 venue list names no venue".into());
         }
         let profiles = crate::engine::committed_profiles()?;
         let mut environments = BTreeSet::new();
-        let mut baselines = Vec::new();
-        // The Metal reference list, read once a device states a Metal environment.
-        let mut references: Option<Result<crate::c3::reference::References, String>> = None;
         for venue in &self.venues {
             let at = |what: String| format!("C3 venue {:?}: {what}", venue.environment_id);
             if venue.environment_id.trim().is_empty()
@@ -809,66 +765,8 @@ impl Venues {
                         device.profile
                     )));
                 }
-                if let Some(metal) = &device.metal_environment_id {
-                    let references = references.get_or_insert_with(|| {
-                        crate::c3::reference::References::load(
-                            &crate::c3::reference::References::committed_path(),
-                        )
-                    });
-                    let references = references.as_ref().map_err(|error| at(error.clone()))?;
-                    match references.declared(metal) {
-                        Some(reference) if reference.device == identity.device => {}
-                        Some(reference) => {
-                            return Err(at(format!(
-                                "{} compares with Metal environment {metal:?}, which is another \
-                                 GPU's ({}): a device's Metal environment is its own GPU's",
-                                identity.label(),
-                                reference.device
-                            )))
-                        }
-                        None => {
-                            return Err(at(format!(
-                                "{} compares with Metal environment {metal:?}, which is no C3 \
-                                 reference environment (c3-references.json)",
-                                identity.label()
-                            )))
-                        }
-                    }
-                }
-                let moltenvk = identity.driver_id == vk::DriverId::MOLTENVK.as_raw();
-                if moltenvk != (venue.kind == VenueKind::Moltenvk) {
-                    return Err(at(format!(
-                        "a {} venue declares driver {}: a MoltenVK venue runs MoltenVK, and no \
-                         other venue does",
-                        venue.kind.as_str(),
-                        identity.driver_id
-                    )));
-                }
-            }
-            if venue.population == Population::OldEngineMatched {
-                if baselines.contains(&venue.backend()) {
-                    return Err(at(format!(
-                        "a second venue holds the old engine's baseline for the {} backend",
-                        venue.backend().directory()
-                    )));
-                }
-                baselines.push(venue.backend());
             }
         }
         Ok(())
-    }
-
-    /// The venue whose operator environment is `environment_id`.
-    pub fn by_environment(&self, environment_id: &str) -> Option<&Venue> {
-        self.venues
-            .iter()
-            .find(|venue| venue.environment_id == environment_id)
-    }
-
-    /// The venue holding the old engine's baseline for `backend`, if one does.
-    pub fn baseline(&self, backend: Backend) -> Option<&Venue> {
-        self.venues.iter().find(|venue| {
-            venue.population == Population::OldEngineMatched && venue.backend() == backend
-        })
     }
 }

@@ -89,8 +89,8 @@ impl CorpusStore {
         Ok(rows)
     }
 
-    /// Every place a committed shard leaves the layout this store writes: in the case, Metal,
-    /// MoltenVK and Vulkan shards, a row in a shard its AIR's hash does not select, or a
+    /// Every place a committed shard leaves the layout this store writes: in the case, Metal and
+    /// Vulkan shards, a row in a shard its AIR's hash does not select, or a
     /// row whose key (`ShardRow::order_key`) does not strictly follow the previous row's. The
     /// store, the one writer of these shards, sorts the shard it writes by that key and the key is one slot, so a shard that
     /// passes is in the one order the store would write it in, with no slot twice. A tool that
@@ -101,24 +101,18 @@ impl CorpusStore {
         shard_layout_errors::<MetalObservation>(&self.root, "observations/metal", &mut errors)?;
         shard_layout_errors::<CandidateObservation>(
             &self.root,
-            "observations/moltenvk",
-            &mut errors,
-        )?;
-        shard_layout_errors::<CandidateObservation>(
-            &self.root,
             "observations/vulkan",
             &mut errors,
         )?;
-        for backend in [Backend::Moltenvk, Backend::Vulkan] {
-            let directory = refusal_directory(backend);
-            shard_layout_errors::<RefusalObservation>(
-                &self.root,
-                directory
-                    .to_str()
-                    .ok_or("the refusal directory is not UTF-8")?,
-                &mut errors,
-            )?;
-        }
+        let backend = Backend::Vulkan;
+        let directory = refusal_directory(backend);
+        shard_layout_errors::<RefusalObservation>(
+            &self.root,
+            directory
+                .to_str()
+                .ok_or("the refusal directory is not UTF-8")?,
+            &mut errors,
+        )?;
         Ok(errors)
     }
 
@@ -308,49 +302,36 @@ impl CorpusStore {
         let name = shard_name(index);
         let case_path = PathBuf::from("cases").join(&name);
         let metal_path = PathBuf::from("observations/metal").join(&name);
-        let moltenvk_path = PathBuf::from("observations/moltenvk").join(&name);
         let vulkan_path = PathBuf::from("observations/vulkan").join(&name);
         let mut metal: Vec<Stored<MetalObservation>> =
             read_stored_if_exists(&self.root.join(&metal_path))?;
-        let mut moltenvk: Vec<Stored<CandidateObservation>> =
-            read_stored_if_exists(&self.root.join(&moltenvk_path))?;
         let mut vulkan: Vec<Stored<CandidateObservation>> =
             read_stored_if_exists(&self.root.join(&vulkan_path))?;
         validate_aligned_observation_rows(rows_of(&metal), index)?;
-        validate_aligned_observation_rows(rows_of(&moltenvk), index)?;
         validate_aligned_observation_rows(rows_of(&vulkan), index)?;
-        if rows_of(&moltenvk).any(|row| row.backend != Backend::Moltenvk)
-            || rows_of(&vulkan).any(|row| row.backend != Backend::Vulkan)
-        {
+        if rows_of(&vulkan).any(|row| row.backend != Backend::Vulkan) {
             return Err("candidate observation is stored in the wrong backend directory".into());
         }
         reject_duplicate_metal_slots(rows_of(&metal))?;
-        reject_duplicate_candidate_slots(rows_of(&moltenvk))?;
         reject_duplicate_candidate_slots(rows_of(&vulkan))?;
         if let Some(case_id) = cascaded_case_id {
             metal.retain(|stored| stored.row.case_id != case_id);
-            moltenvk.retain(|stored| stored.row.case_id != case_id);
             vulkan.retain(|stored| stored.row.case_id != case_id);
         }
         sort_stored(cases);
         sort_stored(&mut metal);
-        sort_stored(&mut moltenvk);
         sort_stored(&mut vulkan);
         let mut files = vec![
             (case_path, stored_jsonl(cases)?),
             (metal_path, stored_jsonl(&metal)?),
-            (moltenvk_path, stored_jsonl(&moltenvk)?),
             (vulkan_path, stored_jsonl(&vulkan)?),
         ];
         let mut deletions = Vec::new();
         // A refusal follows its case as a row does; a refusal shard the bucket does not have is
         // not created.
-        for backend in [Backend::Moltenvk, Backend::Vulkan] {
-            let path = refusal_directory(backend).join(&name);
-            if !self.root.join(&path).exists() {
-                continue;
-            }
-            let mut refusals = self.read_refusal_shard(&path, index, backend)?;
+        let path = refusal_directory(Backend::Vulkan).join(&name);
+        if self.root.join(&path).exists() {
+            let mut refusals = self.read_refusal_shard(&path, index, Backend::Vulkan)?;
             if let Some(case_id) = cascaded_case_id {
                 refusals.retain(|stored| stored.row.case_id != case_id);
             }
@@ -513,34 +494,33 @@ impl CorpusStore {
         self.recover_transactions()?;
         let mut counts = vec![(0, 0); rekeys.len()];
         let mut files = Vec::new();
-        for backend in [Backend::Moltenvk, Backend::Vulkan] {
-            let rows_dir = PathBuf::from("observations").join(backend.directory());
-            for path in shard_paths(&self.root.join(&rows_dir))? {
-                let mut rows: Vec<Stored<CandidateObservation>> = read_stored_if_exists(&path)?;
-                let rewritten = rekey_stored(&mut rows, rekeys, |row| &mut row.environment);
-                if rewritten.iter().any(|&n| n > 0) {
-                    for (count, n) in counts.iter_mut().zip(&rewritten) {
-                        count.0 += n;
-                    }
-                    files.push((
-                        rows_dir.join(path.file_name().unwrap_or_default()),
-                        stored_jsonl(&rows)?,
-                    ));
+        let backend = Backend::Vulkan;
+        let rows_dir = PathBuf::from("observations").join(backend.directory());
+        for path in shard_paths(&self.root.join(&rows_dir))? {
+            let mut rows: Vec<Stored<CandidateObservation>> = read_stored_if_exists(&path)?;
+            let rewritten = rekey_stored(&mut rows, rekeys, |row| &mut row.environment);
+            if rewritten.iter().any(|&n| n > 0) {
+                for (count, n) in counts.iter_mut().zip(&rewritten) {
+                    count.0 += n;
                 }
+                files.push((
+                    rows_dir.join(path.file_name().unwrap_or_default()),
+                    stored_jsonl(&rows)?,
+                ));
             }
-            let refusals_dir = refusal_directory(backend);
-            for path in shard_paths(&self.root.join(&refusals_dir))? {
-                let mut refusals: Vec<Stored<RefusalObservation>> = read_stored_if_exists(&path)?;
-                let rewritten = rekey_stored(&mut refusals, rekeys, |row| &mut row.environment);
-                if rewritten.iter().any(|&n| n > 0) {
-                    for (count, n) in counts.iter_mut().zip(&rewritten) {
-                        count.1 += n;
-                    }
-                    files.push((
-                        refusals_dir.join(path.file_name().unwrap_or_default()),
-                        stored_jsonl(&refusals)?,
-                    ));
+        }
+        let refusals_dir = refusal_directory(backend);
+        for path in shard_paths(&self.root.join(&refusals_dir))? {
+            let mut refusals: Vec<Stored<RefusalObservation>> = read_stored_if_exists(&path)?;
+            let rewritten = rekey_stored(&mut refusals, rekeys, |row| &mut row.environment);
+            if rewritten.iter().any(|&n| n > 0) {
+                for (count, n) in counts.iter_mut().zip(&rewritten) {
+                    count.1 += n;
                 }
+                files.push((
+                    refusals_dir.join(path.file_name().unwrap_or_default()),
+                    stored_jsonl(&refusals)?,
+                ));
             }
         }
         if !files.is_empty() {
@@ -1616,29 +1596,29 @@ mod tests {
         for case in [&first, &second] {
             for environment in ["env-b", "env-a"] {
                 store
-                    .upsert_candidate(candidate(case, Backend::Moltenvk, environment))
+                    .upsert_candidate(candidate(case, Backend::Vulkan, environment))
                     .unwrap();
             }
         }
         assert_eq!(store.layout_errors().unwrap(), Vec::<String>::new());
 
         let shard = shard_name(shard_index_for_hash(&first.air_sha256).unwrap());
-        let moltenvk = scratch.path().join("observations/moltenvk").join(&shard);
-        let sorted = std::fs::read_to_string(&moltenvk).unwrap();
+        let shard_file = scratch.path().join("observations/vulkan").join(&shard);
+        let sorted = std::fs::read_to_string(&shard_file).unwrap();
         let lines = sorted.lines().collect::<Vec<_>>();
         assert_eq!(lines.len(), 4);
         // Appended out of order, then one slot twice.
         let appended = [lines[1], lines[2], lines[3], lines[0]].join("\n") + "\n";
-        std::fs::write(&moltenvk, appended).unwrap();
+        std::fs::write(&shard_file, appended).unwrap();
         let errors = store.layout_errors().unwrap();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].starts_with(&format!("observations/moltenvk/{shard}: row 4 ")));
+        assert!(errors[0].starts_with(&format!("observations/vulkan/{shard}: row 4 ")));
         let twice = [lines[0], lines[1], lines[1], lines[2], lines[3]].join("\n") + "\n";
-        std::fs::write(&moltenvk, twice).unwrap();
+        std::fs::write(&shard_file, twice).unwrap();
         let errors = store.layout_errors().unwrap();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("row 3 "), "{errors:?}");
-        std::fs::write(&moltenvk, &sorted).unwrap();
+        std::fs::write(&shard_file, &sorted).unwrap();
 
         // A case row in a shard its AIR does not select.
         let other = shard_name((shard_index_for_hash(&first.air_sha256).unwrap() + 1) % 64);
@@ -1666,14 +1646,14 @@ mod tests {
         let case = make_case("slot", "AAAAAA==");
         store.put_case(case.clone()).unwrap();
         store
-            .upsert_candidate(candidate(&case, Backend::Moltenvk, "mvk-env"))
+            .upsert_candidate(candidate(&case, Backend::Vulkan, "mvk-env"))
             .unwrap();
         // A valid row in a form a rewrite would not keep (a trailing space), as legacy rows are.
         let shard = shard_name(shard_index_for_hash(&case.air_sha256).unwrap());
-        let moltenvk = scratch.path().join("observations/moltenvk").join(&shard);
-        let row = std::fs::read_to_string(&moltenvk).unwrap();
-        std::fs::write(&moltenvk, format!("{} \n", row.trim_end())).unwrap();
-        let observations = std::fs::read(&moltenvk).unwrap();
+        let shard_file = scratch.path().join("observations/vulkan").join(&shard);
+        let row = std::fs::read_to_string(&shard_file).unwrap();
+        std::fs::write(&shard_file, format!("{} \n", row.trim_end())).unwrap();
+        let observations = std::fs::read(&shard_file).unwrap();
         let mut annotated = case.clone();
         annotated.public_source =
             Some("crates/metal2vulkan-validation/fixtures/public/x.ll".into());
@@ -1684,8 +1664,8 @@ mod tests {
         );
         assert_eq!(store.read_all_cases().unwrap(), vec![annotated]);
         // The observation shards are not rewritten at all.
-        assert_eq!(std::fs::read(&moltenvk).unwrap(), observations);
-        assert_eq!(store.read_candidates(Backend::Moltenvk).unwrap().len(), 1);
+        assert_eq!(std::fs::read(&shard_file).unwrap(), observations);
+        assert_eq!(store.read_candidates(Backend::Vulkan).unwrap().len(), 1);
         let mut renamed = case.clone();
         renamed.name = "other".into();
         let error = store.put_case(renamed).unwrap_err();
@@ -1705,7 +1685,7 @@ mod tests {
         let store = CorpusStore::new(scratch.path());
         let case = make_case("slot", "AAAAAA==");
         store.put_case(case.clone()).unwrap();
-        let mut old = candidate(&case, Backend::Moltenvk, "env-old");
+        let mut old = candidate(&case, Backend::Vulkan, "env-old");
         old.census = Some(ExecutedCensus {
             device: None,
             product: "p".into(),
@@ -1742,14 +1722,14 @@ mod tests {
         // The rows as an older executor wrote them: the containment states `device_addresses`,
         // and the Metal row's keys are out of the order a write would sort them into.
         let shard = shard_name(shard_index_for_hash(&case.air_sha256).unwrap());
-        let moltenvk = scratch.path().join("observations/moltenvk").join(&shard);
-        let written = fs::read_to_string(&moltenvk).unwrap();
+        let shard_file = scratch.path().join("observations/vulkan").join(&shard);
+        let written = fs::read_to_string(&shard_file).unwrap();
         let legacy = written.replace(
             r#""buffers":"checked","images""#,
             r#""buffers":"checked","device_addresses":false,"images""#,
         );
         assert_ne!(legacy, written);
-        fs::write(&moltenvk, &legacy).unwrap();
+        fs::write(&shard_file, &legacy).unwrap();
         let metal = scratch.path().join("observations/metal").join(&shard);
         let row: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(fs::read_to_string(&metal).unwrap().trim_end()).unwrap();
@@ -1762,14 +1742,14 @@ mod tests {
                 .join(",")
         );
         fs::write(&metal, &reversed).unwrap();
-        assert_eq!(store.read_candidates(Backend::Moltenvk).unwrap().len(), 1);
+        assert_eq!(store.read_candidates(Backend::Vulkan).unwrap().len(), 1);
         assert_eq!(store.read_metal().unwrap().len(), 1);
 
         // A row of another slot in the same shard: the legacy row stays as it was.
         store
-            .upsert_candidate(candidate(&case, Backend::Moltenvk, "env-new"))
+            .upsert_candidate(candidate(&case, Backend::Vulkan, "env-new"))
             .unwrap();
-        let lines = fs::read_to_string(&moltenvk).unwrap();
+        let lines = fs::read_to_string(&shard_file).unwrap();
         assert!(
             lines.lines().any(|line| line == legacy.trim_end()),
             "{lines}"
@@ -1789,15 +1769,15 @@ mod tests {
         // and the refusal's removal by a row in its slot: the legacy rows never change.
         store
             .upsert_refusal(RefusalObservation {
-                backend: Backend::Moltenvk,
+                backend: Backend::Vulkan,
                 ..refusal(&case, "env@engine")
             })
             .unwrap();
         store.put_case(make_case("other", "AQAAAA==")).unwrap();
         store
-            .upsert_candidate(candidate(&case, Backend::Moltenvk, "env@engine"))
+            .upsert_candidate(candidate(&case, Backend::Vulkan, "env@engine"))
             .unwrap();
-        let lines = fs::read_to_string(&moltenvk).unwrap();
+        let lines = fs::read_to_string(&shard_file).unwrap();
         assert!(
             lines.lines().any(|line| line == legacy.trim_end()),
             "{lines}"
@@ -1830,9 +1810,6 @@ mod tests {
                 })
                 .unwrap();
             store
-                .upsert_candidate(candidate(case, Backend::Moltenvk, "mvk-env"))
-                .unwrap();
-            store
                 .upsert_candidate(candidate(case, Backend::Vulkan, "vk-env"))
                 .unwrap();
         }
@@ -1851,11 +1828,10 @@ mod tests {
         let metal = store.read_metal().unwrap();
         assert_eq!(metal.len(), 1);
         assert_eq!(metal[0].case_id, sibling.case_id);
-        for backend in [Backend::Moltenvk, Backend::Vulkan] {
-            let rows = store.read_candidates(backend).unwrap();
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].case_id, sibling.case_id);
-        }
+        let backend = Backend::Vulkan;
+        let rows = store.read_candidates(backend).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].case_id, sibling.case_id);
     }
 
     #[test]
@@ -2154,7 +2130,7 @@ mod tests {
             ("a2@engine", Backend::Vulkan, venue("profile-a", &other)),
             ("b@engine", Backend::Vulkan, venue("profile-b", &old)),
             ("plain", Backend::Vulkan, serde_json::json!({})),
-            ("m@engine", Backend::Moltenvk, venue("profile-a", &old)),
+            ("m@engine", Backend::Vulkan, venue("profile-a", &old)),
         ] {
             store
                 .upsert_candidate(CandidateObservation {
@@ -2173,11 +2149,7 @@ mod tests {
             .unwrap();
         let lines = || {
             let mut lines = Vec::new();
-            for dir in [
-                "observations/vulkan",
-                "observations/moltenvk",
-                "observations/refusals/vulkan",
-            ] {
+            for dir in ["observations/vulkan", "observations/refusals/vulkan"] {
                 for path in shard_paths(&scratch.path().join(dir)).unwrap() {
                     lines.extend(fs::read_to_string(path).unwrap().lines().map(String::from));
                 }
@@ -2199,10 +2171,9 @@ mod tests {
             crate::c3::VenueProfile::recorded_fingerprint(environment).map(String::from)
         };
         let mut recorded = BTreeMap::new();
-        for backend in [Backend::Vulkan, Backend::Moltenvk] {
-            for row in store.read_candidates(backend).unwrap() {
-                recorded.insert(row.environment_id.clone(), fingerprint(&row.environment));
-            }
+        let backend = Backend::Vulkan;
+        for row in store.read_candidates(backend).unwrap() {
+            recorded.insert(row.environment_id.clone(), fingerprint(&row.environment));
         }
         for refused in store.read_refusals(Backend::Vulkan).unwrap() {
             recorded.insert(
@@ -2267,7 +2238,6 @@ mod tests {
             store.read_refusals(Backend::Vulkan).unwrap(),
             vec![refusal(&refused, slot)]
         );
-        assert!(store.read_refusals(Backend::Moltenvk).unwrap().is_empty());
         // A refusal in another slot is its own.
         let off = "env@engine@runtime-floor";
         store.upsert_refusal(refusal(&refused, off)).unwrap();

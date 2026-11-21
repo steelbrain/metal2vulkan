@@ -231,23 +231,15 @@ pub(super) fn opened_device(context: &VulkanContext) -> Result<WorkerDevice, Exe
         .map_err(|e| product_refusal(&e))
 }
 
-/// Rows from different ICDs are different backends: the MoltenVK backend runs only on MoltenVK, and
-/// native Vulkan never on it.
+/// The Vulkan backend's rows are a native ICD's: it never runs on MoltenVK.
 pub(super) fn check_backend(
     context: &VulkanContext,
     backend: Backend,
 ) -> Result<(), ExecutorError> {
     let moltenvk = context.driver.driver_id == vk::DriverId::MOLTENVK.as_raw();
     match backend {
-        Backend::Moltenvk if !moltenvk => Err(format!(
-            "the moltenvk backend opened {} (driver id {}), not MoltenVK",
-            context.driver.driver_name, context.driver.driver_id
-        )
-        .into()),
-        Backend::Vulkan if moltenvk => {
-            Err("the native vulkan backend opened MoltenVK; use the moltenvk backend".into())
-        }
-        Backend::Moltenvk | Backend::Vulkan => Ok(()),
+        Backend::Vulkan if moltenvk => Err("the vulkan backend opened MoltenVK".into()),
+        Backend::Vulkan => Ok(()),
     }
 }
 

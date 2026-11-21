@@ -3521,7 +3521,11 @@ pub fn execute_prepared(
             .map(|venue| VenueRun {
                 environment_id: environment_id.into(),
                 profile: venue.profile.clone(),
-                allowed: venue.identities_compared_with(metal_environment_id),
+                allowed: venue
+                    .devices
+                    .iter()
+                    .map(|device| device.identity.clone())
+                    .collect(),
             }),
     };
     let input = DeviceInput {

@@ -270,7 +270,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let c1 = reviews("c1-reviewed.json", &["entries"]);
-        let c3 = reviews("c3-reviewed.json", &["readings", "old_mismatches"]);
+        let c3 = reviews("c3-reviewed.json", &["readings"]);
         assert!(!c1.is_empty() && !c3.is_empty());
     }
 }

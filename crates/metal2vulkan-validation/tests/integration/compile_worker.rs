@@ -48,12 +48,8 @@ fn device(stem: &str) -> WorkerDevice {
 
 /// Every binary that compiles through the worker serves it (and installs the allocator it
 /// refuses to serve without).
-fn serving() -> [PathBuf; 3] {
-    [
-        bin_exe!("corpus-pipeline"),
-        bin_exe!("corpus-vulkan"),
-        bin_exe!("corpus-moltenvk"),
-    ]
+fn serving() -> [PathBuf; 2] {
+    [bin_exe!("corpus-pipeline"), bin_exe!("corpus-vulkan")]
 }
 
 #[test]

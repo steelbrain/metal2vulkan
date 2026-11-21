@@ -1,9 +1,7 @@
 //! Cutover criterion C3's report.
 //!
-//! C3 asks that the engine on MoltenVK match every authored case the old engine matched, with
-//! no new mismatch, that each of the old engine's mismatches be fixed or explained, and that the
-//! cases every other device must cover match there: the public cases on lavapipe, and every
-//! Metal-qualified case on the real GPUs (the committed [`Venues`]). Some cases read a value Metal
+//! C3 asks that the cases every device must cover match there: the public cases on lavapipe, and
+//! every Metal-qualified case on the real GPUs (the committed [`Venues`]). Some cases read a value Metal
 //! only bounds: an ulp or absolute bound, a formula over bounded parts, an operation Metal states
 //! no accuracy for, or a grouping the AIR's fast-math flags leave open. Metal's answer is then one
 //! reading inside the bound, and an exact match with it is not a property of the translation. The
@@ -21,7 +19,7 @@
 //! Only this report reads it; translation, classification, and the evidence census never do. It is
 //! read, checked, and written as C1's list is ([`List`]), and every entry carries the review both
 //! cutover lists share ([`Review`]: its evidence, the reviewer's note, and the user's
-//! [`SignOff`]). It has two parts:
+//! [`SignOff`]). Beside its reference gaps and answer gaps, it holds readings:
 //!
 //! - **Readings** ([`Reading`]): per case, the cause, the bound Metal states, and the reviewed
 //!   observations. Each observation names an engine slot, the candidate (`spv_sha256`), its
@@ -36,9 +34,6 @@
 //!   whatever candidate it executed and whatever words differ, since the user accepted that
 //!   difference with no bound; its observations are the evidence the review read, and each reads
 //!   [`ReadingState::Changed`] once its slot's row no longer shows the cause.
-//! - **Causes of the old engine's mismatches** ([`OldMismatch`]): per case, why its recorded
-//!   old-engine rows mismatched. The ledger itself ([`LedgerRow`]) is generated from the store: one
-//!   row per old-engine row recorded as a mismatch, with the case's engine verdicts beside it.
 //!
 //! An `apple_reading` reading also declares its bounded lanes ([`bound::BoundedLane`]): what each
 //! output word computes, from which of the case's inputs. The report recomputes every word the
@@ -53,8 +48,7 @@
 //! be told word by word: a NaN encoding, a denormal, or a `half` rounding the device chose where
 //! Metal's answer is reproducible ([`crate::observation_contract::value_difference`]).
 //!
-//! The old engine's recorded rows are C3's baseline whatever their executor ABI: its GPU runs stay
-//! restricted, so its rows are not re-recorded. The engine's rows count only when current under
+//! The engine's rows count only when current under
 //! this build, by the evidence census's rule (`index::candidate_slot_state`): recorded at it, or at
 //! another build while what they executed is this build's artifact
 //! ([`VenueKeys::artifact_is_current`]). And they count only when they ran on a device and driver
@@ -88,8 +82,8 @@
 //! device lacks) has no Metal output, so no row of it can be current. Where a slot would read it
 //! missing or stale it reads [`Verdict::ReferenceGap`], counted in its own column and not keeping
 //! the slot from holding; it is never `missing_without_metal`. Each such case is listed in the
-//! report ([`ReferenceGapRow`]) and C3 holds only once the list's third part
-//! ([`ReferenceGapEntry`]) holds it with the user's sign-off.
+//! report ([`ReferenceGapRow`]) and C3 holds only once the list's reference gaps
+//! ([`ReferenceGapEntry`]) hold it with the user's sign-off.
 
 pub mod bound;
 pub mod reference;
@@ -230,17 +224,6 @@ pub struct ReviewedObservation {
     pub differing_words: usize,
     /// The observed values against Metal's, in words.
     pub values: String,
-}
-
-/// Why one case's recorded old-engine rows mismatched.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OldMismatch {
-    pub case_id: String,
-    pub name: String,
-    pub cause: Cause,
-    /// The evidence that explains the mismatch, the reviewer's note, and the user's sign-off.
-    pub review: Review,
 }
 
 /// A case the reference device cannot run: its current Metal row is a reference gap of
@@ -439,13 +422,12 @@ pub struct AnswerGapEntry {
     pub review: Review,
 }
 
-/// The reviewed list: the readings, the causes of the old engine's mismatches, the cases the
-/// reference device cannot run, and the cases that meet an answer gap.
+/// The reviewed list: the readings, the cases the reference device cannot run, and the cases that
+/// meet an answer gap.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewedList {
     pub readings: Vec<Reading>,
-    pub old_mismatches: Vec<OldMismatch>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_gaps: Vec<ReferenceGapEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -533,16 +515,6 @@ impl List for ReviewedList {
             }
         }
         let mut cases = BTreeSet::new();
-        for cause in &self.old_mismatches {
-            let at = |what: String| format!("C3 old mismatch {}: {what}", cause.case_id);
-            validate_hash("case_id", &cause.case_id).map_err(at)?;
-            if !cases.insert(cause.case_id.as_str()) {
-                return Err(at("listed twice".into()));
-            }
-            entry_name(&cause.name).map_err(at)?;
-            cause.review.check().map_err(at)?;
-        }
-        let mut cases = BTreeSet::new();
         for gap in &self.reference_gaps {
             let at = |what: String| format!("C3 reference gap {}: {what}", gap.case_id);
             validate_hash("case_id", &gap.case_id).map_err(at)?;
@@ -609,9 +581,8 @@ fn entry_name(name: &str) -> Result<(), String> {
 pub struct C3Input {
     pub cases: Vec<AuthoredCase>,
     pub metals: Vec<MetalObservation>,
-    pub moltenvk: Vec<CandidateObservation>,
     pub vulkan: Vec<CandidateObservation>,
-    /// The engine's refusals of both backends (`crate::refusal`).
+    /// The engine's refusals (`crate::refusal`).
     pub refusals: Vec<RefusalObservation>,
     /// The AIR of every public fixture: a case over one is a public case.
     pub public_air: BTreeSet<String>,
@@ -625,13 +596,8 @@ impl C3Input {
         Ok(C3Input {
             cases: store.read_all_cases()?,
             metals: store.read_metal()?,
-            moltenvk: store.read_candidates(Backend::Moltenvk)?,
             vulkan: store.read_candidates(Backend::Vulkan)?,
-            refusals: [Backend::Moltenvk, Backend::Vulkan]
-                .into_iter()
-                .map(|backend| store.read_refusals(backend))
-                .collect::<Result<Vec<_>, _>>()?
-                .concat(),
+            refusals: store.read_refusals(Backend::Vulkan)?,
             public_air: public_sources()?
                 .into_iter()
                 .map(|source| source.air_sha256)
@@ -933,10 +899,6 @@ pub struct SlotReport {
     pub rows: Vec<SlotRow>,
     /// Every judged case whose verdict is [`Verdict::Match`], by case ID.
     pub matched: BTreeSet<String>,
-    /// Unreviewed current mismatches of cases the old engine's baseline did not record as a
-    /// mismatch (C3's "zero new mismatches"; only in a venue that holds the baseline,
-    /// [`Population::OldEngineMatched`]).
-    pub new_mismatches: usize,
     /// Missing cases that have no Metal reference row either ([`reference::Judge::judging`]):
     /// they need Metal qualification before any executor can compare them.
     pub missing_without_metal: usize,
@@ -1026,53 +988,9 @@ pub struct ReadingRow {
     pub bound: Option<BoundCheck>,
 }
 
-/// One old-engine row recorded as a mismatch, with the case's engine verdicts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LedgerRow {
-    pub case_id: String,
-    pub name: String,
-    pub backend: Backend,
-    pub environment_id: String,
-    pub executor_abi: String,
-    /// The 32-bit words in which the row's output differs from the Metal output it was compared
-    /// with, when the store still holds that Metal output.
-    pub differing_words: Option<usize>,
-    pub words: usize,
-    /// Whether the row was compared with the case's current Metal output.
-    pub against_current_metal: bool,
-    /// Whether the row's output equals the case's current Metal output (it would match today).
-    pub output_is_current_metal: bool,
-    /// The case's verdict in the stated engine slot of the row's venue: the venue of the row's
-    /// environment, else the venue holding its backend's baseline; missing without either.
-    pub engine: Verdict,
-    /// The status that slot's row recorded, current or not (a stale row's status is not evidence,
-    /// but says what the last run saw).
-    pub engine_recorded: Option<CandidateStatus>,
-    pub cause: Option<Cause>,
-}
-
-/// The part of the list an entry is in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ListPart {
-    /// A [`Reading`].
-    Reading,
-    /// An [`OldMismatch`].
-    OldMismatch,
-}
-
-impl ListPart {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Reading => "reading",
-            Self::OldMismatch => "old_mismatch",
-        }
-    }
-}
-
-/// One entry of the list and the user's decision on it.
+/// One reading of the list and the user's decision on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryRow {
-    pub part: ListPart,
     pub case_id: String,
     pub name: String,
     pub cause: Cause,
@@ -1169,10 +1087,7 @@ pub struct RefusedSignOff {
 pub struct C3Report {
     pub slots: Vec<SlotReport>,
     pub readings: Vec<ReadingRow>,
-    pub ledger: Vec<LedgerRow>,
-    /// Cases the list gives a cause for that no recorded old-engine row mismatched.
-    pub stale_causes: Vec<String>,
-    /// Every list entry, readings first, in the list's order, with its sign-off.
+    /// Every reading of the list, in the list's order, with its sign-off.
     pub entries: Vec<EntryRow>,
     /// The C1 entries the report's device gaps read, in (profile, outcome, key) order.
     pub device_gaps: Vec<DeviceGapRow>,
@@ -1190,15 +1105,6 @@ pub struct C3Report {
 }
 
 impl C3Report {
-    /// Ledger cases without a cause.
-    pub fn unexplained(&self) -> BTreeSet<&str> {
-        self.ledger
-            .iter()
-            .filter(|row| row.cause.is_none())
-            .map(|row| row.case_id.as_str())
-            .collect()
-    }
-
     /// Reviewed observations that no longer describe the store.
     pub fn stale_readings(&self) -> usize {
         self.readings
@@ -1207,8 +1113,8 @@ impl C3Report {
             .count()
     }
 
-    /// List entries (readings and causes, and the C1 entries the device gaps read) and recorded
-    /// reference gaps the user has signed off. Answer gaps are never signed off: they stay open
+    /// List entries (readings, and the C1 entries the device gaps read) and recorded reference
+    /// gaps the user has signed off. Answer gaps are never signed off: they stay open
     /// mismatches ([`OpenReason::AnswerGap`]).
     pub fn signed_off(&self) -> usize {
         self.entries
@@ -1224,8 +1130,8 @@ impl C3Report {
                 .count()
     }
 
-    /// List entries (readings and causes, and the C1 entries the device gaps read) and recorded
-    /// reference gaps, listed or not, the user has not signed off.
+    /// List entries (readings, and the C1 entries the device gaps read) and recorded reference
+    /// gaps, listed or not, the user has not signed off.
     pub fn awaiting_sign_off(&self) -> usize {
         self.entries.len() + self.device_gaps.len() + self.reference_gaps.len()
             - self.stale_reference_gaps()
@@ -1240,15 +1146,12 @@ impl C3Report {
             .count()
     }
 
-    /// C3 holds: every slot holds, every reviewed observation holds, every old-engine mismatch
-    /// has a cause the list still needs, every listed reference gap is recorded, the user signed
-    /// off every entry and every recorded reference gap, and each sign-off is one the report does
-    /// not refuse.
+    /// C3 holds: every slot holds, every reviewed observation holds, every listed reference gap
+    /// is recorded, the user signed off every entry and every recorded reference gap, and each
+    /// sign-off is one the report does not refuse.
     pub fn holds(&self) -> bool {
         self.slots.iter().all(SlotReport::holds)
             && self.stale_readings() == 0
-            && self.unexplained().is_empty()
-            && self.stale_causes.is_empty()
             && self.stale_reference_gaps() == 0
             && self.awaiting_sign_off() == 0
             && self.refused.is_empty()
@@ -1324,9 +1227,8 @@ pub fn report(
         .collect();
     // The row a slot holds for a case.
     let rows: HashMap<(&str, &str), &CandidateObservation> = input
-        .moltenvk
+        .vulkan
         .iter()
-        .chain(&input.vulkan)
         .map(|row| ((row.case_id.as_str(), row.environment_id.as_str()), row))
         .collect();
     // The refusal a slot holds for a case (a slot holds a row or a refusal, never both).
@@ -1432,150 +1334,122 @@ pub fn report(
             },
         )
     };
-    let candidates = |backend: Backend| match backend {
-        Backend::Moltenvk => &input.moltenvk,
-        Backend::Vulkan => &input.vulkan,
-    };
-    // The old engine's recorded rows in each venue's own environment: the baseline of a venue
-    // that holds it.
-    let baseline = |venue: &Venue| -> HashMap<&str, CandidateStatus> {
-        candidates(venue.backend())
-            .iter()
-            .filter(|row| row.environment_id == venue.environment_id)
-            .map(|row| (row.case_id.as_str(), row.status))
-            .collect()
-    };
 
     let mut slots = Vec::new();
     let mut gap_cases = BTreeMap::<(&str, &str, &str), usize>::new();
     let mut proposals = BTreeMap::<(&str, &str, &str), usize>::new();
     for venue in &venues.venues {
-        let baseline = baseline(venue);
-        let holds_baseline = venue.population == Population::OldEngineMatched;
-        {
-            let slot = engine_slot(&venue.environment_id, None);
-            let required = |case: &AuthoredCase| match venue.population {
-                Population::OldEngineMatched => {
-                    baseline.get(case.case_id.as_str()) == Some(&CandidateStatus::Match)
+        let slot = engine_slot(&venue.environment_id, None);
+        let required = |case: &AuthoredCase| match venue.population {
+            Population::Public => input.public_air.contains(&case.air_sha256),
+            Population::MetalQualified => metals.contains_key(case.case_id.as_str()),
+        };
+        let mut report = SlotReport {
+            kind: venue.kind,
+            venue: venue.environment_id.clone(),
+            slot: slot.clone(),
+            population: 0,
+            verdicts: BTreeMap::new(),
+            rows: Vec::new(),
+            matched: BTreeSet::new(),
+            missing_without_metal: 0,
+            stale_without_metal: 0,
+            stale_device: 0,
+        };
+        for case in cases.values() {
+            let key = (case.case_id.as_str(), slot.as_str());
+            let required = required(case);
+            // A case outside the population that the slot never recorded is still judged once
+            // a Metal row would judge its record: it reads missing, so
+            // the venue's lane, which runs what C3 reads stale or missing, records it, and no
+            // new case stays unrun because the population is narrower than the corpus. It does
+            // not join the population.
+            let judgeable = judged_by(case).is_some();
+            report.population += usize::from(required);
+            let judged = match verdict(case, venue.backend(), &slot) {
+                Some(verdict) => verdict,
+                None if required || judgeable => Verdict::Missing,
+                None => continue,
+            };
+            let judged = match judged {
+                Verdict::Missing | Verdict::Stale
+                    if reference_gaps.contains_key(case.case_id.as_str()) =>
+                {
+                    Verdict::ReferenceGap
                 }
-                Population::Public => input.public_air.contains(&case.air_sha256),
-                Population::MetalQualified => metals.contains_key(case.case_id.as_str()),
+                judged => judged,
             };
-            let mut report = SlotReport {
-                kind: venue.kind,
-                venue: venue.environment_id.clone(),
-                slot: slot.clone(),
-                population: 0,
-                verdicts: BTreeMap::new(),
-                rows: Vec::new(),
-                matched: BTreeSet::new(),
-                new_mismatches: 0,
-                missing_without_metal: 0,
-                stale_without_metal: 0,
-                stale_device: 0,
-            };
-            for case in cases.values() {
-                let key = (case.case_id.as_str(), slot.as_str());
-                let required = required(case);
-                // A case outside the population that the slot never recorded is still judged once
-                // a Metal row would judge its record: it reads missing, so
-                // the venue's lane, which runs what C3 reads stale or missing, records it, and no
-                // new case stays unrun because the population is narrower than the corpus. It does
-                // not join the population: covering it is no baseline claim.
-                let judgeable = judged_by(case).is_some();
-                report.population += usize::from(required);
-                let judged = match verdict(case, venue.backend(), &slot) {
-                    Some(verdict) => verdict,
-                    None if required || judgeable => Verdict::Missing,
-                    None => continue,
-                };
-                let judged = match judged {
-                    Verdict::Missing | Verdict::Stale
-                        if reference_gaps.contains_key(case.case_id.as_str()) =>
+            *report.verdicts.entry(judged).or_default() += 1;
+            if judged == Verdict::Missing && judged_by(case).is_none() {
+                report.missing_without_metal += 1;
+            }
+            if judged == Verdict::Stale && rows.contains_key(&key) && judged_by(case).is_none() {
+                report.stale_without_metal += 1;
+            }
+            if judged == Verdict::Stale
+                && match rows.get(&key) {
+                    Some(row) => row_on_other_device(row),
+                    None => refusals
+                        .get(&key)
+                        .is_some_and(|refusal| other_device(&slot, &refusal.environment)),
+                }
+            {
+                report.stale_device += 1;
+            }
+            let refusal = matches!(
+                judged,
+                Verdict::Refused | Verdict::DeviceGap | Verdict::OutOfScope(_)
+            )
+            .then(|| refusals.get(&key).map(|refusal| &refusal.refusal))
+            .flatten();
+            if let Some(refusal) = refusal {
+                match (judged, gap_entry(&slot, refusal), &refusal.product) {
+                    (Verdict::DeviceGap, Some(entry), _) => {
+                        *gap_cases
+                            .entry((&entry.profile, &entry.outcome, &entry.key))
+                            .or_default() += 1;
+                    }
+                    // An out-of-scope refusal is no device gap: nothing is proposed.
+                    (Verdict::Refused, None, Some(product))
+                        if refusal.class == RefusalClass::Device
+                            && !c1.entries.iter().any(|entry| {
+                                entry.profile == venue.profile
+                                    && entry.outcome == product.label
+                                    && entry.key == product.key
+                            }) =>
                     {
-                        Verdict::ReferenceGap
+                        *proposals
+                            .entry((&venue.profile, &product.label, &product.key))
+                            .or_default() += 1;
                     }
-                    judged => judged,
-                };
-                *report.verdicts.entry(judged).or_default() += 1;
-                if judged == Verdict::Missing && judged_by(case).is_none() {
-                    report.missing_without_metal += 1;
-                }
-                if judged == Verdict::Stale && rows.contains_key(&key) && judged_by(case).is_none()
-                {
-                    report.stale_without_metal += 1;
-                }
-                if judged == Verdict::Stale
-                    && match rows.get(&key) {
-                        Some(row) => row_on_other_device(row),
-                        None => refusals
-                            .get(&key)
-                            .is_some_and(|refusal| other_device(&slot, &refusal.environment)),
-                    }
-                {
-                    report.stale_device += 1;
-                }
-                let refusal = matches!(
-                    judged,
-                    Verdict::Refused | Verdict::DeviceGap | Verdict::OutOfScope(_)
-                )
-                .then(|| refusals.get(&key).map(|refusal| &refusal.refusal))
-                .flatten();
-                if let Some(refusal) = refusal {
-                    match (judged, gap_entry(&slot, refusal), &refusal.product) {
-                        (Verdict::DeviceGap, Some(entry), _) => {
-                            *gap_cases
-                                .entry((&entry.profile, &entry.outcome, &entry.key))
-                                .or_default() += 1;
-                        }
-                        // An out-of-scope refusal is no device gap: nothing is proposed.
-                        (Verdict::Refused, None, Some(product))
-                            if refusal.class == RefusalClass::Device
-                                && !c1.entries.iter().any(|entry| {
-                                    entry.profile == venue.profile
-                                        && entry.outcome == product.label
-                                        && entry.key == product.key
-                                }) =>
-                        {
-                            *proposals
-                                .entry((&venue.profile, &product.label, &product.key))
-                                .or_default() += 1;
-                        }
-                        _ => {}
-                    }
-                }
-                if judged == Verdict::Mismatch
-                    && holds_baseline
-                    && baseline.get(case.case_id.as_str()) != Some(&CandidateStatus::Mismatch)
-                {
-                    report.new_mismatches += 1;
-                }
-                if judged == Verdict::Match {
-                    report.matched.insert(case.case_id.clone());
-                } else {
-                    let reason = match judged {
-                        Verdict::Mismatch => rows
-                            .get(&(case.case_id.as_str(), slot.as_str()))
-                            .and_then(|row| deferred_note(row))
-                            .map(OpenReason::NearEquivalent)
-                            .or_else(|| {
-                                answer_gap(case, slot.as_str())
-                                    .map(|entry| OpenReason::AnswerGap(entry.gap))
-                            }),
-                        Verdict::Missing | Verdict::Refused => rate_map_refusal(case),
-                        _ => None,
-                    };
-                    report.rows.push(SlotRow {
-                        case_id: case.case_id.clone(),
-                        name: case.name.clone(),
-                        verdict: judged,
-                        refusal: refusal.cloned(),
-                        reason,
-                    });
+                    _ => {}
                 }
             }
-            slots.push(report);
+            if judged == Verdict::Match {
+                report.matched.insert(case.case_id.clone());
+            } else {
+                let reason = match judged {
+                    Verdict::Mismatch => rows
+                        .get(&(case.case_id.as_str(), slot.as_str()))
+                        .and_then(|row| deferred_note(row))
+                        .map(OpenReason::NearEquivalent)
+                        .or_else(|| {
+                            answer_gap(case, slot.as_str())
+                                .map(|entry| OpenReason::AnswerGap(entry.gap))
+                        }),
+                    Verdict::Missing | Verdict::Refused => rate_map_refusal(case),
+                    _ => None,
+                };
+                report.rows.push(SlotRow {
+                    case_id: case.case_id.clone(),
+                    name: case.name.clone(),
+                    verdict: judged,
+                    refusal: refusal.cloned(),
+                    reason,
+                });
+            }
         }
+        slots.push(report);
     }
 
     let golden_bytes = |case_id: &str, sha: &str| {
@@ -1739,97 +1613,15 @@ pub fn report(
         }
     }
 
-    let causes: HashMap<&str, Cause> = list
-        .old_mismatches
-        .iter()
-        .map(|cause| (cause.case_id.as_str(), cause.cause))
-        .collect();
-    let mut ledger = Vec::new();
-    for row in input.moltenvk.iter().chain(&input.vulkan) {
-        if is_engine_slot(&row.environment_id) || row.status != CandidateStatus::Mismatch {
-            continue;
-        }
-        let case = cases.get(row.case_id.as_str());
-        let judging = metals.get(row.case_id.as_str()).copied();
-        let output = decode(&row.output_b64).unwrap_or_default();
-        // The row's venue: the venue of its environment, else the venue holding its backend's
-        // baseline (a probe build's row of the same device).
-        let venue = venues
-            .by_environment(&row.environment_id)
-            .filter(|venue| venue.backend() == row.backend)
-            .or_else(|| venues.baseline(row.backend));
-        let (engine, engine_recorded) = match venue {
-            Some(venue) => {
-                let new_slot = engine_slot(&venue.environment_id, None);
-                (
-                    case.and_then(|case| verdict(case, venue.backend(), &new_slot))
-                        .unwrap_or(Verdict::Missing),
-                    rows.get(&(row.case_id.as_str(), new_slot.as_str()))
-                        .map(|row| row.status),
-                )
-            }
-            None => (Verdict::Missing, None),
-        };
-        ledger.push(LedgerRow {
-            case_id: row.case_id.clone(),
-            name: case.map_or_else(String::new, |case| case.name.clone()),
-            backend: row.backend,
-            environment_id: row.environment_id.clone(),
-            executor_abi: row.executor_abi.clone(),
-            differing_words: golden_bytes(&row.case_id, &row.golden_output_sha256)
-                .and_then(|golden| differing_words(&golden, &output)),
-            words: word_count(&output),
-            against_current_metal: judging
-                .is_some_and(|metal| metal.metal_output_sha256 == row.golden_output_sha256),
-            output_is_current_metal: judging
-                .is_some_and(|metal| metal.metal_output_sha256 == row.candidate_output_sha256),
-            engine,
-            engine_recorded,
-            cause: causes.get(row.case_id.as_str()).copied(),
-        });
-    }
-    ledger.sort_by(|left, right| {
-        (&left.name, &left.case_id, &left.environment_id).cmp(&(
-            &right.name,
-            &right.case_id,
-            &right.environment_id,
-        ))
-    });
-    let mismatched: BTreeSet<&str> = ledger.iter().map(|row| row.case_id.as_str()).collect();
-    let stale_causes = list
-        .old_mismatches
-        .iter()
-        .filter(|cause| !mismatched.contains(cause.case_id.as_str()))
-        .map(|cause| cause.case_id.clone())
-        .collect();
-    let entry = |part, case_id: &String, name: &String, cause, review: &Review| EntryRow {
-        part,
-        case_id: case_id.clone(),
-        name: name.clone(),
-        cause,
-        sign_off: review.sign_off.clone(),
-    };
     let entries = list
         .readings
         .iter()
-        .map(|reading| {
-            entry(
-                ListPart::Reading,
-                &reading.case_id,
-                &reading.name,
-                reading.cause,
-                &reading.review,
-            )
+        .map(|reading| EntryRow {
+            case_id: reading.case_id.clone(),
+            name: reading.name.clone(),
+            cause: reading.cause,
+            sign_off: reading.review.sign_off.clone(),
         })
-        .chain(list.old_mismatches.iter().map(|cause| {
-            entry(
-                ListPart::OldMismatch,
-                &cause.case_id,
-                &cause.name,
-                cause.cause,
-                &cause.review,
-            )
-        }))
         .collect();
     let device_gaps = gap_cases
         .into_iter()
@@ -1903,8 +1695,6 @@ pub fn report(
     C3Report {
         slots,
         readings,
-        ledger,
-        stale_causes,
         entries,
         device_gaps,
         gap_proposals,

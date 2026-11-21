@@ -9,9 +9,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-/// Every binary that executes engine cases (`candidate::engine::execute_prepared`).
-fn serving() -> [PathBuf; 2] {
-    [bin_exe!("corpus-vulkan"), bin_exe!("corpus-moltenvk")]
+/// The binary that executes engine cases (`candidate::engine::execute_prepared`).
+fn serving() -> PathBuf {
+    bin_exe!("corpus-vulkan")
 }
 
 /// A public authored case (`primitive-acceleration-structure-intersection`), whose AIR the
@@ -51,37 +51,36 @@ fn serve(program: &Path, input: &str) -> Output {
 /// for, before it opens a device: unrestricted, and restricted to a committed profile.
 #[test]
 fn every_case_running_tool_serves_the_device_worker() {
-    for path in serving() {
-        let program = path.display();
-        for (restricted_to, generated_commands) in
-            [(None, true), (Some("gate-lavapipe"), true), (None, false)]
-        {
-            let output = serve(&path, &input(restricted_to, generated_commands));
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "{program}: {stderr}");
-            let report: serde_json::Value = serde_json::from_slice(&output.stdout)
-                .unwrap_or_else(|error| panic!("{program}: {error}: {stderr}"));
-            let result = &report["result"];
-            assert_eq!(
-                result["product_fingerprint"], TRANSLATOR_FINGERPRINT,
-                "{program}"
-            );
-            assert_eq!(
-                result["validation_fingerprint"], VALIDATION_FINGERPRINT,
-                "{program}"
-            );
-            assert_eq!(
-                result["generated_commands"], generated_commands,
-                "{program}"
-            );
-            let failed = result["result"]["Err"]["Failed"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{program}: {report}"));
-            assert!(
-                failed.contains(&format!("its parent as {}", "0".repeat(64))),
-                "{program}: {failed}"
-            );
-        }
+    let path = serving();
+    let program = path.display();
+    for (restricted_to, generated_commands) in
+        [(None, true), (Some("gate-lavapipe"), true), (None, false)]
+    {
+        let output = serve(&path, &input(restricted_to, generated_commands));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{program}: {stderr}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{program}: {error}: {stderr}"));
+        let result = &report["result"];
+        assert_eq!(
+            result["product_fingerprint"], TRANSLATOR_FINGERPRINT,
+            "{program}"
+        );
+        assert_eq!(
+            result["validation_fingerprint"], VALIDATION_FINGERPRINT,
+            "{program}"
+        );
+        assert_eq!(
+            result["generated_commands"], generated_commands,
+            "{program}"
+        );
+        let failed = result["result"]["Err"]["Failed"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{program}: {report}"));
+        assert!(
+            failed.contains(&format!("its parent as {}", "0".repeat(64))),
+            "{program}: {failed}"
+        );
     }
 }
 
@@ -90,32 +89,30 @@ fn every_case_running_tool_serves_the_device_worker() {
 /// stderr), with no report.
 #[test]
 fn a_worker_applies_the_parents_restriction_first() {
-    for path in serving() {
-        let program = path.display();
-        let output = serve(&path, &input(Some("no-such-profile"), true));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
-        assert!(
-            stderr.starts_with("engine device worker: unknown profile \"no-such-profile\""),
-            "{program}: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "{program}");
-    }
+    let path = serving();
+    let program = path.display();
+    let output = serve(&path, &input(Some("no-such-profile"), true));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
+    assert!(
+        stderr.starts_with("engine device worker: unknown profile \"no-such-profile\""),
+        "{program}: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "{program}");
 }
 
 /// An input the worker cannot decode is the worker's own failure (exit 1, named on stderr), not a
 /// tool's usage error.
 #[test]
 fn a_worker_refuses_an_input_it_cannot_decode() {
-    for path in serving() {
-        let program = path.display();
-        let output = serve(&path, "{}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
-        assert!(
-            stderr.starts_with("engine device worker: decode the device worker's input"),
-            "{program}: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "{program}");
-    }
+    let path = serving();
+    let program = path.display();
+    let output = serve(&path, "{}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
+    assert!(
+        stderr.starts_with("engine device worker: decode the device worker's input"),
+        "{program}: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "{program}");
 }

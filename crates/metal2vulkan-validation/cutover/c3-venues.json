@@ -1,26 +1,6 @@
 {
   "venues": [
     {
-      "kind": "moltenvk",
-      "environment_id": "apple-m3-max-moltenvk",
-      "profile": "moltenvk-m3",
-      "population": "old_engine_matched",
-      "devices": [
-        {
-          "profile": "moltenvk-m3",
-          "identity": {
-            "device": "Apple M3 Max",
-            "vendor_id": 4203,
-            "device_id": 452985353,
-            "driver_id": 14,
-            "driver_version": 10402,
-            "driver_info": "1.4.2"
-          },
-          "metal_environment_id": "apple-m3-max-macos27.0.1"
-        }
-      ]
-    },
-    {
       "kind": "cpu_icd",
       "environment_id": "ubuntu-26.04-lavapipe",
       "profile": "gate-lavapipe",

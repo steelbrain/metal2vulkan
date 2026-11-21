@@ -1,6 +1,5 @@
-//! `corpus-vulkan --batch`, `--batch-report`, and `--batch-install`, and the same of
-//! `corpus-moltenvk`: the command line of [`metal2vulkan_validation::vulkan_batch`], which runs
-//! this executable once per case.
+//! `corpus-vulkan --batch`, `--batch-report`, and `--batch-install`: the command line of
+//! [`metal2vulkan_validation::vulkan_batch`], which runs this executable once per case.
 
 use metal2vulkan_validation::gpu::tripwire::TripwirePaths;
 use metal2vulkan_validation::gpu::wait::parse_wait_timeout;
@@ -28,8 +27,7 @@ const USAGE: &str =
   corpus-vulkan --batch-report --out DIR --metal-environment-id ID --environment-id ID \\\n\
     [--corpus DIR] [--case-id HASH]... [--profiles-layer P]\n\
   corpus-vulkan --batch-install DIR --out DIR\n\
-corpus-moltenvk takes the same three modes (--device-type gpu only: MoltenVK has no CPU device);\n\
-each records, reports, and installs its own backend's rows, never Metal's. With --profiles-layer P\n\
+Each mode records, reports, and installs the Vulkan backend's rows, never Metal's. With --profiles-layer P\n\
 every run is the executor's --profiles-layer P run (the device restricted to the committed profile\n\
 P, which it must hold), its rows in the ID@engine@P slots; the build record names P.\n\
 --batch runs every case with a current Metal row in --metal-environment-id (or each --case-id,\n\
@@ -61,8 +59,7 @@ short) is dropped. --batch-install writes into the store at DIR, for each case, 
 evidence of its last run that recorded any (its row, or its refusal) through the store's\n\
 validated writes, and prints batch-install rows=N refusals=N store=DIR this_build=yes|no|unrecorded:\n\
 whether DIR/build.json is this build (executor, product, semantics, oracle, and validation\n\
-sources), the only build whose rows are current once installed. It refuses an out\n\
-directory of the other backend.";
+sources), the only build whose rows are current once installed.";
 
 /// Run a batch mode if the command line names one (its first argument): `true` when it did (and
 /// it exited the process on an error), `false` for a single-case invocation, the workers' included.
@@ -215,9 +212,6 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
                     .as_deref()
                     .ok_or("--batch needs --device-type cpu or gpu")?,
             )? {
-                DeviceType::Cpu if backend == Backend::Moltenvk => {
-                    return Err("MoltenVK has no CPU device: pass --device-type gpu".into())
-                }
                 DeviceType::Cpu => BatchDevice::Cpu,
                 DeviceType::Gpu => BatchDevice::Gpu(TripwirePaths::for_host()?),
             };

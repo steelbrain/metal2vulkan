@@ -3,7 +3,7 @@
 # venue's backend over the cases with a current Metal row, into an out
 # directory kept on this host, resumable and measured. Metal is never run.
 #
-#   scripts/rerecord-venue --venue ID [--kind native-gpu|moltenvk|cpu-icd]
+#   scripts/rerecord-venue --venue ID [--kind native-gpu|cpu-icd]
 #                          [--icd lavapipe] [--ref SHA] [--out-root DIR]
 #                          [--case-id HASH]...
 #                          [--limit CASES] [--budget SECONDS] [--cpus N] [--slot NAME]
@@ -29,9 +29,7 @@
 # - Metal is never run. The batch selects the cases with a current Metal row in
 #   --metal-environment-id (default apple-m3-max-macos27.0.1), or each --case-id (each must have
 #   one), and compares against the committed row.
-# - Where it runs. native-gpu: this host's GPU, `corpus-vulkan --batch --device-type gpu`.
-#   moltenvk: this Mac's GPU, `corpus-moltenvk --batch --device-type gpu`, with Homebrew's
-#   validation layer through a scratch VK_ADD_LAYER_PATH (docs/VALIDATION.md). cpu-icd:
+# - Where it runs. native-gpu: this host's GPU, `corpus-vulkan --batch --device-type gpu`. cpu-icd:
 #   `corpus-vulkan --batch --device-type cpu` inside scripts/linux-gate (--cpus N, default 6;
 #   --slot NAME, default rerecord; --icd; --private-corpus DIR, read-only, for the private cases,
 #   which the native venues read through crates/metal2vulkan-validation/corpus/local), lavapipe at its native width.
@@ -133,12 +131,10 @@ if [ -n "$declared" ]; then
 fi
 case "$kind" in
     native-gpu) exe=corpus-vulkan; device=gpu; : "${limit:=50}" ;;
-    moltenvk) exe=corpus-moltenvk; device=gpu; : "${limit:=50}" ;;
     cpu-icd) exe=corpus-vulkan; device=cpu; : "${limit:=200}" ;;
     '') fail "$venue is not in c3-venues.json: pass --kind" ;;
-    *) fail "--kind is native-gpu, moltenvk, or cpu-icd" ;;
+    *) fail "--kind is native-gpu or cpu-icd" ;;
 esac
-if [ "$kind" = moltenvk ] && [ "$(uname -s)" != Darwin ]; then fail "MoltenVK runs on macOS"; fi
 [ "$limit" -gt 0 ] 2>/dev/null || fail "--limit must be positive"
 
 hex=$(printf '%s' "$ref" | cut -c1-12)
@@ -224,17 +220,6 @@ else
     # directory can replace mid-batch.
     mkdir -p "$d/bin" && cp "$target/release/$exe" "$d/bin/$exe" || exit 1
     bin=$d/bin/$exe
-    vvl=
-    if [ "$kind" = moltenvk ]; then
-        manifest=/opt/homebrew/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json
-        [ -f "$manifest" ] || fail "no validation layer at $manifest"
-        vvl=$d/vvl
-        mkdir -p "$vvl"
-        sed 's#"library_path": *"[^"]*"#"library_path": "/opt/homebrew/lib/libVkLayer_khronos_validation.dylib"#' \
-            "$manifest" > "$vvl/VkLayer_khronos_validation.json"
-        export VK_ADD_LAYER_PATH=$vvl
-        trap 'rm -rf "$vvl"' EXIT
-    fi
     i=0
     while [ "$(elapsed)" -lt "$budget" ]; do
         if tripped; then stopped="hang tripwire present"; break; fi

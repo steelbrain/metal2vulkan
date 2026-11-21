@@ -17,20 +17,19 @@ use crate::observation_contract::ComparisonClass;
 use metal2vulkan::pipeline::PrecisionNote;
 use reference::ReferenceEnvironment;
 
-const MOLTENVK: &str = "mvk-host";
+const GPU: &str = "gpu-host";
 const LAVAPIPE: &str = "lavapipe-gate";
 const RADV: &str = "radv-host";
 /// The profile every synthetic engine row records.
 const PROFILE: [u8; 32] = [7; 32];
 
-/// The device and driver of the synthetic venue `environment`: MoltenVK's driver for the MoltenVK
-/// venue, RADV's otherwise.
+/// The device and driver of the synthetic venue `environment`: RADV's driver.
 fn identity(environment: &str) -> DeviceIdentity {
     DeviceIdentity {
         device: format!("{environment} device"),
         vendor_id: 0x1002,
         device_id: 0x15bf,
-        driver_id: if environment == MOLTENVK { 14 } else { 3 },
+        driver_id: 3,
         driver_version: 109060100,
         driver_info: "Mesa 26.2.4".into(),
     }
@@ -45,19 +44,19 @@ fn venue(kind: VenueKind, environment: &str, population: Population, profile: &s
         devices: vec![VenueDevice {
             profile: profile.into(),
             identity: identity(environment),
-            metal_environment_id: None,
         }],
     }
 }
 
-/// MoltenVK (the old engine's baseline) and lavapipe (the public cases).
+/// A GPU described by the M3's capture (every Metal-qualified case) and lavapipe (the public
+/// cases).
 fn venues() -> Venues {
     Venues {
         venues: vec![
             venue(
-                VenueKind::Moltenvk,
-                MOLTENVK,
-                Population::OldEngineMatched,
+                VenueKind::NativeGpu,
+                GPU,
+                Population::MetalQualified,
                 "moltenvk-m3",
             ),
             venue(
@@ -275,20 +274,6 @@ fn new_row(
     row
 }
 
-/// An old-engine MoltenVK row in `environment`, recorded under an old executor ABI.
-fn old_row(
-    case: &AuthoredCase,
-    environment: &str,
-    output: &[u8],
-    golden: &[u8],
-) -> CandidateObservation {
-    let mut row = row(case, Backend::Moltenvk, environment.into(), output, golden);
-    row.executor_abi = "vulkan-retired-executor-v1".into();
-    row.translator_fingerprint = "44".repeat(32);
-    row.environment = serde_json::json!({"vulkan_target": {"version": [1, 2]}});
-    row
-}
-
 /// `row` with one executed kernel module recording the precision notes `notes`.
 fn noting(mut row: CandidateObservation, notes: &[PrecisionNote]) -> CandidateObservation {
     row.census = Some(crate::coverage::ExecutedCensus {
@@ -371,15 +356,6 @@ fn signed(note: &str) -> Review {
     }
 }
 
-fn old_cause(case: &AuthoredCase, cause: Cause) -> OldMismatch {
-    OldMismatch {
-        case_id: case.case_id.clone(),
-        name: case.name.clone(),
-        cause,
-        review: signed("why the old row differs"),
-    }
-}
-
 fn slot<'a>(report: &'a C3Report, venue: &str) -> &'a SlotReport {
     report
         .slots
@@ -424,7 +400,6 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
     // Listed at its candidate, output, and Metal output, it is reviewed; the reading holds.
     let list = ReviewedList {
         readings: vec![reading(&bounded, vec![reviewed(&lavapipe, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -464,7 +439,6 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
     assert_eq!(
         report.entries,
         [EntryRow {
-            part: ListPart::Reading,
             case_id: bounded.case_id.clone(),
             name: bounded.name.clone(),
             cause: Cause::AppleReading,
@@ -521,11 +495,10 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
     // The list reviews a slot, not a case: the same candidate and reading in another venue's
     // slot is unreviewed until the list names that slot too.
     let mut elsewhere = input.clone();
-    let mut moltenvk = lavapipe.clone();
-    moltenvk.backend = Backend::Moltenvk;
-    moltenvk.environment_id = engine_slot(MOLTENVK, None);
-    moltenvk.environment = recorded_environment(MOLTENVK);
-    elsewhere.moltenvk.push(moltenvk);
+    let mut gpu = lavapipe.clone();
+    gpu.environment_id = engine_slot(GPU, None);
+    gpu.environment = recorded_environment(GPU);
+    elsewhere.vulkan.push(gpu);
     let report = report_of(
         &elsewhere,
         &list,
@@ -533,10 +506,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &venues(),
         &VenueKeys::default(),
     );
-    assert_eq!(
-        verdict_of(slot(&report, MOLTENVK), &bounded),
-        Verdict::Mismatch
-    );
+    assert_eq!(verdict_of(slot(&report, GPU), &bounded), Verdict::Mismatch);
     assert_eq!(
         verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Reviewed
@@ -558,7 +528,6 @@ fn stale_rows_are_not_evidence_and_their_reviewed_reading_still_names_them() {
     };
     let list = ReviewedList {
         readings: vec![reading(&bounded, vec![reviewed(&stale, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -662,82 +631,6 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     assert_eq!(stated.stale_without_metal, 1);
 }
 
-#[test]
-fn moltenvk_must_cover_every_case_the_old_engine_matched_without_a_new_mismatch() {
-    let covered = case(1, "covered");
-    let regressed = case(2, "regressed");
-    let refused = case(3, "refused");
-    let old_mismatch = case(4, "old-mismatch");
-    let new_only = case(5, "new-only");
-    let unqualified = case(6, "unqualified");
-    let mut input = C3Input {
-        cases: vec![
-            covered.clone(),
-            regressed.clone(),
-            refused.clone(),
-            old_mismatch.clone(),
-            new_only.clone(),
-        ],
-        ..C3Input::default()
-    };
-    for case in &input.cases.clone() {
-        input.metals.push(metal(case, &METAL));
-    }
-    // A case the baseline matched that has no current Metal row: missing, and Metal must qualify
-    // it before an executor can compare it.
-    input.cases.push(unqualified.clone());
-    input.moltenvk = vec![
-        old_row(&unqualified, MOLTENVK, &METAL, &METAL),
-        old_row(&covered, MOLTENVK, &METAL, &METAL),
-        old_row(&regressed, MOLTENVK, &METAL, &METAL),
-        old_row(&refused, MOLTENVK, &METAL, &METAL),
-        old_row(&old_mismatch, MOLTENVK, &DEVICE, &METAL),
-        // A probe build's row in another environment is not the baseline.
-        old_row(&new_only, "probe-build", &METAL, &METAL),
-        new_row(&covered, Backend::Moltenvk, MOLTENVK, &METAL, &METAL),
-        new_row(&regressed, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
-        new_row(&old_mismatch, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
-        new_row(&new_only, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
-    ];
-    let list = ReviewedList {
-        readings: vec![],
-        old_mismatches: vec![old_cause(&old_mismatch, Cause::FastMathRegrouping)],
-        reference_gaps: vec![],
-        answer_gaps: vec![],
-    };
-    let report = report_of(
-        &input,
-        &list,
-        &C1List::default(),
-        &venues(),
-        &VenueKeys::default(),
-    );
-    let stated = slot(&report, MOLTENVK);
-    // The population is the four cases the baseline matched.
-    assert_eq!(stated.population, 4);
-    assert_eq!(verdict_of(stated, &unqualified), Verdict::Missing);
-    assert_eq!(stated.count(Verdict::Missing), 2);
-    assert_eq!(stated.missing_without_metal, 1);
-    assert_eq!(verdict_of(stated, &covered), Verdict::Match);
-    assert_eq!(verdict_of(stated, &regressed), Verdict::Mismatch);
-    assert_eq!(verdict_of(stated, &refused), Verdict::Missing);
-    // Judged though outside the population: an old mismatch still mismatching is no new
-    // mismatch, and a case the baseline never ran is.
-    assert_eq!(verdict_of(stated, &old_mismatch), Verdict::Mismatch);
-    assert_eq!(verdict_of(stated, &new_only), Verdict::Mismatch);
-    assert_eq!(stated.new_mismatches, 2);
-    assert!(!stated.holds());
-    // Lavapipe has no public case here, so nothing in its population, and no row: each of the
-    // five cases a Metal row judges reads missing there until lavapipe records it; the unqualified
-    // case is not judged.
-    let lavapipe = slot(&report, LAVAPIPE);
-    assert_eq!(lavapipe.population, 0);
-    assert_eq!(lavapipe.count(Verdict::Missing), 5);
-    assert_eq!(lavapipe.missing_without_metal, 0);
-    assert_eq!(lavapipe.verdict_of(&unqualified.case_id), None);
-    assert!(!lavapipe.holds());
-}
-
 /// A case the reference device cannot run reads `reference_gap` where it would read missing or
 /// stale: never missing without Metal, and the slot holds, but C3 holds only once the list holds
 /// the gap with the user's sign-off.
@@ -759,13 +652,13 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
     let input = C3Input {
         cases: vec![gap_case.clone(), stale_gap.clone(), unqualified.clone()],
         metals: vec![gap_row(&gap_case), gap_row(&stale_gap)],
-        moltenvk: vec![
-            old_row(&gap_case, MOLTENVK, &METAL, &METAL),
-            old_row(&stale_gap, MOLTENVK, &METAL, &METAL),
-            old_row(&unqualified, MOLTENVK, &METAL, &METAL),
+        vulkan: vec![
             // Recorded against a Metal output the oracle no longer holds: stale.
-            new_row(&stale_gap, Backend::Moltenvk, MOLTENVK, &METAL, &METAL),
+            new_row(&stale_gap, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
         ],
+        public_air: [&gap_case, &stale_gap, &unqualified]
+            .map(|case| case.air_sha256.clone())
+            .into(),
         ..C3Input::default()
     };
     let unlisted = report_of(
@@ -775,7 +668,7 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&unlisted, MOLTENVK);
+    let stated = slot(&unlisted, LAVAPIPE);
     assert_eq!(stated.population, 3);
     assert_eq!(verdict_of(stated, &gap_case), Verdict::ReferenceGap);
     assert_eq!(verdict_of(stated, &stale_gap), Verdict::ReferenceGap);
@@ -809,17 +702,13 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
     assert_eq!(unlisted.awaiting_sign_off(), 2);
     assert!(!unlisted.holds());
 
-    // The unqualified case qualified and recorded on both venues (lavapipe judges it once a Metal
+    // The unqualified case qualified and recorded on both venues (the GPU judges it once a Metal
     // row does): every slot holds, and only the gaps' sign-off is left.
     let mut qualified = input.clone();
     qualified.metals.push(metal(&unqualified, &METAL));
-    qualified.moltenvk.push(new_row(
-        &unqualified,
-        Backend::Moltenvk,
-        MOLTENVK,
-        &METAL,
-        &METAL,
-    ));
+    qualified
+        .vulkan
+        .push(new_row(&unqualified, Backend::Vulkan, GPU, &METAL, &METAL));
     qualified.vulkan.push(new_row(
         &unqualified,
         Backend::Vulkan,
@@ -842,7 +731,6 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
     let signed_off = signed("").sign_off;
     let list = |first, second| ReviewedList {
         readings: vec![],
-        old_mismatches: vec![],
         reference_gaps: vec![entry(&gap_case, 10, first), entry(&stale_gap, 10, second)],
         answer_gaps: vec![],
     };
@@ -901,119 +789,6 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
 }
 
 #[test]
-fn the_ledger_lists_every_old_mismatch_row_with_its_cause_and_the_new_verdict() {
-    let fixed = case(1, "fixed");
-    let still = case(2, "still");
-    let probe_only = case(3, "probe-only");
-    let unexplained = case(4, "unexplained");
-    let unrelated = case(5, "unrelated");
-    let older_metal = [0u8, 0, 0x80, 0xbf];
-    let mut input = C3Input {
-        cases: vec![
-            fixed.clone(),
-            still.clone(),
-            probe_only.clone(),
-            unexplained.clone(),
-            unrelated.clone(),
-        ],
-        ..C3Input::default()
-    };
-    for case in &input.cases.clone() {
-        input.metals.push(metal(case, &METAL));
-    }
-    // An older Metal reading `fixed`'s old row was compared with, retired since.
-    let mut retired = metal(&fixed, &older_metal);
-    retired.environment_id = "older-metal".into();
-    retired.oracle_abi = "metal-retired-v1".into();
-    input.metals.push(retired);
-    input.moltenvk = vec![
-        // The old engine answered today's Metal reading, but was compared with an older one.
-        old_row(&fixed, MOLTENVK, &METAL, &older_metal),
-        old_row(&still, MOLTENVK, &DEVICE, &METAL),
-        old_row(&probe_only, MOLTENVK, &METAL, &METAL),
-        old_row(&probe_only, "probe-build", &DEVICE, &METAL),
-        old_row(&unexplained, MOLTENVK, &DEVICE, &METAL),
-        new_row(&fixed, Backend::Moltenvk, MOLTENVK, &METAL, &METAL),
-        new_row(&still, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
-    ];
-    let list = ReviewedList {
-        readings: vec![reading(&still, vec![reviewed(&input.moltenvk[6], &METAL)])],
-        old_mismatches: vec![
-            old_cause(&fixed, Cause::FastMathRegrouping),
-            old_cause(&still, Cause::FastMathRegrouping),
-            old_cause(&probe_only, Cause::FastMathRegrouping),
-            old_cause(&unrelated, Cause::AppleReading),
-        ],
-        reference_gaps: vec![],
-        answer_gaps: vec![],
-    };
-    let report = report_of(
-        &input,
-        &list,
-        &C1List::default(),
-        &venues(),
-        &VenueKeys::default(),
-    );
-    let rows = report
-        .ledger
-        .iter()
-        .map(|row| {
-            (
-                row.name.as_str(),
-                row.environment_id.as_str(),
-                row.engine,
-                row.cause,
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        rows,
-        [
-            (
-                "fixed",
-                MOLTENVK,
-                Verdict::Match,
-                Some(Cause::FastMathRegrouping)
-            ),
-            (
-                "probe-only",
-                "probe-build",
-                Verdict::Missing,
-                Some(Cause::FastMathRegrouping)
-            ),
-            (
-                "still",
-                MOLTENVK,
-                Verdict::Reviewed,
-                Some(Cause::FastMathRegrouping)
-            ),
-            ("unexplained", MOLTENVK, Verdict::Missing, None),
-        ]
-    );
-    let fixed_row = &report.ledger[0];
-    assert!(!fixed_row.against_current_metal);
-    assert!(fixed_row.output_is_current_metal);
-    assert_eq!(fixed_row.differing_words, Some(1));
-    assert_eq!(fixed_row.words, 1);
-    assert_eq!(fixed_row.engine_recorded, Some(CandidateStatus::Match));
-    let still_row = &report.ledger[2];
-    assert_eq!(still_row.engine_recorded, Some(CandidateStatus::Mismatch));
-    assert_eq!(report.ledger[3].engine_recorded, None);
-    assert!(still_row.against_current_metal);
-    assert!(!still_row.output_is_current_metal);
-    assert_eq!(
-        report.unexplained(),
-        BTreeSet::from([unexplained.case_id.as_str()])
-    );
-    // A cause for a case no old row mismatched is stale.
-    assert_eq!(
-        report.stale_causes,
-        std::slice::from_ref(&unrelated.case_id)
-    );
-    assert!(!report.holds());
-}
-
-#[test]
 fn a_reviewed_reading_that_disagrees_with_the_store_is_reported() {
     let bounded = case(1, "bounded");
     let other = case(2, "other");
@@ -1051,7 +826,6 @@ fn a_reviewed_reading_that_disagrees_with_the_store_is_reported() {
     ] {
         let list = ReviewedList {
             readings: vec![entry],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         };
@@ -1098,13 +872,6 @@ fn reviewed_lists_are_schema_checked() {
     };
     let good = serde_json::json!({
         "readings": [entry("aa", serde_json::json!([observation("env@engine", "33", 2, 1)]))],
-        "old_mismatches": [{
-            "case_id": hash("bb"), "name": "old", "cause": "fast_math_regrouping",
-            "review": {
-                "evidence": ["a regrouping probe"], "note": "regrouped",
-                "sign_off": {"state": "signed_off", "decision": "C3", "date": "2026-10-02"},
-            },
-        }],
     });
     let list = ReviewedList::parse(&good.to_string()).unwrap();
     // The list round-trips through its committed form, in the order given.
@@ -1128,7 +895,6 @@ fn reviewed_lists_are_schema_checked() {
             decision: "C3".into()
         }
     );
-    assert!(list.old_mismatches[0].review.sign_off.is_signed_off());
     let edit = |change: &dyn Fn(&mut serde_json::Value)| {
         let mut list = good.clone();
         change(&mut list);
@@ -1161,10 +927,6 @@ fn reviewed_lists_are_schema_checked() {
         (
             edit(&|list| list["readings"][0]["name"] = " ".into()),
             "no name",
-        ),
-        (
-            edit(&|list| list["old_mismatches"][0]["name"] = " ".into()),
-            "a cause without a name",
         ),
         (
             edit(&|list| list["readings"][0]["review"]["evidence"] = serde_json::json!([])),
@@ -1212,8 +974,8 @@ fn reviewed_lists_are_schema_checked() {
             "more differing words than words",
         ),
         (
-            edit(&|list| list["old_mismatches"][0]["review"]["note"] = "".into()),
-            "a cause without a note",
+            edit(&|list| list["readings"][0]["review"]["note"] = "".into()),
+            "a reading without a note",
         ),
         (
             edit(&|list| {
@@ -1234,12 +996,14 @@ fn reviewed_lists_are_schema_checked() {
             "no sign-off",
         ),
         (
-            edit(&|list| list["old_mismatches"][0]["review"]["by"] = "x".into()),
+            edit(&|list| list["readings"][0]["review"]["by"] = "x".into()),
             "a review with an unknown field",
         ),
         (
             edit(&|list| {
-                list["old_mismatches"][0]["review"]["sign_off"] = serde_json::json!(
+                // A regrouping reading is signed off with no lanes: only the date is wrong.
+                list["readings"][0]["cause"] = "fast_math_regrouping".into();
+                list["readings"][0]["review"]["sign_off"] = serde_json::json!(
                     {"state": "signed_off", "decision": "C3", "date": "2026/10/02"}
                 )
             }),
@@ -1294,28 +1058,19 @@ fn an_entry_in_the_shape_before_the_shared_review_is_rejected() {
         "case_id": hash("aa"), "name": "case", "cause": "apple_reading", "bound": "4 ulp",
         "observations": observations,
     });
-    let mut cause = serde_json::json!({
-        "case_id": hash("bb"), "name": "old", "cause": "fast_math_regrouping",
-    });
     for (key, value) in flat.as_object().unwrap() {
         reading[key] = value.clone();
-        cause[key] = value.clone();
     }
-    let old_reading = serde_json::json!({"readings": [reading.clone()], "old_mismatches": []});
-    let old_cause = serde_json::json!({"readings": [], "old_mismatches": [cause.clone()]});
-    for old in [&old_reading, &old_cause] {
-        let error = ReviewedList::parse(&old.to_string()).unwrap_err();
-        assert!(error.contains("unknown field"), "{error}");
+    let old = serde_json::json!({"readings": [reading.clone()]});
+    let error = ReviewedList::parse(&old.to_string()).unwrap_err();
+    assert!(error.contains("unknown field"), "{error}");
+    // The same reading with its review nested is read.
+    let object = reading.as_object_mut().unwrap();
+    for key in ["evidence", "note", "sign_off"] {
+        object.remove(key);
     }
-    // The same entries with their review nested are read.
-    for entry in [&mut reading, &mut cause] {
-        let object = entry.as_object_mut().unwrap();
-        for key in ["evidence", "note", "sign_off"] {
-            object.remove(key);
-        }
-        object.insert("review".into(), flat.clone());
-    }
-    let migrated = serde_json::json!({"readings": [reading], "old_mismatches": [cause]});
+    object.insert("review".into(), flat.clone());
+    let migrated = serde_json::json!({ "readings": [reading] });
     assert!(ReviewedList::parse(&migrated.to_string()).is_ok());
 }
 
@@ -1488,7 +1243,6 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
     };
     let list = ReviewedList {
         readings: vec![reading(&sampled, vec![reviewed(&differs, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -1565,7 +1319,6 @@ fn metals_latitude_may_be_signed_off_and_the_fma_cause_is_gone() {
         }
         let list = ReviewedList {
             readings: vec![entry],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         };
@@ -1584,7 +1337,6 @@ fn an_apple_reading_is_signed_off_only_with_well_formed_lanes() {
         change(&mut entry);
         ReviewedList {
             readings: vec![entry],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         }
@@ -1684,7 +1436,6 @@ fn a_signed_off_apple_reading_holds_only_while_every_differing_word_is_within_ap
         };
         let list = ReviewedList {
             readings: vec![reading],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         };
@@ -1807,7 +1558,6 @@ fn an_unstated_word_the_product_approximates_keeps_its_reading_open() {
         };
         let list = ReviewedList {
             readings: vec![reading],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         };
@@ -1910,7 +1660,6 @@ fn a_word_within_apples_bound_that_shows_a_recorded_near_equivalent_keeps_its_re
         };
         let list = ReviewedList {
             readings: vec![reading],
-            old_mismatches: vec![],
             reference_gaps: vec![],
             answer_gaps: vec![],
         };
@@ -1989,30 +1738,20 @@ fn the_committed_list_parses_in_its_committed_form() {
     );
 }
 
-/// Three venues, each with its own population: MoltenVK covers the cases its old-engine rows
-/// matched, lavapipe the public cases, and the real GPU every Metal-qualified case, public or
-/// private.
+/// Each venue covers its own population: lavapipe the public cases, and each real GPU every
+/// Metal-qualified case, public or private.
 #[test]
 fn each_venue_covers_its_own_population() {
     let public = case(1, "public");
     let private = case(2, "private");
     let unqualified = case(3, "unqualified");
-    let old_matched = case(4, "old-matched");
     let mut input = C3Input {
-        cases: vec![
-            public.clone(),
-            private.clone(),
-            unqualified.clone(),
-            old_matched.clone(),
-        ],
-        metals: [&public, &private, &old_matched]
-            .map(|case| metal(case, &METAL))
-            .to_vec(),
+        cases: vec![public.clone(), private.clone(), unqualified.clone()],
+        metals: [&public, &private].map(|case| metal(case, &METAL)).to_vec(),
         public_air: [public.air_sha256.clone()].into(),
-        moltenvk: vec![old_row(&old_matched, MOLTENVK, &METAL, &METAL)],
         ..C3Input::default()
     };
-    // The real GPU ran the public and the private case.
+    // One real GPU ran the public and the private case.
     let radv = |case: &AuthoredCase| new_row(case, Backend::Vulkan, RADV, &METAL, &METAL);
     input.vulkan = vec![
         radv(&public),
@@ -2028,50 +1767,34 @@ fn each_venue_covers_its_own_population() {
     );
     assert_eq!(report.slots.len(), 3);
     let population = |venue: &str| slot(&report, venue).population;
-    assert_eq!(population(MOLTENVK), 1);
     assert_eq!(population(LAVAPIPE), 1);
     // Every case with a current Metal row: the unqualified case is outside.
-    assert_eq!(population(RADV), 3);
+    assert_eq!(population(RADV), 2);
+    assert_eq!(population(GPU), 2);
 
     let radv_stated = slot(&report, RADV);
     assert_eq!(radv_stated.kind, VenueKind::NativeGpu);
     assert_eq!(verdict_of(radv_stated, &public), Verdict::Match);
     assert_eq!(verdict_of(radv_stated, &private), Verdict::Match);
-    assert_eq!(verdict_of(radv_stated, &old_matched), Verdict::Missing);
-    assert_eq!(radv_stated.count(Verdict::Missing), 1);
     assert_eq!(radv_stated.missing_without_metal, 0);
-    assert!(!radv_stated.holds());
+    assert!(radv_stated.holds());
     // The other venues judge their own populations, and read missing every other case a Metal
     // row judges that they never recorded.
     let lavapipe = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(lavapipe, &public), Verdict::Match);
     assert_eq!(verdict_of(lavapipe, &private), Verdict::Missing);
-    assert_eq!(verdict_of(lavapipe, &old_matched), Verdict::Missing);
     assert!(!lavapipe.holds());
-    assert_eq!(
-        verdict_of(slot(&report, MOLTENVK), &old_matched),
-        Verdict::Missing
-    );
-    // Only the venue holding the baseline counts new mismatches against it.
-    let mut mismatching = input.clone();
-    mismatching.vulkan[1] = new_row(&private, Backend::Vulkan, RADV, &DEVICE, &METAL);
-    let report = report_of(
-        &mismatching,
-        &ReviewedList::default(),
-        &C1List::default(),
-        &three_venues(),
-        &VenueKeys::default(),
-    );
-    let radv_stated = slot(&report, RADV);
-    assert_eq!(verdict_of(radv_stated, &private), Verdict::Mismatch);
-    assert_eq!(radv_stated.new_mismatches, 0);
+    let gpu = slot(&report, GPU);
+    assert_eq!(verdict_of(gpu, &public), Verdict::Missing);
+    assert_eq!(verdict_of(gpu, &private), Verdict::Missing);
+    assert!(!gpu.holds());
 }
 
 /// A case outside a venue's population that the venue never recorded reads missing once a Metal
 /// row judges it: the venue's lane runs every case C3 reads stale or
 /// missing in its slot, so the case is selected and recorded, never left unrun because the venue's
-/// population (the old engine's matches, the public cases) is narrower than the corpus. It does not
-/// join the population, and a case with no Metal row is not judged.
+/// population (the public cases) is narrower than the corpus. It does not join the population, and
+/// a case with no Metal row is not judged.
 #[test]
 fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
     let private = case(1, "private");
@@ -2079,7 +1802,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
     let input = C3Input {
         cases: vec![private.clone(), unqualified.clone()],
         metals: vec![metal(&private, &METAL)],
-        // Only the real GPU recorded the private case; nothing recorded the unqualified one.
+        // Only one real GPU recorded the private case; nothing recorded the unqualified one.
         vulkan: vec![new_row(&private, Backend::Vulkan, RADV, &METAL, &METAL)],
         ..C3Input::default()
     };
@@ -2093,46 +1816,46 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
         )
     };
     let report = judge(&input);
-    for venue in [MOLTENVK, LAVAPIPE] {
-        let stated = slot(&report, venue);
-        // Outside the population (no old-engine match, no public fixture): still judged.
-        assert_eq!(stated.population, 0, "{venue}");
-        assert_eq!(verdict_of(stated, &private), Verdict::Missing, "{venue}");
-        // Selected: the lane runs the slot's `stale` and `missing` rows, which corpus-status
-        // prints as c3-row lines.
-        let selected = stated
-            .rows
-            .iter()
-            .filter(|row| matches!(row.verdict, Verdict::Stale | Verdict::Missing))
-            .map(|row| row.case_id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(selected, [private.case_id.as_str()], "{venue}");
-        // It has a Metal row, so it is no case waiting on Metal's qualification.
-        assert_eq!(stated.missing_without_metal, 0, "{venue}");
-        // A case with no Metal row is not judged: there is nothing to compare its record with.
-        assert_eq!(stated.verdict_of(&unqualified.case_id), None, "{venue}");
-        assert!(!stated.holds(), "{venue}");
-    }
+    let stated = slot(&report, LAVAPIPE);
+    // Outside the population (no public fixture): still judged.
+    assert_eq!(stated.population, 0);
+    assert_eq!(verdict_of(stated, &private), Verdict::Missing);
+    // Selected: the lane runs the slot's `stale` and `missing` rows, which corpus-status prints as
+    // c3-row lines.
+    let selected = stated
+        .rows
+        .iter()
+        .filter(|row| matches!(row.verdict, Verdict::Stale | Verdict::Missing))
+        .map(|row| row.case_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(selected, [private.case_id.as_str()]);
+    // It has a Metal row, so it is no case waiting on Metal's qualification.
+    assert_eq!(stated.missing_without_metal, 0);
+    // A case with no Metal row is not judged: there is nothing to compare its record with.
+    assert_eq!(stated.verdict_of(&unqualified.case_id), None);
+    assert!(!stated.holds());
+    // Each real GPU covers every Metal-qualified case: the one that never recorded it reads
+    // missing.
+    assert_eq!(slot(&report, GPU).population, 1);
+    assert_eq!(verdict_of(slot(&report, GPU), &private), Verdict::Missing);
     assert_eq!(verdict_of(slot(&report, RADV), &private), Verdict::Match);
 
     // Once each venue records it, the case is judged by its record and every slot holds.
     let mut recorded = input.clone();
-    recorded.moltenvk.push(new_row(
-        &private,
-        Backend::Moltenvk,
-        MOLTENVK,
-        &METAL,
-        &METAL,
-    ));
-    recorded
-        .vulkan
-        .push(new_row(&private, Backend::Vulkan, LAVAPIPE, &METAL, &METAL));
-    let report = judge(&recorded);
-    for venue in [MOLTENVK, LAVAPIPE] {
-        let stated = slot(&report, venue);
-        assert_eq!(verdict_of(stated, &private), Verdict::Match, "{venue}");
-        assert_eq!(stated.population, 0, "{venue}");
+    for venue in [GPU, LAVAPIPE] {
+        recorded
+            .vulkan
+            .push(new_row(&private, Backend::Vulkan, venue, &METAL, &METAL));
     }
+    let report = judge(&recorded);
+    for venue in [GPU, LAVAPIPE] {
+        assert_eq!(
+            verdict_of(slot(&report, venue), &private),
+            Verdict::Match,
+            "{venue}"
+        );
+    }
+    assert_eq!(slot(&report, LAVAPIPE).population, 0);
     assert!(report.slots.iter().all(SlotReport::holds));
 }
 
@@ -2224,7 +1947,6 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
     }
     let list = ReviewedList {
         readings: vec![reading(&bounded, vec![reviewed(&other_device, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -2258,7 +1980,6 @@ fn a_reading_reviewed_in_one_venue_does_not_cover_another() {
     };
     let mut list = ReviewedList {
         readings: vec![reading(&bounded, vec![reviewed(&lavapipe, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -2304,7 +2025,7 @@ fn a_fast_math_blend_of_a_half_output_shows_the_regrouping_cause() {
     let blend = case(1, "half_blend");
     let row = |notes: &[PrecisionNote]| {
         unbounded_by(
-            new_row(&blend, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
+            new_row(&blend, Backend::Vulkan, GPU, &DEVICE, &METAL),
             notes,
         )
     };
@@ -2326,7 +2047,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let regroup = [PrecisionNote::FastMathRewrites];
     let fft = case(1, "fft");
     let mut rows = [
-        new_row(&fft, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
+        new_row(&fft, Backend::Vulkan, GPU, &DEVICE, &METAL),
         new_row(&fft, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL),
         new_row(&fft, Backend::Vulkan, RADV, &OTHER, &METAL),
     ]
@@ -2337,12 +2058,11 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let input_of = |rows: &[CandidateObservation]| C3Input {
         cases: vec![fft.clone()],
         metals: vec![metal(&fft, &METAL)],
-        moltenvk: rows[..1].to_vec(),
-        vulkan: rows[1..].to_vec(),
+        vulkan: rows.to_vec(),
         public_air: [fft.air_sha256.clone()].into(),
         ..C3Input::default()
     };
-    let slots = [MOLTENVK, LAVAPIPE, RADV];
+    let slots = [GPU, LAVAPIPE, RADV];
     let verdicts = |report: &C3Report| slots.map(|venue| verdict_of(slot(report, venue), &fft));
     let judge = |input: &C3Input, list: &ReviewedList| {
         report_of(
@@ -2369,7 +2089,6 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     regrouping.lanes.clear();
     let list = ReviewedList {
         readings: vec![regrouping],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -2449,10 +2168,10 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 fn venue_lists_are_checked() {
     assert_eq!(three_venues().check(), Ok(()));
     type Edit = fn(&mut Venues);
-    let edits: [(Edit, &str); 13] = [
+    let edits: [(Edit, &str); 10] = [
         (|venues| venues.venues.clear(), "no venue"),
         (
-            |venues| venues.venues[2].environment_id = MOLTENVK.into(),
+            |venues| venues.venues[2].environment_id = GPU.into(),
             "listed twice",
         ),
         (
@@ -2466,14 +2185,6 @@ fn venue_lists_are_checked() {
         (
             |venues| venues.venues[2].devices[0].identity.driver_info = " ".into(),
             "needs a device name",
-        ),
-        (
-            |venues| venues.venues[2].devices[0].identity.driver_id = 14,
-            "a MoltenVK venue runs MoltenVK",
-        ),
-        (
-            |venues| venues.venues[0].devices[0].identity.driver_id = 3,
-            "a MoltenVK venue runs MoltenVK",
         ),
         // The allowed-device list.
         (
@@ -2507,14 +2218,6 @@ fn venue_lists_are_checked() {
                 venues.venues[2].devices.push(other);
             },
             "is not a committed profile",
-        ),
-        (
-            // Two baselines on one backend: lavapipe's and the GPU's.
-            |venues| {
-                venues.venues[1].population = Population::OldEngineMatched;
-                venues.venues[2].population = Population::OldEngineMatched;
-            },
-            "a second venue holds the old engine's baseline",
         ),
     ];
     for (edit, why) in edits {
@@ -2604,7 +2307,6 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
         identity: VenueProfile::committed("intel-uhd770-rpls-anv")
             .unwrap()
             .identity,
-        metal_environment_id: None,
     };
     let mut with_rpls = committed.clone();
     let found = (with_rpls.venues.iter_mut())
@@ -2626,7 +2328,6 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
         venue.devices.push(VenueDevice {
             profile: nvidia.stem,
             identity: nvidia.identity,
-            metal_environment_id: None,
         });
     });
     assert!(
@@ -2643,9 +2344,9 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
     );
 }
 
-/// Each committed venue keys its native engine slot, for its own backend only,
-/// with its committed profile's translation key, which a record holds only by recording it; a venue
-/// is found by its operator environment and backend.
+/// Each committed venue keys its native engine slot with its committed profile's translation key,
+/// which a record holds only by recording it; a venue is found by its operator environment and
+/// backend.
 #[test]
 fn each_venue_keys_its_slots_with_its_profiles_key() {
     let committed = Venues::load(&Venues::committed_path()).unwrap();
@@ -2657,19 +2358,13 @@ fn each_venue_keys_its_slots_with_its_profiles_key() {
             profile.fingerprint
         );
         let backend = venue.backend();
-        let other = match backend {
-            Backend::Moltenvk => Backend::Vulkan,
-            Backend::Vulkan => Backend::Moltenvk,
-        };
         let slot = engine_slot(&venue.environment_id, None);
         assert_eq!(
             keys.expected(backend, &slot),
             Some(profile.fingerprint.as_str())
         );
-        assert_eq!(keys.expected(other, &slot), None);
         let mut environment = serde_json::json!({});
         assert!(!keys.holds(backend, &slot, &environment));
-        assert!(keys.holds(other, &slot, &environment));
         environment[VENUE_PROFILE] = profile.record();
         assert!(keys.holds(backend, &slot, &environment));
         assert_eq!(
@@ -2681,14 +2376,12 @@ fn each_venue_keys_its_slots_with_its_profiles_key() {
             committed.venue_of(&venue.environment_id, backend),
             Some(venue)
         );
-        assert_eq!(committed.venue_of(&venue.environment_id, other), None);
     }
 }
 
 /// Each answer gap is decided from each venue's committed profile. Of the committed venues, arm64
 /// lavapipe alone runs fragment subgroups of fewer than two quads (its 4-lane subgroups); x86
-/// lavapipe's 8, the GPUs' and MoltenVK's (which pins no fragment size and runs 32) hold two or
-/// more. Every venue but MoltenVK, which draws through Metal, has the clipped-primitive split. The
+/// lavapipe's 8 and the GPUs' hold two or more. Every venue has the clipped-primitive split. The
 /// venue keys record each for the venue's slot.
 #[test]
 fn each_answer_gap_is_decided_from_each_venues_profile() {
@@ -2704,13 +2397,7 @@ fn each_answer_gap_is_decided_from_each_venues_profile() {
             AnswerGap::FragmentSubgroupUnderTwoQuads,
             BTreeSet::from(["gate-lavapipe"]),
         ),
-        (
-            AnswerGap::ClippedPrimitiveSplit,
-            all.iter()
-                .copied()
-                .filter(|stem| !stem.starts_with("moltenvk-"))
-                .collect(),
-        ),
+        (AnswerGap::ClippedPrimitiveSplit, all.clone()),
         (
             AnswerGap::QuadsSplitByClipping,
             BTreeSet::from(["gate-lavapipe", "gate-lavapipe-x86_64"]),
@@ -3368,7 +3055,6 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
     // Even a signed-off reading at the row's candidate does not review it.
     let list = ReviewedList {
         readings: vec![reading(&decoded, vec![reviewed(&row, &METAL)])],
-        old_mismatches: vec![],
         reference_gaps: vec![],
         answer_gaps: vec![],
     };
@@ -3628,92 +3314,6 @@ fn a_rekey_list_moves_records_only_to_this_builds_keys() {
     rekey.apply(&mut environment);
     assert_eq!(environment, recorded(&stem, &now));
     assert!(!rekey.matches(&environment));
-}
-
-/// The Apple M3 Max's MoltenVK runs (`apple-m3-max-moltenvk`) compare with its own Metal rows: a
-/// run compared with another Metal environment allows no device, and a device stating no Metal
-/// environment is allowed under any. The list refuses a second GPU's device (the M3 Max's capture
-/// under another GPU's name, in a venue of its own) naming the M3 Max's Metal environment, and a
-/// device whose Metal environment is no C3 reference environment.
-#[test]
-fn each_moltenvk_device_compares_with_its_own_gpus_metal() {
-    let committed = Venues::load(&Venues::committed_path()).unwrap();
-    let moltenvk = committed
-        .venues
-        .iter()
-        .filter(|venue| venue.kind == VenueKind::Moltenvk)
-        .collect::<Vec<_>>();
-    let devices = |venue: &Venue| {
-        venue
-            .devices
-            .iter()
-            .map(|device| {
-                (
-                    device.profile.clone(),
-                    device.identity.device_id,
-                    device.metal_environment_id.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        moltenvk
-            .iter()
-            .map(|venue| (venue.environment_id.as_str(), devices(venue)))
-            .collect::<Vec<_>>(),
-        [(
-            "apple-m3-max-moltenvk",
-            vec![(
-                "moltenvk-m3".to_string(),
-                452985353,
-                Some("apple-m3-max-macos27.0.1".to_string())
-            )]
-        )]
-    );
-    let m3 = moltenvk[0];
-    assert_eq!(m3.population, Population::OldEngineMatched);
-    let names = |venue: &Venue, metal: &str| {
-        venue
-            .identities_compared_with(metal)
-            .into_iter()
-            .map(|identity| identity.device)
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(names(m3, "apple-m3-max-macos27.0.1"), ["Apple M3 Max"]);
-    assert_eq!(names(m3, "apple-m3-max-macos26.7"), Vec::<String>::new());
-    assert_eq!(names(m3, "apple-m3-max-macos26.5.2"), Vec::<String>::new());
-    let mut stating_none = m3.clone();
-    stating_none.devices[0].metal_environment_id = None;
-    assert_eq!(
-        names(&stating_none, "apple-m3-max-macos26.5.2"),
-        ["Apple M3 Max"]
-    );
-    let mut m4_device = m3.devices[0].clone();
-    m4_device.identity.device = "Apple M4".into();
-    // A venue of its own whose device names the M3 Max's Metal environment.
-    let mut own = committed.clone();
-    let mut venue = m3.clone();
-    venue.environment_id = "apple-m4-moltenvk".into();
-    venue.devices = vec![m4_device];
-    own.venues.push(venue);
-    let error = own.check().unwrap_err();
-    assert!(
-        error.contains("which is another GPU's (Apple M3 Max)"),
-        "{error}"
-    );
-    let mut unknown = committed.clone();
-    unknown
-        .venues
-        .iter_mut()
-        .find(|venue| venue.environment_id == "apple-m3-max-moltenvk")
-        .unwrap()
-        .devices[0]
-        .metal_environment_id = Some("apple-m3-max-macos26.0".into());
-    let error = unknown.check().unwrap_err();
-    assert!(
-        error.contains("which is no C3 reference environment"),
-        "{error}"
-    );
 }
 
 /// The split quads' structure: an entry meets it through a quad or simdgroup operation over its

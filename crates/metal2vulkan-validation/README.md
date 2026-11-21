@@ -26,7 +26,6 @@ as tightly packed selected regions, not backend-specific row-pitched storage.
 | `corpus-pipeline` | Ask a Vulkan driver to create each translated pipeline, without dispatching |
 | `corpus-metal` | Qualify cases on Metal (`--device-type gpu`) |
 | `corpus-vulkan` | Run cases on a Vulkan device against their Metal observations (`--device-type cpu\|gpu`) |
-| `corpus-moltenvk` | The same through MoltenVK (macOS) |
 | `command-replay` | Play a replay stream on a Vulkan device through the runtime, or print its calls |
 
 Each command's `--help` lists its options.
@@ -39,8 +38,8 @@ cargo nextest run -p metal2vulkan-validation --all-features
 
 That run opens no device. Tests that execute on a device compile only under `--cfg m2v_cpu_icd` (a
 CPU Vulkan ICD such as lavapipe) or `--cfg m2v_gpu` (a real GPU); see
-[docs/VALIDATION.md](../../docs/VALIDATION.md#device-tests-and-gpu-safety). MoltenVK execution is
-macOS-only; native Vulkan execution is Linux-only.
+[docs/VALIDATION.md](../../docs/VALIDATION.md#device-tests-and-gpu-safety). Vulkan execution is
+Linux-only.
 
 ## The corpus
 
@@ -138,7 +137,7 @@ without rasterization and its case observes the empty output (`"output": {"kind"
 does not draw one: an object or mesh case requires `mesh_render_pipeline`, which no candidate
 runs, so its Metal observation stands with its Vulkan side unsupported. The authored compile
 census still compiles its mesh render pipeline, as the candidate would build it, on each
-profile-leg. An object case's
+profile. An object case's
 `threadgroup_memory` sets its arguments' lengths through `setObjectThreadgroupMemoryLength:atIndex:`.
 
 Dynamic Metal `threadgroup` arguments are declared through `threadgroup_memory` binding/length

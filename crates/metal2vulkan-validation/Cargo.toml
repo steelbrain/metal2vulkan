@@ -97,11 +97,6 @@ path = "src/bin/corpus-metal.rs"
 test = false
 
 [[bin]]
-name = "corpus-moltenvk"
-path = "src/bin/corpus-moltenvk.rs"
-test = false
-
-[[bin]]
 name = "corpus-vulkan"
 path = "src/bin/corpus-vulkan.rs"
 test = false

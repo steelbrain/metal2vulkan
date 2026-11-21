@@ -29,18 +29,14 @@ fn committed_shards_keep_the_store_layout() {
     // unique, and every observation names a committed case with its inputs, in a unique slot.
     let cases = store.read_all_cases().expect("committed cases");
     let metal = store.read_metal().expect("committed Metal observations");
-    let moltenvk = store
-        .read_candidates(Backend::Moltenvk)
-        .expect("committed MoltenVK observations");
     let vulkan = store
         .read_candidates(Backend::Vulkan)
         .expect("committed Vulkan observations");
     assert!(
-        !cases.is_empty() && !metal.is_empty() && !moltenvk.is_empty() && !vulkan.is_empty(),
-        "the committed store is empty: {} cases, {} Metal, {} MoltenVK, {} Vulkan rows",
+        !cases.is_empty() && !metal.is_empty() && !vulkan.is_empty(),
+        "the committed store is empty: {} cases, {} Metal, {} Vulkan rows",
         cases.len(),
         metal.len(),
-        moltenvk.len(),
         vulkan.len()
     );
 }
@@ -60,14 +56,13 @@ fn every_committed_observation_and_refusal_names_a_committed_case() {
         errors.push(format!("Metal observations: {error}"));
     }
     let mut refusals = 0;
-    for backend in [Backend::Moltenvk, Backend::Vulkan] {
-        if let Err(error) = store.read_candidates(backend) {
-            errors.push(format!("{} observations: {error}", backend.directory()));
-        }
-        match store.read_refusals(backend) {
-            Ok(rows) => refusals += rows.len(),
-            Err(error) => errors.push(format!("{} refusals: {error}", backend.directory())),
-        }
+    let backend = Backend::Vulkan;
+    if let Err(error) = store.read_candidates(backend) {
+        errors.push(format!("{} observations: {error}", backend.directory()));
+    }
+    match store.read_refusals(backend) {
+        Ok(rows) => refusals += rows.len(),
+        Err(error) => errors.push(format!("{} refusals: {error}", backend.directory())),
     }
     assert!(
         errors.is_empty(),

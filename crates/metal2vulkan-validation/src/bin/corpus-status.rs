@@ -8,7 +8,6 @@ use metal2vulkan_validation::cutover::List as _;
 use metal2vulkan_validation::index::{
     default_index_path, evidence_status, select_queue, status_counts, EvidenceState, QueueState,
 };
-use metal2vulkan_validation::observation::CandidateStatus;
 use metal2vulkan_validation::source::corpus_root;
 use metal2vulkan_validation::store::CorpusStore;
 use std::collections::{BTreeMap, BTreeSet};
@@ -83,8 +82,7 @@ fn run() -> Result<(), String> {
                      needs) reads reference_gap, is printed (c3-reference-gap), and needs the\n\
                      reviewed list's reference_gaps entry signed off. A venue's\n\
                      slots must cover its\n\
-                     population: the cases its old-engine rows matched\n\
-                     (MoltenVK), the public cases (lavapipe), or every Metal-qualified case (the real\n\
+                     population: the public cases (lavapipe), or every Metal-qualified case (the real\n\
                      GPUs). A row that recorded another device or driver than its venue declares is\n\
                      stale (stale_device). Each case is judged against one Metal reference row:\n\
                      the reference environment's of the reference list (default\n\
@@ -114,9 +112,8 @@ fn run() -> Result<(), String> {
                      reading, keyed by its cause, and the row's comparison is unbounded by\n\
                      FastMathRewrites, in any slot. It then prints each reviewed\n\
                      observation's state (a regrouping observation holds while its slot's row\n\
-                     shows the cause, and reads changed once it does not), and the ledger\n\
-                     of every old-engine row recorded as a mismatch with its cause and the case's\n\
-                     engine verdict, and each list entry with its sign-off (awaiting_user or\n\
+                     shows the cause, and reads changed once it does not), and each list entry\n\
+                     with its sign-off (awaiting_user or\n\
                      signed_off, as C1's list prints it). For an apple_reading it judges every\n\
                      word the device differs from Metal in against Apple's stated accuracy\n\
                      (c3-bound, c3-bound-word, c3-bound-unstated), a word where\n\
@@ -241,16 +238,12 @@ fn run() -> Result<(), String> {
         if !named.is_empty() {
             listed.insert(row.case_id.clone());
         }
-        if !named.is_empty()
-            || row.metal != EvidenceState::Current
-            || candidate_problem(row.moltenvk)
-            || candidate_problem(row.vulkan)
+        if !named.is_empty() || row.metal != EvidenceState::Current || candidate_problem(row.vulkan)
         {
             println!(
-                "evidence\t{}\tmetal={}\tmoltenvk={}\tvulkan={}\t{}",
+                "evidence\t{}\tmetal={}\tvulkan={}\t{}",
                 row.case_id,
                 row.metal.as_str(),
-                row.moltenvk.as_str(),
                 row.vulkan.as_str(),
                 row.translation_error.as_deref().unwrap_or(&row.name)
             );
@@ -298,14 +291,13 @@ fn print_c3(report: &C3Report, limit: usize) {
             .collect::<Vec<_>>()
             .join("\t");
         println!(
-            "c3-slot\t{}\t{}\tpopulation={}\t{counts}\tmissing_without_metal={}\tstale_without_metal={}\tstale_device={}\tnew_mismatches={}\tholds={}",
+            "c3-slot\t{}\t{}\tpopulation={}\t{counts}\tmissing_without_metal={}\tstale_without_metal={}\tstale_device={}\tholds={}",
             slot.kind.as_str(),
             slot.slot,
             slot.population,
             slot.missing_without_metal,
             slot.stale_without_metal,
             slot.stale_device,
-            slot.new_mismatches,
             slot.holds()
         );
         let mut printed = BTreeMap::<Verdict, usize>::new();
@@ -393,44 +385,9 @@ fn print_c3(report: &C3Report, limit: usize) {
             refused.name
         );
     }
-    let mut by_cause = BTreeMap::<&str, usize>::new();
-    let mut by_verdict = BTreeMap::<&str, usize>::new();
-    let mut cases = std::collections::BTreeSet::new();
-    for row in &report.ledger {
-        if cases.insert(row.case_id.as_str()) {
-            *by_cause
-                .entry(row.cause.map_or("unexplained", |cause| cause.as_str()))
-                .or_default() += 1;
-            *by_verdict.entry(row.engine.as_str()).or_default() += 1;
-        }
-        println!(
-            "c3-ledger\t{}\t{}\t{}\t{}\tdiffering_words={}\twords={}\tagainst_current_metal={}\toutput_is_current_metal={}\tengine={}\tengine_recorded={}\tcause={}\t{}",
-            row.case_id,
-            row.backend.directory(),
-            row.environment_id,
-            row.executor_abi,
-            row.differing_words
-                .map_or_else(|| "unknown".into(), |words| words.to_string()),
-            row.words,
-            row.against_current_metal,
-            row.output_is_current_metal,
-            row.engine.as_str(),
-            match row.engine_recorded {
-                Some(CandidateStatus::Match) => "match",
-                Some(CandidateStatus::Mismatch) => "mismatch",
-                None => "none",
-            },
-            row.cause.map_or("unexplained", |cause| cause.as_str()),
-            row.name
-        );
-    }
-    for case_id in &report.stale_causes {
-        println!("c3-stale-cause\t{case_id}");
-    }
     for entry in &report.entries {
         println!(
-            "c3-entry\t{}\t{}\tcause={}\t{}\t{}",
-            entry.part.as_str(),
+            "c3-entry\t{}\tcause={}\t{}\t{}",
             entry.case_id,
             entry.cause.as_str(),
             entry.sign_off.label(),
@@ -478,30 +435,13 @@ fn print_c3(report: &C3Report, limit: usize) {
             gap.name
         );
     }
-    let join = |counts: &BTreeMap<&str, usize>| {
-        counts
-            .iter()
-            .map(|(key, count)| format!("{key}:{count}"))
-            .collect::<Vec<_>>()
-            .join(",")
-    };
     println!(
-        "c3-ledger-summary\trows={}\tcases={}\tunexplained={}\tby_cause={}\tby_engine={}",
-        report.ledger.len(),
-        cases.len(),
-        report.unexplained().len(),
-        join(&by_cause),
-        join(&by_verdict)
-    );
-    println!(
-        "c3\tholds={}\tslots_holding={}/{}\treadings={}\tstale_readings={}\tunexplained_old_mismatches={}\tstale_causes={}\tdevice_gaps={}\tgap_proposals={}\treference_gaps={}\tstale_reference_gaps={}\tawaiting_sign_off={}\tsigned_off={}\trefused_sign_offs={}",
+        "c3\tholds={}\tslots_holding={}/{}\treadings={}\tstale_readings={}\tdevice_gaps={}\tgap_proposals={}\treference_gaps={}\tstale_reference_gaps={}\tawaiting_sign_off={}\tsigned_off={}\trefused_sign_offs={}",
         report.holds(),
         report.slots.iter().filter(|slot| slot.holds()).count(),
         report.slots.len(),
         report.readings.len(),
         report.stale_readings(),
-        report.unexplained().len(),
-        report.stale_causes.len(),
         report.device_gaps.len(),
         report.gap_proposals.len(),
         report.reference_gaps.len(),
