@@ -9,9 +9,8 @@
 //! be in the group, in commit order with every queue's, once its waits are met
 //! ([`WorkState::hold`]), while other queues' go on. Only its `vkQueueSubmit2` waits for room.
 //! The group goes when a completion leaves room (the completion thread wakes the thread as
-//! it retires), while the completion thread runs a round of retirements, completed handlers and
-//! listeners (it sees no completion until the round ends, so a group is held only while it waits
-//! on the GPU), when the host is to wait for one of them or one waiting behind it
+//! it retires; a round of it sees no completion until it ends, and sends nothing), when the host
+//! is to wait for one of them or one waiting behind it
 //! ([`Work::send`]), when a command buffer of another queue that waits on a fence one of them
 //! updates is to go (`crate::fence`), or at teardown. The
 //! driver runs a submission's command buffers as one kernel job, which a job timeout ends as a
@@ -1486,11 +1485,11 @@ impl WorkState {
     /// Else, of the committed heads that are ended or whose next segment is ready, and of the
     /// first command buffers not yet scheduled behind heads that wait, ended or with every
     /// segment's waits met, the earliest committed.
-    fn next_ready(&self, busy: bool) -> Option<(usize, bool)> {
+    fn next_ready(&self) -> Option<(usize, bool)> {
         let mut held: Option<(u64, usize)> = None;
         let mut best: Option<(usize, bool, u64)> = None;
         for (index, fifo) in self.fifos.iter().enumerate() {
-            let waits = self.waits_for_room(fifo, busy);
+            let waits = self.waits_for_room(fifo);
             if let (false, Some(at)) = (waits, fifo.entries.front().and_then(|head| head.held)) {
                 held = held.filter(|&(first, _)| first < at).or(Some((at, index)));
                 continue;
@@ -1529,7 +1528,7 @@ impl WorkState {
     /// ([`Batch::takes`]) or would go at its signal. With no group held, one that signals an event
     /// in any segment, which would send its group at once, waits where its queue has no room for
     /// it. The command buffers behind it wait with it.
-    fn waits_for_room(&self, fifo: &Fifo, busy: bool) -> bool {
+    fn waits_for_room(&self, fifo: &Fifo) -> bool {
         let Some(head) = fifo.entries.front() else {
             return false;
         };
@@ -1547,11 +1546,11 @@ impl WorkState {
             Some(group) => {
                 !group.leans.conflicts(&segment.overs)
                     && (signals || !group.takes(run, fifo.queue.retired()))
-                    && !fifo.goes(self.stop, busy)
+                    && !fifo.goes(self.stop)
             }
             None => {
                 let room = room(&fifo.in_flight, run.unwrap_or(u64::MAX));
-                signals && !(self.stop || busy || fifo.send_through >= head.place || room)
+                signals && !(self.stop || fifo.send_through >= head.place || room)
             }
         }
     }
@@ -1630,19 +1629,16 @@ impl WorkState {
     /// ended command buffer behind its queue's work. A command buffer whose last segment joins a
     /// group is scheduled at `now`, its scheduled handlers going to `joined`, but one that
     /// presents a drawable, which `submit` schedules once its submission has passed
-    /// `vkQueueSubmit2`; one ended with nothing held goes to `ended`. With `busy` (the completion
-    /// thread runs a round of retirements and handlers, `Done::busy`) a group goes as each
-    /// command buffer joins it, as no completion would send it until the round ends. Behind a
-    /// head that waits for room, the next command buffer is scheduled instead ([`hold`](Self::hold)).
+    /// `vkQueueSubmit2`; one ended with nothing held goes to `ended`. Behind a head that waits
+    /// for room, the next command buffer is scheduled instead ([`hold`](Self::hold)).
     fn step(
         &mut self,
         now: u64,
-        busy: bool,
         counters: &Counters,
         joined: &mut Vec<Joined>,
         ended: &mut Vec<Ended>,
     ) -> Step {
-        let Some((index, waits)) = self.next_ready(busy) else {
+        let Some((index, waits)) = self.next_ready() else {
             return Step::Idle;
         };
         if waits {
@@ -1800,7 +1796,7 @@ impl WorkState {
         // A command buffer held for room behind it joins it or, not taken, sends it first: with
         // room the two would have been staged together.
         let held_behind = (fifo.entries.front()).is_some_and(|entry| entry.held.is_some());
-        match signals || (fifo.goes(stop, busy) && !held_behind) {
+        match signals || (fifo.goes(stop) && !held_behind) {
             true => Step::Goes(index),
             false => Step::Staged,
         }
@@ -1877,8 +1873,8 @@ impl WorkState {
     }
 
     /// The first FIFO whose group goes at the end of a pass ([`Fifo::goes`]).
-    fn unheld(&self, busy: bool) -> Option<usize> {
-        (self.fifos.iter()).position(|fifo| fifo.goes(self.stop, busy))
+    fn unheld(&self) -> Option<usize> {
+        (self.fifos.iter()).position(|fifo| fifo.goes(self.stop))
     }
 }
 
@@ -1898,12 +1894,13 @@ impl Fifo {
         (self.entries.front()).and_then(|entry| entry.pending.as_ref())
     }
 
-    /// Whether it holds a group that goes now: at teardown (`stop`), while the completion thread
-    /// runs a round of retirements and handlers (`busy`), where a host wait is to come for one of
-    /// its command buffers or one behind it, or with room ([`room`]).
-    fn goes(&self, stop: bool, busy: bool) -> bool {
+    /// Whether it holds a group that goes now: at teardown (`stop`), where a host wait is to come
+    /// for one of its command buffers or one behind it, or with room ([`room`]). A round of the
+    /// completion thread sends none: it holds what it saw complete when it began, so held work
+    /// waits for the round to end.
+    fn goes(&self, stop: bool) -> bool {
         self.group.as_ref().is_some_and(|group| {
-            stop || busy || self.send_through >= group.first || room(&self.in_flight, group.run)
+            stop || self.send_through >= group.first || room(&self.in_flight, group.run)
         })
     }
 
@@ -2098,19 +2095,17 @@ pub(crate) fn run(core: Arc<Core>) {
 /// goes as it closes, then each group its queue no longer holds, then an upload to flush alone.
 fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<'a, WorkState> {
     let work = &core.work;
-    // Marked before the completed value and the completion thread's busy mark are read: a
-    // completion the read misses, or a round of the completion thread's begun after its read,
-    // sees the mark and wakes the thread.
+    // Marked before the completed value is read: a completion the read misses sees the mark and
+    // wakes the thread.
     work.keeping.store(true, Ordering::SeqCst);
     state.settle(core.done.completed());
     let mut joined: Vec<Joined> = Vec::new();
     let mut ended: Vec<Ended> = Vec::new();
     let mut sent = false;
     loop {
-        let busy = core.done.busy();
         let now = times::host_time();
-        let index = match state.step(now, busy, &core.counters, &mut joined, &mut ended) {
-            Step::Idle => match state.unheld(busy) {
+        let index = match state.step(now, &core.counters, &mut joined, &mut ended) {
+            Step::Idle => match state.unheld() {
                 Some(index) => index,
                 None => {
                     state.mark_holds(now);

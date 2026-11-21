@@ -623,15 +623,13 @@ mod on_device {
             let mut points = Vec::new();
             let mut held = Vec::new();
             let mut run = None;
-            // Each step's submissions counted, progress seen and the completion thread's round,
-            // which a failed check names.
+            // Each step's submissions counted and progress seen, which a failed check names.
             let mut trace = Vec::new();
             let mut step = |label: &str| {
                 trace.push(format!(
-                    "{label}: {} sent, {} seen, busy {}",
+                    "{label}: {} sent, {} seen",
                     device.counters().metrics().submissions,
                     core.done.completed(),
-                    core.done.busy()
                 ))
             };
             behind_busy(name, &device, &queue, |busy, _, _| {

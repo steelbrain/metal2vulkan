@@ -1711,10 +1711,7 @@ made, with no lock, and never rewritten for layouts.
   its scheduled handlers run: `Metrics::held_for_room`), and so are its queue's later command
   buffers. The held work goes when a completion leaves room (the completion thread wakes the
   submit thread as it retires; no commit or
-  wait is needed), while the completion thread runs a round of retirements, completed handlers and
-  listeners (it sees no completion until the round ends: a group is held only while the completion
-  thread waits on the GPU, so a slow completed handler holds no later submission), when the host
-  is to wait for one of them (`wait_until_completed`, or
+  wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
   `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
   at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); so a
@@ -1793,8 +1790,11 @@ made, with no lock, and never rewritten for layouts.
   handlers invoked. Every queue's later submissions wait while it runs, those of command buffers
   held in a group or for room included, so a scheduled handler that blocks outside the runtime
   until such a command buffer completes never returns, where Metal, running it on a thread of its
-  own, would go on: a known gap. It may run while another command buffer's completed handler
-  runs on the completion thread. A scheduled handler may read the command buffer's status
+  own, would go on: a known gap. While the completion thread runs a round it sees no completion,
+  so held work waits for the round's end: a completed handler or listener that runs longer than
+  the work in flight leaves the GPU idle for the rest, where Metal, running it on a thread of its
+  own, would go on: a known gap. A scheduled handler may run while another command buffer's
+  completed handler runs on the completion thread. A scheduled handler may read the command buffer's status
   and times, enqueue command buffers, make objects that take no upload, and do the consumer's own
   work. Each call that may wait for the submit thread is `Refusal::InScheduledHandler` in it, on
   every device: `commit`, the waits (`wait_until_scheduled`, `wait_until_completed`,
@@ -1806,7 +1806,7 @@ made, with no lock, and never rewritten for layouts.
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the completed handlers. Completed handlers and listeners run on it, in
   turn, so a slow completed handler delays the later command buffers' retirement, status and
-  handlers, in that order, though not their submission (above). A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and one
+  handlers, in that order, and the held work their completions would send (above). A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and one
   already met answers at once: `wait_until_completed` for a command buffer not yet completed (its
   own handler's command buffer has), `wait_until_scheduled` for one not yet scheduled,
   `wait_until_signaled_value` for a value not yet reached (a timed wait too: it is refused, never

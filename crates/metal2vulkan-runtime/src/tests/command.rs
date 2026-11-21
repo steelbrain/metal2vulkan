@@ -1759,9 +1759,7 @@ pub(crate) mod on_device {
     /// body opens the busy work ([`Busy::open`]) and the completion thread sees a busy one
     /// complete, and a held group goes no earlier than that. The busy work is opened after `body`
     /// where it did not, and waited for. First a command buffer of the queue with no commands of
-    /// its own runs and retires, and the completion thread waits on the GPU again
-    /// (`Done::busy`), so a commit in `body` is held rather than sent as that round ends. Then
-    /// the queue's expected GPU run is set to [`BODY_RUN`], the test's own input, so the command
+    /// its own runs and retires. Then the queue's expected GPU run is set to [`BODY_RUN`], the test's own input, so the command
     /// buffers held behind the busy work join one group (`submit::GROUP_RUN`) however long that
     /// command buffer's run measured on a loaded host. A group sent after the busy work opens is
     /// sent at the run its retirements leave, which a loaded host can raise past the bound: a
@@ -1776,7 +1774,6 @@ pub(crate) mod on_device {
         (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
         first.commit().expect("a commit");
         finished(name, &first);
-        within(name, || !device.core().done.busy());
         first.queue().set_run_for_test(BODY_RUN);
         let before = device.counters().metrics().submissions;
         let seen = device.core().done.completed();
@@ -1868,7 +1865,6 @@ pub(crate) mod on_device {
             finished(name, &first);
             first.queue().set_run_for_test(run);
         }
-        within(name, || !device.core().done.busy());
         let busy = Busy::new(device);
         let scheduled = Arc::new(AtomicUsize::new(0));
         let logged = |queue: &CommandQueue, number: u32| {
@@ -1982,6 +1978,65 @@ pub(crate) mod on_device {
             };
             let log = two_queues(name, &device, (false, 3), encode, |_, _| {});
             assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: the one run before each");
+        });
+    }
+
+    /// Held work waits for room while the completion thread runs a round: with a completed handler
+    /// parked, A1 and A2 go, room for two, and A3 is held in a group, though A1 and A2 may have
+    /// ended on the GPU, until the round ends and the completion thread sees them complete. An
+    /// empty command buffer committed after A3 on another queue, scheduled, shows the submit
+    /// thread has looked at A3.
+    #[test]
+    fn every_device_holds_work_for_room_while_a_completed_handler_runs() {
+        each_device("command_room_in_a_round", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let (a, parked_queue, other) = (queue(&device), queue(&device), queue(&device));
+            let probe = a.command_buffer().expect("a command buffer");
+            probe.queue().set_run_for_test(LONG_RUN);
+            drop(probe);
+            let park = Arc::new(std::sync::Barrier::new(2));
+            let round = parked_queue.command_buffer().expect("a command buffer");
+            (round.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            let parked = Arc::clone(&park);
+            (round.add_completed_handler(move |_| {
+                parked.wait();
+                parked.wait();
+            }))
+            .expect("a handler");
+            round.commit().expect("a commit");
+            park.wait();
+            let mut release = Release::of(&park);
+            let before = device.counters().metrics().submissions;
+            let held: Vec<CommandBuffer> =
+                (1..=3).map(|word| queue_fill(&a, &buffer, word)).collect();
+            let looked = other.command_buffer().expect("a command buffer");
+            looked.commit().expect("a commit");
+            within(name, || looked.status() != CommandBufferStatus::Committed);
+            assert_eq!(
+                (
+                    device.core().work.in_flight(held[0].queue()),
+                    device.counters().metrics().submissions - before,
+                ),
+                ((2, true), 2),
+                "{name}: A3 held while the round runs"
+            );
+            release.now();
+            for command_buffer in held.iter().chain([&round]) {
+                finished(name, command_buffer);
+            }
+            assert_eq!(word(&buffer), 3, "{name}");
+            drop((
+                looked,
+                held,
+                round,
+                buffer,
+                arena,
+                a,
+                parked_queue,
+                other,
+                device,
+            ));
         });
     }
 
