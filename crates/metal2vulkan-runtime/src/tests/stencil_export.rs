@@ -56,7 +56,13 @@ mod on_device {
                 (true, Ok(state)) => state,
                 (true, Err(error)) => panic!("{name}: {error}"),
                 (false, Ok(_)) => panic!("{name}: a state made without the export"),
-                (false, Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u)))) => {
+                (
+                    false,
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }),
+                ) => {
                     assert_eq!(u.feature, Feature::StencilExport, "{name}: {u:?}");
                     println!("{name}: no stencil export listed; refused naming StencilExport");
                     return;
