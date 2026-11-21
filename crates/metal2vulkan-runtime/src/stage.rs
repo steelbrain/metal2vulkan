@@ -188,7 +188,7 @@ impl Heavy {
         (weight > bound()).then(|| Heavy {
             weight,
             words: Arc::clone(&stage.spirv),
-            digest: Sha256::digest(words_bytes(&stage.spirv)).into(),
+            digest: words_digest(&stage.spirv),
         })
     }
 }
@@ -255,9 +255,18 @@ impl fmt::Debug for StageRequest {
     }
 }
 
-/// The bytes of `words`, least significant byte first.
-fn words_bytes(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+/// The SHA-256 of `words`' bytes, each word least significant byte first, read a page at a time,
+/// so no copy of the module is made.
+fn words_digest(words: &[u32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    let mut page = [0u8; 4096];
+    for chunk in words.chunks(page.len() / 4) {
+        for (bytes, word) in page.chunks_exact_mut(4).zip(chunk) {
+            bytes.copy_from_slice(&word.to_le_bytes());
+        }
+        h.update(&page[..chunk.len() * 4]);
+    }
+    h.finalize().into()
 }
 
 /// The `deviceUUID` and `driverUUID` of `physical`.
@@ -709,7 +718,13 @@ fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 
 /// A request's payload.
 fn request_payload(request: &Request) -> Vec<u8> {
-    let mut out = Vec::new();
+    // The fixed fields' 176 bytes, then the variable ones: the payload is made once, at its size.
+    let len = 176
+        + request.entry.as_bytes().len()
+        + request.ids.len() * 4
+        + request.data.len()
+        + request.words.len() * 4;
+    let mut out = Vec::with_capacity(len);
     out.extend_from_slice(&request.key);
     out.extend(request.weight.to_le_bytes());
     out.extend_from_slice(&request.header);
@@ -724,7 +739,10 @@ fn request_payload(request: &Request) -> Vec<u8> {
         out.extend(id.to_le_bytes());
     }
     put_bytes(&mut out, &request.data);
-    put_bytes(&mut out, &words_bytes(&request.words));
+    out.extend((request.words.len() as u64 * 4).to_le_bytes());
+    for word in request.words.iter() {
+        out.extend(word.to_le_bytes());
+    }
     out
 }
 
