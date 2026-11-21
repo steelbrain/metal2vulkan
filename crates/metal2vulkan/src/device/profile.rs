@@ -231,13 +231,6 @@ impl DeviceProfile {
             DriverDeviation::MetalSampler => {
                 f.enabled.properties.contains(&VkProperty::MetalSampler)
             }
-            DriverDeviation::MetalColorWrites => {
-                f.enabled.properties.contains(&VkProperty::MetalColorWrites)
-            }
-            DriverDeviation::MetalFloatColorNans => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalFloatColorNans),
             DriverDeviation::MetalHalfFma => {
                 f.enabled.properties.contains(&VkProperty::MetalHalfFma)
             }
@@ -249,14 +242,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalCenterVaryings),
-            DriverDeviation::MetalSmallFloatColorWrites => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalSmallFloatColorWrites),
-            DriverDeviation::MetalNorm16ColorWrites => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalNorm16ColorWrites),
             DriverDeviation::MetalMinMax => f.enabled.properties.contains(&VkProperty::MetalMinMax),
             DriverDeviation::MetalHalfArithmetic => f
                 .enabled

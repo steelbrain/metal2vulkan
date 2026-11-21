@@ -638,21 +638,6 @@ pub enum VkProperty {
     /// `framebuffer*ColorSampleCounts` are the counts every format of a kind takes; one format
     /// may take more.
     ColorAttachmentSampleCount(vk::Format, u32),
-    /// The device stores a fragment function's float color output into a normalized, sRGB or
-    /// half-float attachment as Metal does (the driver's measured deviation
-    /// [`DriverDeviation::MetalColorWrites`](crate::error::DriverDeviation::MetalColorWrites)). No
-    /// Vulkan query reports it. No module requires it: where the profile has it,
-    /// `Device::compile_render_pipeline`'s map of the color writes (`LoweringInputs::color_writes`)
-    /// keeps only the half-float channels, and the others record no
-    /// `PrecisionNote::DeviceColorConversion`; without it, each channel the device converts
-    /// records that note.
-    MetalColorWrites,
-    /// The device stores the NaN `0x7fc00000` a fragment function writes for a `float` output to
-    /// a half-float color channel as Metal does, `0x7e00` (the driver's measured deviation
-    /// [`DriverDeviation::MetalFloatColorNans`](crate::error::DriverDeviation::MetalFloatColorNans)):
-    /// the NaN of a lane the function rounds to nearest even. No Vulkan query reports it. Without
-    /// it, such a write records `PrecisionNote::DeviceNanEncoding`.
-    MetalFloatColorNans,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma` (the
     /// driver's measured deviation
     /// [`DriverDeviation::MetalHalfFma`](crate::error::DriverDeviation::MetalHalfFma)). No Vulkan
@@ -684,23 +669,6 @@ pub enum VkProperty {
     /// pixel form, requires it; without it, their pixel form is `InterpolateAtOffset` at offset
     /// 0, which requires [`VkProperty::InterpolateAtOffsetCentered`].
     MetalCenterVaryings,
-    /// The device stores a fragment function's `float` color output into a half-float channel,
-    /// or an unsigned 11- or 10-bit float one, as Metal does for every value but a NaN (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalSmallFloatColorWrites`](crate::error::DriverDeviation::MetalSmallFloatColorWrites)).
-    /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. A
-    /// fragment module that writes such an output with no `PrecisionNote::DeviceColorConversion`
-    /// requires it; without it, the module records that note.
-    MetalSmallFloatColorWrites,
-    /// The device stores a fragment function's float color output into a 16-bit unorm or snorm
-    /// channel as Metal does, a blended snorm channel's NaN aside (the driver's measured
-    /// deviation
-    /// [`DriverDeviation::MetalNorm16ColorWrites`](crate::error::DriverDeviation::MetalNorm16ColorWrites)).
-    /// No Vulkan query reports it: Vulkan allows a conversion within one code's width of the exact
-    /// product's. A fragment module that writes such an output with no
-    /// `PrecisionNote::DeviceColorConversion` requires it; without it, the module records that
-    /// note.
-    MetalNorm16ColorWrites,
     /// The device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` on 32-bit floats are Metal's own
     /// `fmin`, `fmax` and `clamp` (the driver's measured deviation
     /// [`DriverDeviation::MetalMinMax`](crate::error::DriverDeviation::MetalMinMax)). No Vulkan

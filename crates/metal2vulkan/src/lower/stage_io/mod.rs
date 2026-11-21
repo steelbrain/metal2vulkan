@@ -182,8 +182,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDecor, IoDir, MemAccess, StorageClass,
-    Type as SType, UnOp,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, IoDecor, IoDir, MemAccess, StorageClass,
+    Type as SType,
 };
 
 pub(crate) use plan::{
@@ -336,11 +336,6 @@ pub struct PlannedOutput {
     /// too, not Metal's blue, so alpha to coverage reads Metal's alpha (the image keeps only its
     /// red).
     pub alpha_red: bool,
-    /// A fragment function's first output to a rotated attachment whose blend takes
-    /// `RotatedBlendForm::Premultiplied` (`LoweringInputs::rotated_blends`): after the rotation,
-    /// the image's alpha lane (Metal's blue) holds Metal's blue times Metal's alpha, each clamped
-    /// to `[0, 1]` with a NaN taken as 0, multiplied without contraction.
-    pub premultiplied: bool,
     /// The `u32` push field added to the part before `below` holds it: under
     /// `LoweringInputs::amplification_draws`, the amplification's offset added to a vertex
     /// function's viewport and render target slice indices, in their builtins and raw varyings
@@ -2296,10 +2291,7 @@ fn output_part(
         (true, true) => fb.vector_shuffle(part, part, &[3, 0, 1, 3])?,
         (false, _) => part,
     };
-    match o.premultiplied {
-        true => premultiplied_blue(fb, o.link.form, part),
-        false => Ok(part),
-    }
+    Ok(part)
 }
 
 /// The raw components a write of first output `part` (of `form`) to extended-range attachment
@@ -2325,27 +2317,6 @@ fn input_blended(
     let texel =
         crate::lower::fragment::input_blend_texel(cx, fb, (color, ib), (form, part), second)?;
     extended_color::raw_components(fb, ib.form, texel)
-}
-
-/// The rotated first output `part`, of float form `form`, with its alpha lane (Metal's blue)
-/// premultiplied by its red lane (Metal's alpha) (`PlannedOutput::premultiplied`): each clamped
-/// to `[0, 1]` with a NaN taken as 0, as Metal's blend clamps its source, and their product not
-/// contracted, which Apple's blend then adds as its own `s * a`
-/// (`RotatedBlendForm::Premultiplied`).
-fn premultiplied_blue(fb: &mut FunctionBuilder<'_>, form: Form, part: SValue) -> BResult<SValue> {
-    let one = Form { lanes: 1, ..form };
-    let zero = ops::fsplat(fb, one, 0.0)?;
-    let unit = ops::fsplat(fb, one, 1.0)?;
-    let saturated = |fb: &mut FunctionBuilder<'_>, lane: u32| -> BResult<SValue> {
-        let v = fb.composite_extract(part, &[lane])?;
-        let is_nan = fb.unary(UnOp::IsNan, v)?;
-        let v = fb.select(is_nan, zero, v)?;
-        fb.glsl(GlslOp::NClamp, &[v, zero, unit])
-    };
-    let blue = saturated(fb, 3)?;
-    let alpha = saturated(fb, 0)?;
-    let product = fb.binary_no_contraction(BinOp::FMul, blue, alpha)?;
-    fb.composite_insert(product, part, &[3])
 }
 
 /// The second output `s` holds beside the first output `first`, as the function returns it

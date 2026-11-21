@@ -465,10 +465,7 @@ mod serde_round_trips {
                 ),
             )]),
             cubic_samplers: BTreeMap::from([(slot(Stage::Fragment, SlotClass::Sampler, 2), 0x2d0)]),
-            rotated_blends: BTreeMap::from([
-                (4, crate::pipeline::RotatedBlendForm::Premultiplied),
-                (6, crate::pipeline::RotatedBlendForm::Unmeasured),
-            ]),
+            rotated_blends: BTreeSet::from([4, 6]),
             cross_class: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 10),
                 SampledType::Float,

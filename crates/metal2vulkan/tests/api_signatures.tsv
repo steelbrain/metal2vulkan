@@ -945,7 +945,6 @@ enum	metal2vulkan::pipeline::PushLoc	#[cfg_attr(feature = "serde", derive(serde:
 enum	metal2vulkan::pipeline::Reconvergence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Reconvergence
 enum	metal2vulkan::pipeline::RegionFanOut	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum RegionFanOut
 enum	metal2vulkan::pipeline::ResourceKind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResourceKind
-enum	metal2vulkan::pipeline::RotatedBlendForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum RotatedBlendForm
 enum	metal2vulkan::pipeline::RuntimeFact	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum RuntimeFact
 enum	metal2vulkan::pipeline::SampledType	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SampledType
 enum	metal2vulkan::pipeline::SamplerRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SamplerRef
@@ -3013,7 +3012,7 @@ field	metal2vulkan::pipeline::LoweringInputs.region_copies	pub region_copies: bo
 field	metal2vulkan::pipeline::LoweringInputs.region_viewports	pub region_viewports: bool
 field	metal2vulkan::pipeline::LoweringInputs.render_target_array_index_varying	pub render_target_array_index_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.replay_bindings	pub replay_bindings: bool
-field	metal2vulkan::pipeline::LoweringInputs.rotated_blends	pub rotated_blends: BTreeMap<u32, RotatedBlendForm>
+field	metal2vulkan::pipeline::LoweringInputs.rotated_blends	pub rotated_blends: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.rotated_colors	pub rotated_colors: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.rotated_factors	pub rotated_factors: BTreeMap<u32, [FactorLane; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.rotated_weights	pub rotated_weights: bool
@@ -10263,11 +10262,9 @@ variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	Interpolat
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetFromSevenSixteenths	InterpolateAtOffsetFromSevenSixteenths
 variant	metal2vulkan::device::VkProperty::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::device::VkProperty::MetalCenterVaryings	MetalCenterVaryings
-variant	metal2vulkan::device::VkProperty::MetalColorWrites	MetalColorWrites
 variant	metal2vulkan::device::VkProperty::MetalDepth16BiasedStores	MetalDepth16BiasedStores
 variant	metal2vulkan::device::VkProperty::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::device::VkProperty::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::device::VkProperty::MetalFloatColorNans	MetalFloatColorNans
 variant	metal2vulkan::device::VkProperty::MetalFloatDenormals	MetalFloatDenormals
 variant	metal2vulkan::device::VkProperty::MetalFragmentSimdgroups	MetalFragmentSimdgroups
 variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
@@ -10280,12 +10277,10 @@ variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWri
 variant	metal2vulkan::device::VkProperty::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::device::VkProperty::MetalMinMax	MetalMinMax
 variant	metal2vulkan::device::VkProperty::MetalNanMoves	MetalNanMoves
-variant	metal2vulkan::device::VkProperty::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
 variant	metal2vulkan::device::VkProperty::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::device::VkProperty::MetalSampler	MetalSampler
-variant	metal2vulkan::device::VkProperty::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::device::VkProperty::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::device::VkProperty::MetalVertexSimdgroups	MetalVertexSimdgroups
@@ -10440,11 +10435,9 @@ variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	Graph
 variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::error::DriverDeviation::MetalCanonicalNans	MetalCanonicalNans
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
-variant	metal2vulkan::error::DriverDeviation::MetalColorWrites	MetalColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalDepth16BiasedStores	MetalDepth16BiasedStores
 variant	metal2vulkan::error::DriverDeviation::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::error::DriverDeviation::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::error::DriverDeviation::MetalFloatColorNans	MetalFloatColorNans
 variant	metal2vulkan::error::DriverDeviation::MetalFloatDenormals	MetalFloatDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalFloatFunctions	MetalFloatFunctions
 variant	metal2vulkan::error::DriverDeviation::MetalFragmentSimdgroups	MetalFragmentSimdgroups
@@ -10458,12 +10451,10 @@ variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexe
 variant	metal2vulkan::error::DriverDeviation::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::error::DriverDeviation::MetalMinMax	MetalMinMax
 variant	metal2vulkan::error::DriverDeviation::MetalNanMoves	MetalNanMoves
-variant	metal2vulkan::error::DriverDeviation::MetalNorm16ColorWrites	MetalNorm16ColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
 variant	metal2vulkan::error::DriverDeviation::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::error::DriverDeviation::MetalSampler	MetalSampler
-variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::error::DriverDeviation::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
@@ -11066,8 +11057,6 @@ variant	metal2vulkan::pipeline::ResourceKind::Texture	Texture
 variant	metal2vulkan::pipeline::ResourceKind::TileAttachment	TileAttachment(u32)
 variant	metal2vulkan::pipeline::ResourceKind::TileMap	TileMap
 variant	metal2vulkan::pipeline::ResourceKind::YCbCrPlanes	YCbCrPlanes(crate::bind::YCbCrPlanesSampler)
-variant	metal2vulkan::pipeline::RotatedBlendForm::Premultiplied	Premultiplied
-variant	metal2vulkan::pipeline::RotatedBlendForm::Unmeasured	Unmeasured
 variant	metal2vulkan::pipeline::RuntimeFact::AccelerationStructureInstanceCount	AccelerationStructureInstanceCount { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::AddressAlignment	AddressAlignment { slot: SlotRef, align: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::AliasedImageblock	AliasedImageblock { data_size: u32 }

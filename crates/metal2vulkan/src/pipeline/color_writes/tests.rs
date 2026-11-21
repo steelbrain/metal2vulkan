@@ -23,18 +23,12 @@ fn attachment(pf: PixelFormat, blend: Option<bool>) -> ColorAttachmentDescriptor
 }
 
 /// Every committed profile's map for the 32-bit float formats: each channel the device's under a
-/// source-over blend, unless the profile stores Metal's color writes (MoltenVK), and no entry
-/// without a blend or under factors one and zero; an integer format takes none either way.
+/// source-over blend, and no entry without a blend or under factors one and zero; an integer format takes none either way.
 #[test]
 fn a_blended_32_bit_float_channel_is_the_devices() {
     let mut device_blends = 0;
     for (stem, dev) in crate::metal::format::tests::committed_devices() {
         let p = dev.profile();
-        let metal = p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalColorWrites);
         for (pf, channels) in [
             (PixelFormat::R32Float, 1),
             (PixelFormat::RG32Float, 2),
@@ -50,16 +44,12 @@ fn a_blended_32_bit_float_channel_is_the_devices() {
                 )
             };
             let blended = map(Some(true));
-            if metal {
-                assert!(blended.is_empty(), "{stem} {pf:?}: {blended:?}");
-            } else {
-                let mut want = [None; 4];
-                for channel in want.iter_mut().take(channels) {
-                    *channel = Some(ChannelWrite::Device);
-                }
-                assert_eq!(blended.get(&0), Some(&want), "{stem} {pf:?}");
-                device_blends += 1;
+            let mut want = [None; 4];
+            for channel in want.iter_mut().take(channels) {
+                *channel = Some(ChannelWrite::Device);
             }
+            assert_eq!(blended.get(&0), Some(&want), "{stem} {pf:?}");
+            device_blends += 1;
             assert!(map(None).is_empty(), "{stem} {pf:?} unblended");
             assert!(map(Some(false)).is_empty(), "{stem} {pf:?} one and zero");
         }
@@ -90,11 +80,6 @@ fn a_blend_sweep_of_a_rule_the_device_converts_compiles_under_one_map() {
     let mut converted = 0;
     for (stem, dev) in crate::metal::format::tests::committed_devices() {
         let p = dev.profile();
-        let metal = p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalColorWrites);
         let rounding = (false, TextureWriteRoundingMode::TowardZero);
         let sweep = |pf| {
             [None, Some(false), Some(true)].map(|blend| {
@@ -108,20 +93,15 @@ fn a_blend_sweep_of_a_rule_the_device_converts_compiles_under_one_map() {
         let [unblended, one_zero, over] = sweep(PixelFormat::RGBA8Unorm);
         assert_eq!(unblended.0, over.0, "{stem}: unblended and source-over");
         assert_eq!(one_zero.0, over.0, "{stem}: one and zero and source-over");
-        match metal {
-            true => assert!(over.0.is_empty(), "{stem}: {:?}", over.0),
-            false => {
-                assert_eq!(
-                    over.0.get(&0),
-                    Some(&[Some(ChannelWrite::Device); 4]),
-                    "{stem}"
-                );
-                converted += 1;
-            }
-        }
+        assert_eq!(
+            over.0.get(&0),
+            Some(&[Some(ChannelWrite::Device); 4]),
+            "{stem}"
+        );
+        converted += 1;
         assert_eq!(
             [unblended.1, one_zero.1, over.1],
-            [!metal, !metal, false],
+            [true, true, false],
             "{stem}: the attachment takes Metal's rule where it stores the output as written"
         );
     }

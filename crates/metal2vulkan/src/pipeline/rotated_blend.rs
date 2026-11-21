@@ -41,22 +41,20 @@
 //! a)`, where the image's alpha blends a factor and one minus it as `fma(f, s - d, d)`, which
 //! rounds one code apart near half-code ties. A swept 440 blend states held 1 to 1,767 differing
 //! texels of 65,536 in 40 of them. The blend states [`MEASURED`] lists store Metal's bytes rotated
-//! in the forms this module gives them, on the M4 and the M3 Max at 65,536 tie-heavy texels and on
-//! every lane device at the rotated-targets lane's; under `SourceAlpha` over `OneMinusSourceAlpha`
-//! with the add operation, where the device's blend is Apple's (`VkProperty::MetalColorWrites`),
-//! the image's alpha takes one over one minus the second output's alpha and the function writes
-//! Metal's blue premultiplied by Metal's alpha (`RotatedBlendForm::Premultiplied`), which the blend
-//! then computes as Metal's own `fma(d, 1 - a, s * a)`. Every other blend state is the search's,
-//! announced (`RotatedBlendForm::Unmeasured`, `PrecisionNote::RotatedBlendRounding`).
+//! in the forms this module gives them on every lane device at the rotated-targets lane's texels,
+//! and all but the two straight-alpha pairs (`SourceAlpha` over `OneMinusSourceAlpha` for color)
+//! on the M4 and the M3 Max at 65,536 tie-heavy texels: under Apple's own blend those two may round
+//! as above, unannounced. Every other blend state is the search's, announced
+//! (`LoweringInputs::rotated_blends`, `PrecisionNote::RotatedBlendRounding`).
 
-use crate::device::requirements::{VkFeature, VkProperty};
+use crate::device::requirements::VkFeature;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::metal::state::{blend_factors, blend_op};
 use crate::metal::{BlendFactor, BlendOperation};
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::graphics::BlendState;
-use crate::pipeline::lower_inputs::{FactorLane, RotatedBlendForm};
+use crate::pipeline::lower_inputs::FactorLane;
 use crate::vk;
 
 /// The Metal channel (0 to 3: red, green, blue, alpha) each channel of the image holds: its red
@@ -73,36 +71,21 @@ pub(crate) enum RotatedBlend {
     Synthesized(BlendState, [FactorLane; 4]),
 }
 
-/// One measured blend state (the module docs): Metal's color source and destination factors,
-/// its alpha source and destination factors, and its one operation; and, for the straight pair
-/// on a device whose blend is Apple's, the premultiplied form's Vulkan factors (color source,
-/// color destination, alpha source, alpha destination) and second-output lanes.
-struct Measured {
-    metal: ([BlendFactor; 4], BlendOperation),
-    premultiplied: Option<([vk::BlendFactor; 4], [FactorLane; 4])>,
-}
-
 /// The measured blend states (the module docs): the rotated-targets lane's blended cases, and
-/// one over zero and one over one, whose arithmetic is the one channel's or one sum.
-const MEASURED: [Measured; 11] = {
-    use vk::BlendFactor as B;
+/// one over zero and one over one, whose arithmetic is the one channel's or one sum: Metal's
+/// color source and destination factors, its alpha source and destination factors, and its one
+/// operation.
+const MEASURED: [([BlendFactor; 4], BlendOperation); 11] = {
     use BlendFactor as F;
     use BlendOperation as O;
-    use FactorLane::{One, Output, Zero};
-    const fn plain(metal: [BlendFactor; 4], op: BlendOperation) -> Measured {
-        Measured {
-            metal: (metal, op),
-            premultiplied: None,
-        }
-    }
     [
-        plain([F::One, F::Zero, F::One, F::Zero], O::Add),
-        plain([F::One, F::One, F::One, F::One], O::Add),
-        plain(
+        ([F::One, F::Zero, F::One, F::Zero], O::Add),
+        ([F::One, F::One, F::One, F::One], O::Add),
+        (
             [F::DestinationColor, F::Zero, F::DestinationAlpha, F::Zero],
             O::Add,
         ),
-        plain(
+        (
             [
                 F::SourceColor,
                 F::OneMinusSourceColor,
@@ -111,7 +94,7 @@ const MEASURED: [Measured; 11] = {
             ],
             O::Add,
         ),
-        plain(
+        (
             [
                 F::BlendAlpha,
                 F::OneMinusBlendAlpha,
@@ -120,50 +103,27 @@ const MEASURED: [Measured; 11] = {
             ],
             O::Add,
         ),
-        // Straight alpha: the image's red, green and blue by the second output's alpha (Metal's
-        // source alpha), its alpha (Metal's blue) premultiplied.
-        Measured {
-            metal: (
-                [
-                    F::SourceAlpha,
-                    F::OneMinusSourceAlpha,
-                    F::SourceAlpha,
-                    F::OneMinusSourceAlpha,
-                ],
-                O::Add,
-            ),
-            premultiplied: Some((
-                [
-                    B::SRC1_ALPHA,
-                    B::ONE_MINUS_SRC1_ALPHA,
-                    B::ONE,
-                    B::ONE_MINUS_SRC1_ALPHA,
-                ],
-                [Zero, Zero, Zero, Output(3)],
-            )),
-        },
-        // Straight alpha, Metal's alpha accumulated: the image's red (Metal's alpha) by one.
-        Measured {
-            metal: (
-                [
-                    F::SourceAlpha,
-                    F::OneMinusSourceAlpha,
-                    F::One,
-                    F::OneMinusSourceAlpha,
-                ],
-                O::Add,
-            ),
-            premultiplied: Some((
-                [
-                    B::SRC1_COLOR,
-                    B::ONE_MINUS_SRC1_ALPHA,
-                    B::ONE,
-                    B::ONE_MINUS_SRC1_ALPHA,
-                ],
-                [One, Output(3), Output(3), Output(3)],
-            )),
-        },
-        plain(
+        // Straight alpha.
+        (
+            [
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        // Straight alpha, Metal's alpha accumulated.
+        (
+            [
+                F::SourceAlpha,
+                F::OneMinusSourceAlpha,
+                F::One,
+                F::OneMinusSourceAlpha,
+            ],
+            O::Add,
+        ),
+        (
             [
                 F::One,
                 F::OneMinusSourceAlpha,
@@ -172,12 +132,12 @@ const MEASURED: [Measured; 11] = {
             ],
             O::Add,
         ),
-        plain([F::SourceAlpha, F::One, F::Zero, F::One], O::Add),
-        plain(
+        ([F::SourceAlpha, F::One, F::Zero, F::One], O::Add),
+        (
             [F::SourceAlpha, F::One, F::SourceAlpha, F::One],
             O::ReverseSubtract,
         ),
-        plain(
+        (
             [
                 F::One,
                 F::OneMinusSourceAlpha,
@@ -189,64 +149,34 @@ const MEASURED: [Measured; 11] = {
     ]
 };
 
-/// The measured blend state `a` blends by ([`MEASURED`]), if it is one.
-fn measured(a: &ColorAttachmentDescriptor) -> Option<&'static Measured> {
+/// Whether `a` blends by a measured blend state ([`MEASURED`]).
+fn measured(a: &ColorAttachmentDescriptor) -> bool {
     let factors = [
         a.source_rgb_blend_factor,
         a.destination_rgb_blend_factor,
         a.source_alpha_blend_factor,
         a.destination_alpha_blend_factor,
     ];
-    if a.rgb_blend_operation != a.alpha_blend_operation {
-        return None;
-    }
-    MEASURED
-        .iter()
-        .find(|m| m.metal == (factors, a.rgb_blend_operation))
+    a.rgb_blend_operation == a.alpha_blend_operation
+        && MEASURED.contains(&(factors, a.rgb_blend_operation))
 }
 
-/// The premultiplied form of `a` on `p` (the module docs): a measured straight pair's, where the
-/// device's blend is Apple's (`VkProperty::MetalColorWrites`: MoltenVK on the measured Apple GPUs,
-/// whose blend is Metal's own).
-fn premultiplied(
-    a: &ColorAttachmentDescriptor,
-    p: &DeviceProfile,
-) -> Option<([vk::BlendFactor; 4], [FactorLane; 4])> {
-    let apple = p
-        .fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::MetalColorWrites);
-    measured(a)?.premultiplied.filter(|_| apple)
-}
-
-/// The form of the blend of attachment `a`, held with its channels rotated, on `p`
-/// (`LoweringInputs::rotated_blends`, the module docs): `Premultiplied` for a measured straight
-/// pair where the device's blend is Apple's, `Unmeasured` for a blend [`rotated_blend`] admits in
-/// none of the measured forms, and `None` without blending, under a minimum or a maximum (which
-/// takes no factor), for another measured form, and for a blend no Vulkan state gives (which link
-/// refuses).
-pub(crate) fn rotated_form(
-    a: &ColorAttachmentDescriptor,
-    p: &DeviceProfile,
-) -> Option<RotatedBlendForm> {
+/// Whether the blend of attachment `a`, held with its channels rotated, on `p` is in none of the
+/// measured forms (`LoweringInputs::rotated_blends`, the module docs): a blend [`rotated_blend`]
+/// admits, under neither a minimum nor a maximum (which takes no factor), that [`MEASURED`] does
+/// not list. A blend that is off, and one no Vulkan state gives (which link refuses), is not.
+pub(crate) fn unmeasured(a: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
     if !matches!(rotated_blend(a, p), Ok(Some(_))) {
-        return None;
+        return false;
     }
     // The same resolution [`rotated_blend`] makes, so the form of a blend holding a placeholder is
     // the form of the blend Metal draws with.
     let a = &a.specialized();
-    if matches!(
+    let factorless = matches!(
         a.rgb_blend_operation,
         BlendOperation::Min | BlendOperation::Max
-    ) {
-        return None;
-    }
-    match measured(a) {
-        Some(_) if premultiplied(a, p).is_some() => Some(RotatedBlendForm::Premultiplied),
-        Some(_) => None,
-        None => Some(RotatedBlendForm::Unmeasured),
-    }
+    );
+    !factorless && !measured(a)
 }
 
 /// The value a blend factor takes at one channel, in Metal's channels (0 to 3).
@@ -469,25 +399,6 @@ pub(crate) fn rotated_blend(
         return Ok(Some(RotatedBlend::Direct(plain)));
     }
     let op = blend_op(a.rgb_blend_operation)?;
-    // A measured straight pair on Apple's blend: its premultiplied form.
-    if let Some(([src_color, dst_color, src_alpha, dst_alpha], lanes)) = premultiplied(a, p) {
-        if !p.fields().fragment.dual_src_blend {
-            return Err(Unsupported::needs(
-                Feature::DualSourceBlending,
-                Capability::Feature(VkFeature::DualSrcBlend),
-            )
-            .into());
-        }
-        let state = BlendState {
-            src_color,
-            dst_color,
-            color_op: op,
-            src_alpha,
-            dst_alpha,
-            alpha_op: op,
-        };
-        return Ok(Some(RotatedBlend::Synthesized(state, lanes)));
-    }
     let src = metal_values(a.source_rgb_blend_factor, a.source_alpha_blend_factor);
     let dst = metal_values(
         a.destination_rgb_blend_factor,

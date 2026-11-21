@@ -12,7 +12,7 @@ use crate::air::ir::{ArgIdx, Callee, InstKind, Type, TypeId as AirTypeId, Value}
 use crate::device::requirements::{VkExtension, VkFeature, VkLimit, VkProperty};
 use crate::error::{Attachment, Capability, DriverDeviation, Error, Feature, Unsupported};
 use crate::lower::arith::legal::{form_on, refuse_bfloat_color, refuse_int64_interface};
-use crate::lower::arith::{FloatFmt, Form, Held};
+use crate::lower::arith::{Form, Held};
 use crate::lower::select::SelectCx;
 use crate::lower::stage_io::{
     fetch, not_lowered, AmplifiedOutput, DepthClamp, IoObject, MergedRead, MergedValue,
@@ -20,7 +20,7 @@ use crate::lower::stage_io::{
 };
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::lower_inputs::{FactorLane, RotatedBlendForm, VertexFetch};
+use crate::pipeline::lower_inputs::{FactorLane, VertexFetch};
 use crate::pipeline::stage_io::{
     DepthMode, Interpolation, IoNumeric, IoRole, IoType, IoVariable, Sampling, StageBuiltin,
 };
@@ -1346,41 +1346,6 @@ fn writes_layer(cx: &SelectCx<'_>) -> bool {
         .any(|o| matches!(o.role, OutputRole::RenderTargetArrayIndex))
 }
 
-/// Whether a fragment function's first output of form `form` to the rotated attachment
-/// `attachment`, whose blend takes the form `blend` (`LoweringInputs::rotated_blends`), writes
-/// Metal's blue premultiplied by Metal's alpha (`RotatedBlendForm::Premultiplied`), recording
-/// the form in the function's interface. Its blend reads Metal's source alpha from a second
-/// output (`LoweringInputs::rotated_factors`'s lane 3), else the inputs are no pipeline's. Apple's
-/// blend multiplies an `f32` source exactly as the function does; another float format rounds the
-/// product apart, and a blend in none of the measured forms (`RotatedBlendForm::Unmeasured`) may
-/// round apart: each records `PrecisionNote::RotatedBlendRounding`.
-fn rotated_blend_form(
-    cx: &mut SelectCx<'_>,
-    attachment: u32,
-    blend: RotatedBlendForm,
-    form: Form,
-) -> Result<bool, Error> {
-    let premultiplied = match blend {
-        RotatedBlendForm::Premultiplied => {
-            let lanes = cx.inputs.rotated_factors.get(&attachment);
-            if lanes.is_none_or(|l| l[3] != FactorLane::Output(3)) {
-                return Err(not_lowered());
-            }
-            if form.float_fmt() != Some(FloatFmt::F32) {
-                cx.precision.insert(PrecisionNote::RotatedBlendRounding);
-            }
-            true
-        }
-        RotatedBlendForm::Unmeasured => {
-            cx.precision.insert(PrecisionNote::RotatedBlendRounding);
-            false
-        }
-    };
-    let sp = &mut cx.families.stage_io;
-    sp.interface.rotated_blends.insert(attachment, blend);
-    Ok(premultiplied)
-}
-
 /// The second output a fragment function writes beside its first output, the returned field
 /// `field` of form `form`, to the rotated attachment `attachment`
 /// (`LoweringInputs::rotated_factors`): an output variable of dual-source index 1 there, of the
@@ -2325,7 +2290,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                     color: None,
                     rotated: false,
                     alpha_red: false,
-                    premultiplied: false,
                     offset: offset(PushField::AmplificationLayerOffset),
                 });
                 continue;
@@ -2471,7 +2435,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 color: None,
                 rotated: false,
                 alpha_red: false,
-                premultiplied: false,
                 offset: offset(PushField::AmplificationViewportOffset),
             });
             continue;
@@ -2524,7 +2487,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // An output to an attachment held with its channels rotated stores them rotated; one to an
         // attachment holding Metal's alpha in red holds that alpha in the image's alpha lane too,
         // where alpha to coverage reads it.
-        let mut premultiplied = false;
         let mut alpha_red = false;
         let rotated = match o.role {
             OutputRole::RenderTarget {
@@ -2548,9 +2510,12 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 if let (0, Some(&lanes)) = (index, cx.inputs.rotated_factors.get(&attachment)) {
                     seconds.push((attachment, o.field, link.form, lanes));
                 }
-                if let (0, Some(&form)) = (index, cx.inputs.rotated_blends.get(&attachment)) {
-                    premultiplied = rotated_blend_form(cx, attachment, form, link.form)
-                        .map_err(|e| e.at_attachment(Attachment::Color(attachment)))?;
+                // A blend in none of the measured forms may round apart from Apple's
+                // (`LoweringInputs::rotated_blends`).
+                if index == 0 && cx.inputs.rotated_blends.contains(&attachment) {
+                    cx.precision.insert(PrecisionNote::RotatedBlendRounding);
+                    let sp = &mut cx.families.stage_io;
+                    sp.interface.rotated_blends.insert(attachment);
                 }
                 true
             }
@@ -2564,7 +2529,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             color,
             rotated,
             alpha_red,
-            premultiplied,
             offset: added,
         });
         if let Some((index, count, _)) = raw {
@@ -2581,7 +2545,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 color: None,
                 rotated: false,
                 alpha_red: false,
-                premultiplied: false,
                 offset: added,
             });
         }
@@ -3459,10 +3422,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 + u64::from(o.below.is_some())
                 + u64::from(o.offset.is_some())
                 + u64::from(o.rotated)
-                // Metal's blue premultiplied: two extracts, each lane's NaN test, select and
-                // clamp, the product (an `Fma` with `-0.0` where the builder writes one so), its
-                // insert, and their constants.
-                + 12 * u64::from(o.premultiplied)
         })
         .sum::<u64>()
         // A rotation's second output: its field, two shuffles and a store.

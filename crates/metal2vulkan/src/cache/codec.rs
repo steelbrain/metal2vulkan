@@ -55,7 +55,7 @@ use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
 use crate::pipeline::lower_inputs::{
-    BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane, RotatedBlendForm, VertexFetch,
+    BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane, VertexFetch,
 };
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
@@ -1047,9 +1047,8 @@ codec_enum! {
         InterpolateAtOffsetCentered, SimdgroupLockstep, MetalSampler, StorageImageSampleCount(f0),
         DepthResolveMode(f0), StencilResolveMode(f0), IndependentResolveNone, IndependentResolve,
         VariableSampleLocations, SampleLocationSampleCount(f0), ColorAttachmentSampleCount(f0, f1),
-        MetalColorWrites, MetalFloatColorNans,
         MetalHalfFma, MetalFloatDenormals,
-        MetalCenterVaryings, MetalSmallFloatColorWrites, MetalNorm16ColorWrites, MetalMinMax,
+        MetalCenterVaryings, MetalMinMax,
         MetalHalfArithmetic, MetalHalfStorageWrites, MetalHalfStorageNans,
         MetalFragmentSimdgroups, MetalVertexSimdgroups,
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
@@ -1208,7 +1207,6 @@ codec_enum! {
     }
     WordAttachment { Packed16 { fields }, Srgb8 { fields }, Rgb9e5 }
     FactorLane { Zero, One, Output(f0) }
-    RotatedBlendForm { Premultiplied, Unmeasured }
     TextureWriteRoundingMode { TowardZero, NearestEven }
     CompareFunction { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always }
     CoverageLoopRefusal {

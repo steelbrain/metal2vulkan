@@ -152,16 +152,11 @@ fn texels(seed: u64) -> impl Iterator<Item = (Texel, Texel, Texel, Texel)> {
 }
 
 /// That Vulkan's blend `chosen` of `a` on the rotated image on `p` stores Metal's blend rotated,
-/// over pseudo-random texels: the function's first output rotated, its image alpha (Metal's
-/// blue) premultiplied by Metal's alpha where the form says so.
-fn check(a: &ColorAttachmentDescriptor, chosen: &RotatedBlend, p: &DeviceProfile) {
-    let premultiplied = rotated_form(a, p) == Some(RotatedBlendForm::Premultiplied);
+/// over pseudo-random texels: the function's first output rotated.
+fn check(a: &ColorAttachmentDescriptor, chosen: &RotatedBlend) {
     for v in texels(u64::from(a.source_rgb_blend_factor.as_raw())).take(16) {
         let (s, s1, d, c) = v;
-        let mut first = rotated(s);
-        if premultiplied {
-            first[3] = s[2] * s[3];
-        }
+        let first = rotated(s);
         let (state, second) = match *chosen {
             RotatedBlend::Direct(state) => (state, rotated(s1)),
             RotatedBlend::Synthesized(state, lanes) => (
@@ -227,7 +222,7 @@ fn every_admitted_blend_stores_metals_rotated() {
                         let a = attachment((sr, dr, op), (sa, da, op));
                         match rotated_blend(&a, &p) {
                             Ok(Some(chosen)) => {
-                                check(&a, &chosen, &p);
+                                check(&a, &chosen);
                                 admitted += 1;
                                 synthesized +=
                                     usize::from(matches!(chosen, RotatedBlend::Synthesized(..)));
@@ -348,7 +343,7 @@ fn source_alpha_blends_read_a_second_output_of_the_source_alpha() {
     ];
     for (a, want) in cases {
         assert_eq!(rotated_blend(&a, &p), Ok(Some(want)), "{a:?}");
-        check(&a, &want, &p);
+        check(&a, &want);
     }
 }
 
@@ -425,15 +420,14 @@ fn a_second_output_needs_dual_source_blending() {
 fn measured_blends_take_their_measured_forms() {
     let mvk = moltenvk();
     let lvp = profile("lavapipe", DevicePolicy::default()).expect("profile");
-    for m in &MEASURED {
-        let ([sr, dr, sa, da], op) = m.metal;
+    for &([sr, dr, sa, da], op) in &MEASURED {
         let a = attachment((sr, dr, op), (sa, da, op));
         let on_mvk = rotated_blend(&a, &mvk).expect("admitted").expect("blended");
         let on_lvp = rotated_blend(&a, &lvp).expect("admitted").expect("blended");
-        check(&a, &on_mvk, &mvk);
-        check(&a, &on_lvp, &lvp);
-        assert_eq!(rotated_form(&a, &lvp), None, "{a:?}");
-        assert_eq!(rotated_form(&a, &mvk), None, "{a:?}");
+        check(&a, &on_mvk);
+        check(&a, &on_lvp);
+        assert!(!unmeasured(&a, &lvp), "{a:?}");
+        assert!(!unmeasured(&a, &mvk), "{a:?}");
         assert_eq!(on_mvk, on_lvp, "{a:?}");
     }
 }
@@ -455,20 +449,16 @@ fn unmeasured_blends_are_announced() {
     off.blending_enabled = false;
     for p in [&mvk, &lvp] {
         assert!(matches!(rotated_blend(&kept, p), Ok(Some(_))));
-        assert_eq!(
-            rotated_form(&kept, p),
-            Some(RotatedBlendForm::Unmeasured),
-            "{p:?}"
-        );
+        assert!(unmeasured(&kept, p), "{p:?}");
         let max = attachment((F::One, F::One, O::Max), (F::One, F::One, O::Max));
         assert!(matches!(rotated_blend(&max, p), Ok(Some(_))));
-        assert_eq!(rotated_form(&max, p), None);
-        assert_eq!(rotated_form(&off, p), None);
+        assert!(!unmeasured(&max, p));
+        assert!(!unmeasured(&off, p));
         let refused = attachment(
             (F::DestinationAlpha, F::OneMinusDestinationAlpha, O::Add),
             (F::One, F::Zero, O::Add),
         );
-        assert_eq!(rotated_form(&refused, p), None);
+        assert!(!unmeasured(&refused, p));
     }
 }
 

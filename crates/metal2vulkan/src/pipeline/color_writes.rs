@@ -8,14 +8,9 @@
 //! ANV, RADV and lavapipe round the `f32` product with ties to even, NVIDIA's 615.71.09 on the RTX
 //! 5080 Laptop GPU stores an 8-bit channel's lower code on a tie and up to two `f32` steps above
 //! one (0.5 as `0x7f`, where Metal stores `0x80`), and each encodes sRGB by its own approximation,
-//! so near a tie they may store another code (measured). Their half-float and small-float channels
-//! round toward zero as Metal's do where measured (`DriverDeviation::MetalSmallFloatColorWrites`:
-//! RADV on the Radeon 780M, ANV on the Iris Xe and the UHD 770, NVIDIA on the RTX 3090, NaNs
-//! aside); only MoltenVK on Apple's GPUs stores Metal's codes for every format
-//! (`VkProperty::MetalColorWrites`). The map names each channel's rule so the fragment function can
-//! record where the device's conversion is not measured to be Metal's
-//! (`PrecisionNote::DeviceColorConversion`); it rounds none of them. On MoltenVK the map keeps the
-//! half-float channels alone, which record the device's NaN encoding of a `half` output.
+//! so near a tie they may store another code (measured). The map names each channel's rule so the
+//! fragment function can record where the device's conversion is not measured to be Metal's
+//! (`PrecisionNote::DeviceColorConversion`); it rounds none of them.
 //!
 //! The map names each rule as the function's lowering on the profile tells it apart
 //! ([`lowered`]): a rule whose channel the device's conversion stores and notes alike, Metal's
@@ -52,9 +47,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
-use crate::error::{DriverDeviation, Error, RuntimeInput};
+use crate::error::{Error, RuntimeInput};
 use crate::library::FunctionArtifact;
 use crate::metal;
 use crate::metal::format::{color_output_components, write_conversion, WriteConversion};
@@ -63,10 +57,8 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::ColorAttachmentState;
-use crate::pipeline::lower_inputs::{
-    ChannelWrite, ExtendedRangeColor, FactorLane, RotatedBlendForm,
-};
-use crate::pipeline::rotated_blend::{rotated_blend, rotated_form, RotatedBlend};
+use crate::pipeline::lower_inputs::{ChannelWrite, ExtendedRangeColor, FactorLane};
+use crate::pipeline::rotated_blend::{rotated_blend, unmeasured, RotatedBlend};
 use crate::pipeline::stage_io::IoRole;
 
 /// The color writes of a fragment function writing the attachments `written` (dual-source index
@@ -74,9 +66,7 @@ use crate::pipeline::stage_io::IoRole;
 /// `alpha_to_coverage`, its half-float channels rounding by `rounding`) on profile `p` (the
 /// module docs): each channel's rule as the function's lowering on `p` tells it apart
 /// ([`lowered`]), so pipelines whose rules differ only where the lowering does not compile the
-/// function under one map. Where the device stores Metal's codes itself
-/// (`VkProperty::MetalColorWrites`) the map keeps only the half-float channels
-/// ([`metal_stored`]), whose `half` NaN the function's `float` output does not carry.
+/// function under one map.
 pub(crate) fn color_writes(
     written: impl IntoIterator<Item = u32>,
     colors: &[Option<ColorAttachmentDescriptor>],
@@ -87,10 +77,7 @@ pub(crate) fn color_writes(
         .into_iter()
         .filter_map(|attachment| {
             let rules = metal_rules(attachment, colors, rounding, p)?;
-            Some((
-                attachment,
-                rules.map(|rule| rule.map(|rule| lowered(rule, p))),
-            ))
+            Some((attachment, rules.map(|rule| rule.map(lowered))))
         })
         .collect()
 }
@@ -128,51 +115,26 @@ fn metal_rules(
         return None;
     }
     let coverage_alpha = attachment == 0 && alpha_to_coverage;
-    let write = match metal_color_writes(p) {
-        true => metal_stored(&c),
-        false => attachment_write(&c, coverage_alpha),
-    };
+    let write = attachment_write(&c, coverage_alpha);
     match rounding {
         TextureWriteRoundingMode::NearestEven => write.map(|w| nearest_even(w, &c, coverage_alpha)),
         _ => write,
     }
 }
 
-/// `rule` as the fragment function's lowering on `p` tells it apart
+/// `rule` as the fragment function's lowering tells it apart
 /// (`lower::stage_io::color_write`): [`ChannelWrite::Device`] for a rule the device's conversion
 /// stores whatever the output and however the function writes it, which records
 /// `PrecisionNote::DeviceColorConversion` as `Device` does and emits the same words; the rule
 /// itself where the lowering reads it. It reads a half-float channel's (whose `half` output is
-/// exact, and whose NaN it notes), one rounded to nearest even or after a blend of other factors,
-/// a small float's where the profile takes `DriverDeviation::MetalSmallFloatColorWrites`, and an
-/// unblended 16-bit unorm or snorm one's where it takes `DriverDeviation::MetalNorm16ColorWrites`.
-/// Every other rule (an 8- or 10-bit unorm or snorm, an sRGB, a blended 16-bit snorm, a small
-/// float on a profile not measured to store it as Metal does) is the device's.
-fn lowered(rule: ChannelWrite, p: &DeviceProfile) -> ChannelWrite {
-    let takes = |d| p.takes_driver_deviation(d);
+/// exact, and whose NaN it notes), and one rounded to nearest even or after a blend of other
+/// factors. Every other rule (a unorm, snorm or sRGB channel's, a small float's) is the device's.
+fn lowered(rule: ChannelWrite) -> ChannelWrite {
     match rule {
         _ if half_float(rule) => rule,
         ChannelWrite::FloatNearestEven { .. } | ChannelWrite::BlendedNearestEven { .. } => rule,
-        ChannelWrite::FloatTowardZero { .. }
-            if takes(DriverDeviation::MetalSmallFloatColorWrites) =>
-        {
-            rule
-        }
-        ChannelWrite::Unorm { bits: 16 }
-        | ChannelWrite::Snorm {
-            bits: 16,
-            blended: false,
-        } if takes(DriverDeviation::MetalNorm16ColorWrites) => rule,
         _ => ChannelWrite::Device,
     }
-}
-
-/// Whether profile `p`'s device stores Metal's codes itself (`VkProperty::MetalColorWrites`).
-fn metal_color_writes(p: &DeviceProfile) -> bool {
-    p.fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::MetalColorWrites)
 }
 
 /// The precision notes and the attachments it rounds in the shader of fragment function `a` in
@@ -302,31 +264,14 @@ fn nearest_even(
     rules
 }
 
-/// The channels of attachment `c` on a device that stores a float output as Metal does
-/// (`VkProperty::MetalColorWrites`): its half-float channels, whatever its blend, and nothing
-/// where it has none or writes none. The function rounds nothing there; a `half` output it writes
-/// to such a channel is held widened to `float`, and the device stores that `float`'s NaN as Metal
-/// stores a `float` NaN, not as the `half`'s own bits, so the function records
-/// `PrecisionNote::DeviceNanEncoding` for it.
-fn metal_stored(c: &ColorAttachmentDescriptor) -> Option<[Option<ChannelWrite>; 4]> {
-    if c.write_mask.is_empty() {
-        return None;
-    }
-    let WriteConversion::Rules(rules) = write_conversion(c.pixel_format)? else {
-        return None;
-    };
-    let halves = rules.map(|r| r.filter(|&r| r == HALF));
-    halves.iter().any(Option::is_some).then_some(halves)
-}
-
 /// Check the fragment stage `fragment` of a render pipeline whose color attachments are
 /// `colors` (alpha-to-coverage on where `alpha_to_coverage`, rounding by `rounding`) on `p`: the
 /// color writes it compiled under are the pipeline's for the attachments it writes
 /// ([`writes_hold`]), and so are its extended-range attachments' writes
 /// ([`wanted_extended_range`]), and every color it stores nowhere (`StageIo::unattached_colors`)
 /// has no attachment and is not color 0 under alpha to coverage, and the second outputs it writes
-/// for rotated attachments are the pipeline's ([`wanted_rotated_factors`]), and so are the forms of
-/// their blends ([`wanted_rotated_blends`]), and the attachments holding Metal's alpha in red it
+/// for rotated attachments are the pipeline's ([`wanted_rotated_factors`]), and so are those of
+/// their blends in none of the measured forms ([`wanted_rotated_blends`]), and the attachments holding Metal's alpha in red it
 /// writes or reads are the pipeline's ([`wanted_alpha_in_red`]), and its texture writes
 /// that Metal's mode 2 stores otherwise compiled under the pipeline's `textureWriteRoundingMode`
 /// (`StageIo::texture_write_rounding`), else `NeedsInput(ColorWrites)`.
@@ -765,34 +710,32 @@ pub(crate) fn wanted_rotated_factors(
     out
 }
 
-/// The forms of the blends of the attachments of `colors` held with their channels rotated, on
-/// `p` (`LoweringInputs::rotated_blends`): every such attachment whose blend the fragment
-/// function shapes or announces (`rotated_blend::rotated_form`).
+/// The attachments of `colors` held with their channels rotated whose blend is in none of the
+/// measured forms on `p` (`LoweringInputs::rotated_blends`, `rotated_blend::unmeasured`).
 pub(crate) fn rotated_blends(
     colors: &[Option<ColorAttachmentDescriptor>],
     p: &DeviceProfile,
-) -> BTreeMap<u32, RotatedBlendForm> {
+) -> BTreeSet<u32> {
     colors
         .iter()
         .enumerate()
         .filter_map(|(i, c)| {
             let c = c.as_ref()?;
-            if !metal::format::rotated_channels(c.pixel_format) {
-                return None;
-            }
-            Some((i as u32, rotated_form(c, p)?))
+            let rotated = metal::format::rotated_channels(c.pixel_format);
+            (rotated && unmeasured(c, p)).then_some(i as u32)
         })
         .collect()
 }
 
-/// The forms of the blends of rotated attachments the fragment stage `fragment` compiles under in
-/// a render pipeline whose color attachments are `colors` on `p`: [`rotated_blends`]'s, for the
-/// attachments it writes through a first (dual-source index 0) output.
+/// The attachments held with their channels rotated whose blends in none of the measured forms
+/// the fragment stage `fragment` compiles under in a render pipeline whose color attachments are
+/// `colors` on `p`: [`rotated_blends`]'s, for the attachments it writes through a first
+/// (dual-source index 0) output.
 pub(crate) fn wanted_rotated_blends(
     fragment: &FunctionArtifact,
     colors: &[Option<ColorAttachmentDescriptor>],
     p: &DeviceProfile,
-) -> BTreeMap<u32, RotatedBlendForm> {
+) -> BTreeSet<u32> {
     let written: BTreeSet<u32> = fragment
         .interface
         .io
@@ -807,7 +750,7 @@ pub(crate) fn wanted_rotated_blends(
         })
         .collect();
     let mut out = rotated_blends(colors, p);
-    out.retain(|a, _| written.contains(a));
+    out.retain(|a| written.contains(a));
     out
 }
 

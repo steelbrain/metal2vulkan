@@ -1091,10 +1091,7 @@ pub enum PrecisionNote {
     ViewBaseTexelOffset,
     /// A fragment function writes a float to a color channel whose conversion the device makes
     /// where it is not measured to make Metal's: a normalized, sRGB or small float channel the
-    /// attachment stores as written, on a device other than MoltenVK on an Apple GPU
-    /// (`VkProperty::MetalColorWrites`) not measured to convert that kind of channel as Metal does
-    /// (`DriverDeviation::MetalSmallFloatColorWrites`, `MetalNorm16ColorWrites`), an attachment that
-    /// blends with factors other than one and zero (`ChannelWrite::Device`), the alpha of
+    /// attachment stores as written, an attachment that blends with factors other than one and zero (`ChannelWrite::Device`), the alpha of
     /// attachment 0 under alpha-to-coverage, a format whose conversion Metal was not measured with
     /// (the packed 16-bit unorm formats, `A8Unorm`, the packed floats). (A `bfloat` output is
     /// refused, as Metal's compiler rejects one.) Near a tie between two codes the device may store
@@ -1107,9 +1104,8 @@ pub enum PrecisionNote {
     /// `f32` nearest 1.5/255 as 1 and the one nearest 2.5/255 as 2, where Metal stores `0x80`, 2
     /// and 3), and Metal's code elsewhere: measured against an Apple M3 Max under macOS 27.0.1 over
     /// every code's exact value and every tie with two `f32` steps either side, in `BGRA8Unorm`
-    /// and `RGBA8Unorm`, a draw of an indirect command buffer's as a plain draw. A device not
-    /// measured to store Metal's half-float channels (`MetalSmallFloatColorWrites`) may round
-    /// them otherwise. A NaN stores as its conversion makes it (Metal stores a normalized
+    /// and `RGBA8Unorm`, a draw of an indirect command buffer's as a plain draw. A device may
+    /// round a small float channel otherwise. A NaN stores as its conversion makes it (Metal stores a normalized
     /// channel's as 0, a blended snorm channel's as -1.0's code). A 32-bit float attachment that so blends
     /// stores the device's blend arithmetic (NVIDIA's 615.71.09 one `f32` ulp from Metal's in some
     /// source-over sums, a NaN as `0x7fffffff` where Metal stores `0x7fc00000`).
@@ -1269,8 +1265,7 @@ pub enum PrecisionNote {
     /// mismatch for review, deferred in C3 until an exact path exists.
     BlendedWriteRounding,
     /// A fragment function writes an attachment held with its channels rotated (`ARGB8Unorm`)
-    /// whose blend is none of the measured forms (`RotatedBlendForm::Unmeasured`), or the
-    /// premultiplied form through a first output that is not 32-bit float: Apple's blend
+    /// whose blend is none of the measured forms (`LoweringInputs::rotated_blends`): Apple's blend
     /// computes a factor pair apart in its color and alpha arithmetic, and the rotation moves
     /// Metal's blue into the image's alpha and Metal's alpha into its red, so a channel may store
     /// one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels over 440 swept blend

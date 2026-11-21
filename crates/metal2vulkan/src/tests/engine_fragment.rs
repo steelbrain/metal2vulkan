@@ -1508,7 +1508,6 @@ fn the_partial_write_masks_of_a_fetched_attachment_share_one_module() {
 /// itself.
 #[test]
 fn a_fetched_attachment_s_module_is_the_same_for_each_format_it_reads_alike() {
-    use crate::device::requirements::VkProperty;
     use crate::lower::fragment::fetch::interlock_orders;
     use crate::metal::format::{accessed_without_format, StorageUse};
     let (Some(bc), Some(io)) = (fixture("fragment_fetch"), fixture("stage_io")) else {
@@ -1529,12 +1528,11 @@ fn a_fetched_attachment_s_module_is_the_same_for_each_format_it_reads_alike() {
     };
     let mut shared = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        let metal = (p.fields().enabled.properties).contains(&VkProperty::MetalColorWrites);
         let access = StorageUse::texture(true, true);
         let untyped = formats
             .iter()
             .all(|&(_, f)| accessed_without_format(f, access, &p));
-        if !interlock_orders(&p) || metal || !untyped {
+        if !interlock_orders(&p) || !untyped {
             continue;
         }
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

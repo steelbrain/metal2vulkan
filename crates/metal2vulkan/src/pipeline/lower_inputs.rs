@@ -394,8 +394,7 @@ pub struct LoweringInputs {
     /// device's conversion of another value stays (blending other than factors one and zero, the
     /// alpha alpha-to-coverage reads, or a format whose conversion Metal was not measured with),
     /// recorded alike; and a half-float channel's rule under
-    /// `TextureWriteRoundingMode::NearestEven`, which the function rounds itself. On a device that
-    /// stores Metal's codes (`VkProperty::MetalColorWrites`) only the half-float channels. A rule
+    /// `TextureWriteRoundingMode::NearestEven`, which the function rounds itself. A rule
     /// of Metal's the function's lowering on the device does not tell from the device's
     /// conversion (an 8-bit unorm channel's on a device not measured to store it as Metal does,
     /// say) is named [`ChannelWrite::Device`], so pipelines that differ only there, as a blend
@@ -716,16 +715,16 @@ pub struct LoweringInputs {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub cubic_samplers: BTreeMap<SlotRef, u32>,
-    /// The attachments of `rotated_colors` whose blend the fragment function shapes or
-    /// announces, by color index (`pipeline::rotated_blend`): one blended in a measured form that
-    /// reads Metal's blue premultiplied (`RotatedBlendForm::Premultiplied`), and one blended in
-    /// none of the measured forms (`RotatedBlendForm::Unmeasured`). An attachment blended in
-    /// another measured form, or not blended, is not listed. `Device::compile_render_pipeline` sets
-    /// it for a `Function` fragment stage from the pipeline's color attachments, and link refuses a
-    /// fragment compiled under another map as `NeedsInput(ColorWrites)`. Empty for any other
-    /// function.
+    /// The attachments of `rotated_colors` blended in none of the measured forms, by color index
+    /// (`pipeline::rotated_blend`): Vulkan's factors store Metal's channels rotated, which Apple's
+    /// blend may round one code apart from Metal's (up to 1,767 of 65,536 tie-heavy texels in our
+    /// probe's sweep), and the function records `PrecisionNote::RotatedBlendRounding`. An
+    /// attachment blended in a measured form, under a minimum or a maximum, or not blended, is not
+    /// listed. `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
+    /// pipeline's color attachments, and link refuses a fragment compiled under another set as
+    /// `NeedsInput(ColorWrites)`. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub rotated_blends: BTreeMap<u32, RotatedBlendForm>,
+    pub rotated_blends: BTreeSet<u32>,
     /// Sampled texture slots bound to a texture whose format's numeric class (`Float`, `Sint` or
     /// `Uint`) is not the class the function declares there, by the bound format's class
     /// (`VariantKey::cross_class`): each such slot is declared as an image of the bound class,
@@ -882,29 +881,6 @@ pub struct LoweringInputs {
     /// 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub push_base: u32,
-}
-
-/// How the blend of an attachment held with its channels rotated reads the fragment function's
-/// first output there (`LoweringInputs::rotated_blends`). Apple's blend does not compute each
-/// factor pair alike in its color and alpha arithmetic, and the rotation moves Metal's blue into
-/// the image's alpha and Metal's alpha into its red: under Metal's color factors `SourceAlpha` over
-/// `OneMinusSourceAlpha`, Metal's color is `fma(d, 1 - a, s * a)`, and the image's alpha blends a
-/// factor and one minus it as `fma(f, s - d, d)`, which rounds one code apart near half-code ties.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RotatedBlendForm {
-    /// The image's alpha (Metal's blue) blends under factors one and one minus the second
-    /// output's alpha (Metal's source alpha), and the function writes it premultiplied: Metal's
-    /// blue times Metal's alpha, each clamped to `[0, 1]` with a NaN taken as 0 as Metal's blend
-    /// clamps its source, multiplied in the output's float format and not contracted. The
-    /// blend then computes `fma(d, 1 - a, s * a)`, Metal's own.
-    Premultiplied,
-    /// None of the measured forms: the blend stores Metal's channels rotated by Vulkan's factors
-    /// (`pipeline::rotated_blend`'s search), which Apple's blend may round one code apart from
-    /// Metal's (up to 1,767 of 65,536 tie-heavy texels in our probe's sweep). The function
-    /// records `PrecisionNote::RotatedBlendRounding`.
-    Unmeasured,
 }
 
 /// One channel of the second output a fragment function writes for an attachment held with its

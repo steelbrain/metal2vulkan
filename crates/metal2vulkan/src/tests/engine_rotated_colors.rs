@@ -16,14 +16,12 @@
 //!   `RotatedInputBlend`), noting the device's conversion, and a device that orders it in neither
 //!   form refuses naming both orderings; alpha to coverage over the image is refused
 //!   `NotImplemented(Format)` at the attachment;
-//! - where the device's blend is Apple's, straight alpha takes the measured premultiplied form: a
-//!   second output of `(0, 0, 0, a)` and Metal's blue times Metal's alpha in the image's alpha; a
-//!   blend in none of the measured forms records `PrecisionNote::RotatedBlendRounding`.
+//! - a blend in none of the measured forms records `PrecisionNote::RotatedBlendRounding`.
 //!
 //! No GPU is used. `llvm-as` assembles the fixture; a missing tool skips visibly.
 
 use crate::budget::Budget;
-use crate::device::requirements::{VkFeature, VkLimit, VkProperty};
+use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Attachment, Capability, Error, Feature, Needs};
 use crate::library::Library;
@@ -150,27 +148,6 @@ fn second_output(pipeline: &RenderPipeline) -> bool {
         .any(|d| d.get(1) == Some(&(crate::spv::Decoration::Index as u32)) && d.get(2) == Some(&1))
 }
 
-/// Whether the fragment module premultiplies a lane: a product of two values each clamped by
-/// `GLSL.std.450`'s `NClamp`, an `OpFMul` or, where the builder writes an exact product so, a
-/// `GLSL.std.450` `Fma` of them with `-0.0`.
-fn premultiplies(pipeline: &RenderPipeline) -> bool {
-    const NCLAMP: u32 = 81;
-    const FMA: u32 = 50;
-    let ext = fragment_instructions(pipeline, crate::spv::Op::ExtInst);
-    let clamped: Vec<u32> = ext
-        .iter()
-        .filter(|o| o.get(3) == Some(&NCLAMP))
-        .map(|o| o[1])
-        .collect();
-    let of_clamped = |a: u32, b: u32| clamped.contains(&a) && clamped.contains(&b);
-    fragment_instructions(pipeline, crate::spv::Op::FMul)
-        .iter()
-        .any(|o| of_clamped(o[2], o[3]))
-        || ext
-            .iter()
-            .any(|o| o.len() == 7 && o[3] == FMA && of_clamped(o[4], o[5]))
-}
-
 /// Whether the pipeline's fragment stage records `note`.
 fn notes(pipeline: &RenderPipeline, note: PrecisionNote) -> bool {
     pipeline
@@ -262,12 +239,6 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
         }
         // Blends whose color factors read Metal's source alpha: a second output of copies of it.
         let dual = dev.profile().fragment().dual_src_blend;
-        let apple = dev
-            .profile()
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalColorWrites);
         for c in [
             blended(F::One, F::OneMinusSourceAlpha, O::Add, O::Add),
             blended(F::SourceAlpha, F::OneMinusSourceAlpha, O::Add, O::Add),
@@ -278,13 +249,8 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
                     let blend = p.graphics.color_attachments[0].and_then(|s| s.blend);
                     assert!(blend.is_some_and(|b| b.reads_second_output()), "{stem}");
                     assert!(second_output(&p) && rotates(&p), "{stem}: {c:?}");
-                    // Straight alpha on Apple's blend: the premultiplied form, the second output
-                    // `(0, 0, 0, a)` and Metal's blue times Metal's alpha in the image's alpha.
-                    // Elsewhere copies of Metal's source alpha. Measured either way: no notice.
-                    let premultiplied = apple && c.source_rgb_blend_factor == F::SourceAlpha;
-                    assert_eq!(shuffles(&p, [4, 4, 4, 3]), premultiplied, "{stem}: {c:?}");
-                    assert_eq!(shuffles(&p, [3, 3, 3, 3]), !premultiplied, "{stem}: {c:?}");
-                    assert_eq!(premultiplies(&p), premultiplied, "{stem}: {c:?}");
+                    // Copies of Metal's source alpha. Measured: no notice.
+                    assert!(shuffles(&p, [3, 3, 3, 3]), "{stem}: {c:?}");
                     assert!(!announces_rounding(&p), "{stem}: {c:?}");
                 }
                 Err(Error::Unsupported(u)) if !dual => {

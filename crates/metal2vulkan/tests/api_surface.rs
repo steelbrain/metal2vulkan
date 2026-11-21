@@ -407,7 +407,6 @@ surface! {
         struct FramebufferFetchInputs N;
         enum KernelVariant N;
         struct LoweringInputs N;
-        enum RotatedBlendForm N;
         struct StorageImageChoice N;
         enum StorageImageClass N;
         enum VertexFetch N;
@@ -943,27 +942,15 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::Budget;
 
-/// `inputs` with the color writes `writes` (attachment, its channels' rules), the half-float
-/// channels alone where `dev`'s driver converts a fragment's float writes as Metal does: the
-/// inputs a fragment of a pipeline with those attachments compiles under.
+/// `inputs` with the color writes `writes` (attachment, its channels' rules): the inputs a fragment
+/// of a pipeline with those attachments compiles under.
 fn with_color_writes(
-    dev: &Device,
     mut inputs: LoweringInputs,
     writes: &[(u32, [Option<metal2vulkan::pipeline::ChannelWrite>; 4])],
 ) -> LoweringInputs {
-    use metal2vulkan::pipeline::ChannelWrite;
-    let metal = metal2vulkan::error::DriverDeviation::MetalColorWrites;
-    let half = ChannelWrite::FloatTowardZero {
-        mantissa: 10,
-        signed: true,
-    };
-    let metal = dev.profile().takes_driver_deviation(metal);
     inputs.color_writes = writes
         .iter()
-        .map(|&(a, rules)| match metal {
-            true => (a, rules.map(|r| r.filter(|&r| r == half))),
-            false => (a, rules),
-        })
+        .copied()
         .filter(|(_, rules)| rules.iter().any(Option::is_some))
         .collect();
     inputs
@@ -1352,7 +1339,7 @@ fn a_signed_integer_attachment_compiles_the_fragment_for_it() {
         let keys = dev
             .render_pipeline_key(&unsigned, &Budget::standard())
             .expect("keys");
-        let common = with_color_writes(&dev, LoweringInputs::new(), &[(0, UNORM8)]);
+        let common = with_color_writes(LoweringInputs::new(), &[(0, UNORM8)]);
         assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
         let plain = round_tripped(&dev, &fragment, &common);
         assert_eq!(keys.fragment, Some(*plain.key()), "{stem}");
@@ -1390,14 +1377,14 @@ fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
     }); 4];
     for stem in ["moltenvk-m3", "lavapipe"] {
         let dev = device(stem);
-        let mut multisampled = with_color_writes(&dev, LoweringInputs::new(), &[(0, half)]);
+        let mut multisampled = with_color_writes(LoweringInputs::new(), &[(0, half)]);
         multisampled.multisampled = true;
         let four = descriptor(StageSource::Function(fragment.clone()), 4);
         let keys = dev
             .render_pipeline_key(&four, &Budget::standard())
             .expect("keys");
         assert_eq!(keys.fragment_inputs.as_ref(), Some(&multisampled), "{stem}");
-        let common = with_color_writes(&dev, LoweringInputs::new(), &[(0, half)]);
+        let common = with_color_writes(LoweringInputs::new(), &[(0, half)]);
         let plain = round_tripped(&dev, &fragment, &common);
         let foreign = descriptor(StageSource::Compiled(plain.clone()), 4);
         let pipeline = dev
@@ -1591,7 +1578,7 @@ fn compiled_render_stages_round_trip_through_the_public_api() {
         assert!(vertex_inputs.vertex_fetch.is_some(), "{stem}");
         let v = round_tripped(&dev, &vertex, &vertex_inputs);
         assert_eq!(*v.key(), keys.vertex, "{stem}");
-        let mut common = with_color_writes(&dev, LoweringInputs::new(), &[(0, UNORM8)]);
+        let mut common = with_color_writes(LoweringInputs::new(), &[(0, UNORM8)]);
         common.push_base = v.fragment_push_base();
         assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
         let f = round_tripped(&dev, &fragment, &common);

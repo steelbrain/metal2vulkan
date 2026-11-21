@@ -252,12 +252,12 @@ pub struct StageIo {
     /// for another map than the pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_factors: BTreeMap<u32, [crate::pipeline::lower_inputs::FactorLane; 4]>,
-    /// The forms of the blends of attachments held with their channels rotated the function
-    /// compiled under (`LoweringInputs::rotated_blends`), by color index: those of the
-    /// attachments it writes through a first output. Link refuses a stage compiled for another
-    /// map than the pipeline's (`NeedsInput(ColorWrites)`).
+    /// The attachments held with their channels rotated whose blends in none of the measured
+    /// forms the function compiled under (`LoweringInputs::rotated_blends`), by color index: those
+    /// of the attachments it writes through a first output. Link refuses a stage compiled for
+    /// another set than the pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
-    pub rotated_blends: BTreeMap<u32, crate::pipeline::lower_inputs::RotatedBlendForm>,
+    pub rotated_blends: std::collections::BTreeSet<u32>,
     /// The inputs the fragment function reads per primitive (`PerPrimitiveEXT`), sorted: those
     /// of the keys its mesh render pipeline's mesh function writes per primitive
     /// (`LoweringInputs::primitive_varyings`). Link refuses a fragment function whose list is not

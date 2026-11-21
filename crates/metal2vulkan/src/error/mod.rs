@@ -527,21 +527,6 @@ pub enum DriverDeviation {
     /// two tangents: an `x` or `z` face's gradient reaches it as Metal's own, a `y` face's `z`
     /// tangent is lost. Unmeasured, as [`DriverDeviation::CubeGradientRoute`].
     GraphicsCubeGradientTangents,
-    /// The device stores a fragment function's float color output into a normalized, sRGB or
-    /// half-float attachment as Metal does (`VkProperty::MetalColorWrites`): the exact product
-    /// rounded to nearest, Metal's twelve-bit sRGB encode, and `half` rounded toward zero. The
-    /// fragment function writes each such output as computed either way, but a half-float channel
-    /// under `TextureWriteRoundingMode::NearestEven`, which it rounds on every profile; unmeasured,
-    /// a channel the device converts records `PrecisionNote::DeviceColorConversion`
-    /// (`LoweringInputs::color_writes`).
-    MetalColorWrites,
-    /// The device stores the NaN `0x7fc00000` a fragment function writes for a `float` output to
-    /// a half-float color channel as `0x7e00`, the NaN Metal stores for any `float` NaN
-    /// (`VkProperty::MetalFloatColorNans`): the NaN of a lane the function rounds to nearest even
-    /// under `TextureWriteRoundingMode::NearestEven`. Where the profile takes it, such a lane
-    /// records no note. Unmeasured, it records `PrecisionNote::DeviceNanEncoding`, as an output
-    /// written as computed does on every device but one of `MetalColorWrites`.
-    MetalFloatColorNans,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma`, which
     /// rounds the exact `a * b + c` once (`VkProperty::MetalHalfFma`). Where the profile also has
     /// `shaderFloat16`, a `half` fused multiply-add converts its operands (each a `half`, so
@@ -569,26 +554,6 @@ pub enum DriverDeviation {
     /// that reads from the center (`VkProperty::InterpolateAtOffsetCentered`), and a function that
     /// runs per sample is refused elsewhere.
     MetalCenterVaryings,
-    /// The device stores a fragment function's `float` color output into a half-float channel,
-    /// or one of `RG11B10Float`'s unsigned 11- and 10-bit floats, as Metal does for every value
-    /// but a NaN, plain and through blending with factors one and zero
-    /// (`VkProperty::MetalSmallFloatColorWrites`): rounded toward zero, a finite value past the
-    /// largest stored as the largest, an infinity as itself, and where unsigned a negative value
-    /// as 0. The function writes such an output as computed either way. Where the profile takes
-    /// it, the lane records no `PrecisionNote::DeviceColorConversion` and the module requires the
-    /// property; its NaN, as computed, is the device's (`PrecisionNote::DeviceNanEncoding`).
-    /// Unmeasured, the lane records `DeviceColorConversion` (`LoweringInputs::color_writes`).
-    MetalSmallFloatColorWrites,
-    /// The device stores a fragment function's float color output into a 16-bit unorm or snorm
-    /// channel as Metal does, the exact product with the format's largest code rounded to
-    /// nearest, for every value, a NaN's included, plain and through blending with factors one
-    /// and zero, except a blended snorm channel's NaN, which Metal stores as -1.0's code
-    /// (`VkProperty::MetalNorm16ColorWrites`). The function writes such an output as computed
-    /// either way. Where the profile takes it, a lane to such a channel but a blended snorm one
-    /// records no `PrecisionNote::DeviceColorConversion` and the module requires the property;
-    /// a blended snorm channel's lane, and every such lane on a profile without it, records the
-    /// note.
-    MetalNorm16ColorWrites,
     /// The device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` on 32-bit floats are Metal's own
     /// `fmin`, `fmax` and `clamp` (`VkProperty::MetalMinMax`): a NaN operand loses, two NaNs and a
     /// tie answer the second operand's bits, an `f32` denormal compares as a zero but is returned
