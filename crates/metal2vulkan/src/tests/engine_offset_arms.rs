@@ -10,7 +10,9 @@
 //! a constant is not switched on. A fragment's implicit-level sample takes its derivatives in its
 //! own position and samples with them in every arm (`PrecisionNote::GradFromBias`): the switch
 //! holds no implicit level. Past `OFFSET_ARMS_PER_FUNCTION` arms in one function the access is
-//! refused as without the arms.
+//! refused as without the arms. A filter loop nest whose counters the constants decide, and that
+//! runs at most 25 times, is unrolled before lowering, so its offsets are constants on every
+//! profile; one past that, or whose runs are not decided, keeps its arms.
 //!
 //! The interpreter does not model sampling, so these are shape tests on the emitted SPIR-V, every
 //! module validated by `spirv-val` under its profile. `llvm-as` assembles the kernels; without it
@@ -301,6 +303,119 @@ fn a_constant_lane_is_not_switched_on() {
             1,
             "{name}"
         );
+    }
+}
+
+/// A kernel sampling `texture2d<float, sample>` slot 0 through the nearest normalized sampler at
+/// level 0 in a 3x3 filter nest: its counters `x` and `y` start at -1, step by 1, and leave where
+/// `y` reaches 2 and `x` reaches `x_end` (an LLVM `i32` operand: `%end` is the first word of
+/// `offs`), each sample at offset `int2(x, y)`, the `x` of the samples summed into `out[tid]`.
+/// `y_end` sets the outer loop's end the same way.
+fn filter_nest_kernel(x_end: &str, y_end: &str) -> String {
+    format!(
+        r#"@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 {NEAREST_WORDS}, i64 0], align 8
+
+define void @k(ptr addrspace(1) %t, ptr addrspace(1) %offs, ptr addrspace(1) %out, i32 %tid) {{
+entry:
+  %i = zext i32 %tid to i64
+  %end = load i32, ptr addrspace(1) %offs, align 8
+  br label %ys
+ys:
+  %y = phi i32 [ -1, %entry ], [ %yn, %ye ]
+  %ay = phi float [ 0.000000e+00, %entry ], [ %sx, %ye ]
+  br label %xs
+xs:
+  %x = phi i32 [ -1, %ys ], [ %xn, %xs ]
+  %ax = phi float [ %ay, %ys ], [ %sx, %xs ]
+  %o0 = insertelement <2 x i32> poison, i32 %x, i64 0
+  %o = insertelement <2 x i32> %o0, i32 %y, i64 1
+  %r = call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) @__air_sampler_state, <2 x float> <float 5.078125e-01, float 5.078125e-01>, i1 true, <2 x i32> %o, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0)
+  %v = extractvalue {{ <4 x float>, i8 }} %r, 0
+  %e = extractelement <4 x float> %v, i64 0
+  %sx = fadd float %ax, %e
+  %xn = add nsw i32 %x, 1
+  %xd = icmp eq i32 %xn, {x_end}
+  br i1 %xd, label %ye, label %xs
+ye:
+  %yn = add nsw i32 %y, 1
+  %yd = icmp eq i32 %yn, {y_end}
+  br i1 %yd, label %done, label %ys
+done:
+  %q = getelementptr inbounds float, ptr addrspace(1) %out, i64 %i
+  store float %sx, ptr addrspace(1) %q, align 4
+  ret void
+}}
+
+declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
+
+!air.kernel = !{{!0}}
+!air.sampler_states = !{{!7}}
+!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5, !6}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<float, sample>", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"int2", !"air.arg_name", !"offs"}}
+!5 = !{{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"out"}}
+!6 = !{{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}}
+!7 = !{{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}}
+"#
+    )
+}
+
+/// A filter nest whose counters the constants decide, 9 runs together, is unrolled, so its offsets
+/// are constants: 9 samples, each with its offset as `ConstOffset` but the zero offset's, and no
+/// switch, on every profile. One whose inner counter's end is loaded, or whose runs pass 25
+/// together (3 x 9), keeps its offset dynamic: 256 arms of one switch where the `Offset` operand
+/// is missing.
+#[test]
+fn a_filter_nest_of_decided_counters_has_constant_offsets() {
+    let with_operand_features = profile("amd-780m-radv", DevicePolicy::default()).expect("radv");
+    let profiles = || {
+        armed_profiles()
+            .into_iter()
+            .chain([("amd-780m-radv", with_operand_features.clone())])
+    };
+    let Some(bc) = assemble("decided", &filter_nest_kernel("2", "2")) else {
+        return;
+    };
+    for (name, p) in profiles() {
+        let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(!has_offset_operand(&words), "{name}");
+        assert!(
+            !insts(&words).iter().any(|(o, _)| *o == OP_SWITCH),
+            "{name}"
+        );
+        let samples = insts(&words)
+            .iter()
+            .filter(|(o, _)| *o == OP_IMAGE_SAMPLE_EXPLICIT_LOD)
+            .count();
+        assert_eq!(samples, 9, "{name}");
+        assert_eq!(
+            with_operand(&words, OP_IMAGE_SAMPLE_EXPLICIT_LOD, 5, CONST_OFFSET),
+            8,
+            "{name}"
+        );
+    }
+    for (what, x_end, y_end) in [("loaded", "%end", "2"), ("27 runs", "2", "8")] {
+        let Some(bc) = assemble("kept", &filter_nest_kernel(x_end, y_end)) else {
+            return;
+        };
+        for (name, p) in armed_profiles() {
+            let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{what} {name}: {e}"));
+            let (_, words) =
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what} {name}: {e}"));
+            let switches = insts(&words)
+                .iter()
+                .filter(|(o, _)| *o == OP_SWITCH)
+                .count();
+            assert_eq!(switches, 1, "{what} {name}");
+            assert_eq!(
+                with_operand(&words, OP_IMAGE_SAMPLE_EXPLICIT_LOD, 5, CONST_OFFSET),
+                255,
+                "{what} {name}"
+            );
+        }
     }
 }
 
