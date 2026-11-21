@@ -1901,7 +1901,13 @@ fn ulong_texture_slots_are_rg32_elements_their_resource_ids_name() {
             .then_some([0, 0, 0, 1]);
         let image =
             |slot, e: u32| texture(slot, e, [8, 2], |x, y| ulong_texel(e, y * 8 + x).0, robust);
-        let images = vec![image(sampled, S), image(sampled, R), image(storage, W)];
+        // An array's elements are bound from 0: those below the named ones, which no thread
+        // reaches, hold one texel.
+        let filler = |slot, e: u32| texture(slot, e, [1, 1], |_, _| [0xdead_beef; 4], None);
+        let mut images = vec![filler(sampled, 0), image(sampled, S), image(sampled, R)];
+        images.extend((0..W).map(|e| filler(storage, e)));
+        images.push(image(storage, W));
+        let written = images.len() - 1;
         let res = Resources {
             buffers: vec![Buffer {
                 slot: None,
@@ -1924,7 +1930,7 @@ fn ulong_texture_slots_are_rg32_elements_their_resource_ids_name() {
                 assert_eq!(out[at..at + 4], [vs, 0, 0, 1], "{stem}: lane {t} sampled");
                 assert_eq!(out[at + 4..at + 8], [vr, 0, 0, 1], "{stem}: lane {t} read");
                 let sum = vs.wrapping_add(vr);
-                let stored = after[2].texels[n as usize];
+                let stored = after[written].texels[n as usize];
                 assert_eq!(
                     [stored[0], stored[1]],
                     [sum as u32, (sum >> 32) as u32],
