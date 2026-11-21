@@ -50,11 +50,10 @@ pub(super) fn filled(
         return Err(NotSupported::Requirements([requirement].into()).into());
     }
     let state = pipeline(device)?;
-    let written = device.new_depth_stencil_state(&rt::DepthStencilDescriptor {
-        depth_compare_function: CompareFunction::Always,
-        depth_write_enabled: true,
-        ..rt::DepthStencilDescriptor::default()
-    });
+    let mut always = rt::DepthStencilDescriptor::default();
+    always.depth_compare_function = CompareFunction::Always;
+    always.depth_write_enabled = true;
+    let written = device.new_depth_stencil_state(&always);
     let buffers = fills
         .iter()
         .map(|fill| {
