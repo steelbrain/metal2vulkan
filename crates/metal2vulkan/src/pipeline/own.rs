@@ -225,9 +225,12 @@ mod tests {
             ..Config::default()
         };
         let out = run(&module, &config, resources).expect("the run");
-        (out.buffers[0][ExecutionCounts::COUNTS_AT as usize..].chunks(4))
-            .map(|w| u32::from_le_bytes(w.try_into().expect("a word")))
-            .collect()
+        (out.buffers[0][ExecutionCounts::COUNTS_AT as usize..]
+            .as_chunks::<4>()
+            .0
+            .iter())
+        .map(|w| u32::from_le_bytes(*w))
+        .collect()
     }
 
     /// Each part's count runs through the range's last command and no further, none for a part

@@ -677,8 +677,8 @@ mod on_device {
             // SAFETY: the buffer holds 16 bytes, which the finished command buffer wrote and whose
             // writes reach the host.
             let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 16) };
-            let counts: Vec<u64> = (bytes.chunks(8))
-                .map(|word| u64::from_le_bytes(word.try_into().expect("a word")))
+            let counts: Vec<u64> = (bytes.as_chunks::<8>().0.iter())
+                .map(|word| u64::from_le_bytes(*word))
                 .collect();
             // Each command draws a band of 16 pixels: the execution's four, the two direct draws'.
             assert_eq!(counts, [64, 32], "{name}: each mode's samples");

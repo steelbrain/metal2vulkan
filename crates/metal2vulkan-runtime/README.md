@@ -3447,7 +3447,12 @@ cache is answered compile-required on both.
   pass whose `visibility_result_type` is `Accumulate` (`AccumulatedVisibilityResults`,
   `set_visibility_result_mode`; counted in `Metrics::accumulated_visibility_refused`), each
   refused where it is set, the encoder's state unchanged; the replay streams set Metal's defaults
-  alone, which those setters take as nothing; a draw of lines or a line strip while the encoder's line width
+  alone, which those setters take as nothing; beside `Accumulate`, while a `Boolean` or `Counting`
+  mode's query counts the draws, an execution of an indirect command buffer over a range a buffer
+  holds (`VisibilityResultInterrupt`, `execute_commands_in_buffer_with_range`; counted in
+  `Metrics::visibility_interrupts_refused`), refused where it is called: its count kernel ends the
+  rendering, and both need a count carried across two queries with the parts added, which is not
+  built; a draw of lines or a line strip while the encoder's line width
   (`set_line_width`, which keeps every width) is not 1 (`LineWidth`): Metal draws such a line as
   a parallelogram that width wide, and Vulkan's wider lines are a device feature (`wideLines`)
   the floor does not require; a
@@ -3545,7 +3550,9 @@ cache is answered compile-required on both.
 - While a `Boolean` or `Counting` mode's query counts the draws (from the mode's first draw to the
   next mode set or the encoder's end), a command that would end the pass's rendering is refused,
   `Gap::Draw` of `VisibilityResultInterrupt`, the encoder as it was, and counted in
-  `Metrics::visibility_interrupts_refused`: a memory barrier after a draw that wrote memory; a
+  `Metrics::visibility_interrupts_refused`: a memory barrier after a draw that wrote memory; an
+  execution of an indirect command buffer over a range a buffer holds, whose count kernel runs
+  outside the rendering; a
   draw that moves an attachment to the feedback layout, pays the barrier owed before an
   attachment read, or copies into an attachment's shadow what it reads; and, whether or not a
   copy is owed, a draw that looks at textures over a buffer in images of their own (one bound or

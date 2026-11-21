@@ -2797,7 +2797,7 @@ impl RenderCommandEncoder {
         };
         let (topology, _) = primitives(PrimitiveType::Triangle);
         let pipeline = compiled.pipeline(topology, self.raster)?;
-        let made = (compiled, self.raster, pipeline);
+        let made = (&**compiled, self.raster, pipeline);
         let shape = indirect.shape(&self.core, made, buffer.layout(), buffer.size())?;
         Ok(shape.part)
     }
