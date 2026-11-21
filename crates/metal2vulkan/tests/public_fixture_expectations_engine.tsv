@@ -166,7 +166,7 @@ kernel_write_one_dimensional_textures.ll	kernel_write_one_dimensional_textures	o
 kernel_write_short_coordinate_textures.ll	kernel_write_short_coordinate_textures	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 kernel_write_short_texture.ll	kernel_write_short_texture	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 kernel_zero_a_struct_prefix.ll	zero_a_struct_prefix	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-vertex_amplification_id_layer.ll	vertex_amplification_id_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+vertex_amplification_id_layer.ll	vertex_amplification_id_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 vertex_escaping_pointer_integers.ll	escaping_pointer_integers	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 vertex_fetch_buffer_without_address_space.ll	fetch_from_device	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 vertex_fetch_buffer_without_address_space.ll	fetch_from_constant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -468,12 +468,12 @@ engine/cfb_imageblock_masters.air.ll	cfb_ib_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/cfb_imageblock_masters.air.ll	cfb_ib_splat_swapped	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Imageblocks; AnyOf[[Feature(FragmentShaderPixelInterlock)]]}
 engine/cfb_imageblock_masters.ll	cfb_ib_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_imageblock_masters.ll	cfb_ib_splat_swapped	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Imageblocks; AnyOf[[Feature(FragmentShaderPixelInterlock)]]}
-engine/cfb_rate_layers.air.ll	cfb_rl_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/cfb_rate_layers.air.ll	cfb_rl_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.air.ll	cfb_rl_amp	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.air.ll	cfb_rl_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.air.ll	cfb_rl_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.air.ll	cfb_rl_position_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/cfb_rate_layers.ll	cfb_rl_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/cfb_rate_layers.ll	cfb_rl_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.ll	cfb_rl_amp	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.ll	cfb_rl_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_rate_layers.ll	cfb_rl_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2477,12 +2477,12 @@ engine/rrp_swizzled_storage.ll	rrp_sw_atomic_u	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/rrs_tile_writer.air.ll	rrs_tile_writer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rrs_tile_writer.ll	rrs_tile_writer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.air.ll	rt6_amplified_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/rt6_amplified.air.ll	rt6_amplified_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/rt6_amplified.air.ll	rt6_amplified_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.air.ll	rt6_amplified_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.air.ll	rt6_amplified_slice_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.air.ll	rt6_amplified_layered_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.ll	rt6_amplified_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/rt6_amplified.ll	rt6_amplified_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/rt6_amplified.ll	rt6_amplified_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.ll	rt6_amplified_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.ll	rt6_amplified_slice_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_amplified.ll	rt6_amplified_layered_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2498,10 +2498,10 @@ engine/rt6_first_vertex.air.ll	rt6_first_vertex_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/rt6_first_vertex.ll	rt6_first_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}
 engine/rt6_first_vertex.ll	rt6_first_vertex_point	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}
 engine/rt6_first_vertex.ll	rt6_first_vertex_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/rt6_layered.air.ll	rt6_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/rt6_layered.air.ll	rt6_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_layered.air.ll	rt6_layered_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_layered.air.ll	rt6_layered_weights	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Barycentrics; AnyOf[[Feature(FragmentShaderBarycentric)], [Feature(GeometryShader)]]}
-engine/rt6_layered.ll	rt6_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/rt6_layered.ll	rt6_layered_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_layered.ll	rt6_layered_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_layered.ll	rt6_layered_weights	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Barycentrics; AnyOf[[Feature(FragmentShaderBarycentric)], [Feature(GeometryShader)]]}
 engine/rt6_pair.air.ll	rt6_pair_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2660,6 +2660,18 @@ engine/rvc_simd_vertex.air.ll	simd_functions_in_a_vertex_function	ok	ok	ok	ok	Un
 engine/rvc_simd_vertex.ll	simd_functions_in_a_vertex_function	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}
 engine/rvc_simd_vertex_fill.air.ll	simd_shuffle_and_fill_down_in_a_vertex_function	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}
 engine/rvc_simd_vertex_fill.ll	simd_shuffle_and_fill_down_in_a_vertex_function	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}	ok	ok	ok	Unsupported{SubgroupOperations; AnyOf[[Property(SubgroupStage(Vertex))]]}
+engine/sample_fill.air.ll	sample_read_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.air.ll	sample_read_depth	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.air.ll	sample_read_stencil	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.air.ll	sample_fill_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.air.ll	sample_fill_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.air.ll	sample_fill_depth	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_read_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_read_depth	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_read_stencil	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_fill_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_fill_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/sample_fill.ll	sample_fill_depth	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/sample_rate.air.ll	sample_rate_num_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/sample_rate.air.ll	sample_rate_mask_in	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/sample_rate.air.ll	sample_rate_coverage	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2961,7 +2973,7 @@ engine/stage_in_regions.ll	stage_in_region_pair	NeedsInput{StageInputDescriptor 
 engine/stage_io.air.ll	stage_io_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.air.ll	stage_io_vertex_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.air.ll	stage_io_vertex_clip	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/stage_io.air.ll	stage_io_vertex_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/stage_io.air.ll	stage_io_vertex_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.air.ll	stage_io_vertex_invariant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.air.ll	stage_io_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.air.ll	stage_io_fragment_point	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2970,7 +2982,7 @@ engine/stage_io.air.ll	stage_io_fragment_dual_source	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/stage_io.ll	stage_io_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.ll	stage_io_vertex_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.ll	stage_io_vertex_clip	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/stage_io.ll	stage_io_vertex_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(ShaderOutputLayer)], [Feature(GeometryShader)]]}
+engine/stage_io.ll	stage_io_vertex_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.ll	stage_io_vertex_invariant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.ll	stage_io_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/stage_io.ll	stage_io_fragment_point	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
