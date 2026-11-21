@@ -18,9 +18,9 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType,
-        FunctionDescriptor, HeapRange, IndexClass, Library, MemoryClass, NumberedSampler,
-        PixelFormat, Region, Resource, ResourceUsage, SamplerDescriptor, StageSource, Texture,
-        TextureDescriptor, TextureType, TextureUsage,
+        FunctionDescriptor, IndexClass, Library, MemoryClass, NumberedSampler, PixelFormat, Region,
+        Resource, ResourceUsage, SamplerDescriptor, StageSource, Texture, TextureDescriptor,
+        TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 
@@ -246,6 +246,7 @@ mod on_device {
         use crate::tests::command::on_device::shared_event;
         use crate::tests::compute::on_device::step;
         use crate::tests::gpu_span::on_device::{dispatches_for, long, words, WORDS};
+        use crate::HeapRange;
         let Some(library) = library("examples/heap_samples.ll") else {
             return;
         };
