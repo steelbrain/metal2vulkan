@@ -195,8 +195,8 @@ fn two_queues(device: &rt::Device) -> Result<OwnReport> {
 
 /// What a part of the two-queue row measured, in microseconds: each of B's command buffers'
 /// commit to completed, each GPU start of B's after the GPU end of the signaller it waited for,
-/// each of A's GPU runs and each GPU start of A's after the GPU end of A's before it; and the
-/// command buffers held for room during it.
+/// each of A's GPU runs and the GPU idle before each of A's, from the end of A's before it, less
+/// B's runs between them; and the command buffers held for room during it.
 struct Part {
     b: Vec<f64>,
     after: Vec<f64>,
@@ -339,8 +339,16 @@ fn two_queue_part(
                     .saturating_sub(command_buffer.gpu_start_time()) as f64)
             })
             .collect(),
+        // The GPU idle between two of A's: their gap less B's runs within it.
         a_gap: (of_a.windows(2))
-            .map(|pair| gap(&pair[0], &pair[1]))
+            .map(|pair| {
+                let (from, to) = (pair[0].gpu_end_time(), pair[1].gpu_start_time());
+                let within = (frames.iter()).map(|(command_buffer, ..)| {
+                    let start = command_buffer.gpu_start_time().max(from);
+                    command_buffer.gpu_end_time().min(to).saturating_sub(start)
+                });
+                gap(&pair[0], &pair[1]) - us(within.sum::<u64>() as f64)
+            })
             .collect(),
         held: held() - before,
     })

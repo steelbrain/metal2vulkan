@@ -281,9 +281,9 @@ pub enum OwnRow {
     /// commits on B right after it a command buffer that waits for that count, then fills 4 KiB
     /// once; the GPU start of each of B's after the GPU end of its signaller, at p50 and p90, are
     /// its times. Each part also times A's GPU idle before each of its command buffers, from the
-    /// GPU end of the one before, at p50 and p90, and prints the command buffers held for room
-    /// (`Metrics::held_for_room`). Every command buffer is to complete, and each of B's to end
-    /// after its signaller, or the row fails.
+    /// GPU end of the one before, less B's runs between, at p50 and p90, and prints the command
+    /// buffers held for room (`Metrics::held_for_room`). Every command buffer is to complete, and
+    /// each of B's to end after its signaller, or the row fails.
     TwoQueues,
 }
 
