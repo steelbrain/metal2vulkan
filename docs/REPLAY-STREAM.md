@@ -225,22 +225,33 @@ and the (name id, value) answer pairs.
   indices:indexCount:`), as Metal's pool hands out a sampler state's ID. A reserved index is taken
   only where the stream names it. A named index a live object of the play holds is taken from
   it, as Metal's later texture at an ID takes the ID: the earlier object's release leaves the
-  index. A placement at an index waits first for the commits of the command buffers that named
-  an object while it held the index, live or released since, to retire (their completed handlers have run, which the runtime runs once it
-  has let go of what they held): the runtime leaves it to its consumer never to write an
-  element that work in flight may use. An object named after a later
-  one took its index holds it no more: the index is the later one's, and that naming owes it
-  nothing. Where the runtime refuses a named index (it lies outside the object's class), the object
-  takes the lowest free one, and the report counts it. A constexpr sampler, which the stream names
-  no index for, takes the highest free sampler index, outside the sequence the program's sampler
-  states take, so none of theirs takes its index. Every other object takes the ID the runtime
-  gives it.
+  index. The runtime leaves it to its consumer never to write an element that work in flight may
+  use, and a consumer keeps a released ID back until every command buffer committed before the
+  release has retired; the player keeps that duty. An index is owed to every commit before the
+  release of the object that held it (work may reach the object through an ID in memory, which
+  no call names), and to the commits of the command buffers that named an object while it held
+  the index, live or released since. A placement at an index first waits until the commits it is
+  owed to have retired (their completed handlers have run, which the runtime runs once it has let
+  go of what they held). An object named after a later one took its index holds it no more: the
+  index is the later one's, and that naming owes it nothing. Where one of the commits is held on
+  records not yet played (its command buffer waits for an event only a later record signals, or
+  is behind one that does on its queue), no wait can end before the placement: the player keeps
+  the index back, and the object takes the highest free index of its class that no commit in
+  flight is owed, outside the sequence the program's objects take. Its ID then differs from the
+  one the program saw (section 10), and an ID of it the program wrote into memory reads another
+  element. A sampler state whose recorded descriptor is that of the sampler state placed at the
+  index last takes the index without waiting: the runtime writes no element for it. Where the
+  runtime refuses a named index (it lies outside the object's class), the object takes the lowest
+  free one, and the report counts it. A constexpr sampler, which the stream names no index for,
+  takes the highest free sampler index that no commit in flight is owed, outside the sequence the
+  program's sampler states take, so none of theirs takes its index. Every other object takes the
+  ID the runtime gives it.
 - **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
   program's (the host's cursor), comes from a texture descriptor record whose map holds
   `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no
   ID in Metal's space, so the program's textures took theirs as if it were not there. The player
-  makes it where it moves no ID of the program's: at the highest free index of its class, outside
-  the sequence the program's textures take. A marked descriptor with a `resourceIndex`, a marked
+  makes it where it moves no ID of the program's: at the highest free index of its class that no
+  commit in flight is owed, outside the sequence the program's textures take. A marked descriptor with a `resourceIndex`, a marked
   descriptor any other call makes a texture of, and a drawable's map with the mark are refused; a
   `gpuResourceID` record of a marked texture stops the play (`invalid stream`): the program never
   saw its ID, so the mark or the record is wrong.
@@ -867,15 +878,14 @@ records as text, and
   indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
   whose named index the runtime refused, the indices the program reserved, the placements
-  that waited for an index's holders' commits, with the time waited, and the sampler states placed
-  without waiting at an index whose last sampler state had the same recorded descriptor while its
-  commits were in flight (Metal hands an equal descriptor the same sampler state and ID, so work in
-  flight reads nothing new there). A placement that owes its index to a command buffer no record
-  played so far lets complete (its event waits only later records signal, or it is behind such a
-  one on its queue) shows that the recording device gave the index to the new object before that
-  command buffer completed, as its index policy does: it takes the index without waiting, as the
-  recording did, and its own `indices given while a commit they owe is held N: ...` line counts
-  it. The index stays owed to that command buffer. Its readback serves
+  that waited for the commits an index is owed to, with the time waited, and the sampler states
+  placed without waiting at an index whose last sampler state had the same recorded descriptor
+  while its commits were in flight (Metal hands an equal descriptor the same sampler state and
+  ID, so work in flight reads nothing new there). A placement at an index owed to a command
+  buffer no record played so far lets complete (its event waits only later records signal, or it
+  is behind such a one on its queue) is kept back: the object takes the highest free index of its
+  class that no commit in flight is owed, and the `indices kept back N: ...` line counts it. The
+  index stays owed to that command buffer. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
   an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw

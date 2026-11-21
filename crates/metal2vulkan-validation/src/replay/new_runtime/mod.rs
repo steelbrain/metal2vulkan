@@ -1365,7 +1365,7 @@ impl NewRuntime {
 
     /// Waits until the commits up to `commit` have retired, each wait bounded (`gpu::wait`): one
     /// past the bound ends the process as a hang. Where one of them is held (`held`), no wait can
-    /// end: false, unwaited.
+    /// end: false, none waited for.
     fn wait_for(&mut self, commit: u64) -> bool {
         let mut flights = (self.in_flight.iter()).take_while(|flight| flight.commit <= commit);
         if flights.any(|flight| self.held.contains(&flight.id)) {
@@ -1386,7 +1386,9 @@ impl NewRuntime {
     /// the lowest free index of `class`. `sampler` is a sampler state's recorded descriptor: where
     /// the sampler state placed last at the index has the same one, the placement displaces
     /// nothing work in flight reads (Metal hands an equal descriptor the same sampler and ID), and
-    /// it takes the index without waiting.
+    /// it takes the index without waiting. Where the index is owed to a commit held on records not
+    /// yet played (`settle`), the object takes the highest free index that no commit in flight is
+    /// owed instead (`Indices::top`), and is counted.
     fn place<T>(
         &mut self,
         call: &Call,
@@ -1398,17 +1400,24 @@ impl NewRuntime {
         // The ID's low half is its index (docs/RESOURCE-ID.md).
         let recorded = recorded.map(|(_, id)| id as u32);
         let named = self.named.or(recorded);
-        if let Some(index) = self.indices.target(class, named) {
-            let equal = sampler.is_some() && self.sampler_descriptors.get(&index) == sampler;
-            match equal {
-                true => {
-                    let retired = self.completed();
-                    self.indices.equal(class, index, retired);
-                }
-                false => self.settle(class, index),
+        let kept = match self.indices.target(class, named) {
+            Some(index) if sampler.is_some() && self.sampler_descriptors.get(&index) == sampler => {
+                let retired = self.completed();
+                self.indices.equal(class, index, retired);
+                false
             }
-        }
-        let made = match self.indices.place(call.result, class, named, make) {
+            Some(index) => !self.settle(class, index),
+            None => false,
+        };
+        let made = match kept {
+            true => {
+                self.indices.kept();
+                let retired = self.completed();
+                self.indices.top(call.result, class, retired, make)
+            }
+            false => self.indices.place(call.result, class, named, make),
+        };
+        let made = match made {
             Some(made) => made.map_err(failed(call))?,
             None => return Err(refuse(call, format!("every {class:?} index is in use"))),
         };
@@ -1418,37 +1427,36 @@ impl NewRuntime {
         Ok(made)
     }
 
-    /// Before a placement at `index` of `class`: waits for the commits that named an object
-    /// holding it to retire, where they have not (`Indices::owed`), and counts the wait. Where one
-    /// of them is held on records not yet played, no wait for it can end, and the recording
-    /// device gave the index to the new object before that commit completed, as its index policy
-    /// does: the placement takes the index without waiting, as the recording did, and is counted
-    /// (`Indices::unwaited`).
-    fn settle(&mut self, class: rt::IndexClass, index: u32) {
+    /// Before a placement at `index` of `class`: waits until the commits the index is owed to have
+    /// retired, where they have not (`Indices::owed`), and counts the wait; true, the index free
+    /// to take.
+    /// Where one of them is held on records not yet played, no wait for it can end before the
+    /// placement: false, the index kept back.
+    fn settle(&mut self, class: rt::IndexClass, index: u32) -> bool {
         let retired = self.completed();
-        if let Some(commit) = self.indices.owed(class, index, retired) {
-            let began = std::time::Instant::now();
-            if !self.wait_for(commit) {
-                self.indices.unwaited();
-                return;
-            }
-            let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            self.indices.waited(class, index, nanos);
+        let Some(commit) = self.indices.owed(class, index, retired) else {
+            return true;
+        };
+        let began = std::time::Instant::now();
+        if !self.wait_for(commit) {
+            return false;
         }
+        let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.indices.waited(class, index, nanos);
+        true
     }
 
-    /// `make` at the highest index of `class` that no object holds and the program did not
-    /// reserve (`Indices::top`): outside the indices the program's own objects take.
+    /// `make` at the highest index of `class` that no object holds, the program did not reserve
+    /// and no commit in flight is owed (`Indices::top`): outside the indices the program's own
+    /// objects take.
     fn place_outside<T>(
         &mut self,
         call: &Call,
         class: rt::IndexClass,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
-        if let Some(index) = self.indices.highest(class, |_| false) {
-            self.settle(class, index);
-        }
-        match self.indices.top(call.result, class, make) {
+        let retired = self.completed();
+        match self.indices.top(call.result, class, retired, make) {
             Some(made) => made.map_err(failed(call)),
             None => Err(refuse(call, format!("every {class:?} index is in use"))),
         }
@@ -1722,9 +1730,9 @@ impl NewRuntime {
     }
 
     /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
-    /// constexpr sampler an index of its own, the highest free one, the same words one index: the
-    /// stream names no index for it, and the program's sampler states take the lowest, which a
-    /// constexpr sampler there would lose to them.
+    /// constexpr sampler an index of its own, the highest free one that no commit in flight is
+    /// owed, the same words one index: the stream names no index for it, and the program's sampler
+    /// states take the lowest, which a constexpr sampler there would lose to them.
     fn numbered<T>(
         &mut self,
         make: impl FnOnce(
@@ -1732,6 +1740,7 @@ impl NewRuntime {
             &mut dyn FnMut(&[rt::NumberedSampler]) -> Result<Vec<u32>, rt::Error>,
         ) -> Result<T, rt::Error>,
     ) -> Result<T, rt::Error> {
+        let retired = self.completed();
         let mut taken: Vec<([u64; 2], u32)> = Vec::new();
         let made = {
             let (constexprs, indices) = (&self.constexprs, &self.indices);
@@ -1746,10 +1755,14 @@ impl NewRuntime {
                         .or_else(|| taken.iter().find(|(w, _)| w == words).map(|&(_, i)| i));
                     let index = match known {
                         Some(index) => index,
-                        // The highest free sampler index this call has not taken yet.
+                        // The highest free sampler index this call has not taken yet and no
+                        // commit in flight is owed.
                         None => {
-                            let fresh = |index| taken.iter().any(|&(_, i)| i == index);
-                            let index = indices.highest(rt::IndexClass::Sampler, fresh);
+                            let skip = |index| {
+                                taken.iter().any(|&(_, i)| i == index)
+                                    || indices.owes(rt::IndexClass::Sampler, index, retired)
+                            };
+                            let index = indices.highest(rt::IndexClass::Sampler, skip);
                             // None free: the next would be past the class's range.
                             let index = index.ok_or(rt::Error::Refused(
                                 rt::Refusal::IndicesNotGranted {
@@ -2506,7 +2519,7 @@ impl Backend for NewRuntime {
                 let users = self.users_of(call.receiver);
                 self.places.give(place, self.commits, users);
             }
-            self.indices.give(call.receiver);
+            self.indices.give(call.receiver, self.commits);
             self.resource_indices.remove(&call.receiver);
             self.surfaces.released(call.receiver);
             self.videos.released(call.receiver);
@@ -3317,7 +3330,7 @@ impl Backend for NewRuntime {
         lines.push(self.places.line());
         lines.push(self.unwritten.line());
         lines.push(self.indices.line());
-        lines.push(self.indices.unwaited_line());
+        lines.push(self.indices.kept_line());
         lines
     }
 

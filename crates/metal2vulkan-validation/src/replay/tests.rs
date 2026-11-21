@@ -1603,7 +1603,7 @@ fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
         made.expect("a free index").expect("made")
     };
     let topped = |indices: &mut Indices, object| {
-        let made = indices.top(object, class, make);
+        let made = indices.top(object, class, 0, make);
         made.expect("a free index").expect("made")
     };
     let mut indices = Indices::default();
@@ -1666,20 +1666,20 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
     assert_eq!(take(&mut indices, 4, None), start + 3);
     // A named index an object holds: taken, and the earlier object's release leaves it.
     assert_eq!(take(&mut indices, 5, Some(start + 7)), start + 7);
-    indices.give(1);
+    indices.give(1, 0);
     assert_eq!(indices.lowest(class, start + 7), Some(start + 8));
     assert_eq!(
         take(&mut indices, 6, Some(start + 2)),
         start + 2,
         "the stream names a reserved index"
     );
-    indices.give(2);
+    indices.give(2, 0);
     assert_eq!(
         take(&mut indices, 7, None),
         start,
         "free again after the release"
     );
-    indices.give(5);
+    indices.give(5, 0);
     assert_eq!(indices.lowest(class, start + 7), Some(start + 7));
     assert!(
         indices.line().starts_with("indices named 3:"),
@@ -1689,10 +1689,11 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
 }
 
 /// An index is owed to the last commit of a command buffer that named an object while it held the
-/// index, the object live or released since; a placement there waits only while the owed commit
-/// has not retired, and the line counts the waits and their time. A command buffer released
-/// uncommitted owes nothing, and nor does one that named an object after a later one took its
-/// index: of two live objects placed at one index, the index is the later one's.
+/// index, the object live or released since, and to every commit before its holder's release; a
+/// placement there waits only while the owed commit has not retired, and the line counts the
+/// waits and their time. A command buffer released uncommitted owes nothing, and nor does one that
+/// named an object after a later one took its index: of two live objects placed at one index, the
+/// index is the later one's.
 #[test]
 fn an_index_is_owed_to_the_commits_that_named_its_holders() {
     let class = rt::IndexClass::Texture;
@@ -1709,7 +1710,7 @@ fn an_index_is_owed_to_the_commits_that_named_its_holders() {
     );
     // Released while one more command buffer not yet committed named it.
     indices.named(101, &[1]);
-    indices.give(1);
+    indices.give(1, 3);
     indices.committed(101, 5);
     assert_eq!(
         indices.owed(class, 10, 4),
@@ -1729,10 +1730,15 @@ fn an_index_is_owed_to_the_commits_that_named_its_holders() {
     let placed = indices.place(3, class, Some(11), made);
     assert_eq!(placed.expect("a free index").expect("made"), 11);
     indices.named(103, &[3]);
-    indices.give(3);
+    indices.give(3, 6);
     indices.ended(103);
     indices.committed(103, 9);
-    assert_eq!(indices.owed(class, 11, 0), None, "nothing owed");
+    assert_eq!(
+        indices.owed(class, 11, 5),
+        Some(6),
+        "every commit before the release"
+    );
+    assert_eq!(indices.owed(class, 11, 6), None, "and nothing of #103");
     // Two live objects placed at 12, #5 after #4: a command buffer that names #4 then, which is
     // released after, owes 12 nothing; one that names #5 owes it.
     for object in [4, 5] {
@@ -1740,7 +1746,7 @@ fn an_index_is_owed_to_the_commits_that_named_its_holders() {
         assert_eq!(placed.expect("a free index").expect("made"), 12);
     }
     indices.named(104, &[4]);
-    indices.give(4);
+    indices.give(4, 9);
     indices.committed(104, 10);
     assert_eq!(indices.owed(class, 12, 0), None, "the earlier object's");
     indices.named(105, &[5]);
@@ -1754,12 +1760,39 @@ fn an_index_is_owed_to_the_commits_that_named_its_holders() {
     let line = indices.line();
     assert!(
         line.ends_with(
-            "1 placed at an index whose holders' commits were in flight, after waiting for them \
-             (7 ns); 0 sampler states placed without waiting at an index whose last sampler state \
-             had the same descriptor while its commits were in flight"
+            "1 placed at an index owed to commits in flight, after waiting for them (7 ns); 0 \
+             sampler states placed without waiting at an index whose last sampler state had the \
+             same descriptor while its commits were in flight"
         ),
         "{line}"
     );
+}
+
+/// A released object's index is owed to every commit before the release, which may reach it
+/// through an ID in memory, though no command buffer named the object. An index the player chooses
+/// itself (`top`) is never one owed to a commit in flight, and a placement kept back is counted.
+#[test]
+fn a_released_index_is_owed_to_every_commit_before_the_release() {
+    let class = rt::IndexClass::Texture;
+    let made = |index: u32| Ok::<u32, rt::Error>(index);
+    let end = class.range().end;
+    let mut indices = Indices::default();
+    let placed = indices.place(1, class, Some(end - 1), made);
+    assert_eq!(placed.expect("a free index").expect("made"), end - 1);
+    // Released after commit 3, which named nothing.
+    indices.give(1, 3);
+    assert!(indices.owes(class, end - 1, 2), "commit 3 in flight");
+    assert!(!indices.owes(class, end - 1, 3), "commit 3 retired");
+    let topped = indices.top(2, class, 2, made);
+    let topped = topped.expect("a free index").expect("made");
+    assert_eq!(topped, end - 2, "the owed index skipped");
+    indices.kept();
+    let line = indices.kept_line();
+    assert!(line.starts_with("indices kept back 1:"), "{line}");
+    assert_eq!(indices.owed(class, end - 1, 2), Some(3), "still owed");
+    let topped = indices.top(3, class, 3, made);
+    let topped = topped.expect("a free index").expect("made");
+    assert_eq!(topped, end - 1, "free again once commit 3 retired");
 }
 
 #[test]
@@ -1772,7 +1805,7 @@ fn an_equal_sampler_state_takes_an_owed_index_and_leaves_it_owed() {
     assert_eq!(indices.index_of(1), Some(16));
     indices.named(100, &[1]);
     indices.committed(100, 4);
-    indices.give(1);
+    indices.give(1, 4);
     // An equal sampler state at 16 while commit 4 is in flight: counted, and 16 stays owed.
     indices.equal(class, 16, 3);
     assert_eq!(indices.owed(class, 16, 3), Some(4), "still owed");

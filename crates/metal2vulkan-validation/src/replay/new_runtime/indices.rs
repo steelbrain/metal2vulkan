@@ -6,16 +6,20 @@
 //! last, as the runtime's is: a later object at an index an earlier one holds takes it, and the
 //! earlier one's release leaves it.
 //!
-//! An index is owed to the commits of the command buffers that named an object while it held the
-//! index, the object live or released since: a placement there takes the index's element from
-//! under that work, which Metal leaves to the
-//! program never to do while the work runs (docs/RESOURCE-ID.md), and the program's own timing
-//! kept that duty. The player keeps it by waiting for those commits to retire before such a
-//! placement, and counts the waits and their time. Where one of them is held on records not yet
-//! played (its command buffer waits for an event only a later record signals), the recording
-//! device gave the index to the new object before that commit could complete, as its index policy
-//! does: the player takes the index without waiting, as the recording did, and counts it on a line
-//! of its own. The index stays owed to the held commit.
+//! A placement writes the index's elements, a write Vulkan does not define while pending work may
+//! use them, and the runtime leaves it to its consumer never to place at an index that work in
+//! flight may use (docs/RESOURCE-ID.md). An index is owed to every commit before the release of
+//! the object that held it, which may reach the object through an ID in memory as well as by
+//! name, and to the commits of the command buffers that named an object while it held the index,
+//! the object live or released since. The player keeps that duty as a consumer does: a placement
+//! at an index waits until the commits the index is owed to have retired, and the waits and their
+//! time are counted. Where one of them is held on records not yet played (its command buffer waits for an
+//! event only a later record signals, or is behind one that does on its queue), no wait for it
+//! can end before the placement: the player keeps the index back and places the object at the
+//! highest index of its class that no object holds and no commit in flight is owed, away from the
+//! indices the program's objects take, and counts it on a line of its own. The index stays owed.
+//! An index the player chooses itself (a constexpr sampler's, a texture's outside the program's
+//! IDs) is never one owed to a commit in flight.
 
 use metal2vulkan_runtime as rt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -48,8 +52,9 @@ pub(in crate::replay) struct Indices {
     /// held when it named them. An object named after a later one took its index holds it no
     /// more: the index is the later one's.
     naming: HashMap<u64, HashSet<(usize, u32)>>,
-    /// Each index's last commit that named an object holding it, until a placement there finds
-    /// it retired.
+    /// Each index's last commit it is owed to: the last before the release of the object that
+    /// held it, or the last of a command buffer that named an object holding it; until a
+    /// placement there finds it retired.
     owed: HashMap<(usize, u32), u64>,
     /// The placements that waited for an index's owed commits, and the nanoseconds they waited.
     waits: u64,
@@ -57,9 +62,9 @@ pub(in crate::replay) struct Indices {
     /// The placements of a sampler state equal to the one placed last at its index, which took
     /// the index without waiting for the commits in flight it was owed to.
     equal: u64,
-    /// The placements that took the index without waiting for a commit it was owed to that is held
-    /// on records not yet played, as the recording device's index policy gave it.
-    unwaited: u64,
+    /// The placements kept off the index the stream gives them, owed to a commit held on records
+    /// not yet played: placed at the highest free index instead.
+    kept: u64,
 }
 
 impl Indices {
@@ -85,13 +90,15 @@ impl Indices {
         }
     }
 
-    /// The index `object` held, free again where no later object was placed there. The command
-    /// buffers not yet committed that named it while it held the index still owe it once they
-    /// are (`named`).
-    pub(in crate::replay) fn give(&mut self, object: u64) {
+    /// The index `object` held, free again where no later object was placed there, and owed to
+    /// every commit so far (`commits`, the last), which may reach the object through an ID in
+    /// memory. The command buffers not yet committed that named it while it held the index owe it
+    /// once they are (`named`).
+    pub(in crate::replay) fn give(&mut self, object: u64, commits: u64) {
         if let Some((slot, index)) = self.objects.remove(&object) {
             if self.held[slot].get(&index) == Some(&Some(object)) {
                 self.held[slot].remove(&index);
+                self.owe((slot, index), commits);
             }
         }
     }
@@ -130,8 +137,8 @@ impl Indices {
         self.naming.remove(&command_buffer);
     }
 
-    /// The commit a placement at `index` of `class` waits for: the last that named an object
-    /// holding it, where that has not retired (`retired`, the commits that have).
+    /// The commit a placement at `index` of `class` waits for: the last it is owed to, where that
+    /// has not retired (`retired`, the commits that have).
     pub(in crate::replay) fn owed(
         &mut self,
         class: rt::IndexClass,
@@ -150,7 +157,8 @@ impl Indices {
     /// A placement at `index` of `class` of a sampler state equal to the one placed there last:
     /// it displaces nothing, so it takes the index without waiting for the commits the index is
     /// owed to, and is counted where one of them has not retired (`retired`, the commits that
-    /// have). They stay owed: a placement of another sampler state there waits for them.
+    /// have). They stay owed: a placement of another sampler state there waits for them, or is
+    /// kept back where one is held.
     pub(in crate::replay) fn equal(&mut self, class: rt::IndexClass, index: u32, retired: u64) {
         let key = (slot(class), index);
         match self.owed.get(&key) {
@@ -160,10 +168,17 @@ impl Indices {
         }
     }
 
-    /// A placement took its index without waiting for an owed commit held on records not yet
-    /// played, as the recording device's index policy did; the index stays owed to the commit.
-    pub(in crate::replay) fn unwaited(&mut self) {
-        self.unwaited += 1;
+    /// Whether `index` of `class` is owed to a commit that has not retired (`retired`, the commits
+    /// that have).
+    pub(in crate::replay) fn owes(&self, class: rt::IndexClass, index: u32, retired: u64) -> bool {
+        let owed = self.owed.get(&(slot(class), index));
+        owed.is_some_and(|&commit| commit > retired)
+    }
+
+    /// A placement kept off its index, owed to a commit held on records not yet played, for the
+    /// [`top`](Self::top) free one; the index stays owed to the commit.
+    pub(in crate::replay) fn kept(&mut self) {
+        self.kept += 1;
     }
 
     /// The index `object` holds, where it holds one.
@@ -243,15 +258,17 @@ impl Indices {
         Some(made)
     }
 
-    /// `make` at the [`highest`](Self::highest) free index of `class`; what `object` then holds.
-    /// None where every index of the class is held.
+    /// `make` at the [`highest`](Self::highest) free index of `class` that no commit that has not
+    /// retired (`retired`, the commits that have) is owed; what `object` then holds. None where
+    /// every index of the class is held or owed.
     pub(in crate::replay) fn top<T>(
         &mut self,
         object: u64,
         class: rt::IndexClass,
+        retired: u64,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Option<Result<T, rt::Error>> {
-        let index = self.highest(class, |_| false)?;
+        let index = self.highest(class, |index| self.owes(class, index, retired))?;
         let made = make(index);
         if made.is_ok() {
             self.hold(Some(object), class, index);
@@ -260,29 +277,29 @@ impl Indices {
     }
 
     /// The report's line: the objects placed at the index the stream named, those whose named
-    /// index the runtime refused, the indices the program reserved, and the placements that
-    /// waited for an index's owed commits, with the time waited.
+    /// index the runtime refused, the indices the program reserved, the placements that waited
+    /// for an index's owed commits, with the time waited, and the equal sampler states that did
+    /// not.
     pub(in crate::replay) fn line(&self) -> String {
         let reserved: usize = self.reserved.iter().map(BTreeSet::len).sum();
         format!(
             "indices named {}: objects placed at the index the stream named; {} whose named index \
              the runtime refused, placed at the lowest free one; {reserved} reserved; {} placed \
-             at an index whose holders' commits were in flight, after waiting for them ({} ns); {} \
-             sampler states placed without waiting at an index whose last sampler state had the \
-             same descriptor while its commits were in flight",
+             at an index owed to commits in flight, after waiting for them ({} ns); {} sampler \
+             states placed without waiting at an index whose last sampler state had the same \
+             descriptor while its commits were in flight",
             self.named, self.refused, self.waits, self.wait_nanos, self.equal
         )
     }
 
-    /// The report's line of the placements that took an index without waiting for a commit owed
-    /// held on records not yet played.
-    pub(in crate::replay) fn unwaited_line(&self) -> String {
+    /// The report's line of the placements kept off their index, owed to a commit held on
+    /// records not yet played.
+    pub(in crate::replay) fn kept_line(&self) -> String {
         format!(
-            "indices given while a commit they owe is held {}: placed without waiting at an index \
-             owed to a command buffer no record played so far lets complete, as the recording \
-             device's index policy gave the index to a new object before that command buffer \
-             completed",
-            self.unwaited
+            "indices kept back {}: objects placed at the highest free index, not at the one the \
+             stream gives them, which is owed to a command buffer no record played so far lets \
+             complete",
+            self.kept
         )
     }
 }
