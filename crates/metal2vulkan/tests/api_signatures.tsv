@@ -500,6 +500,7 @@ const	metal2vulkan-runtime::floor::BUFFER_USAGE	pub const BUFFER_USAGE: vk::Buff
 const	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	pub const DEVICE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-runtime::floor::INDIRECT_COMMANDS	pub const INDIRECT_COMMANDS: &[&CStr]
 const	metal2vulkan-runtime::floor::INSTANCE_EXTENSIONS	pub const INSTANCE_EXTENSIONS: &[&CStr]
+const	metal2vulkan-runtime::floor::MAINTENANCE8	pub const MAINTENANCE8: &CStr
 const	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	pub const OPTIONAL_EXTENSIONS: &[&CStr]
 const	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-runtime::floor::TIME_DOMAINS	pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2]
@@ -583,7 +584,8 @@ const-value	metal2vulkan-runtime::floor::BUFFER_USAGE	vk::BufferUsageFlags::from
 const-value	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME, ash::ext::line_rasterization::NAME]
 const-value	metal2vulkan-runtime::floor::INDIRECT_COMMANDS	&[crate::dgc::NAME, ash::khr::maintenance5::NAME]
 const-value	metal2vulkan-runtime::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME, ash::ext::device_fault::NAME]
+const-value	metal2vulkan-runtime::floor::MAINTENANCE8	c"VK_KHR_maintenance8"
+const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME, ash::ext::device_fault::NAME, MAINTENANCE8]
 const-value	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-runtime::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-runtime::floor::VERSION	vk::API_VERSION_1_3
@@ -1980,6 +1982,7 @@ field	metal2vulkan-runtime::floor::Capabilities.queue_family	pub queue_family: u
 field	metal2vulkan-runtime::floor::Capabilities.shared_int64_atomics	pub shared_int64_atomics: bool
 field	metal2vulkan-runtime::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan-runtime::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
+field	metal2vulkan-runtime::floor::Capabilities.texel_offset_operand	pub texel_offset_operand: bool
 field	metal2vulkan-runtime::floor::DgcFeatures.device_generated_commands	pub device_generated_commands: vk::Bool32
 field	metal2vulkan-runtime::floor::DgcFeatures.dynamic_generated_pipeline_layout	pub dynamic_generated_pipeline_layout: vk::Bool32
 field	metal2vulkan-runtime::floor::Features.barycentric	pub barycentric: vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR<'static>
@@ -1994,6 +1997,7 @@ field	metal2vulkan-runtime::floor::Features.interlock	pub interlock: vk::Physica
 field	metal2vulkan-runtime::floor::Features.line_rasterization	pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.linear_attachment	pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>
 field	metal2vulkan-runtime::floor::Features.maintenance5	pub maintenance5: vk::PhysicalDeviceMaintenance5FeaturesKHR<'static>
+field	metal2vulkan-runtime::floor::Features.maintenance8	pub maintenance8: Maintenance8Features
 field	metal2vulkan-runtime::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.quad_control	pub quad_control: vk::PhysicalDeviceShaderQuadControlFeaturesKHR<'static>
@@ -2006,6 +2010,7 @@ field	metal2vulkan-runtime::floor::IndirectCommandLimits.sequences	pub sequences
 field	metal2vulkan-runtime::floor::IndirectCommandLimits.stride	pub stride: u32
 field	metal2vulkan-runtime::floor::IndirectCommandLimits.token_offset	pub token_offset: u32
 field	metal2vulkan-runtime::floor::IndirectCommandLimits.tokens	pub tokens: u32
+field	metal2vulkan-runtime::floor::Maintenance8Features.maintenance8	pub maintenance8: vk::Bool32
 field	metal2vulkan-runtime::floor::MemoryTypes.private	pub private: u32
 field	metal2vulkan-runtime::floor::MemoryTypes.ring	pub ring: u32
 field	metal2vulkan-runtime::floor::MemoryTypes.shared	pub shared: u32
@@ -7689,6 +7694,7 @@ struct	metal2vulkan-runtime::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-runtime::floor::DgcFeatures	#[derive(Clone, Copy)] #[repr(C)] pub struct DgcFeatures
 struct	metal2vulkan-runtime::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
 struct	metal2vulkan-runtime::floor::IndirectCommandLimits	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct IndirectCommandLimits
+struct	metal2vulkan-runtime::floor::Maintenance8Features	#[derive(Clone, Copy)] #[repr(C)] pub struct Maintenance8Features
 struct	metal2vulkan-runtime::floor::MemoryTypes	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct MemoryTypes
 struct	metal2vulkan::Budget	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct Budget
 struct	metal2vulkan::CancelToken	#[derive(Clone, Debug, Default)] pub struct CancelToken(Arc<AtomicBool>)
@@ -8046,6 +8052,11 @@ trait-impl	metal2vulkan-runtime::floor::DgcFeatures impl fe impl Send	unsafe imp
 trait-impl	metal2vulkan-runtime::floor::DgcFeatures impl fe impl Sync	unsafe impl Sync for DgcFeatures
 trait-impl	metal2vulkan-runtime::floor::DgcFeatures impl fe impl vk::ExtendsDeviceCreateInfo	unsafe impl vk::ExtendsDeviceCreateInfo for DgcFeatures
 trait-impl	metal2vulkan-runtime::floor::DgcFeatures impl fe impl vk::ExtendsPhysicalDeviceFeatures2	unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for DgcFeatures
+trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl Default	impl Default for Maintenance8Features
+trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl Send	unsafe impl Send for Maintenance8Features
+trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl Sync	unsafe impl Sync for Maintenance8Features
+trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl vk::ExtendsDeviceCreateInfo	unsafe impl vk::ExtendsDeviceCreateInfo for Maintenance8Features
+trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl vk::ExtendsPhysicalDeviceFeatures2	unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for Maintenance8Features
 trait-impl	metal2vulkan-runtime::floor::Missing impl fmt::Display	impl fmt::Display for Missing
 trait-impl	metal2vulkan::bind::ArgumentLayoutError impl From<Error>	impl From<Error> for ArgumentLayoutError
 trait-impl	metal2vulkan::bind::DrawCommands impl Default	impl Default for DrawCommands
