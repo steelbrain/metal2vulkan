@@ -3667,7 +3667,7 @@ declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
                 .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()]));
             match got {
                 Err(Error::Translation { error, functions }) => {
-                    assert_eq!(functions, ["colored_vertex"], "{name}: {error}");
+                    assert_eq!(*functions, ["colored_vertex"], "{name}: {error}");
                     let text = Error::Translation { error, functions }.to_string();
                     assert!(
                         text.starts_with("the translator made no pipeline of colored_vertex: "),

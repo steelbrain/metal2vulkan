@@ -253,7 +253,7 @@ pub fn make_kernel(
         .and_then(|library| library.function(entry))
         .map_err(|error| rt::Error::Translation {
             error,
-            functions: Vec::new(),
+            functions: Box::default(),
         })?;
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
         FunctionDescriptor::new(function).with_specialized(true),

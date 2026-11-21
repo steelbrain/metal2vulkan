@@ -69,7 +69,7 @@ pub enum Error {
         /// `NSError`'s text of Metal's failed creation is, that nothing decides by. A stage the
         /// consumer compiled (`StageSource::Compiled`) has no name here; a sampler state, a
         /// device and a dispatch's variant of a kernel name none.
-        functions: Vec<String>,
+        functions: Box<[String]>,
     },
     /// A Metal feature the runtime does not build yet: a typed known gap.
     Unsupported(Gap),
@@ -1842,7 +1842,7 @@ impl Error {
     pub(crate) fn translation(error: metal2vulkan::error::Error) -> Error {
         Error::Translation {
             error,
-            functions: Vec::new(),
+            functions: Box::default(),
         }
     }
 

@@ -497,7 +497,7 @@ impl Failure {
             metal2vulkan_runtime::Error::Translation { error, .. } => {
                 let unnamed = metal2vulkan_runtime::Error::Translation {
                     error: error.clone(),
-                    functions: Vec::new(),
+                    functions: Box::default(),
                 };
                 unnamed.to_string()
             }

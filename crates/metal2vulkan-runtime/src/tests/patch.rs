@@ -694,7 +694,7 @@ BUFFER_META"#;
                         error: metal2vulkan::error::Error::Unsupported(u),
                         functions,
                     }) if u.feature == Feature::Tessellation
-                        && *functions == ["tess_triangle_points", "tess_fragment"]
+                        && **functions == ["tess_triangle_points", "tess_fragment"]
                 ),
                 "{name}: a control-point index type: {:?}",
                 got.as_ref().err()
