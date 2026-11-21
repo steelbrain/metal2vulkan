@@ -1104,9 +1104,10 @@ pub(crate) mod on_device {
 
     /// Links of a chain on two queues, each but the first waiting for the shared event's value the
     /// link before it signals, then copying the words of every link before it from that link's
-    /// buffer, writing its own after them, and signalling the next, all behind busy work: every
-    /// link goes to the driver and reads `Scheduled`, its scheduled handler run, before the first
-    /// has run, and the submit thread holds none of them for a value. No semaphore wait is
+    /// buffer, writing its own after them, and signalling the next, all behind busy work: each
+    /// queue's expected run 1 ms, so each has room for its links (`submit::room`), every link goes
+    /// to the driver and reads `Scheduled`, its scheduled handler run, before the first has run,
+    /// and the submit thread holds none of them for a value. No semaphore wait is
     /// submitted for a link: once the busy work ends, the links complete in order, and each holds
     /// the words of every link before it and its own, as the barrier ending each link's commands
     /// orders the next link's after them on the device's one queue. A link waiting for a value no
@@ -1126,6 +1127,10 @@ pub(crate) mod on_device {
             let chain = shared_event(&device);
             let holds = || device.counters().metrics().event_holds;
             let before = holds();
+            for queue in &queues {
+                let probe = queue.command_buffer().expect("a command buffer");
+                probe.queue().set_run_for_test(BODY_RUN);
+            }
             // Link `link`'s commands: the words of every link before it, from the buffer of the
             // one before it, then its own word, `link + 1`, after them.
             let record = |command_buffer: &CommandBuffer, link: u32| {
@@ -1264,13 +1269,14 @@ pub(crate) mod on_device {
         });
     }
 
-    /// An event's signal on a queue with three submissions running goes to the driver at once,
-    /// with the group held there, and a waiter on another queue that the submit thread holds for
-    /// that value goes after it: two submissions, both before the busy work ends. A held group
-    /// never keeps back a signal. For a plain event's value and for a shared event's alike; the
+    /// An event's signal on a queue with three submissions running waits for room with the group
+    /// held there, scheduled, as a waiter takes a signal staged as submitted, and a waiter on
+    /// another queue that the submit thread holds for that value waits with it: nothing more goes
+    /// before the busy work ends. Then the group, the signaller and the waiter go, and the waiter
+    /// ends after the signaller. For a plain event's value and for a shared event's alike; the
     /// waiter is held once, counted in `Metrics::event_holds`.
     #[test]
-    fn every_device_sends_a_signal_from_a_queue_three_deep_to_a_held_waiter_on_another_queue() {
+    fn every_device_holds_a_signal_for_room_with_its_waiter_on_another_queue() {
         each_device("event_signal_three_deep", |name, _, device| {
             let mut arena = Arena::new(&device);
             let plain = device.new_event().expect("an event");
@@ -1300,20 +1306,25 @@ pub(crate) mod on_device {
                     fill(&signaller, &signalled, 2);
                     (signaller.encode_signal_event(event, 1)).expect("a signal");
                     signaller.commit().expect("a commit");
-                    within(name, || sent() >= AHEAD + 2);
-                    let seen = host_time();
+                    within(name, || {
+                        signaller.status() != CommandBufferStatus::Committed
+                    });
                     assert_eq!(
-                        sent(),
-                        AHEAD + 2,
-                        "{name}: {label}: the group with the signal, then the waiter"
+                        (signaller.status(), waiter.status(), sent()),
+                        (
+                            CommandBufferStatus::Scheduled,
+                            CommandBufferStatus::Committed,
+                            AHEAD
+                        ),
+                        "{name}: {label}: the signal held for room, its waiter with it"
                     );
                     busy.open();
                     for command_buffer in [&held, &signaller, &waiter] {
                         finished(name, command_buffer);
                     }
                     assert!(
-                        busy.running()[0].gpu_end_time() > seen,
-                        "{name}: {label}: both went before the busy work ended"
+                        waiter.gpu_end_time() >= signaller.gpu_end_time(),
+                        "{name}: {label}: the waiter after the signaller"
                     );
                 });
                 assert_eq!(
