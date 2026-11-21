@@ -76,14 +76,14 @@ fn run() -> Result<(), String> {
                      fails).\n\n\
                      --c3 prints the venues' report, each case's verdict on every venue, from the case and\n\
                      observation shards alone: per engine slot of each venue of the venue list\n\
-                     (default validation/cutover/c3-venues.json; both legs), each case's verdict\n\
+                     (default validation/cutover/c3-venues.json), each case's verdict\n\
                      (match, reviewed, device_gap, out_of_scope_ray_tracing, reference_gap,\n\
                      mismatch, refused, stale, missing). A case whose current Metal row is a\n\
                      reference gap (the reference device lacks the Apple GPU family its pipeline\n\
                      needs) reads reference_gap, is printed (c3-reference-gap), and needs the\n\
                      reviewed list's reference_gaps entry signed off. A venue's\n\
                      slots must cover its\n\
-                     population in the legs it lists: the cases its old-engine rows matched\n\
+                     population: the cases its old-engine rows matched\n\
                      (MoltenVK), the public cases (lavapipe), or every Metal-qualified case (the real\n\
                      GPUs). A row that recorded another device or driver than its venue declares is\n\
                      stale (stale_device). Each case is judged against one Metal reference row:\n\

@@ -36,19 +36,12 @@ fn identity(environment: &str) -> DeviceIdentity {
     }
 }
 
-fn venue(
-    kind: VenueKind,
-    environment: &str,
-    population: Population,
-    legs: &[Leg],
-    profile: &str,
-) -> Venue {
+fn venue(kind: VenueKind, environment: &str, population: Population, profile: &str) -> Venue {
     Venue {
         kind,
         environment_id: environment.into(),
         profile: profile.into(),
         population,
-        legs: legs.to_vec(),
         devices: vec![VenueDevice {
             profile: profile.into(),
             identity: identity(environment),
@@ -57,7 +50,7 @@ fn venue(
     }
 }
 
-/// MoltenVK (the old engine's baseline) and lavapipe (the public cases), each in its stated leg.
+/// MoltenVK (the old engine's baseline) and lavapipe (the public cases).
 fn venues() -> Venues {
     Venues {
         venues: vec![
@@ -65,28 +58,25 @@ fn venues() -> Venues {
                 VenueKind::Moltenvk,
                 MOLTENVK,
                 Population::OldEngineMatched,
-                &[Leg::Stated],
                 "moltenvk-m3",
             ),
             venue(
                 VenueKind::CpuIcd,
                 LAVAPIPE,
                 Population::Public,
-                &[Leg::Stated],
                 "gate-lavapipe",
             ),
         ],
     }
 }
 
-/// [`venues`] and a real GPU that must cover every Metal-qualified case in both legs.
+/// [`venues`] and a real GPU that must cover every Metal-qualified case.
 fn three_venues() -> Venues {
     let mut venues = venues();
     venues.venues.push(venue(
         VenueKind::NativeGpu,
         RADV,
         Population::MetalQualified,
-        &[Leg::Stated, Leg::RobustnessOff],
         "amd-rdna3-radv",
     ));
     venues
@@ -275,32 +265,13 @@ fn new_row(
     let mut row = row(
         case,
         backend,
-        engine_slot(environment, None, Leg::Stated),
+        engine_slot(environment, None),
         output,
         golden,
     );
     row.executor_abi = ENGINE_EXECUTOR_ABI.into();
     row.translator_fingerprint = engine_fingerprint_of(&PROFILE);
     row.environment = recorded_environment(environment);
-    row
-}
-
-/// `row` as its executor records it in `leg`: the leg in its environment and its census, and the
-/// leg's slot.
-fn in_leg(mut row: CandidateObservation, leg: Leg) -> CandidateObservation {
-    let environment = row.environment_id.trim_end_matches("@engine").to_string();
-    row.environment_id = engine_slot(&environment, None, leg);
-    row.environment["robustness"] = serde_json::json!({ "leg": leg });
-    row.census = Some(crate::coverage::ExecutedCensus {
-        device: None,
-        product: crate::observation::TRANSLATOR_FINGERPRINT.into(),
-        restricted_to: None,
-        leg: Some(leg),
-        modules: vec![],
-        out_of_bounds: None,
-        rate_map_pass: None,
-        artifact: None,
-    });
     row
 }
 
@@ -324,7 +295,6 @@ fn noting(mut row: CandidateObservation, notes: &[PrecisionNote]) -> CandidateOb
         device: None,
         product: crate::observation::TRANSLATOR_FINGERPRINT.into(),
         restricted_to: None,
-        leg: None,
         modules: vec![crate::coverage::ModuleCensus {
             stage: Stage::Kernel,
             subgroup: Some(crate::coverage::SubgroupShape::default()),
@@ -410,11 +380,11 @@ fn old_cause(case: &AuthoredCase, cause: Cause) -> OldMismatch {
     }
 }
 
-fn slot<'a>(report: &'a C3Report, venue: &str, leg: Leg) -> &'a SlotReport {
+fn slot<'a>(report: &'a C3Report, venue: &str) -> &'a SlotReport {
     report
         .slots
         .iter()
-        .find(|slot| slot.venue == venue && slot.leg == leg)
+        .find(|slot| slot.venue == venue)
         .unwrap()
 }
 
@@ -446,7 +416,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &lavapipe_alone(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(stated.population, 1);
     assert_eq!(verdict_of(stated, &bounded), Verdict::Mismatch);
     assert!(!stated.holds());
@@ -465,7 +435,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &lavapipe_alone(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &bounded), Verdict::Reviewed);
     assert!(stated.holds());
     assert_eq!(report.readings.len(), 1);
@@ -486,7 +456,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &VenueKeys::default(),
     );
     assert_eq!(
-        verdict_of(slot(&report, LAVAPIPE, Leg::Stated), &bounded),
+        verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Reviewed
     );
     assert_eq!(report.awaiting_sign_off(), 1);
@@ -523,7 +493,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
             &lavapipe_alone(),
             &VenueKeys::default(),
         );
-        let stated = slot(&report, LAVAPIPE, Leg::Stated);
+        let stated = slot(&report, LAVAPIPE);
         assert_eq!(verdict_of(stated, &bounded), Verdict::Mismatch);
         assert_eq!(report.readings[0].state, ReadingState::Changed);
         assert!(!report.holds());
@@ -543,7 +513,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &VenueKeys::default(),
     );
     assert_eq!(
-        verdict_of(slot(&report, LAVAPIPE, Leg::Stated), &bounded),
+        verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Mismatch
     );
     assert_eq!(report.readings[0].state, ReadingState::Changed);
@@ -553,7 +523,7 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
     let mut elsewhere = input.clone();
     let mut moltenvk = lavapipe.clone();
     moltenvk.backend = Backend::Moltenvk;
-    moltenvk.environment_id = engine_slot(MOLTENVK, None, Leg::Stated);
+    moltenvk.environment_id = engine_slot(MOLTENVK, None);
     moltenvk.environment = recorded_environment(MOLTENVK);
     elsewhere.moltenvk.push(moltenvk);
     let report = report_of(
@@ -564,11 +534,11 @@ fn a_listed_mismatch_at_its_candidate_is_reviewed_and_a_changed_candidate_is_not
         &VenueKeys::default(),
     );
     assert_eq!(
-        verdict_of(slot(&report, MOLTENVK, Leg::Stated), &bounded),
+        verdict_of(slot(&report, MOLTENVK), &bounded),
         Verdict::Mismatch
     );
     assert_eq!(
-        verdict_of(slot(&report, LAVAPIPE, Leg::Stated), &bounded),
+        verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Reviewed
     );
 }
@@ -600,7 +570,7 @@ fn stale_rows_are_not_evidence_and_their_reviewed_reading_still_names_them() {
         &VenueKeys::default(),
     );
     assert_eq!(
-        verdict_of(slot(&report, LAVAPIPE, Leg::Stated), &bounded),
+        verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Stale
     );
     assert_eq!(report.readings[0].state, ReadingState::Holds);
@@ -630,7 +600,6 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     let mut stale_refusal = refusal_of(
         &refused,
         LAVAPIPE,
-        Leg::Stated,
         &NotSupported::NotEnabled(vec!["rayQuery".into()]),
     );
     stale_refusal.translator_fingerprint = engine_fingerprint_of(&[9; 32]);
@@ -658,7 +627,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
         )
     };
     let report = judge(&input);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(stated.population, 3);
     for case in [&awaiting, &rebuilt, &refused] {
         assert_eq!(verdict_of(stated, case), Verdict::Stale);
@@ -672,7 +641,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     let mut requalified = input.clone();
     requalified.metals[0] = metal(&awaiting, &METAL);
     let report = judge(&requalified);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &awaiting), Verdict::Match);
     assert_eq!(stated.stale_without_metal, 0);
 
@@ -680,7 +649,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     let mut moved = input.clone();
     moved.metals[0] = metal(&awaiting, &DEVICE);
     let report = judge(&moved);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &awaiting), Verdict::Stale);
     assert_eq!(stated.stale_without_metal, 0);
 
@@ -688,7 +657,7 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
     let mut unqualified = input;
     unqualified.metals.remove(0);
     let report = judge(&unqualified);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &awaiting), Verdict::Stale);
     assert_eq!(stated.stale_without_metal, 1);
 }
@@ -743,7 +712,7 @@ fn moltenvk_must_cover_every_case_the_old_engine_matched_without_a_new_mismatch(
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, MOLTENVK, Leg::Stated);
+    let stated = slot(&report, MOLTENVK);
     // The population is the four cases the baseline matched.
     assert_eq!(stated.population, 4);
     assert_eq!(verdict_of(stated, &unqualified), Verdict::Missing);
@@ -761,7 +730,7 @@ fn moltenvk_must_cover_every_case_the_old_engine_matched_without_a_new_mismatch(
     // Lavapipe has no public case here, so nothing in its population, and no row: each of the
     // five cases a Metal row judges reads missing there until lavapipe records it; the unqualified
     // case is not judged.
-    let lavapipe = slot(&report, LAVAPIPE, Leg::Stated);
+    let lavapipe = slot(&report, LAVAPIPE);
     assert_eq!(lavapipe.population, 0);
     assert_eq!(lavapipe.count(Verdict::Missing), 5);
     assert_eq!(lavapipe.missing_without_metal, 0);
@@ -806,7 +775,7 @@ fn a_reference_gap_is_counted_apart_and_held_to_the_users_sign_off() {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&unlisted, MOLTENVK, Leg::Stated);
+    let stated = slot(&unlisted, MOLTENVK);
     assert_eq!(stated.population, 3);
     assert_eq!(verdict_of(stated, &gap_case), Verdict::ReferenceGap);
     assert_eq!(verdict_of(stated, &stale_gap), Verdict::ReferenceGap);
@@ -1061,7 +1030,7 @@ fn a_reviewed_reading_that_disagrees_with_the_store_is_reported() {
     let mut renamed = reading(&bounded, vec![reviewed(&lavapipe, &METAL)]);
     renamed.name = "renamed".into();
     let mut unobserved = reviewed(&lavapipe, &METAL);
-    unobserved.environment_id = engine_slot(LAVAPIPE, None, Leg::RobustnessOff);
+    unobserved.environment_id = engine_slot(LAVAPIPE, Some("runtime-floor"));
     for (entry, expected) in [
         (
             reading(&bounded, vec![miscounted]),
@@ -1396,7 +1365,6 @@ fn a_device_interpolation_row_stays_a_mismatch() {
             device: None,
             product: crate::observation::TRANSLATOR_FINGERPRINT.into(),
             restricted_to: None,
-            leg: None,
             modules: vec![ModuleCensus {
                 stage: crate::case::Stage::Fragment,
                 subgroup: Some(crate::coverage::SubgroupShape {
@@ -1428,7 +1396,7 @@ fn a_device_interpolation_row_stays_a_mismatch() {
             &venues(),
             &VenueKeys::default(),
         );
-        let stated = slot(&report, LAVAPIPE, Leg::Stated);
+        let stated = slot(&report, LAVAPIPE);
         assert_eq!(verdict_of(stated, &drawn), want);
         let open = stated
             .rows
@@ -1494,7 +1462,6 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
             device: None,
             product: crate::observation::TRANSLATOR_FINGERPRINT.into(),
             restricted_to: None,
-            leg: None,
             modules: vec![ModuleCensus {
                 stage: crate::case::Stage::Kernel,
                 subgroup: Some(crate::coverage::SubgroupShape {
@@ -1532,7 +1499,7 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     let deferred = OpenReason::NearEquivalent(note);
     let open = stated
         .rows
@@ -1566,7 +1533,7 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &sampled), Verdict::Match);
     assert!(stated.rows.iter().all(|row| row.case_id != sampled.case_id));
     // A match is named, not inferred from its absence among the open rows; a case the slot did not
@@ -2022,11 +1989,11 @@ fn the_committed_list_parses_in_its_committed_form() {
     );
 }
 
-/// Three venues, each with its own population in its own legs: MoltenVK covers the cases its
-/// old-engine rows matched in its stated leg, lavapipe the public cases in its stated leg, and the
-/// real GPU every Metal-qualified case in both legs, public or private.
+/// Three venues, each with its own population: MoltenVK covers the cases its old-engine rows
+/// matched, lavapipe the public cases, and the real GPU every Metal-qualified case, public or
+/// private.
 #[test]
-fn each_venue_covers_its_own_population_in_its_own_legs() {
+fn each_venue_covers_its_own_population() {
     let public = case(1, "public");
     let private = case(2, "private");
     let unqualified = case(3, "unqualified");
@@ -2045,14 +2012,11 @@ fn each_venue_covers_its_own_population_in_its_own_legs() {
         moltenvk: vec![old_row(&old_matched, MOLTENVK, &METAL, &METAL)],
         ..C3Input::default()
     };
-    // The real GPU ran the public case in both legs and the private case in the stated leg only.
-    let radv = |case: &AuthoredCase, leg: Leg| {
-        in_leg(new_row(case, Backend::Vulkan, RADV, &METAL, &METAL), leg)
-    };
+    // The real GPU ran the public and the private case.
+    let radv = |case: &AuthoredCase| new_row(case, Backend::Vulkan, RADV, &METAL, &METAL);
     input.vulkan = vec![
-        radv(&public, Leg::Stated),
-        radv(&public, Leg::RobustnessOff),
-        radv(&private, Leg::Stated),
+        radv(&public),
+        radv(&private),
         new_row(&public, Backend::Vulkan, LAVAPIPE, &METAL, &METAL),
     ];
     let report = report_of(
@@ -2062,42 +2026,35 @@ fn each_venue_covers_its_own_population_in_its_own_legs() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    assert_eq!(report.slots.len(), 6);
-    let population = |venue: &str, leg: Leg| slot(&report, venue, leg).population;
-    assert_eq!(population(MOLTENVK, Leg::Stated), 1);
-    assert_eq!(population(MOLTENVK, Leg::RobustnessOff), 0);
-    assert_eq!(population(LAVAPIPE, Leg::Stated), 1);
-    assert_eq!(population(LAVAPIPE, Leg::RobustnessOff), 0);
-    // Every case with a current Metal row, in each leg: the unqualified case is outside.
-    assert_eq!(population(RADV, Leg::Stated), 3);
-    assert_eq!(population(RADV, Leg::RobustnessOff), 3);
+    assert_eq!(report.slots.len(), 3);
+    let population = |venue: &str| slot(&report, venue).population;
+    assert_eq!(population(MOLTENVK), 1);
+    assert_eq!(population(LAVAPIPE), 1);
+    // Every case with a current Metal row: the unqualified case is outside.
+    assert_eq!(population(RADV), 3);
 
-    let radv_stated = slot(&report, RADV, Leg::Stated);
+    let radv_stated = slot(&report, RADV);
     assert_eq!(radv_stated.kind, VenueKind::NativeGpu);
     assert_eq!(verdict_of(radv_stated, &public), Verdict::Match);
     assert_eq!(verdict_of(radv_stated, &private), Verdict::Match);
     assert_eq!(verdict_of(radv_stated, &old_matched), Verdict::Missing);
     assert_eq!(radv_stated.count(Verdict::Missing), 1);
     assert_eq!(radv_stated.missing_without_metal, 0);
-    let radv_off = slot(&report, RADV, Leg::RobustnessOff);
-    assert_eq!(verdict_of(radv_off, &public), Verdict::Match);
-    assert_eq!(verdict_of(radv_off, &private), Verdict::Missing);
-    assert_eq!(radv_off.count(Verdict::Missing), 2);
-    assert!(!radv_stated.holds() && !radv_off.holds());
+    assert!(!radv_stated.holds());
     // The other venues judge their own populations, and read missing every other case a Metal
-    // row judges that they never recorded, in the legs they list.
-    let lavapipe = slot(&report, LAVAPIPE, Leg::Stated);
+    // row judges that they never recorded.
+    let lavapipe = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(lavapipe, &public), Verdict::Match);
     assert_eq!(verdict_of(lavapipe, &private), Verdict::Missing);
     assert_eq!(verdict_of(lavapipe, &old_matched), Verdict::Missing);
     assert!(!lavapipe.holds());
     assert_eq!(
-        verdict_of(slot(&report, MOLTENVK, Leg::Stated), &old_matched),
+        verdict_of(slot(&report, MOLTENVK), &old_matched),
         Verdict::Missing
     );
     // Only the venue holding the baseline counts new mismatches against it.
     let mut mismatching = input.clone();
-    mismatching.vulkan[2] = new_row(&private, Backend::Vulkan, RADV, &DEVICE, &METAL);
+    mismatching.vulkan[1] = new_row(&private, Backend::Vulkan, RADV, &DEVICE, &METAL);
     let report = report_of(
         &mismatching,
         &ReviewedList::default(),
@@ -2105,17 +2062,16 @@ fn each_venue_covers_its_own_population_in_its_own_legs() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    let radv_stated = slot(&report, RADV, Leg::Stated);
+    let radv_stated = slot(&report, RADV);
     assert_eq!(verdict_of(radv_stated, &private), Verdict::Mismatch);
     assert_eq!(radv_stated.new_mismatches, 0);
 }
 
-/// A case outside a venue's population that the venue never recorded reads missing in each leg
-/// the venue lists once a Metal row judges it: the venue's lane runs every case C3 reads stale or
+/// A case outside a venue's population that the venue never recorded reads missing once a Metal
+/// row judges it: the venue's lane runs every case C3 reads stale or
 /// missing in its slot, so the case is selected and recorded, never left unrun because the venue's
 /// population (the old engine's matches, the public cases) is narrower than the corpus. It does not
-/// join the population, a case with no Metal row is not judged, and a leg the venue does not list
-/// judges nothing.
+/// join the population, and a case with no Metal row is not judged.
 #[test]
 fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
     let private = case(1, "private");
@@ -2124,14 +2080,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
         cases: vec![private.clone(), unqualified.clone()],
         metals: vec![metal(&private, &METAL)],
         // Only the real GPU recorded the private case; nothing recorded the unqualified one.
-        vulkan: [Leg::Stated, Leg::RobustnessOff]
-            .map(|leg| {
-                in_leg(
-                    new_row(&private, Backend::Vulkan, RADV, &METAL, &METAL),
-                    leg,
-                )
-            })
-            .to_vec(),
+        vulkan: vec![new_row(&private, Backend::Vulkan, RADV, &METAL, &METAL)],
         ..C3Input::default()
     };
     let judge = |input: &C3Input| {
@@ -2145,7 +2094,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
     };
     let report = judge(&input);
     for venue in [MOLTENVK, LAVAPIPE] {
-        let stated = slot(&report, venue, Leg::Stated);
+        let stated = slot(&report, venue);
         // Outside the population (no old-engine match, no public fixture): still judged.
         assert_eq!(stated.population, 0, "{venue}");
         assert_eq!(verdict_of(stated, &private), Verdict::Missing, "{venue}");
@@ -2163,15 +2112,8 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
         // A case with no Metal row is not judged: there is nothing to compare its record with.
         assert_eq!(stated.verdict_of(&unqualified.case_id), None, "{venue}");
         assert!(!stated.holds(), "{venue}");
-        // Neither venue lists the robustness-off leg: nothing is judged there.
-        let off = slot(&report, venue, Leg::RobustnessOff);
-        assert_eq!(off.verdict_of(&private.case_id), None, "{venue}");
-        assert!(off.holds(), "{venue}");
     }
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::Stated), &private),
-        Verdict::Match
-    );
+    assert_eq!(verdict_of(slot(&report, RADV), &private), Verdict::Match);
 
     // Once each venue records it, the case is judged by its record and every slot holds.
     let mut recorded = input.clone();
@@ -2187,7 +2129,7 @@ fn a_case_a_venue_never_recorded_is_missing_and_selected_by_its_lane() {
         .push(new_row(&private, Backend::Vulkan, LAVAPIPE, &METAL, &METAL));
     let report = judge(&recorded);
     for venue in [MOLTENVK, LAVAPIPE] {
-        let stated = slot(&report, venue, Leg::Stated);
+        let stated = slot(&report, venue);
         assert_eq!(verdict_of(stated, &private), Verdict::Match, "{venue}");
         assert_eq!(stated.population, 0, "{venue}");
     }
@@ -2219,7 +2161,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &bounded), Verdict::Match);
     assert_eq!(stated.stale_device, 0);
     assert!(stated.holds());
@@ -2232,7 +2174,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &bounded), Verdict::Stale);
     assert_eq!(stated.stale_device, 1);
     assert!(!stated.holds());
@@ -2248,10 +2190,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
         &moved,
         &VenueKeys::default(),
     );
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::Stated), &bounded),
-        Verdict::Stale
-    );
+    assert_eq!(verdict_of(slot(&report, RADV), &bounded), Verdict::Stale);
     let report = report_of(
         &input(vec![updated]),
         &ReviewedList::default(),
@@ -2259,10 +2198,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
         &moved,
         &VenueKeys::default(),
     );
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::Stated), &bounded),
-        Verdict::Match
-    );
+    assert_eq!(verdict_of(slot(&report, RADV), &bounded), Verdict::Match);
 
     // Another device, and a row that records no identity, are stale too; so is a mismatching
     // row's reviewed reading, which is no longer current evidence.
@@ -2282,7 +2218,7 @@ fn a_row_recorded_under_another_driver_is_stale_never_current() {
             &three_venues(),
             &VenueKeys::default(),
         );
-        let stated = slot(&report, RADV, Leg::Stated);
+        let stated = slot(&report, RADV);
         assert_eq!(verdict_of(stated, &bounded), Verdict::Stale);
         assert_eq!(stated.stale_device, 1);
     }
@@ -2334,13 +2270,10 @@ fn a_reading_reviewed_in_one_venue_does_not_cover_another() {
         &VenueKeys::default(),
     );
     assert_eq!(
-        verdict_of(slot(&report, LAVAPIPE, Leg::Stated), &bounded),
+        verdict_of(slot(&report, LAVAPIPE), &bounded),
         Verdict::Reviewed
     );
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::Stated), &bounded),
-        Verdict::Mismatch
-    );
+    assert_eq!(verdict_of(slot(&report, RADV), &bounded), Verdict::Mismatch);
     assert!(!report.holds());
     list.readings[0].observations.push(reviewed(&radv, &METAL));
     let report = report_of(
@@ -2350,20 +2283,13 @@ fn a_reading_reviewed_in_one_venue_does_not_cover_another() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::Stated), &bounded),
-        Verdict::Reviewed
-    );
+    assert_eq!(verdict_of(slot(&report, RADV), &bounded), Verdict::Reviewed);
 }
 
 /// `row` recording, in its one executed module, the precision notes `notes` and the unbounded
-/// class they derive, in the leg its census recorded.
+/// class they derive.
 fn unbounded_by(row: CandidateObservation, notes: &[PrecisionNote]) -> CandidateObservation {
-    let leg = row.census.as_ref().and_then(|census| census.leg);
     let mut row = noting(row, notes);
-    if let Some(census) = row.census.as_mut() {
-        census.leg = leg;
-    }
     row.comparison = ComparisonClass::Unbounded(notes.iter().copied().collect());
     assert!(row.class_holds());
     row
@@ -2390,7 +2316,7 @@ fn a_fast_math_blend_of_a_half_output_shows_the_regrouping_cause() {
 }
 
 /// A `fast_math_regrouping` reading is keyed by its cause. It reviews its case's current mismatch
-/// in every venue's slots, both legs, while the row records `FastMathRewrites`, at whatever
+/// in every venue's slot while the row records `FastMathRewrites`, at whatever
 /// candidate and words; a row that stops recording it is an open mismatch, and the reviewed
 /// observation in that row's slot reads changed, as it does once the row matches Metal. A deferred
 /// near-equivalent stays open beside it, and an `apple_reading` stays keyed by candidate.
@@ -2403,10 +2329,6 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
         new_row(&fft, Backend::Moltenvk, MOLTENVK, &DEVICE, &METAL),
         new_row(&fft, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL),
         new_row(&fft, Backend::Vulkan, RADV, &OTHER, &METAL),
-        in_leg(
-            new_row(&fft, Backend::Vulkan, RADV, &DEVICE, &METAL),
-            Leg::RobustnessOff,
-        ),
     ]
     .map(|row| unbounded_by(row, &regroup));
     for (at, row) in rows.iter_mut().enumerate() {
@@ -2420,14 +2342,8 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
         public_air: [fft.air_sha256.clone()].into(),
         ..C3Input::default()
     };
-    let slots = [
-        (MOLTENVK, Leg::Stated),
-        (LAVAPIPE, Leg::Stated),
-        (RADV, Leg::Stated),
-        (RADV, Leg::RobustnessOff),
-    ];
-    let verdicts =
-        |report: &C3Report| slots.map(|(venue, leg)| verdict_of(slot(report, venue, leg), &fft));
+    let slots = [MOLTENVK, LAVAPIPE, RADV];
+    let verdicts = |report: &C3Report| slots.map(|venue| verdict_of(slot(report, venue), &fft));
     let judge = |input: &C3Input, list: &ReviewedList| {
         report_of(
             input,
@@ -2441,7 +2357,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 
     // Unlisted, every slot's row is an open mismatch.
     let report = judge(&input, &ReviewedList::default());
-    assert_eq!(verdicts(&report), [Verdict::Mismatch; 4]);
+    assert_eq!(verdicts(&report), [Verdict::Mismatch; 3]);
 
     // The reading's one observation is the lavapipe slot's row at an earlier candidate and output:
     // keyed by its cause, it reviews every slot's row that records the cause, and it holds.
@@ -2459,7 +2375,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     };
     assert_eq!(list.check(), Ok(()));
     let report = judge(&input, &list);
-    assert_eq!(verdicts(&report), [Verdict::Reviewed; 4]);
+    assert_eq!(verdicts(&report), [Verdict::Reviewed; 3]);
     assert_eq!(report.readings.len(), 1);
     assert_eq!(report.readings[0].state, ReadingState::Holds);
     assert_eq!((report.signed_off(), report.awaiting_sign_off()), (1, 0));
@@ -2471,12 +2387,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let report = judge(&input_of(&pinned), &list);
     assert_eq!(
         verdicts(&report),
-        [
-            Verdict::Reviewed,
-            Verdict::Reviewed,
-            Verdict::Mismatch,
-            Verdict::Reviewed
-        ]
+        [Verdict::Reviewed, Verdict::Reviewed, Verdict::Mismatch]
     );
     assert_eq!(report.readings[0].state, ReadingState::Holds);
     assert!(!report.holds());
@@ -2487,12 +2398,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let report = judge(&input_of(&pinned), &list);
     assert_eq!(
         verdicts(&report),
-        [
-            Verdict::Reviewed,
-            Verdict::Mismatch,
-            Verdict::Reviewed,
-            Verdict::Reviewed
-        ]
+        [Verdict::Reviewed, Verdict::Mismatch, Verdict::Reviewed]
     );
     assert_eq!(report.readings[0].state, ReadingState::Changed);
     assert!(!report.holds());
@@ -2506,12 +2412,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let report = judge(&input_of(&matched), &list);
     assert_eq!(
         verdicts(&report),
-        [
-            Verdict::Reviewed,
-            Verdict::Match,
-            Verdict::Reviewed,
-            Verdict::Reviewed
-        ]
+        [Verdict::Reviewed, Verdict::Match, Verdict::Reviewed]
     );
     assert_eq!(report.readings[0].state, ReadingState::Changed);
 
@@ -2525,7 +2426,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
         ],
     );
     let report = judge(&input_of(&deferred), &list);
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &fft), Verdict::Mismatch);
     assert_eq!(
         stated.rows[0].reason,
@@ -2540,12 +2441,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
     let report = judge(&input, &bounded);
     assert_eq!(
         verdicts(&report),
-        [
-            Verdict::Mismatch,
-            Verdict::Reviewed,
-            Verdict::Mismatch,
-            Verdict::Mismatch
-        ]
+        [Verdict::Mismatch, Verdict::Reviewed, Verdict::Mismatch]
     );
 }
 
@@ -2553,7 +2449,7 @@ fn a_regrouping_reading_is_keyed_by_its_cause_in_every_slot() {
 fn venue_lists_are_checked() {
     assert_eq!(three_venues().check(), Ok(()));
     type Edit = fn(&mut Venues);
-    let edits: [(Edit, &str); 15] = [
+    let edits: [(Edit, &str); 13] = [
         (|venues| venues.venues.clear(), "no venue"),
         (
             |venues| venues.venues[2].environment_id = MOLTENVK.into(),
@@ -2566,11 +2462,6 @@ fn venue_lists_are_checked() {
         (
             |venues| venues.venues[2].profile = "radv-guess".into(),
             "is not a committed profile",
-        ),
-        (|venues| venues.venues[2].legs.clear(), "lists no leg"),
-        (
-            |venues| venues.venues[2].legs = vec![Leg::Stated, Leg::Stated],
-            "lists a leg twice",
         ),
         (
             |venues| venues.venues[2].devices[0].identity.driver_info = " ".into(),
@@ -2651,7 +2542,6 @@ fn the_committed_venue_list_parses_and_names_a_real_gpu_of_each_vendor() {
     assert_eq!(gpus.len(), 3);
     for gpu in gpus {
         assert_eq!(gpu.population, Population::MetalQualified);
-        assert_eq!(gpu.legs, [Leg::Stated, Leg::RobustnessOff]);
     }
     let json = serde_json::to_string_pretty(&venues).unwrap() + "\n";
     assert_eq!(json, std::fs::read_to_string(&path).unwrap());
@@ -2753,7 +2643,7 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
     );
 }
 
-/// Each committed venue keys its native engine slot in both legs, for its own backend only,
+/// Each committed venue keys its native engine slot, for its own backend only,
 /// with its committed profile's translation key, which a record holds only by recording it; a venue
 /// is found by its operator environment and backend.
 #[test]
@@ -2771,23 +2661,21 @@ fn each_venue_keys_its_slots_with_its_profiles_key() {
             Backend::Moltenvk => Backend::Vulkan,
             Backend::Vulkan => Backend::Moltenvk,
         };
-        for leg in [Leg::Stated, Leg::RobustnessOff] {
-            let slot = engine_slot(&venue.environment_id, None, leg);
-            assert_eq!(
-                keys.expected(backend, &slot),
-                Some(profile.fingerprint.as_str())
-            );
-            assert_eq!(keys.expected(other, &slot), None);
-            let mut environment = serde_json::json!({});
-            assert!(!keys.holds(backend, &slot, &environment));
-            assert!(keys.holds(other, &slot, &environment));
-            environment[VENUE_PROFILE] = profile.record();
-            assert!(keys.holds(backend, &slot, &environment));
-            assert_eq!(
-                VenueProfile::recorded_stem(&environment),
-                Some(venue.profile.as_str())
-            );
-        }
+        let slot = engine_slot(&venue.environment_id, None);
+        assert_eq!(
+            keys.expected(backend, &slot),
+            Some(profile.fingerprint.as_str())
+        );
+        assert_eq!(keys.expected(other, &slot), None);
+        let mut environment = serde_json::json!({});
+        assert!(!keys.holds(backend, &slot, &environment));
+        assert!(keys.holds(other, &slot, &environment));
+        environment[VENUE_PROFILE] = profile.record();
+        assert!(keys.holds(backend, &slot, &environment));
+        assert_eq!(
+            VenueProfile::recorded_stem(&environment),
+            Some(venue.profile.as_str())
+        );
         assert_eq!(keys.expected(backend, &venue.environment_id), None);
         assert_eq!(
             committed.venue_of(&venue.environment_id, backend),
@@ -2801,7 +2689,7 @@ fn each_venue_keys_its_slots_with_its_profiles_key() {
 /// lavapipe alone runs fragment subgroups of fewer than two quads (its 4-lane subgroups); x86
 /// lavapipe's 8, the GPUs' and MoltenVK's (which pins no fragment size and runs 32) hold two or
 /// more. Every venue but MoltenVK, which draws through Metal, has the clipped-primitive split. The
-/// venue keys record each for both legs' slots.
+/// venue keys record each for the venue's slot.
 #[test]
 fn each_answer_gap_is_decided_from_each_venues_profile() {
     let committed = Venues::load(&Venues::committed_path()).unwrap();
@@ -2836,10 +2724,8 @@ fn each_answer_gap_is_decided_from_each_venues_profile() {
             if has {
                 with.insert(venue.profile.as_str());
             }
-            for leg in [Leg::Stated, Leg::RobustnessOff] {
-                let slot = engine_slot(&venue.environment_id, None, leg);
-                assert_eq!(keys.has_gap(&slot, gap), has, "{slot} {}", gap.as_str());
-            }
+            let slot = engine_slot(&venue.environment_id, None);
+            assert_eq!(keys.has_gap(&slot, gap), has, "{slot} {}", gap.as_str());
             assert!(!keys.has_gap(&venue.environment_id, gap));
         }
         assert_eq!(with, expected, "{}", gap.as_str());
@@ -2902,7 +2788,7 @@ fn a_subgroup_gap_names_a_mismatch_only_where_the_device_has_it() {
 
     // The device lacks the gap: both mismatch, naming no reason.
     let report = judged(&input, &keys, &list);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &counted), Verdict::Mismatch);
     assert_eq!(reason_of(stated, &counted), None);
     assert_eq!(verdict_of(stated, &other), Verdict::Mismatch);
@@ -2912,7 +2798,7 @@ fn a_subgroup_gap_names_a_mismatch_only_where_the_device_has_it() {
     // awaits or holds a sign-off, and neither the slot nor C3 holds.
     keys.insert_gaps(LAVAPIPE, &BTreeSet::from([gap]));
     let report = judged(&input, &keys, &list);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &counted), Verdict::Mismatch);
     assert_eq!(
         reason_of(stated, &counted),
@@ -2936,7 +2822,7 @@ fn a_subgroup_gap_names_a_mismatch_only_where_the_device_has_it() {
         .vulkan
         .push(new_row(&other, Backend::Vulkan, LAVAPIPE, &METAL, &METAL));
     let report = judged(&input, &keys, &list);
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert!(!stated.holds());
     assert_eq!(stated.count(Verdict::Mismatch), 1);
 
@@ -3000,7 +2886,7 @@ fn the_clipped_primitive_split_names_a_mismatch_only_where_the_case_meets_it() {
             &reference::testing::references(),
             facts,
         );
-        let stated = slot(&report, LAVAPIPE, Leg::Stated);
+        let stated = slot(&report, LAVAPIPE);
         assert_eq!(verdict_of(stated, &split), Verdict::Mismatch);
         reason_of(stated, &split)
     };
@@ -3028,7 +2914,7 @@ fn the_clipped_primitive_split_names_a_mismatch_only_where_the_case_meets_it() {
         &reference::testing::references(),
         &met(&[gap]),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     assert_eq!(verdict_of(stated, &split), Verdict::Mismatch);
     assert_eq!(reason_of(stated, &split), None);
 }
@@ -3124,16 +3010,13 @@ fn a_venue_profile_states_its_identity() {
     );
 }
 
-/// A current refusal of `case` in `environment`'s slot of `leg`, as the executor records it after
-/// the device opened.
+/// A current refusal of `case` in `environment`'s slot, as the executor records it after the
+/// device opened.
 fn refusal_of(
     case: &AuthoredCase,
     environment: &str,
-    leg: Leg,
     refused: &crate::check::admission::NotSupported,
 ) -> RefusalObservation {
-    let mut recorded = recorded_environment(environment);
-    recorded["robustness"] = serde_json::json!({ "leg": leg });
     RefusalObservation {
         timing: Some(crate::observation::test_timing()),
         case_id: case.case_id.clone(),
@@ -3141,8 +3024,8 @@ fn refusal_of(
         input_sha256: case.computed_input_sha256().unwrap(),
         translator_fingerprint: engine_fingerprint_of(&PROFILE),
         backend: Backend::Vulkan,
-        environment_id: engine_slot(environment, None, leg),
-        environment: recorded,
+        environment_id: engine_slot(environment, None),
+        environment: recorded_environment(environment),
         executor_abi: ENGINE_EXECUTOR_ABI.into(),
         refusal: Refusal::of(refused),
         artifact: None,
@@ -3202,13 +3085,11 @@ fn a_refused_case_reads_refused_never_missing() {
         refusal_of(
             &refused,
             RADV,
-            Leg::Stated,
             &NotSupported::NotEnabled(vec!["rayQuery".into()]),
         ),
         refusal_of(
             &bound,
             RADV,
-            Leg::Stated,
             &NotSupported::Bind("a range past maxStorageBufferRange".into()),
         ),
     ];
@@ -3222,7 +3103,7 @@ fn a_refused_case_reads_refused_never_missing() {
         )
     };
     let report = judge(&input);
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &refused), Verdict::Refused);
     assert_eq!(verdict_of(stated, &bound), Verdict::Refused);
     assert_eq!(stated.count(Verdict::Refused), 2);
@@ -3236,11 +3117,6 @@ fn a_refused_case_reads_refused_never_missing() {
     assert_eq!(row.refusal.as_ref().unwrap().class, RefusalClass::Device);
     // Neither is a product device-capability refusal: no C1 entry is proposed.
     assert!(report.gap_proposals.is_empty() && report.device_gaps.is_empty());
-    // The robustness-off leg recorded nothing: missing there.
-    assert_eq!(
-        verdict_of(slot(&report, RADV, Leg::RobustnessOff), &refused),
-        Verdict::Missing
-    );
 
     // Another build, other inputs, or another driver: stale.
     type Edit = fn(&mut RefusalObservation);
@@ -3263,7 +3139,7 @@ fn a_refused_case_reads_refused_never_missing() {
         let mut stale = input.clone();
         edit(&mut stale.refusals[0]);
         let report = judge(&stale);
-        let stated = slot(&report, RADV, Leg::Stated);
+        let stated = slot(&report, RADV);
         assert_eq!(verdict_of(stated, &refused), Verdict::Stale);
         assert_eq!(stated.stale_device, usize::from(other_device));
     }
@@ -3272,7 +3148,7 @@ fn a_refused_case_reads_refused_never_missing() {
     let mut ran = input.clone();
     ran.vulkan = vec![new_row(&refused, Backend::Vulkan, RADV, &METAL, &METAL)];
     assert_eq!(
-        verdict_of(slot(&judge(&ran), RADV, Leg::Stated), &refused),
+        verdict_of(slot(&judge(&ran), RADV), &refused),
         Verdict::Match
     );
 }
@@ -3289,10 +3165,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
     let input = C3Input {
         cases: vec![fetch.clone()],
         metals: vec![metal(&fetch, &METAL)],
-        refusals: vec![
-            refusal_of(&fetch, RADV, Leg::Stated, &lacks_ordered_access()),
-            refusal_of(&fetch, RADV, Leg::RobustnessOff, &lacks_ordered_access()),
-        ],
+        refusals: vec![refusal_of(&fetch, RADV, &lacks_ordered_access())],
         ..C3Input::default()
     };
     let awaiting = SignOff::AwaitingUser {
@@ -3310,11 +3183,9 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
 
     for class in [ListClass::DeviceLacks, ListClass::NearEquivalent] {
         let report = judge(vec![c1_entry("amd-rdna3-radv", class, awaiting.clone())]);
-        for leg in [Leg::Stated, Leg::RobustnessOff] {
-            let slot = slot(&report, RADV, leg);
-            assert_eq!(verdict_of(slot, &fetch), Verdict::DeviceGap);
-            assert!(slot.holds());
-        }
+        let slot = slot(&report, RADV);
+        assert_eq!(verdict_of(slot, &fetch), Verdict::DeviceGap);
+        assert!(slot.holds());
         assert_eq!(
             report.device_gaps,
             [DeviceGapRow {
@@ -3324,7 +3195,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
                     .into(),
                 class,
                 sign_off: awaiting.clone(),
-                cases: 2,
+                cases: 1,
             }]
         );
         assert!(report.gap_proposals.is_empty());
@@ -3363,7 +3234,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
         ),
     ] {
         let report = judge(entries);
-        let stated = slot(&report, RADV, Leg::Stated);
+        let stated = slot(&report, RADV);
         assert_eq!(verdict_of(stated, &fetch), Verdict::Refused);
         assert!(!stated.holds());
         assert!(report.device_gaps.is_empty());
@@ -3371,7 +3242,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
             profile: "amd-rdna3-radv".into(),
             outcome: "device_capability_missing".into(),
             key: "FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess)".into(),
-            cases: 2,
+            cases: 1,
         });
         assert_eq!(report.gap_proposals, Vec::from_iter(expected));
     }
@@ -3408,14 +3279,12 @@ fn a_ray_tracing_refusal_is_out_of_scope_never_refused_or_a_gap() {
         metals: vec![metal(&query, &METAL), metal(&intersect, &METAL)],
         ..C3Input::default()
     };
-    for leg in [Leg::Stated, Leg::RobustnessOff] {
-        input
-            .refusals
-            .push(refusal_of(&query, RADV, leg, &lacks_ray_query));
-        input
-            .refusals
-            .push(refusal_of(&intersect, RADV, leg, &not_representable));
-    }
+    input
+        .refusals
+        .push(refusal_of(&query, RADV, &lacks_ray_query));
+    input
+        .refusals
+        .push(refusal_of(&intersect, RADV, &not_representable));
     let judge = |input: &C3Input| {
         report_of(
             input,
@@ -3428,26 +3297,24 @@ fn a_ray_tracing_refusal_is_out_of_scope_never_refused_or_a_gap() {
     let report = judge(&input);
     let out_of_scope = Verdict::OutOfScope(OutOfScope::RayTracing);
     assert_eq!(out_of_scope.as_str(), "out_of_scope_ray_tracing");
-    for leg in [Leg::Stated, Leg::RobustnessOff] {
-        let slot = slot(&report, RADV, leg);
-        assert_eq!(verdict_of(slot, &query), out_of_scope);
-        assert_eq!(verdict_of(slot, &intersect), out_of_scope);
-        assert_eq!(slot.count(out_of_scope), 2);
-        assert_eq!(slot.count(Verdict::Refused), 0);
-        assert!(slot.holds());
-        // The slot lists each with the refusal it holds.
-        assert!(slot
-            .rows
-            .iter()
-            .all(|row| row.verdict == out_of_scope && row.refusal.is_some()));
-    }
+    let slot = slot(&report, RADV);
+    assert_eq!(verdict_of(slot, &query), out_of_scope);
+    assert_eq!(verdict_of(slot, &intersect), out_of_scope);
+    assert_eq!(slot.count(out_of_scope), 2);
+    assert_eq!(slot.count(Verdict::Refused), 0);
+    assert!(slot.holds());
+    // The slot lists each with the refusal it holds.
+    assert!(slot
+        .rows
+        .iter()
+        .all(|row| row.verdict == out_of_scope && row.refusal.is_some()));
     assert!(report.gap_proposals.is_empty() && report.device_gaps.is_empty());
 
     // The same refusal of another build is stale, and keeps the slot open.
     let mut stale = input.clone();
     stale.refusals[0].translator_fingerprint = engine_fingerprint_of(&[8; 32]);
     let report = judge(&stale);
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &query), Verdict::Stale);
     assert!(!stated.holds());
 }
@@ -3468,7 +3335,6 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
         device: None,
         product: crate::observation::TRANSLATOR_FINGERPRINT.into(),
         restricted_to: None,
-        leg: None,
         modules: vec![ModuleCensus {
             stage: crate::case::Stage::Kernel,
             subgroup: Some(crate::coverage::SubgroupShape {
@@ -3513,7 +3379,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     let open = |case: &AuthoredCase| {
         stated
             .rows
@@ -3555,7 +3421,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
         &venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, LAVAPIPE, Leg::Stated);
+    let stated = slot(&report, LAVAPIPE);
     let row = stated
         .rows
         .iter()
@@ -3573,11 +3439,10 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
     use crate::check::admission::NotSupported;
     let refused = case(1, "restricted");
     let refusal = RefusalObservation {
-        environment_id: engine_slot(RADV, Some("runtime-floor"), Leg::Stated),
+        environment_id: engine_slot(RADV, Some("runtime-floor")),
         ..refusal_of(
             &refused,
             RADV,
-            Leg::Stated,
             &NotSupported::Restriction {
                 profile: "runtime-floor".into(),
                 gaps: vec![
@@ -3609,7 +3474,7 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
         &three_venues(),
         &VenueKeys::default(),
     );
-    let stated = slot(&report, RADV, Leg::Stated);
+    let stated = slot(&report, RADV);
     assert_eq!(verdict_of(stated, &refused), Verdict::Match);
     for verdict in [
         Verdict::Refused,
@@ -3626,14 +3491,13 @@ fn a_refused_restriction_is_a_device_refusal_of_its_restricted_slot_only() {
     assert!(report.gap_proposals.is_empty() && report.device_gaps.is_empty());
 }
 
-/// RADV in its stated leg, which must cover every case with a Metal reference row.
+/// RADV, which must cover every case with a Metal reference row.
 fn metal_qualified() -> Venues {
     Venues {
         venues: vec![venue(
             VenueKind::NativeGpu,
             RADV,
             Population::MetalQualified,
-            &[Leg::Stated],
             "amd-rdna3-radv",
         )],
     }

@@ -26,9 +26,7 @@
 //!   prints its own stage's module words, which are what the translation sweep (`corpus-triage
 //!   --audit translation`) counts for it, a render row's other stages' apart as `companion_words`,
 //!   and a kernel's representative imageblock extent as `imageblock=WxH`, then the pipeline's
-//!   precision notes as `precision=[...]`. `--robustness-off`
-//!   compiles and creates every row in profile P's robustness-off leg, which the summary's `leg`
-//!   names. `--driver-caches-on` leaves the drivers' shader disk caches as the environment sets
+//!   precision notes as `precision=[...]`. `--driver-caches-on` leaves the drivers' shader disk caches as the environment sets
 //!   them, so a creation may hit what an earlier process compiled: run twice, the second run times
 //!   the warm creation a program's later launches see, beside the cold one the ceiling times (the
 //!   summary's `driver_caches`). `--keep-modules DIR` writes each compiled row's stage modules,
@@ -78,7 +76,6 @@
 //! exit, where a run faulted after its summary before; `candidate::platform::loader_word`).
 
 use metal2vulkan::bind::ImageblockSize;
-use metal2vulkan::device::DeviceDescription;
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan_validation::acceptance::dispatch::BinderAnswer;
@@ -90,7 +87,6 @@ use metal2vulkan_validation::acceptance::{
 };
 use metal2vulkan_validation::budgets::PIPELINE_CREATION_CEILING;
 use metal2vulkan_validation::candidate::engine::graphics::RenderTemplate;
-use metal2vulkan_validation::coverage::{robustness_off, Leg};
 use metal2vulkan_validation::engine::{self, FailureKind, Outcome, RowInput, RowSource};
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout};
 use metal2vulkan_validation::gpu::DeviceType;
@@ -132,7 +128,7 @@ fn main() {
 fn usage() -> String {
     "usage: corpus-pipeline --profile P [--corpus DIR] [--private-corpus DIR] [--limit N]\n\
      \x20      [--after HASH | --hash HASH | --fixtures] [--partition K/N] [--attempting PATH]\n\
-     \x20      [--pulled] [--robustness-off] [--driver-caches-on]\n\
+     \x20      [--pulled] [--driver-caches-on]\n\
      \x20      [--keep-modules DIR] [--specializations FILE | --draws FILE]\n\
      \x20      (--device-type cpu|gpu [--gpu-wait-timeout SECONDS] [--profiles-layer P]\n\
      \x20       | --compile-only)\n\
@@ -154,10 +150,6 @@ fn usage() -> String {
      values.\n\
      --partition K/N sweeps only the corpus rows whose source shard is K modulo N (0 <= K < N <= 64),\n\
      so N processes sweep disjoint parts; --after then names a row of that part.\n\
-     --robustness-off compiles for P without its robustness features\n\
-     (robustBufferAccess, robustBufferAccess2, robustImageAccess, robustImageAccess2), so the\n\
-     product compiles the in-shader containment encodings, and opens the device enabling none\n\
-     of them: the robustness-off leg; P must state one.\n\
      --profiles-layer P (on a device, naming --profile's P) restricts the device to\n\
      P through VK_LAYER_KHRONOS_profiles, after checking that it has P and reports exactly P\n\
      (validation spec 4.1.2's profile-restricted pipeline creation). A drm-shim gpu device requires scripts/drm-shim-exec inside the drm-shim\n\
@@ -203,7 +195,6 @@ fn run() -> Result<(), String> {
     let mut profile = None;
     let mut fixtures = false;
     let mut compile_only = false;
-    let mut leg = Leg::Stated;
     let mut projection = Projection::Derived;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -229,7 +220,6 @@ fn run() -> Result<(), String> {
             "--compile-only" => compile_only = true,
             "--profiles-layer" => options.profiles_layer = Some(value()?),
             "--pulled" => projection = Projection::Pulled,
-            "--robustness-off" => leg = Leg::RobustnessOff,
             DRIVER_CACHES_ON => options.driver_caches = true,
             "--keep-modules" => options.keep_modules = Some(PathBuf::from(value()?)),
             "--draws" => {
@@ -303,8 +293,7 @@ fn run() -> Result<(), String> {
                 .into(),
         );
     }
-    // The process-wide leg is decided before any device opens.
-    let compiler = enter_leg(&profile, leg)?;
+    let compiler = compile_device(&profile)?;
     let worker = CompileWorker::current()?;
     sweep_new(
         device_type,
@@ -312,7 +301,6 @@ fn run() -> Result<(), String> {
         &compiler,
         &Sweep {
             profile: &profile,
-            leg,
             fixtures,
             projection,
         },
@@ -320,40 +308,17 @@ fn run() -> Result<(), String> {
     )
 }
 
-/// The compile device of an engine sweep of profile `stem` in `leg`. The process's leg is
-/// decided here, before the sweep opens any device: in the robustness-off leg every Vulkan context
-/// of the process enables no robustness feature, and the rows compile for the profile without its
-/// robustness features ([`leg_description`]). The device is created under the default policy.
-fn enter_leg(stem: &str, leg: Leg) -> Result<WorkerDevice, String> {
-    let description = leg_description(stem, leg)?;
-    if leg == Leg::RobustnessOff {
-        metal2vulkan_validation::candidate::run_robustness_off()?;
-    }
+/// The compile device of an engine sweep of profile `stem`, created under the default policy.
+fn compile_device(stem: &str) -> Result<WorkerDevice, String> {
+    let description = engine::load_description(stem)?;
     WorkerDevice::new(description, metal2vulkan::device::DevicePolicy::default())
         .map_err(|error| format!("{stem}: {error}"))
 }
 
-/// The description the sweep compiles profile `stem`'s rows for in `leg`: as committed, or without
-/// its robustness features, which the profile must state (otherwise its robustness-off leg is its
-/// stated one, and the sweep would only repeat it).
-fn leg_description(stem: &str, leg: Leg) -> Result<DeviceDescription, String> {
-    let description = engine::load_description(stem)?;
-    match leg {
-        Leg::Stated => Ok(description),
-        Leg::RobustnessOff => robustness_off(&description).ok_or_else(|| {
-            format!(
-                "--robustness-off: {stem} states no robustness feature, so its robustness-off \
-                 leg is its stated one"
-            )
-        }),
-    }
-}
-
-/// What one engine sweep compiles: profile P in a leg, the corpus or the owned fixtures, and
-/// the projection of its vertex attributes.
+/// What one engine sweep compiles: profile P, the corpus or the owned fixtures, and the
+/// projection of its vertex attributes.
 struct Sweep<'a> {
     profile: &'a str,
-    leg: Leg,
     fixtures: bool,
     projection: Projection,
 }
@@ -820,7 +785,6 @@ fn sweep_new(
 ) -> Result<(), String> {
     let &Sweep {
         profile,
-        leg,
         fixtures,
         projection,
     } = sweep;
@@ -967,11 +931,7 @@ fn sweep_new(
         .as_ref()
         .map_or_else(|| "none".to_string(), |listed| listed.0.len().to_string());
     eprintln!(
-        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tleg={}\tprofiles_layer={}\tprojection={projection:?}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\tbind_refused={}\tbind_errors={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
-        match leg {
-            Leg::Stated => "stated",
-            Leg::RobustnessOff => "robustness-off",
-        },
+        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tprofiles_layer={}\tprojection={projection:?}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\tbind_refused={}\tbind_errors={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
         options.profiles_layer.as_deref().unwrap_or("none"),
         device.map_or("none", DeviceType::as_str),
         tally.rows,
@@ -1371,41 +1331,6 @@ mod tests {
         assert_eq!(status, "BIND_ERROR");
         assert_eq!((tally.bind_refused, tally.bind_errors), (1, 1));
         assert!(tally.verdict().unwrap_err().contains("1 binder errors"));
-    }
-
-    /// The robustness-off leg compiles for the profile without its robustness features and with
-    /// every other feature it states; the stated leg, for the profile as committed.
-    #[test]
-    fn the_robustness_off_leg_compiles_for_the_profile_without_its_robustness_features() {
-        use metal2vulkan_validation::coverage::ROBUSTNESS_FEATURES;
-        let stated = engine::load_description("moltenvk-m3").unwrap();
-        assert_eq!(leg_description("moltenvk-m3", Leg::Stated).unwrap(), stated);
-        let off = leg_description("moltenvk-m3", Leg::RobustnessOff).unwrap();
-        assert!(stated
-            .features
-            .iter()
-            .any(|feature| ROBUSTNESS_FEATURES.contains(feature)));
-        assert!(!off
-            .features
-            .iter()
-            .any(|feature| ROBUSTNESS_FEATURES.contains(feature)));
-        // Everything else the profile states is kept.
-        let mut kept = stated.clone();
-        kept.features
-            .retain(|feature| !ROBUSTNESS_FEATURES.contains(feature));
-        assert_eq!(off, kept);
-        assert!(leg_description("no-such-profile", Leg::RobustnessOff).is_err());
-    }
-
-    /// `--robustness-off` decides the process's leg before the sweep opens any device, so every
-    /// context it opens (`candidate::requested_leg`) is in the robustness-off leg, and the leg
-    /// cannot be decided again.
-    #[test]
-    fn the_robustness_off_leg_is_decided_before_any_device_opens() {
-        use metal2vulkan_validation::candidate::{requested_leg, run_robustness_off};
-        enter_leg("moltenvk-m3", Leg::RobustnessOff).unwrap();
-        assert_eq!(requested_leg(), Leg::RobustnessOff);
-        assert!(run_robustness_off().is_err());
     }
 
     #[test]

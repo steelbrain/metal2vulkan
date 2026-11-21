@@ -643,7 +643,6 @@ fn candidate_row(
             device: None,
             product: "p".into(),
             restricted_to: None,
-            leg: None,
             modules: vec![],
             out_of_bounds: Some(run),
             rate_map_pass: None,

@@ -66,8 +66,8 @@
 //! and every candidate row's Metal dependency is that row.
 //!
 //! The devices are data ([`Venues`], `validation/cutover/c3-venues.json`): each venue's kind, its
-//! operator environment, the profile that describes it, the cases it must cover and in which
-//! legs, and its declared device and driver. The report judges every venue by the same rules.
+//! operator environment, the profile that describes it, the cases it must cover, and its declared
+//! device and driver. The report judges every venue by the same rules.
 //!
 //! **Refusals**. A case the executor refused on a venue's device holds a refusal record in the slot
 //! (`crate::refusal`), judged current by the rule a row is. A current refusal is
@@ -99,7 +99,6 @@ use crate::candidate::engine::{engine_slot, is_engine_slot};
 use crate::case::{AuthoredCase, Stage};
 use crate::check::CheckedCase;
 use crate::companion::Companion;
-use crate::coverage::Leg;
 use crate::cutover::scope::OutOfScope;
 use crate::cutover::{List, Review, SignOff};
 use crate::index::EvidenceState;
@@ -215,8 +214,7 @@ pub struct Reading {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewedObservation {
-    /// The engine store slot (`ENV@engine`, with `+robustness-off` for that leg): host,
-    /// engine, profile restriction, and leg.
+    /// The engine store slot (`ENV@engine`): host, engine, and profile restriction.
     pub environment_id: String,
     /// The candidate: the SHA-256 of the pipeline's SPIR-V the row executed, where its row records
     /// one (`None` for a row the runtime ran).
@@ -926,11 +924,9 @@ pub struct SlotReport {
     /// The venue's operator environment ID.
     pub venue: String,
     pub slot: String,
-    pub leg: Leg,
-    /// The cases the slot must cover: the venue's [`Population`] in the legs it lists, none in
-    /// another leg. Every other case
-    /// with a row in the slot is judged too, and so is every other case its Metal row judges in a
-    /// leg the venue lists: one the slot never recorded reads [`Verdict::Missing`].
+    /// The cases the slot must cover: the venue's [`Population`]. Every other case with a row in
+    /// the slot is judged too, and so is every other case its Metal row judges: one the slot never
+    /// recorded reads [`Verdict::Missing`].
     pub population: usize,
     pub verdicts: BTreeMap<Verdict, usize>,
     /// Every judged case whose verdict is not [`Verdict::Match`], in case order.
@@ -963,8 +959,7 @@ impl SlotReport {
     }
 
     /// The verdict of the case `case_id` in this slot, or `None` when the slot did not judge it
-    /// (outside its population, with nothing recorded and no Metal row to judge a record by, or in
-    /// a leg the venue does not list).
+    /// (outside its population, with nothing recorded and no Metal row to judge a record by).
     pub fn verdict_of(&self, case_id: &str) -> Option<Verdict> {
         if self.matched.contains(case_id) {
             return Some(Verdict::Match);
@@ -1350,10 +1345,7 @@ pub fn report(
     let venue_of_slot: HashMap<String, &Venue> = venues
         .venues
         .iter()
-        .flat_map(|venue| {
-            [Leg::Stated, Leg::RobustnessOff]
-                .map(|leg| (engine_slot(&venue.environment_id, None, leg), venue))
-        })
+        .map(|venue| (engine_slot(&venue.environment_id, None), venue))
         .collect();
     let other_device = |slot: &str, environment: &serde_json::Value| {
         venue_of_slot.get(slot).is_some_and(|venue| {
@@ -1460,24 +1452,19 @@ pub fn report(
     for venue in &venues.venues {
         let baseline = baseline(venue);
         let holds_baseline = venue.population == Population::OldEngineMatched;
-        for leg in [Leg::Stated, Leg::RobustnessOff] {
-            let slot = engine_slot(&venue.environment_id, None, leg);
-            let listed = venue.legs.contains(&leg);
-            let required = |case: &AuthoredCase| {
-                listed
-                    && match venue.population {
-                        Population::OldEngineMatched => {
-                            baseline.get(case.case_id.as_str()) == Some(&CandidateStatus::Match)
-                        }
-                        Population::Public => input.public_air.contains(&case.air_sha256),
-                        Population::MetalQualified => metals.contains_key(case.case_id.as_str()),
-                    }
+        {
+            let slot = engine_slot(&venue.environment_id, None);
+            let required = |case: &AuthoredCase| match venue.population {
+                Population::OldEngineMatched => {
+                    baseline.get(case.case_id.as_str()) == Some(&CandidateStatus::Match)
+                }
+                Population::Public => input.public_air.contains(&case.air_sha256),
+                Population::MetalQualified => metals.contains_key(case.case_id.as_str()),
             };
             let mut report = SlotReport {
                 kind: venue.kind,
                 venue: venue.environment_id.clone(),
                 slot: slot.clone(),
-                leg,
                 population: 0,
                 verdicts: BTreeMap::new(),
                 rows: Vec::new(),
@@ -1490,12 +1477,12 @@ pub fn report(
             for case in cases.values() {
                 let key = (case.case_id.as_str(), slot.as_str());
                 let required = required(case);
-                // A case outside the population that the slot never recorded is still judged in a
-                // leg the venue lists once a Metal row would judge its record: it reads missing, so
+                // A case outside the population that the slot never recorded is still judged once
+                // a Metal row would judge its record: it reads missing, so
                 // the venue's lane, which runs what C3 reads stale or missing, records it, and no
                 // new case stays unrun because the population is narrower than the corpus. It does
                 // not join the population: covering it is no baseline claim.
-                let judgeable = listed && judged_by(case).is_some();
+                let judgeable = judged_by(case).is_some();
                 report.population += usize::from(required);
                 let judged = match verdict(case, venue.backend(), &slot) {
                     Some(verdict) => verdict,
@@ -1773,7 +1760,7 @@ pub fn report(
             .or_else(|| venues.baseline(row.backend));
         let (engine, engine_recorded) = match venue {
             Some(venue) => {
-                let new_slot = engine_slot(&venue.environment_id, None, Leg::Stated);
+                let new_slot = engine_slot(&venue.environment_id, None);
                 (
                     case.and_then(|case| verdict(case, venue.backend(), &new_slot))
                         .unwrap_or(Verdict::Missing),

@@ -51,7 +51,7 @@ use crate::candidate::engine::{
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::Stage;
 use crate::check::admission::{ExecutorError, NotSupported};
-use crate::coverage::{ExecutedCensus, ExecutionClass, HostClass, Leg, ModuleCensus};
+use crate::coverage::{ExecutedCensus, ExecutionClass, HostClass, ModuleCensus};
 use crate::executor_contract::out_of_bounds::GUARD_FILL;
 use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
 use crate::gpu::wait::{with_submission_label, SubmissionBackend, SubmissionLabel};
@@ -351,7 +351,6 @@ fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> ser
         "layers": RECORDED_LAYERS,
         "synchronization_validation": true,
         "profiles_layer": null,
-        "robustness": {"leg": Leg::Stated},
     })
 }
 
@@ -575,7 +574,6 @@ pub(super) fn ran(
         device: Some(execution_class(identity)),
         product: TRANSLATOR_FINGERPRINT.into(),
         restricted_to: None,
-        leg: Some(Leg::Stated),
         modules: vec![module],
         artifact: None,
     };

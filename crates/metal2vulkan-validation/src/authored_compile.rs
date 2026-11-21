@@ -23,22 +23,21 @@
 //!   A case worker reads private sources by the byte ranges the census's index records
 //!   (`source::use_source_index`), and parses a whole shard only for a source the index does not
 //!   locate; the report counts both.
-//! - **The profiles.** The profile-legs of the expectation file's header, each a committed profile
-//!   as stated or in its robustness-off leg (`coverage::robustness_off`), derived under the
-//!   default policy as every census row is. A device run compiles for the opened device,
+//! - **The profiles.** The profiles of the expectation file's header, each a committed profile
+//!   as stated, derived under the default policy as every census row is. A device run compiles for the opened device,
 //!   restricted to what the executor enables; this compiles for the committed profile.
 //! - **The baseline.** The committed expectation file ([`EXPECTATIONS`] under the corpus root):
-//!   one line per case, its cell on each profile-leg ([`Cell`]): `compiled` or the executor's
+//!   one line per case, its cell on each profile ([`Cell`]): `compiled` or the executor's
 //!   stable refusal label (`NotSupported::outcome`), with its uncovered count when that is not 0.
 //!   A run fails on any failure (an internal error, a worker stop, a case that does not check or
 //!   map) and on any difference from the file: a compiled case refused, a refusal label changed,
 //!   a refused case compiled, an uncovered count changed, a new case, a removed case. `--bless` rewrites the file and prints the same differences; it never writes a
 //!   failure. `--bless-additions` ([`Mode::BlessAdditions`], what each train's gate runs) fails as
-//!   a check does on any failure and on any changed cell of a case and profile-leg the file
+//!   a check does on any failure and on any changed cell of a case and profile the file
 //!   already holds, and otherwise writes the file with new cases and every C3 venue's missing
-//!   profile-legs added and removed cases dropped: a new case has no baseline to flip from, and a
+//!   profiles added and removed cases dropped: a new case has no baseline to flip from, and a
 //!   removed case cannot regress.
-//! - **The cache.** A table of the index holds each case's cell on each profile-leg under the
+//! - **The cache.** A table of the index holds each case's cell on each profile under the
 //!   census key ([`profile_key`]): the plain census's per-profile key (the product sources,
 //!   `SEMANTICS_VERSION`, the profile's stem and fingerprint, the tools), the executor's ABI
 //!   (which covers how it builds requests), and [`AUTHORED_COMPILE_CENSUS_VERSION`]. A case's id
@@ -53,7 +52,6 @@ use crate::candidate::engine::{
 };
 use crate::case::AuthoredCase;
 use crate::check::admission::{admit, ExecutionRequest, ExecutorError, NotSupported};
-use crate::coverage::{robustness_off, Leg};
 use crate::engine::bounded_detail;
 use crate::gpu::DeviceType;
 use crate::pool::parallel;
@@ -83,7 +81,7 @@ mod tests;
 /// records and a run
 ///    compares.
 /// 3: each recorded cell holds the digest of what a run of its case executes there,
-///    which the expectation file records on the C3 venues' profile-legs, at the build its
+///    which the expectation file records on the C3 venues' profiles, at the build its
 ///    `artifacts_at` line names.
 /// 4: a case the runtime runs compiles its own pipeline although the executor's context does not
 ///    replay its templates, each executed command buffer uncovered (`engine::case_compiles`).
@@ -108,79 +106,58 @@ pub fn expectations_path(root: &Path) -> PathBuf {
     root.join(EXPECTATIONS)
 }
 
-/// A committed profile in one robustness leg.
+/// A committed profile the census compiles for, by its stem.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProfileLeg {
+pub struct ProfileStem {
     /// The committed profile's stem (`validation/profiles/<stem>.json`).
     pub stem: String,
-    pub leg: Leg,
 }
 
-impl ProfileLeg {
-    /// The suffix of a robustness-off leg's label.
-    const OFF: &'static str = "+robustness-off";
-
-    /// The label the expectation file's header and the report name it by: the stem, with
-    /// `+robustness-off` for that leg (`coverage::TierProfile::label`'s spelling).
+impl ProfileStem {
+    /// The label the expectation file's header and the report name it by: its stem.
     pub fn label(&self) -> String {
-        match self.leg {
-            Leg::Stated => self.stem.clone(),
-            Leg::RobustnessOff => format!("{}{}", self.stem, Self::OFF),
-        }
+        self.stem.clone()
     }
 
-    /// The profile-leg `label` names.
-    pub fn parse(label: &str) -> Result<ProfileLeg, String> {
-        let (stem, leg) = match label.strip_suffix(Self::OFF) {
-            Some(stem) => (stem, Leg::RobustnessOff),
-            None => (label, Leg::Stated),
-        };
-        if stem.is_empty() || stem.contains(|c: char| c.is_whitespace() || c == '+') {
+    /// The profile `label` names.
+    pub fn parse(label: &str) -> Result<ProfileStem, String> {
+        if label.is_empty() || label.contains(|c: char| c.is_whitespace() || c == '+') {
             return Err(format!(
-                "{label:?} names no profile-leg (STEM or STEM+robustness-off)"
+                "{label:?} names no profile (a committed profile's stem)"
             ));
         }
-        Ok(ProfileLeg {
-            stem: stem.into(),
-            leg,
-        })
+        Ok(ProfileStem { stem: label.into() })
     }
 }
 
-/// A profile-leg the census compiles for: the device a compile worker rebuilds, and the census
-/// key its cells are recorded under ([`profile_key`]).
+/// A profile the census compiles for: the device a compile worker rebuilds, and the census key
+/// its cells are recorded under ([`profile_key`]).
 pub struct CensusProfile {
-    pub leg: ProfileLeg,
+    pub profile: ProfileStem,
     pub device: WorkerDevice,
     pub key: String,
 }
 
 impl CensusProfile {
-    /// The committed profile `leg.stem` as `leg` states it, under the default policy.
-    pub fn load(leg: &ProfileLeg) -> Result<CensusProfile, String> {
-        let stated = crate::engine::load_description(&leg.stem)?;
-        let description = match leg.leg {
-            Leg::Stated => stated,
-            Leg::RobustnessOff => robustness_off(&stated).ok_or_else(|| {
-                format!(
-                    "{} states no robustness feature, so it has no robustness-off leg",
-                    leg.stem
-                )
-            })?,
-        };
+    /// The committed profile `profile`, under the default policy.
+    pub fn load(profile: &ProfileStem) -> Result<CensusProfile, String> {
+        let description = crate::engine::load_description(&profile.stem)?;
         let device = WorkerDevice::new(description, DevicePolicy::default())
-            .map_err(|error| format!("{}: {error}", leg.label()))?;
-        let key = profile_key(&CensusKey::engine(&leg.label(), device.device().profile()));
+            .map_err(|error| format!("{}: {error}", profile.label()))?;
+        let key = profile_key(&CensusKey::engine(
+            &profile.label(),
+            device.device().profile(),
+        ));
         Ok(CensusProfile {
-            leg: leg.clone(),
+            profile: profile.clone(),
             device,
             key,
         })
     }
 }
 
-/// The key a profile-leg's cells are recorded under: SHA-256 over a domain tag, the plain
-/// census's key for the profile-leg (`census`), the executor's ABI, and
+/// The key a profile's cells are recorded under: SHA-256 over a domain tag, the plain
+/// census's key for the profile (`census`), the executor's ABI, and
 /// [`AUTHORED_COMPILE_CENSUS_VERSION`], each length-prefixed.
 pub fn profile_key(census: &CensusKey) -> String {
     let mut bytes = Vec::new();
@@ -196,7 +173,7 @@ pub fn profile_key(census: &CensusKey) -> String {
     crate::hash::sha256_bytes(&bytes)
 }
 
-/// A case's outcome on one profile-leg, as the expectation file writes it.
+/// A case's outcome on one profile, as the expectation file writes it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CellOutcome {
     /// Every pipeline the census compiles for the case compiled.
@@ -249,10 +226,10 @@ impl CellOutcome {
     }
 }
 
-/// A case's cell on one profile-leg, as the expectation file records it: its outcome, how many
-/// of the case's executed command buffers compile on the profile-leg pipelines the census does
+/// A case's cell on one profile, as the expectation file records it: its outcome, how many
+/// of the case's executed command buffers compile on the profile pipelines the census does
 /// not (uncovered, [`CellResult::host_replayed`]), and, on a
-/// C3 venue's profile-leg, the digest of what a run of the case executes there
+/// C3 venue's profile, the digest of what a run of the case executes there
 /// ([`CellResult::artifact`]): for a compiled case with nothing uncovered. A cell whose outcome or
 /// uncovered count changed is a [`Difference::Changed`], and so is one whose digest changed at
 /// the build the file's digests were computed at ([`ArtifactBuild`]).
@@ -325,7 +302,7 @@ impl Cell {
     }
 
     /// The cell of `outcome` with `uncovered` command buffers host-replayed, keeping `artifact`
-    /// only where a cell holds one: on a profile-leg that records digests (`digested`), for a
+    /// only where a cell holds one: on a profile that records digests (`digested`), for a
     /// compiled case with nothing uncovered.
     fn of(
         outcome: CellOutcome,
@@ -393,7 +370,7 @@ pub struct CellFailure {
     pub detail: String,
 }
 
-/// What the compiles of one case on one profile-leg measured: summed and peak.
+/// What the compiles of one case on one profile measured: summed and peak.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
     /// Every compile's time, from preparing its input through decoding its artifact.
@@ -418,7 +395,7 @@ impl Cost {
     }
 }
 
-/// One case compiled on one profile-leg.
+/// One case compiled on one profile.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellResult {
     pub outcome: Result<CellOutcome, CellFailure>,
@@ -429,7 +406,7 @@ pub struct CellResult {
     /// The compiles run (a failure stops the cell at its compile, as it stops the executor).
     pub compiles: usize,
     pub cost: Cost,
-    /// The digest of what a run of the case executes on the profile-leg, as the executor records
+    /// The digest of what a run of the case executes on the profile, as the executor records
     /// it (`candidate::engine::artifact`): for a case that compiled with nothing uncovered,
     /// `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -449,7 +426,7 @@ impl CellResult {
     }
 }
 
-/// What compiling one case came to: a cell per profile-leg, what the parent measured around the
+/// What compiling one case came to: a cell per profile, what the parent measured around the
 /// case worker that compiled it, and how that worker found the private sources it read (`None`
 /// for a compiler that runs no case worker, or a worker that reported nothing).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -459,7 +436,7 @@ pub struct CaseResult {
     pub sources: Option<SourceReads>,
 }
 
-/// What compiles a case on profile-legs: a case worker per case ([`CaseWorkers`], the census's),
+/// What compiles a case on profiles: a case worker per case ([`CaseWorkers`], the census's),
 /// the compile workers from this process ([`WorkerCompiler`], what a case worker runs), or a
 /// test's.
 pub trait CaseCompiler: Sync {
@@ -538,15 +515,15 @@ pub struct CaseWorkers {
 }
 
 impl CaseWorkers {
-    /// The case worker's wall ceiling on `profiles` profile-legs: the 20-s ceiling for the case's
-    /// admission, and twice it per profile-leg.
+    /// The case worker's wall ceiling on `profiles` profiles: the 20-s ceiling for the case's
+    /// admission, and twice it per profile.
     pub fn deadline(profiles: usize) -> Duration {
         crate::worker::DEADLINE * (1 + 2 * profiles as u32)
     }
 }
 
 /// A case worker's input, as the parent writes it: the corpus, the index whose source locations
-/// it reads, the case, and each profile-leg's description and policy, from which the child
+/// it reads, the case, and each profile's description and policy, from which the child
 /// rebuilds the same `Device`.
 #[derive(Serialize)]
 struct CaseInput<'a> {
@@ -620,7 +597,7 @@ impl CaseCompiler for CaseWorkers {
             Ok(run) => stopped(
                 "case_worker".into(),
                 format!(
-                    "the case worker returned {} cells for {} profile-legs",
+                    "the case worker returned {} cells for {} profiles",
                     run.result.cells.len(),
                     profiles.len()
                 ),
@@ -636,7 +613,7 @@ impl CaseCompiler for CaseWorkers {
 }
 
 /// Serve the census's case worker when this process was started as one ([`CASE_WORKER_ARG`]):
-/// read the case, its corpus, the census's index, and the profile-legs' descriptions from stdin,
+/// read the case, its corpus, the census's index, and the profiles' descriptions from stdin,
 /// read private sources through that index's locations (`source::use_source_index`), run
 /// [`compile_case`] with this executable as the compile worker, report the cells and how the
 /// sources were read, and exit.
@@ -865,12 +842,12 @@ impl ArtifactBuild {
 }
 
 /// The committed expectations: the build their artifact digests were computed at, the
-/// profile-legs of the header, and each case's cell on each.
+/// profiles of the header, and each case's cell on each.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Expectations {
     /// `None` for a file that records no artifact digest.
     pub build: Option<ArtifactBuild>,
-    pub profiles: Vec<ProfileLeg>,
+    pub profiles: Vec<ProfileStem>,
     pub cases: BTreeMap<String, Vec<Cell>>,
 }
 
@@ -883,10 +860,10 @@ impl Expectations {
     pub fn render(&self) -> Result<String, String> {
         let mut out = String::from(
             "# The authored compile census's expectations: one line per \
-             committed authored\n# case, its id, then its cell on each profile-leg of the \
+             committed authored\n# case, its id, then its cell on each profile of the \
              header: `compiled`, or the executor's\n# stable refusal label, followed by \
              ` uncovered=N` when N of the case's command buffers are\n# host-replayed there \
-             (pipelines the census does not compile). On a C3 venue's profile-leg, a\n# \
+             (pipelines the census does not compile). On a C3 venue's profile, a\n# \
              compiled cell with nothing uncovered is followed by ` artifact=SHA256`, the digest \
              of what a\n# run of the case executes there, computed at the build the \
              `artifacts_at` line names. Written\n# only by `corpus-triage --audit \
@@ -914,7 +891,7 @@ impl Expectations {
         for (case_id, cells) in &self.cases {
             if cells.len() != self.profiles.len() {
                 return Err(format!(
-                    "case {case_id} has {} cells for {} profile-legs",
+                    "case {case_id} has {} cells for {} profiles",
                     cells.len(),
                     self.profiles.len()
                 ));
@@ -933,8 +910,8 @@ impl Expectations {
 
     /// The expectations `text` states: comment lines, the build of its artifact digests (an
     /// `artifacts_at` line, before the header; needed when a cell has a digest), a header naming
-    /// each profile-leg once, and one line per case (a lowercase SHA-256, once) with one cell
-    /// ([`Cell::parse`]) per profile-leg.
+    /// each profile once, and one line per case (a lowercase SHA-256, once) with one cell
+    /// ([`Cell::parse`]) per profile.
     pub fn parse(text: &str) -> Result<Expectations, String> {
         let mut lines = text
             .lines()
@@ -957,13 +934,13 @@ impl Expectations {
             return Err(format!("the header does not start with {:?}", Self::HEADER));
         }
         let profiles = columns
-            .map(ProfileLeg::parse)
+            .map(ProfileStem::parse)
             .collect::<Result<Vec<_>, _>>()?;
         if profiles.is_empty() {
-            return Err("the header names no profile-leg".into());
+            return Err("the header names no profile".into());
         }
         if profiles.iter().collect::<BTreeSet<_>>().len() != profiles.len() {
-            return Err("the header names a profile-leg twice".into());
+            return Err("the header names a profile twice".into());
         }
         let mut cases = BTreeMap::new();
         for (number, line) in lines {
@@ -977,7 +954,7 @@ impl Expectations {
                 .map_err(at)?;
             if cells.len() != profiles.len() {
                 return Err(at(format!(
-                    "{} cells for {} profile-legs",
+                    "{} cells for {} profiles",
                     cells.len(),
                     profiles.len()
                 )));
@@ -1017,14 +994,14 @@ impl Expectations {
     }
 }
 
-/// This build's artifact digests: each case's digest on each C3 venue's profile-leg, as an
+/// This build's artifact digests: each case's digest on each C3 venue's profile, as an
 /// expectation file records them when its `artifacts_at` line names this build. They are what C3's
 /// currency holds a venue's record of another build to (`c3::VenueKeys`). A file at another build
 /// (a branch's copy of master's, until the gate blesses the merged tree), one without digests, and
 /// no file all hold none, and the currency then holds every record to the build that recorded it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CurrentArtifacts {
-    by_case: BTreeMap<String, BTreeMap<ProfileLeg, String>>,
+    by_case: BTreeMap<String, BTreeMap<ProfileStem, String>>,
 }
 
 impl CurrentArtifacts {
@@ -1041,7 +1018,7 @@ impl CurrentArtifacts {
                     .profiles
                     .iter()
                     .zip(cells)
-                    .filter_map(|(leg, cell)| Some((leg.clone(), cell.artifact.clone()?)))
+                    .filter_map(|(stem, cell)| Some((stem.clone(), cell.artifact.clone()?)))
                     .collect::<BTreeMap<_, _>>();
                 (case_id.clone(), digests)
             })
@@ -1058,24 +1035,24 @@ impl CurrentArtifacts {
             .unwrap_or_default())
     }
 
-    /// This build's digest of `case_id` on `leg`, when the file records one.
-    pub fn get(&self, case_id: &str, leg: &ProfileLeg) -> Option<&str> {
-        self.by_case.get(case_id)?.get(leg).map(String::as_str)
+    /// This build's digest of `case_id` on `stem`, when the file records one.
+    pub fn get(&self, case_id: &str, stem: &ProfileStem) -> Option<&str> {
+        self.by_case.get(case_id)?.get(stem).map(String::as_str)
     }
 }
 
 /// One difference between a run and the expectations.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Difference {
-    /// A profile-leg of the run the expectations do not name (a bless with other `--profile`s).
+    /// A profile of the run the expectations do not name (a bless with other `--profile`s).
     AddedProfile(String),
-    /// A profile-leg the expectations name that the run did not compile.
+    /// A profile the expectations name that the run did not compile.
     RemovedProfile(String),
     /// A committed case the expectations do not list.
     NewCase { case_id: String },
     /// A case the expectations list that is no longer committed.
     RemovedCase { case_id: String },
-    /// A case whose cell on a profile-leg changed: its outcome, its uncovered count, or, at the
+    /// A case whose cell on a profile changed: its outcome, its uncovered count, or, at the
     /// build the file's digests were computed at, its artifact digest.
     Changed {
         case_id: String,
@@ -1087,7 +1064,7 @@ pub enum Difference {
 
 impl Difference {
     /// Whether the difference only adds to the expectations or drops what is gone (a new case, a
-    /// removed case, an added profile-leg), so no cell the file holds changes: what
+    /// removed case, an added profile), so no cell the file holds changes: what
     /// [`Mode::BlessAdditions`] writes.
     pub fn is_addition(&self) -> bool {
         matches!(
@@ -1147,7 +1124,7 @@ impl Difference {
 /// build (`same_build`): at another, a moved digest is no difference ([`moved_artifacts`]).
 pub fn differences(
     expected: &Expectations,
-    profiles: &[ProfileLeg],
+    profiles: &[ProfileStem],
     cells: &BTreeMap<String, Vec<Cell>>,
     same_build: bool,
 ) -> Vec<Difference> {
@@ -1208,7 +1185,7 @@ pub fn differences(
 /// uncovered count did not: what a bless records.
 pub fn moved_artifacts(
     expected: &Expectations,
-    profiles: &[ProfileLeg],
+    profiles: &[ProfileStem],
     cells: &BTreeMap<String, Vec<Cell>>,
 ) -> usize {
     let shared = profiles
@@ -1239,35 +1216,31 @@ pub enum Mode {
     /// Compare with the file and write nothing (`corpus-triage`'s default).
     #[default]
     Check,
-    /// Rewrite the file from the run, on the file's profile-legs or the named ones (`--bless`):
+    /// Rewrite the file from the run, on the file's profiles or the named ones (`--bless`):
     /// never with a failed cell.
     Bless,
-    /// Write the file only with additions (`--bless-additions`): the file's profile-legs plus
+    /// Write the file only with additions (`--bless-additions`): the file's profiles plus
     /// [`Options::required`]'s missing ones are compiled, and the run fails, writing nothing, on any
     /// failed cell and on any difference that is not [`Difference::is_addition`]. Otherwise new
-    /// cases and profile-legs are added, removed cases dropped, and every artifact digest and the
+    /// cases and profiles are added, removed cases dropped, and every artifact digest and the
     /// `artifacts_at` line recorded at this build (digests that moved with the product are no
     /// difference). The file is written only when that changes it.
     BlessAdditions,
 }
 
-/// The profile-legs of every C3 venue (`validation/cutover/c3-venues.json`): each venue's profile
-/// in each of its legs, in list order, once each. What [`Mode::BlessAdditions`] adds to the file
-/// when it lacks one.
-pub fn venue_legs(venues: &crate::c3::Venues) -> Vec<ProfileLeg> {
-    let mut legs = Vec::new();
+/// The profiles of every C3 venue (`validation/cutover/c3-venues.json`), in list order, once each.
+/// What [`Mode::BlessAdditions`] adds to the file when it lacks one.
+pub fn venue_profiles(venues: &crate::c3::Venues) -> Vec<ProfileStem> {
+    let mut profiles = Vec::new();
     for venue in &venues.venues {
-        for &leg in &venue.legs {
-            let wanted = ProfileLeg {
-                stem: venue.profile.clone(),
-                leg,
-            };
-            if !legs.contains(&wanted) {
-                legs.push(wanted);
-            }
+        let wanted = ProfileStem {
+            stem: venue.profile.clone(),
+        };
+        if !profiles.contains(&wanted) {
+            profiles.push(wanted);
         }
     }
-    legs
+    profiles
 }
 
 /// What one census run is asked to do.
@@ -1278,9 +1251,9 @@ pub struct Options<'a> {
     pub index: &'a Path,
     /// The expectation file ([`expectations_path`] of `root` by default).
     pub expectations: &'a Path,
-    /// The profile-legs to compile: `None` for the expectation file's. Only a bless or a probe
+    /// The profiles to compile: `None` for the expectation file's. Only a bless or a probe
     /// may name others.
-    pub profiles: Option<Vec<ProfileLeg>>,
+    pub profiles: Option<Vec<ProfileStem>>,
     /// A probe: only these committed cases, each cell reported, compared with the expectation
     /// file's rows for them when the file exists; never a bless. `None` for every case.
     pub cases: Option<BTreeSet<String>>,
@@ -1288,12 +1261,12 @@ pub struct Options<'a> {
     pub jobs: usize,
     /// Whether and how the run writes the expectation file.
     pub mode: Mode,
-    /// The profile-legs a [`Mode::BlessAdditions`] run adds when the file does not name them
-    /// ([`venue_legs`] for the census; a test's own): unused by the other modes.
-    pub required: Vec<ProfileLeg>,
-    /// The profile-legs whose cells keep their artifact digest: the C3 venues' ([`venue_legs`]) for
+    /// The profiles a [`Mode::BlessAdditions`] run adds when the file does not name them
+    /// ([`venue_profiles`] for the census; a test's own): unused by the other modes.
+    pub required: Vec<ProfileStem>,
+    /// The profiles whose cells keep their artifact digest: the C3 venues' ([`venue_profiles`]) for
     /// the census, a test's own. Every other cell is written without one.
-    pub artifacts: Vec<ProfileLeg>,
+    pub artifacts: Vec<ProfileStem>,
 }
 
 /// One cell of a case that is a failure.
@@ -1304,8 +1277,8 @@ pub struct Failed {
     pub failure: CellFailure,
 }
 
-/// A cell's measure, for the report's slowest and peaks: of one profile-leg's compiles, or of a
-/// case worker over all of a case's selected profile-legs (`profile` "*").
+/// A cell's measure, for the report's slowest and peaks: of one profile's compiles, or of a
+/// case worker over all of a case's selected profiles (`profile` "*").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Measure {
     pub case_id: String,
@@ -1357,14 +1330,14 @@ pub struct Report {
     pub profiles: Vec<String>,
     /// Committed cases.
     pub cases: usize,
-    /// Cells (cases x profile-legs) the cache held under their current key.
+    /// Cells (cases x profiles) the cache held under their current key.
     pub cached_cells: usize,
     /// Cases admitted and compiled by this run, and their cells.
     pub selected_cases: usize,
     pub selected_cells: usize,
     /// Compiles run (worker spawns).
     pub compiles: usize,
-    /// Cells by outcome, over every case and profile-leg.
+    /// Cells by outcome, over every case and profile.
     pub compiled: usize,
     pub refused: usize,
     pub failures: Vec<Failed>,
@@ -1395,7 +1368,7 @@ pub struct Report {
     pub slowest_case: Option<Measure>,
     pub peak_case_resident: Option<Measure>,
     pub peak_case_allocator: Option<Measure>,
-    /// A probe's cells, in case and profile-leg order (empty unless [`Options::cases`]).
+    /// A probe's cells, in case and profile order (empty unless [`Options::cases`]).
     pub probed: Vec<ProbedCell>,
     pub wall: Duration,
 }
@@ -1533,7 +1506,7 @@ struct Cached {
     artifact: Option<String>,
 }
 
-/// Run the census: compile every committed case on every profile-leg whose cell the index does
+/// Run the census: compile every committed case on every profile whose cell the index does
 /// not hold under its current key, in `options.jobs` cases at once through `compiler`, record
 /// every cell that is an outcome, and compare the whole matrix with the expectations (or, with
 /// `bless`, rewrite them when no cell failed).
@@ -1547,50 +1520,51 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
     if options.mode != Mode::Check && options.cases.is_some() {
         return Err("a bless rewrites every case's row; --case selects a probe's cases".into());
     }
-    let legs =
-        match (&options.profiles, &expected) {
-            (Some(_), _) if options.mode == Mode::BlessAdditions => return Err(
-                "--bless-additions compiles the expectation file's profile-legs and adds every C3 \
+    let stems = match (&options.profiles, &expected) {
+        (Some(_), _) if options.mode == Mode::BlessAdditions => {
+            return Err(
+                "--bless-additions compiles the expectation file's profiles and adds every C3 \
                  venue's; --profile names a full bless's"
                     .into(),
-            ),
-            (Some(_), _) if options.mode == Mode::Check && options.cases.is_none() => {
-                return Err(
-                    "--profile names the profile-legs of a bless or a probe (--case); a check \
+            )
+        }
+        (Some(_), _) if options.mode == Mode::Check && options.cases.is_none() => {
+            return Err(
+                "--profile names the profiles of a bless or a probe (--case); a check \
                         compiles the expectation file's"
-                        .into(),
-                )
-            }
-            (Some(profiles), _) => profiles.clone(),
-            (None, Some(expected)) if options.mode == Mode::BlessAdditions => {
-                let mut legs = expected.profiles.clone();
-                for leg in &options.required {
-                    if !legs.contains(leg) {
-                        legs.push(leg.clone());
-                    }
+                    .into(),
+            )
+        }
+        (Some(profiles), _) => profiles.clone(),
+        (None, Some(expected)) if options.mode == Mode::BlessAdditions => {
+            let mut stems = expected.profiles.clone();
+            for stem in &options.required {
+                if !stems.contains(stem) {
+                    stems.push(stem.clone());
                 }
-                legs
             }
-            (None, Some(expected)) => expected.profiles.clone(),
-            (None, None) => {
-                return Err(format!(
-                "{} does not exist: bless it first with --bless and a --profile per profile-leg",
+            stems
+        }
+        (None, Some(expected)) => expected.profiles.clone(),
+        (None, None) => {
+            return Err(format!(
+                "{} does not exist: bless it first with --bless and a --profile per profile",
                 options.expectations.display()
             ))
-            }
-        };
-    if legs.is_empty() || legs.iter().collect::<BTreeSet<_>>().len() != legs.len() {
-        return Err("name each profile-leg once, and at least one".into());
+        }
+    };
+    if stems.is_empty() || stems.iter().collect::<BTreeSet<_>>().len() != stems.len() {
+        return Err("name each profile once, and at least one".into());
     }
-    let profiles = legs
+    let profiles = stems
         .iter()
         .map(CensusProfile::load)
         .collect::<Result<Vec<_>, _>>()?;
-    let labels = legs.iter().map(ProfileLeg::label).collect::<Vec<_>>();
-    // A cell keeps its artifact digest on the profile-legs that record them.
-    let digested = legs
+    let labels = stems.iter().map(ProfileStem::label).collect::<Vec<_>>();
+    // A cell keeps its artifact digest on the profiles that record them.
+    let digested = stems
         .iter()
-        .map(|leg| options.artifacts.contains(leg))
+        .map(|stem| options.artifacts.contains(stem))
         .collect::<Vec<_>>();
     let mut cases = CorpusStore::new(options.root).read_all_cases()?;
     // A probe compiles its committed cases and compares only their rows.
@@ -1718,7 +1692,7 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
             }
             if results.len() != selected.len() {
                 return Err(format!(
-                    "the compiler returned {} cells for {} profile-legs",
+                    "the compiler returned {} cells for {} profiles",
                     results.len(),
                     selected.len()
                 ));
@@ -1856,13 +1830,13 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
         (None, Some(_)) => Vec::new(),
         (expected, _) => differences(
             &expected.clone().unwrap_or_default(),
-            &legs,
+            &stems,
             &outcomes,
             same_build,
         ),
     };
     if let Some(expected) = &expected {
-        report.moved_artifacts = moved_artifacts(expected, &legs, &outcomes);
+        report.moved_artifacts = moved_artifacts(expected, &stems, &outcomes);
     }
     // A case with a failed cell has no row to compare: it is a failure, not a removed case.
     let failed = report
@@ -1887,7 +1861,7 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
             .any(|cell| cell.artifact.is_some());
         let blessed = Expectations {
             build: digests.then_some(this_build),
-            profiles: legs,
+            profiles: stems,
             cases: outcomes,
         };
         let text = blessed.render()?;
@@ -1946,7 +1920,7 @@ fn open(index: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-/// The cells the index holds for profile-leg `label` under `key`, by case id.
+/// The cells the index holds for profile `label` under `key`, by case id.
 fn read_cached(
     connection: &Connection,
     label: &str,
@@ -1984,8 +1958,8 @@ fn read_cached(
     Ok(out)
 }
 
-/// Record `cells`, each replacing the case's cell on its profile-leg (one per case and
-/// profile-leg: a key's cells replace an older key's, so the table stays bounded).
+/// Record `cells`, each replacing the case's cell on its profile (one per case and
+/// profile: a key's cells replace an older key's, so the table stays bounded).
 fn write_cached(connection: &Connection, cells: &[Recorded]) -> Result<(), String> {
     if cells.is_empty() {
         return Ok(());

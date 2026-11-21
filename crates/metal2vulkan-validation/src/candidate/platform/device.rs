@@ -7,7 +7,7 @@ use super::profiles::{
     self, ActiveTool, ProfileRestriction, ProfilesLayer, ProfilesSettings, RestrictionError,
     PROFILES_LAYER,
 };
-use crate::coverage::{ExecutionClass, Leg};
+use crate::coverage::ExecutionClass;
 use crate::gpu::wait::{self, SubmissionBackend};
 use crate::gpu::DeviceType;
 use ash::{vk, Device, Entry, Instance};
@@ -29,28 +29,6 @@ pub(super) use crate::candidate::device_facts::RECORDED_LAYERS;
 
 /// The validation layer every engine run enables.
 pub(super) const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
-
-/// The robustness leg of every engine context this process opens: decided once, by
-/// [`run_robustness_off`] or by the first context opened without it.
-static LEG: OnceLock<Leg> = OnceLock::new();
-
-/// Run every engine context this process opens in the robustness-off leg (a command's
-/// `--robustness-off`): enable no robustness feature, so the product compiles the in-shader
-/// containment encodings. Call it once, before any device opens: the leg is decided once per
-/// process, and a context already opened in the stated leg refuses it.
-pub fn run_robustness_off() -> Result<(), String> {
-    LEG.set(Leg::RobustnessOff).map_err(|_| {
-        "the robustness leg is already decided: pass --robustness-off once, before any device \
-         opens"
-            .to_string()
-    })
-}
-
-/// The leg of every engine context this process opens ([`run_robustness_off`]); reading it
-/// decides that it is the stated leg if none was set.
-pub fn requested_leg() -> Leg {
-    *LEG.get_or_init(|| Leg::Stated)
-}
 
 /// Run `body` against this thread's Vulkan context for `device_type`, under the validation layer
 /// ([`RECORDED_LAYERS`]), creating the device on first use. One device of each type serves every
@@ -403,9 +381,7 @@ pub(super) struct VulkanContext {
     /// The extensions the restricted context hides ([`ProfileRestriction::hidden`]; empty when
     /// unrestricted).
     hidden: BTreeSet<String>,
-    /// The robustness leg the context runs under ([`requested_leg`]).
-    pub(super) leg: Leg,
-    /// The robustness features the stated leg could not enable
+    /// The robustness features the context could not enable
     /// (`enables::Enables::unmet_robustness`): every run on the context is refused naming them.
     pub(super) unmet_robustness: BTreeSet<VkFeature>,
     /// What the context can do with a sparse case texture.
@@ -1583,13 +1559,11 @@ impl VulkanContext {
                 }
             }
         }
-        let leg = requested_leg();
         let mut enables = enables::engine_list(
             enables::old_engine_list(&supported, &available),
             description.as_ref().map_err(Clone::clone)?,
             &supported,
             &available,
-            leg,
         )
         .map_err(|error| format!("the engine's enable list: {error}"))?;
         // The device replay's generated-commands path: an engine context enables
@@ -1737,7 +1711,6 @@ impl VulkanContext {
             tools,
             restriction,
             hidden,
-            leg,
             unmet_robustness: enables.unmet_robustness,
             sparse_images,
             generated_commands,
@@ -1844,11 +1817,10 @@ impl VulkanContext {
         self.messages.take()
     }
 
-    /// What the environment records of the robustness leg: the leg and the robustness features the
-    /// context enabled.
+    /// What the environment records of robustness: the robustness features the context enabled,
+    /// and those it could not.
     pub(super) fn robustness(&self) -> serde_json::Value {
         serde_json::json!({
-            "leg": self.leg,
             "enabled": crate::coverage::ROBUSTNESS_FEATURES
                 .iter()
                 .filter(|feature| self.enabled.features.contains(feature))

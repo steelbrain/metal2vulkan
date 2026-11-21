@@ -15,14 +15,14 @@
 //! 1. The parent writes a `DeviceInput` to the file that becomes the child's stdin: the case,
 //!    the corpus root, the device type and backend, the bound of every device wait
 //!    ([`wait_timeout()`]), the committed profile its contexts are restricted to
-//!    (`--profiles-layer P`), the robustness leg they run under (`--robustness-off`), the
+//!    (`--profiles-layer P`), the
 //!    read-only source index its private sources are read through (`--source-index`), and the
 //!    digest of the input its own check produced. That is every process-wide setting the device
 //!    half reads; the environment (the loader's and the layers' variables, `METAL2VULKAN_*`,
 //!    `HOME`) is inherited.
 //! 2. The child ([`serve_if_requested`]) sets the wait bound, reads private sources through the
 //!    parent's source index if it was handed one, restricts its contexts to P and
-//!    sets their leg and its generated-commands setting before it opens any device, turns on the
+//!    sets its generated-commands setting before it opens any device, turns on the
 //!    validation layer's echo (`candidate::echo_validation_messages`: each failing message goes
 //!    to stderr as the layer reports it, at most as many as a row keeps, so a crash still shows
 //!    them), admits and prepares the case again, requires the parent's input digest, runs it,
@@ -39,7 +39,7 @@
 //!    before it writes anything, so a GPU child's crash writes the tripwire first; only then does
 //!    it relay the child's stderr, ignoring a closed stream. A report is decoded and refused
 //!    unless the child's build identity and generated-commands setting are the parent's and its
-//!    census names the parent's restriction and leg; the hang protocol's exit comes back to
+//!    census names the parent's restriction; the hang protocol's exit comes back to
 //!    `execute`, which leaves with the same status once the scratch files are gone, as the
 //!    in-process wait did; a signal is a [`DeviceCrash`]; any other exit is `Failed`, with the
 //!    stderr.
@@ -49,7 +49,7 @@ use super::{bounded, report, MonitoredChild, ProcessControl, Reported};
 use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::case::AuthoredCase;
 use crate::check::admission::{DeviceCrash, ExecutorError};
-use crate::coverage::{ExecutedCensus, Leg};
+use crate::coverage::ExecutedCensus;
 use crate::gpu::tripwire::{self, HangKind, HangRecord};
 use crate::gpu::wait::{
     report_incident, set_wait_timeout, wait_timeout, SubmissionBackend, HANG_EXIT_CODE,
@@ -92,9 +92,6 @@ pub(crate) struct DeviceInput {
     /// worker restricts its own to it before it opens a device, and the census of its run must name
     /// it.
     pub(crate) restricted_to: Option<String>,
-    /// The robustness leg the parent's contexts run under (`--robustness-off`): the worker runs its
-    /// own under it, and the census of its run must name it.
-    pub(crate) leg: Leg,
     /// Whether the parent's contexts enable `VK_EXT_device_generated_commands` where their device
     /// supports it (`--without-generated-commands` clears it): the worker opens its own the same
     /// way, and its report must name it.
@@ -142,7 +139,7 @@ pub struct DeviceRun {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenedDevice {
     /// The environment a row on this device records: the device and driver, the layers, the
-    /// robustness leg, the profiles layer's restriction, and the profile and its fingerprint.
+    /// robustness features, the profiles layer's restriction, and the profile and its fingerprint.
     pub environment: serde_json::Value,
     /// The engine's fingerprint of the opened device's profile under this product.
     pub translator_fingerprint: String,
@@ -347,9 +344,9 @@ fn start(
 
 /// The outcome a worker that exited 0 reported in the last line of `stdout_path`, as every
 /// worker's report is ([`super::report`]: a library in the worker may write a line before it),
-/// refused unless the worker is this build and ran under `input`'s generated-commands setting,
-/// restriction, and leg. A device it names beside a refusal must have run under the same
-/// restriction and leg, and only a typed refusal names one.
+/// refused unless the worker is this build and ran under `input`'s generated-commands setting and
+/// restriction. A device it names beside a refusal must have run under the same restriction, and
+/// only a typed refusal names one.
 fn reported(stdout_path: &Path, input: &DeviceInput) -> DeviceOutcome {
     let mut refused_on = None;
     let result = reported_run(stdout_path, input, &mut refused_on);
@@ -424,37 +421,22 @@ fn reported_run(
         )
         .into());
     }
-    if run.census.leg != Some(input.leg) {
-        return Err(format!(
-            "the device worker ran in robustness leg {:?}, and this tool asked for {:?}; its run \
-             is not this tool's evidence",
-            run.census.leg, input.leg
-        )
-        .into());
-    }
     Ok(run)
 }
 
-/// Whether `opened`, the device a worker refused a case on, ran under `input`'s restriction and leg,
-/// as its environment records them.
+/// Whether `opened`, the device a worker refused a case on, ran under `input`'s restriction, as its
+/// environment records it.
 fn opened_under(opened: &OpenedDevice, input: &DeviceInput) -> Result<(), String> {
-    let leg = opened
-        .environment
-        .get("robustness")
-        .and_then(|robustness| robustness.get("leg"))
-        .cloned()
-        .and_then(|leg| serde_json::from_value::<Leg>(leg).ok());
     let restricted_to = opened
         .environment
         .get("profiles_layer")
         .and_then(|restriction| restriction.get("profile"))
         .and_then(serde_json::Value::as_str);
-    if leg != Some(input.leg) || restricted_to != input.restricted_to.as_deref() {
+    if restricted_to != input.restricted_to.as_deref() {
         return Err(format!(
-            "the device worker refused the case on a device opened in leg {leg:?} restricted to \
-             {restricted_to:?}, and this tool asked for {:?} restricted to {:?}; its refusal is \
-             not this tool's evidence",
-            input.leg, input.restricted_to
+            "the device worker refused the case on a device restricted to {restricted_to:?}, and \
+             this tool asked for {:?}; its refusal is not this tool's evidence",
+            input.restricted_to
         ));
     }
     Ok(())
@@ -546,13 +528,9 @@ fn serve() -> Result<(), String> {
     if let Some(index) = &input.source_index {
         crate::source::use_source_index(index.clone())?;
     }
-    // Before any device opens: a context opened first would decide that there is none, and
-    // that it runs in the stated leg.
+    // Before any device opens: a context opened first would decide that there is none.
     if let Some(profile) = &input.restricted_to {
         crate::candidate::restrict_devices_to(profile)?;
-    }
-    if input.leg == Leg::RobustnessOff {
-        crate::candidate::run_robustness_off()?;
     }
     crate::candidate::decide_generated_commands(input.generated_commands)?;
     crate::candidate::echo_validation_messages();

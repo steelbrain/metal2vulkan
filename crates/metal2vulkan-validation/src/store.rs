@@ -1558,7 +1558,7 @@ mod tests {
 
         // A refused attempt is a case the suite ran: it prepared the case and compiled before it
         // refused, so its row records what that cost on the same terms.
-        let mut untimed = refusal(&case, "env@engine", "stated");
+        let mut untimed = refusal(&case, "env@engine");
         untimed.timing = None;
         let refused = store.upsert_refusal(untimed).unwrap_err();
         assert!(
@@ -1566,9 +1566,7 @@ mod tests {
             "{refused}"
         );
         assert!(store.read_refusals(Backend::Vulkan).unwrap().is_empty());
-        store
-            .upsert_refusal(refusal(&case, "env@engine", "stated"))
-            .unwrap();
+        store.upsert_refusal(refusal(&case, "env@engine")).unwrap();
         let mut refusals = store.read_refusals(Backend::Vulkan).unwrap();
         assert_eq!(refusals.len(), 1);
         assert!(refusals.pop().unwrap().timing.is_some());
@@ -1712,7 +1710,6 @@ mod tests {
             device: None,
             product: "p".into(),
             restricted_to: None,
-            leg: None,
             modules: vec![ModuleCensus {
                 stage: Stage::Kernel,
                 subgroup: Default::default(),
@@ -1793,7 +1790,7 @@ mod tests {
         store
             .upsert_refusal(RefusalObservation {
                 backend: Backend::Moltenvk,
-                ..refusal(&case, "env@engine", "stated")
+                ..refusal(&case, "env@engine")
             })
             .unwrap();
         store.put_case(make_case("other", "AQAAAA==")).unwrap();
@@ -2109,7 +2106,7 @@ mod tests {
         );
     }
 
-    fn refusal(case: &AuthoredCase, slot: &str, leg: &str) -> RefusalObservation {
+    fn refusal(case: &AuthoredCase, slot: &str) -> RefusalObservation {
         RefusalObservation {
             timing: Some(crate::observation::test_timing()),
             case_id: case.case_id.clone(),
@@ -2118,7 +2115,7 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             backend: Backend::Vulkan,
             environment_id: slot.into(),
-            environment: serde_json::json!({"robustness": {"leg": leg}}),
+            environment: serde_json::json!({"robustness": {"enabled": [], "unmet": []}}),
             executor_abi: "v1".into(),
             refusal: crate::refusal::Refusal::of(
                 &crate::check::admission::NotSupported::NotEnabled(vec!["rayQuery".into()]),
@@ -2169,10 +2166,9 @@ mod tests {
         store
             .upsert_refusal(RefusalObservation {
                 environment: serde_json::json!({
-                    "robustness": {"leg": "stated"},
                     crate::c3::VENUE_PROFILE: venue("profile-a", &old)[crate::c3::VENUE_PROFILE],
                 }),
-                ..refusal(&case, "r@engine", "stated")
+                ..refusal(&case, "r@engine")
             })
             .unwrap();
         let lines = || {
@@ -2262,47 +2258,34 @@ mod tests {
         store
             .upsert_candidate(candidate(&kept, Backend::Vulkan, slot))
             .unwrap();
-        store
-            .upsert_refusal(refusal(&refused, slot, "stated"))
-            .unwrap();
+        store.upsert_refusal(refusal(&refused, slot)).unwrap();
         assert_eq!(
             store.read_candidates(Backend::Vulkan).unwrap(),
             vec![candidate(&kept, Backend::Vulkan, slot)]
         );
         assert_eq!(
             store.read_refusals(Backend::Vulkan).unwrap(),
-            vec![refusal(&refused, slot, "stated")]
+            vec![refusal(&refused, slot)]
         );
         assert!(store.read_refusals(Backend::Moltenvk).unwrap().is_empty());
-        // A refusal in the other leg's slot is its own.
-        let off = "env@engine+robustness-off";
-        store
-            .upsert_refusal(refusal(&refused, off, "robustness_off"))
-            .unwrap();
-        store
-            .upsert_refusal(refusal(&kept, off, "robustness_off"))
-            .unwrap();
+        // A refusal in another slot is its own.
+        let off = "env@engine@runtime-floor";
+        store.upsert_refusal(refusal(&refused, off)).unwrap();
+        store.upsert_refusal(refusal(&kept, off)).unwrap();
         assert_eq!(store.read_refusals(Backend::Vulkan).unwrap().len(), 3);
         assert!(store.layout_errors().unwrap().is_empty());
         // A row replaces the slot's refusal.
         store
             .upsert_candidate(candidate(&refused, Backend::Vulkan, slot))
             .unwrap();
-        let mut expected = vec![
-            refusal(&kept, off, "robustness_off"),
-            refusal(&refused, off, "robustness_off"),
-        ];
+        let mut expected = vec![refusal(&kept, off), refusal(&refused, off)];
         expected.sort_by(|a, b| a.order_key().cmp(&b.order_key()));
         assert_eq!(store.read_refusals(Backend::Vulkan).unwrap(), expected);
         assert_eq!(store.read_candidates(Backend::Vulkan).unwrap().len(), 2);
-        // A refusal whose leg is not its slot's, or of an unknown case, is not stored.
-        assert!(store
-            .upsert_refusal(refusal(&refused, off, "stated"))
-            .unwrap_err()
-            .contains("but is stored in slot"));
+        // A refusal of an unknown case is not stored.
         let unknown = make_case("unknown", "AgAAAA==");
         assert!(store
-            .upsert_refusal(refusal(&unknown, slot, "stated"))
+            .upsert_refusal(refusal(&unknown, slot))
             .unwrap_err()
             .contains("unknown case_id"));
 
@@ -2311,7 +2294,7 @@ mod tests {
         store.put_case(replacement).unwrap();
         assert_eq!(
             store.read_refusals(Backend::Vulkan).unwrap(),
-            vec![refusal(&kept, off, "robustness_off")]
+            vec![refusal(&kept, off)]
         );
         store
             .delete_named_case(&kept.air_sha256, None, &kept.name)
@@ -2325,8 +2308,8 @@ mod tests {
     }
 
     /// A run restricted to a profile the device cannot take is a typed device refusal,
-    /// `not_supported{profile_exceeds_device}` naming each member, stored in the restricted slot of
-    /// its leg, read back as written, and kept apart from the venue's own slots.
+    /// `not_supported{profile_exceeds_device}` naming each member, stored in the restricted slot,
+    /// read back as written, and kept apart from the venue's own slots.
     #[test]
     fn a_refused_restriction_is_stored_in_its_restricted_slot() {
         use crate::check::admission::NotSupported;
@@ -2341,30 +2324,20 @@ mod tests {
                     .into(),
             ],
         };
-        let restricted = |slot: &str, leg: &str| RefusalObservation {
+        let restricted = |slot: &str| RefusalObservation {
             environment: serde_json::json!({
-                "robustness": {"leg": leg},
                 "profiles_layer": {"profile": "runtime-floor"},
             }),
             refusal: crate::refusal::Refusal::of(&refused),
-            ..refusal(&case, slot, leg)
+            ..refusal(&case, slot)
         };
-        let stated = "env@engine@runtime-floor";
-        let off = "env@engine@runtime-floor+robustness-off";
-        store.upsert_refusal(restricted(stated, "stated")).unwrap();
-        store
-            .upsert_refusal(restricted(off, "robustness_off"))
-            .unwrap();
+        let slot = "env@engine@runtime-floor";
+        store.upsert_refusal(restricted(slot)).unwrap();
         store
             .upsert_candidate(candidate(&case, Backend::Vulkan, "env@engine"))
             .unwrap();
         let stored = store.read_refusals(Backend::Vulkan).unwrap();
-        let mut expected = vec![
-            restricted(stated, "stated"),
-            restricted(off, "robustness_off"),
-        ];
-        expected.sort_by(|a, b| a.order_key().cmp(&b.order_key()));
-        assert_eq!(stored, expected);
+        assert_eq!(stored, vec![restricted(slot)]);
         assert_eq!(
             stored[0].refusal.class,
             crate::refusal::RefusalClass::Device
@@ -2402,7 +2375,7 @@ mod tests {
                 detail: "unsupported: SparseTexture".into(),
                 at_bind,
             }),
-            ..refusal(&case, "env@engine", "stated")
+            ..refusal(&case, "env@engine")
         };
         let bound = product(true);
         let compiled = RefusalObservation {

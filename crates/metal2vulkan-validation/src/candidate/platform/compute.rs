@@ -175,10 +175,6 @@ pub(crate) fn native_refused_on(
             ("layers", serde_json::json!(super::device::RECORDED_LAYERS)),
             ("synchronization_validation", serde_json::json!(true)),
             ("profiles_layer", profiles_layer),
-            (
-                "robustness",
-                serde_json::json!({"leg": crate::candidate::requested_leg()}),
-            ),
             ("profile_fingerprint", serde_json::json!(fingerprint)),
             ("profile", serde_json::json!(format!("{profile:?}"))),
         ] {
@@ -385,7 +381,6 @@ pub(super) fn executed_census(
         restricted_to: context
             .restriction
             .map(|restriction| restriction.stem.clone()),
-        leg: Some(context.leg),
         modules,
         artifact: None,
     }

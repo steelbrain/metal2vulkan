@@ -56,7 +56,6 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
     let mut environment_id = None;
     let mut device_type = None;
     let mut profiles_layer = None;
-    let mut robustness_off = false;
     let mut without_generated_commands = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -78,7 +77,6 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
                 device_type = Some(DeviceType::parse(&required(&mut args, "--device-type")?)?)
             }
             "--profiles-layer" => profiles_layer = Some(required(&mut args, "--profiles-layer")?),
-            "--robustness-off" => robustness_off = true,
             "--without-generated-commands" => without_generated_commands = true,
             "--gpu-wait-timeout" => set_wait_timeout(parse_wait_timeout(&required(
                 &mut args,
@@ -89,7 +87,7 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
                     "usage: corpus-{} [--corpus DIR] [--private-corpus DIR] --case-id HASH --metal-environment-id ID --environment-id ID --device-type cpu|gpu \\\n\
                      [--air-sha256 HASH] [--source-index FILE] \\\n\
                      [--gpu-wait-timeout SECONDS] [--profiles-layer P] \\\n\
-                     [--robustness-off] [--without-generated-commands]\n\
+                     [--without-generated-commands]\n\
                      cpu matches only a CPU Vulkan implementation.\n\
                      --air-sha256 HASH, the case's AIR, reads the case from only the case shard HASH\n\
                      selects (refused if the case there is over another AIR); without it every case\n\
@@ -114,9 +112,7 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
                      states (robustBufferAccess, robustBufferAccess2, robustImageAccess,\n\
                      robustImageAccess2), so the product compiles the robust containment encodings,\n\
                      and a case is not_supported{{not_enabled}} (exit 4) on a device that cannot enable\n\
-                     one it states. --robustness-off enables none of them, so the\n\
-                     product compiles the in-shader encodings; the row is stored in the slot's\n\
-                     +robustness-off form (ID@engine+robustness-off, ID@engine@P+robustness-off).\n\
+                     one it states.\n\
                      It enables VK_EXT_device_generated_commands where the device supports it,\n\
                      so an indirect command buffer's device replay is the extension's token stream.\n\
                      --without-generated-commands leaves it disabled, so the\n\
@@ -145,9 +141,6 @@ fn run(backend: Backend) -> Result<(), ExecutorError> {
     .ok_or_else(|| format!("case_id {case_id} not found"))?;
     if let Some(profile) = &profiles_layer {
         metal2vulkan_validation::candidate::restrict_devices_to(profile)?;
-    }
-    if robustness_off {
-        metal2vulkan_validation::candidate::run_robustness_off()?;
     }
     if without_generated_commands {
         metal2vulkan_validation::candidate::run_without_generated_commands()?;

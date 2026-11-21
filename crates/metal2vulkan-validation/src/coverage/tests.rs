@@ -46,7 +46,6 @@ fn executed_census_round_trips() {
         device: Some(ExecutionClass::Host(MOLTENVK)),
         product: "p".into(),
         restricted_to: None,
-        leg: Some(Leg::Stated),
         modules: vec![module(Stage::Kernel, pinned(32, true), &["simd.reduce"])],
         artifact: None,
     };
@@ -78,7 +77,6 @@ fn a_rate_mapped_pass_records_its_regions() {
         device: Some(ExecutionClass::Host(MOLTENVK)),
         product: "p".into(),
         restricted_to: None,
-        leg: Some(Leg::Stated),
         modules: vec![module(Stage::Fragment, FREE, &["arith.float"])],
         artifact: None,
     };
@@ -314,7 +312,7 @@ fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
 }
 
 /// The tier table holds every committed profile as stated and, where it states a robustness
-/// feature, in its robustness-off leg (validation runs both): the stated leg compiles the robust
+/// feature, in its robustness-off leg: the stated leg compiles the robust
 /// encodings the profile states, the off leg the in-shader ones, on the same device class and
 /// subgroup width. Every committed profile states `robustBufferAccess`, so every one has both legs;
 /// every one states image robustness too (the floor's Vulkan 1.3 requires `robustImageAccess`),

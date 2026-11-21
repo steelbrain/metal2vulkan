@@ -1,14 +1,14 @@
 //! The authored compile census through real compile workers: `corpus-triage --audit
 //! authored-compile` serves the compile worker, compiles a committed public case's executor request
-//! in it, blesses, adds the committed C3 venues' profile-legs with an additions bless, reruns warm
+//! in it, blesses, adds the committed C3 venues' profiles with an additions bless, reruns warm
 //! with no compile, and fails on a difference from the expectations, which an additions bless
 //! refuses to write; a worker that stops is a failed cell. The case is copied into an owned scratch
 //! corpus; nothing is read from the developer's private corpus or index.
 
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 use metal2vulkan_validation::authored_compile::{
-    expectations_path, run, venue_legs, ArtifactBuild, Cell, CellOutcome, Expectations,
-    FailureClass, Mode, Options, ProfileLeg, WorkerCompiler,
+    expectations_path, run, venue_profiles, ArtifactBuild, Cell, CellOutcome, Expectations,
+    FailureClass, Mode, Options, ProfileStem, WorkerCompiler,
 };
 use metal2vulkan_validation::c3::Venues;
 use metal2vulkan_validation::store::CorpusStore;
@@ -102,35 +102,35 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
     assert_eq!(summary(&output, "selected_cells"), "0", "{output}");
     assert_eq!(summary(&output, "cached_cells"), "1", "{output}");
 
-    // An additions bless adds every committed C3 venue's profile-leg the file lacks, compiling
+    // An additions bless adds every committed C3 venue's profile the file lacks, compiling
     // only their cells; run again, it changes nothing.
-    let mut legs = vec![ProfileLeg::parse("lavapipe").unwrap()];
-    for leg in venue_legs(&Venues::load(&Venues::committed_path()).unwrap()) {
-        if !legs.contains(&leg) {
-            legs.push(leg);
+    let mut profiles = vec![ProfileStem::parse("lavapipe").unwrap()];
+    for profile in venue_profiles(&Venues::load(&Venues::committed_path()).unwrap()) {
+        if !profiles.contains(&profile) {
+            profiles.push(profile);
         }
     }
     let (ok, output) = triage(root, &["--bless-additions"]);
     assert!(ok, "{output}");
     assert_eq!(
         summary(&output, "selected_cells"),
-        (legs.len() - 1).to_string(),
+        (profiles.len() - 1).to_string(),
         "{output}"
     );
     assert_eq!(summary(&output, "written"), "true", "{output}");
     let expected = Expectations::load(&expectations_path(root))
         .unwrap()
         .unwrap();
-    assert_eq!(expected.profiles, legs);
+    assert_eq!(expected.profiles, profiles);
     // Each venue's compiled cell holds the digest of what a run executes there, at this build; the
-    // file's own non-venue profile-leg holds none.
+    // file's own non-venue profile holds none.
     assert_eq!(expected.build, Some(ArtifactBuild::this()));
-    for (leg, cell) in legs.iter().zip(expected.cases.values().next().unwrap()) {
-        let venue = leg.label() != "lavapipe";
+    for (profile, cell) in profiles.iter().zip(expected.cases.values().next().unwrap()) {
+        let venue = profile.label() != "lavapipe";
         if cell.outcome == CellOutcome::Compiled && cell.uncovered == 0 {
-            assert_eq!(cell.artifact.is_some(), venue, "{}", leg.label());
+            assert_eq!(cell.artifact.is_some(), venue, "{}", profile.label());
         } else {
-            assert_eq!(cell.artifact, None, "{}", leg.label());
+            assert_eq!(cell.artifact, None, "{}", profile.label());
         }
     }
     assert!(expected
@@ -168,7 +168,7 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
                     id.clone(),
                     vec![
                         Cell::covered(CellOutcome::Refused("not_supported{bind}".into()));
-                        legs.len()
+                        profiles.len()
                     ],
                 )
             })
@@ -212,7 +212,7 @@ fn a_stopped_compile_worker_fails_its_cell() {
             root,
             index: &index,
             expectations: &expectations,
-            profiles: Some(vec![ProfileLeg::parse("lavapipe").unwrap()]),
+            profiles: Some(vec![ProfileStem::parse("lavapipe").unwrap()]),
             cases: None,
             jobs: 1,
             mode: Mode::Bless,
@@ -289,7 +289,7 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         .unwrap_or_else(|error| panic!("admission: {error}"));
         prepare_case(device, admitted).unwrap_or_else(|error| panic!("preparation: {error}"))
     };
-    let profile = |label: &str| CensusProfile::load(&ProfileLeg::parse(label).unwrap()).unwrap();
+    let profile = |label: &str| CensusProfile::load(&ProfileStem::parse(label).unwrap()).unwrap();
     let lavapipe = profile("lavapipe");
     // A device without device addresses (`runtime-floor` without `bufferDeviceAddress`, below the
     // runtime's floor): the GPU-encoded command buffers replay on the host there.
@@ -366,7 +366,7 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         let _ = Command::new(&program).arg("--help").output();
         CompileWorker::program(program)
     };
-    let lavapipe = CensusProfile::load(&ProfileLeg::parse("lavapipe").unwrap()).unwrap();
+    let lavapipe = CensusProfile::load(&ProfileStem::parse("lavapipe").unwrap()).unwrap();
     let device = DeviceType::Cpu;
     for name in [
         "a-mesh-grid-of-threadgroups-draws-through-its-fragment",

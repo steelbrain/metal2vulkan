@@ -28,7 +28,6 @@ pub use compute::execute_engine;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub use compute::opened_worker_device;
 pub use device::{capture_formats, echo_validation_messages, venue_check};
-pub use device::{requested_leg, run_robustness_off};
 pub use profiles::{requested_restriction, restrict_devices_to};
 pub use render::execute_engine_render;
 pub use runtime::execute_runtime;

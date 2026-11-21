@@ -378,7 +378,7 @@ impl CandidateObservation {
             return Err("candidate environment must be a JSON object".into());
         }
         self.validate_restriction()?;
-        self.validate_leg()?;
+        self.validate_census_artifact()?;
         let output = base64::engine::general_purpose::STANDARD
             .decode(&self.output_b64)
             .map_err(|error| format!("invalid candidate output_b64: {error}"))?;
@@ -466,55 +466,11 @@ impl CandidateObservation {
         }
     }
 
-    /// The row's robustness leg is the one its environment records and the one its slot names,
-    /// and its modules' containment agrees with it: a run that enabled no robustness feature
-    /// compiled no robust encoding, and is stored in a robustness-off slot
-    /// (`ENV@engine+robustness-off`), which holds no other row. Rows from before executors ran
-    /// a leg record none, in the census or the environment, and are in no robustness-off slot.
-    fn validate_leg(&self) -> Result<(), String> {
-        let off_slot = crate::candidate::engine::is_robustness_off_slot(&self.environment_id);
-        let recorded = self
-            .environment
-            .get("robustness")
-            .filter(|robustness| !robustness.is_null())
-            .map(|robustness| {
-                robustness
-                    .get("leg")
-                    .cloned()
-                    .and_then(|leg| serde_json::from_value::<crate::coverage::Leg>(leg).ok())
-                    .ok_or("the candidate environment's robustness names no leg")
-            })
-            .transpose()?;
+    /// The census's artifact, where the row records one, is well formed.
+    fn validate_census_artifact(&self) -> Result<(), String> {
         let Some(census) = &self.census else {
-            if off_slot {
-                return Err(format!(
-                    "the row is stored in robustness-off slot {:?}, but records no census, so no \
-                     robustness leg",
-                    self.environment_id
-                ));
-            }
             return Ok(());
         };
-        if census.leg != recorded {
-            return Err(format!(
-                "the candidate census ran in robustness leg {:?}, but the environment records {:?}",
-                census.leg, recorded
-            ));
-        }
-        if off_slot != (census.leg == Some(crate::coverage::Leg::RobustnessOff)) {
-            return Err(format!(
-                "the candidate census ran in robustness leg {:?}, but the row is stored in slot \
-                 {:?}",
-                census.leg, self.environment_id
-            ));
-        }
-        if !census.leg_holds() {
-            return Err(
-                "the candidate census ran with no robustness feature enabled, but records a \
-                 module compiled under a robust encoding"
-                    .into(),
-            );
-        }
         if let Some(artifact) = &census.artifact {
             artifact.validate()?;
         }
@@ -980,7 +936,6 @@ mod tests {
                     device: Some(crate::coverage::ExecutionClass::CpuIcd),
                     product: "77".repeat(32),
                     restricted_to: restricted_to.map(str::to_owned),
-                    leg: None,
                     modules: Vec::new(),
                     artifact: None,
                 }),
@@ -1020,122 +975,6 @@ mod tests {
             .validate_content()
             .unwrap_err()
             .contains("not active"));
-    }
-
-    /// A row's robustness leg is the one its environment records, and a robustness-off row
-    /// records no module compiled under a robust encoding, so the store never accepts a row whose
-    /// census would close a requirement of the other leg.
-    #[test]
-    fn a_row_records_the_leg_its_environment_ran() {
-        use crate::coverage::{BufferEncoding, Containment, ImageEncoding, Leg, ModuleCensus};
-        let case = case();
-        let output_sha256 = sha256_bytes(&[1, 0, 0, 0]);
-        let module = |buffers| ModuleCensus {
-            stage: Stage::Kernel,
-            subgroup: Default::default(),
-            strategies: Default::default(),
-            precision: Default::default(),
-            containment: Some(Containment {
-                buffers,
-                images: ImageEncoding::Unused,
-            }),
-        };
-        // A row in `slot`, its environment recording `environment` and its census `leg`.
-        let in_slot = |slot: &str, environment: serde_json::Value, leg: Option<Leg>, buffers| {
-            CandidateObservation {
-                timing: Some(crate::observation::test_timing()),
-                case_id: case.case_id.clone(),
-                air_sha256: case.air_sha256.clone(),
-                input_sha256: case.computed_input_sha256().unwrap(),
-                golden_output_sha256: output_sha256.clone(),
-                spv_sha256: Some("33".repeat(32)),
-                translator_fingerprint: "55".repeat(32),
-                candidate_output_sha256: output_sha256.clone(),
-                output_b64: "AQAAAA==".into(),
-                backend: Backend::Vulkan,
-                environment_id: slot.into(),
-                environment,
-                executor_abi: "executor-v1".into(),
-                comparison: ComparisonClass::Exact,
-                census: Some(ExecutedCensus {
-                    out_of_bounds: None,
-                    rate_map_pass: None,
-                    device: Some(crate::coverage::ExecutionClass::CpuIcd),
-                    product: "77".repeat(32),
-                    restricted_to: None,
-                    leg,
-                    modules: vec![module(buffers)],
-                    artifact: None,
-                }),
-                status: CandidateStatus::Match,
-            }
-        };
-        let stated_slot = "vk-env@engine";
-        let off_slot = "vk-env@engine+robustness-off";
-        // A row in the slot its census leg names.
-        let row = |environment: serde_json::Value, leg: Option<Leg>, buffers| {
-            let slot = match leg {
-                Some(Leg::RobustnessOff) => off_slot,
-                _ => stated_slot,
-            };
-            in_slot(slot, environment, leg, buffers)
-        };
-        let ran = |leg: &str| serde_json::json!({"robustness": {"leg": leg}});
-        let robust = BufferEncoding::Robust;
-        let checked = BufferEncoding::Checked;
-        assert_eq!(
-            row(ran("stated"), Some(Leg::Stated), robust).validate_content(),
-            Ok(())
-        );
-        assert_eq!(
-            row(ran("robustness_off"), Some(Leg::RobustnessOff), checked).validate_content(),
-            Ok(())
-        );
-        // A row from before executors ran a leg records none anywhere.
-        assert_eq!(
-            row(serde_json::json!({}), None, robust).validate_content(),
-            Ok(())
-        );
-        for (environment, leg) in [
-            (ran("stated"), Some(Leg::RobustnessOff)),
-            (ran("robustness_off"), Some(Leg::Stated)),
-            (ran("robustness_off"), None),
-            (serde_json::json!({}), Some(Leg::Stated)),
-        ] {
-            let refused = row(environment, leg, checked)
-                .validate_content()
-                .unwrap_err();
-            assert!(refused.contains("robustness leg"), "{refused}");
-        }
-        assert!(row(serde_json::json!({"robustness": {}}), None, checked)
-            .validate_content()
-            .unwrap_err()
-            .contains("names no leg"));
-        assert!(row(ran("robustness_off"), Some(Leg::RobustnessOff), robust)
-            .validate_content()
-            .unwrap_err()
-            .contains("robust encoding"));
-        // The slot names the leg: a robustness-off run is never stored as a stated row (where
-        // the coverage report would take it for one), nor any other row as a robustness-off one.
-        for (slot, environment, leg) in [
-            (stated_slot, ran("robustness_off"), Some(Leg::RobustnessOff)),
-            ("vk-env", ran("robustness_off"), Some(Leg::RobustnessOff)),
-            (off_slot, ran("stated"), Some(Leg::Stated)),
-            (off_slot, serde_json::json!({}), None),
-        ] {
-            let refused = in_slot(slot, environment, leg, checked)
-                .validate_content()
-                .unwrap_err();
-            assert!(refused.contains("is stored in slot"), "{refused}");
-        }
-        let mut no_census = row(serde_json::json!({}), None, checked);
-        no_census.census = None;
-        assert_eq!(no_census.validate_content(), Ok(()));
-        no_census.environment_id = off_slot.into();
-        assert!(no_census
-            .validate_content()
-            .unwrap_err()
-            .contains("records no census"));
     }
 
     #[test]
@@ -1228,7 +1067,6 @@ mod tests {
             device: None,
             product: "p".into(),
             restricted_to: None,
-            leg: None,
             modules: vec![crate::coverage::ModuleCensus {
                 stage: Stage::Fragment,
                 subgroup: Default::default(),

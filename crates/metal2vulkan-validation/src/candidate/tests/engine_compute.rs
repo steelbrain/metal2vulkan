@@ -638,7 +638,6 @@ fn a_store_runs_through_the_runtime_under_the_validation_layer() {
     };
     assert_eq!((module.subgroup, module.containment), (None, None));
     assert_eq!(run.census.artifact, None);
-    assert_eq!(run.census.leg, Some(crate::coverage::Leg::Stated));
 }
 
 /// A kernel that calls visible functions it does not define runs through the runtime with the

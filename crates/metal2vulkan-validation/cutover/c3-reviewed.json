@@ -14,15 +14,6 @@
           "words": 37,
           "differing_words": 26,
           "values": "26 of 37 words: tan 1-2 representable values from Metal's, atan 1-199, asin 1-3,528 (D208.5's table)."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "8a950fcdd5f2c7a2ae7005750f918ea80404a2c5468cdf1225479849cd10316e",
-          "candidate_output_sha256": "d4980787239df509054e5d66f862b9394617adfa0caf5831b3c113eb9378563e",
-          "golden_output_sha256": "d23bdd80deb0d0426628cb5e62acdca3f2d297b7dde6ecea02a432bec2fa94fc",
-          "words": 37,
-          "differing_words": 26,
-          "values": "26 of 37 words: tan 1-2 representable values from Metal's, atan 1-199, asin 1-3,528 (D208.5's table)."
         }
       ],
       "lanes": [
@@ -103,15 +94,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "2b43f574b231869985ea1ea4fe78ad86aefdaa1c8036994bb8c4b529eb32b7ed",
-          "candidate_output_sha256": "42dbd27f51bfd158df547b05c9fc4cf89779c9080d3935eb529fd1d428d9ec1d",
-          "golden_output_sha256": "cf687333a70730192ab788f957de469cd190643e7019ddf38655cf2dc6bf28d4",
-          "words": 15,
-          "differing_words": 10,
-          "values": "10 of 15 words, each 1-3 representable values from Metal's."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "87895c24ff6c053c280a6683aaf3a560bdacd5465c38c36ebffffa57bcfcf8c9",
           "candidate_output_sha256": "42dbd27f51bfd158df547b05c9fc4cf89779c9080d3935eb529fd1d428d9ec1d",
           "golden_output_sha256": "cf687333a70730192ab788f957de469cd190643e7019ddf38655cf2dc6bf28d4",
           "words": 15,
@@ -234,15 +216,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "7a1fbdf4a49f7f0655ed35679e91e810dc60c6b3ba021f0ccd0ec5e45aac719f",
-          "candidate_output_sha256": "627093b1234b4ac202bf9292317eba340de79a3796dbc6352c5a020b03a420f9",
-          "golden_output_sha256": "e453a4874387c8f6fb378b04a404071d3dcfbd863bf87611b61439fc3c921544",
-          "words": 10,
-          "differing_words": 8,
-          "values": "8 of 10 words, 1-45 representable values from Metal's; the two sqrt words now match (fast sqrt is Metal's x * rsqrt(x), D253)."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "275bbf44f8caf8ae52901c852e035469227561e589f05207091406edfbf32b6a",
           "candidate_output_sha256": "627093b1234b4ac202bf9292317eba340de79a3796dbc6352c5a020b03a420f9",
           "golden_output_sha256": "e453a4874387c8f6fb378b04a404071d3dcfbd863bf87611b61439fc3c921544",
           "words": 10,
@@ -377,15 +350,6 @@
           "words": 8,
           "differing_words": 2,
           "values": "2 of 8 words: words 1 and 2 (sin of 1e6 and of 6588397.5), one representable value from Metal's. Words 6 and 7 now match: fast sin and cos answer +0 past float(pi/2) * 2^22 (D253)."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "60f3f761a7755a167a059eea4e545b05599f6c5b30a6358f5fb0c14148b3fbea",
-          "candidate_output_sha256": "99cd93ecef818da15e908153185d3bc21ce8c4a4bbdc432e8f39fa2d8eb3e3ec",
-          "golden_output_sha256": "43b6f6b67c749ec03a0bcd37173da4652c29c9c22ae8a4cb79f53c7a5c6296fb",
-          "words": 8,
-          "differing_words": 2,
-          "values": "2 of 8 words: words 1 and 2 (sin of 1e6 and of 6588397.5), one representable value from Metal's. Words 6 and 7 now match: fast sin and cos answer +0 past float(pi/2) * 2^22 (D253)."
         }
       ],
       "lanes": [
@@ -490,15 +454,6 @@
           "words": 8192,
           "differing_words": 1313,
           "values": "1,313 of 8,192 words: 1,250 f32 words (1,125 within 1.8e-7 absolute of Metal's, and 125 at a NaN or infinity input) and 63 half words at a NaN input. tanh(44) now matches."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "b40bfda9fa19300d753186ab818037def36a235ad7185174b8083b71365d3ade",
-          "candidate_output_sha256": "d5f3f8a108a8753e3aa4a6160aa23713801cb2a35689e7f8dc502845d328cb17",
-          "golden_output_sha256": "69e49c332c2a93830dd4944b54e705d700c4384eea765573907cac33a15ce254",
-          "words": 8192,
-          "differing_words": 1313,
-          "values": "1,313 of 8,192 words: 1,250 f32 words (1,125 within 1.8e-7 absolute of Metal's, and 125 at a NaN or infinity input) and 63 half words at a NaN input. tanh(44) now matches."
         }
       ],
       "lanes": [
@@ -588,15 +543,6 @@
           "words": 8,
           "differing_words": 1,
           "values": "1 of 8 words: word 3, 0.999909163 against Metal's 0.999909222, one representable value. Word 5 (x = 44) now matches: Metal's fast division flushes the reciprocal and both answer 0."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "0b0917adaf995d01d22eb5b474f8eefe0eeeb650f23cc615cc5411b0131c60a3",
-          "candidate_output_sha256": "db629e90d19bb6f6a33ccb99b4490ed3c2ee7339ed3e585c98d85cad18d4c060",
-          "golden_output_sha256": "1f7955b8a664e4325fbf810667e5d2a3ed29739ee3a0279a95be461b0e1c4a8d",
-          "words": 8,
-          "differing_words": 1,
-          "values": "1 of 8 words: word 3, 0.999909163 against Metal's 0.999909222, one representable value. Word 5 (x = 44) now matches: Metal's fast division flushes the reciprocal and both answer 0."
         }
       ],
       "lanes": [
@@ -643,15 +589,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "e891abe89c27dc37f078db01352eb25ade1246c42dd494c4fa40ef1f78c9ef4d",
-          "candidate_output_sha256": "88c52304e0ed5f6f12c1b720e12374d3823e0b5af1c434c642ffef922d9ea3c9",
-          "golden_output_sha256": "206a9e6a70540a81c16b5f758db5f04778f30aeb1ec4ff405b037e8199cd3df2",
-          "words": 13,
-          "differing_words": 1,
-          "values": "1 of 13 words: word 11, Metal -0.00936 against llvmpipe's 0.00464. The other six words that differed now match: WP-FMX lowers fast fmod as Metal composes it, around a fused multiply-add (D253)."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "0aa1b8ae5132104cec78982d313e9718622ec854895567c7d60e922cd16ce9bb",
           "candidate_output_sha256": "88c52304e0ed5f6f12c1b720e12374d3823e0b5af1c434c642ffef922d9ea3c9",
           "golden_output_sha256": "206a9e6a70540a81c16b5f758db5f04778f30aeb1ec4ff405b037e8199cd3df2",
           "words": 13,
@@ -760,15 +697,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "c652ac199ee2554dc5f14b25aed8b6ac29e7d7b28222088cc9c7bb46212683df",
-          "candidate_output_sha256": "1aa2a981b50fe59a9cdc0ef1f93f3f298c020ee8d829f55a3e1c7a487f9d420e",
-          "golden_output_sha256": "0e3fa4fcb38b955530fa56bfb161e17c4418d5105ce9b16ef293daa1520aae18",
-          "words": 192,
-          "differing_words": 21,
-          "values": "21 of 192 words: denormal operands and results kept where Metal flushes, NaN 0xffc00000 against 0x7fc00000, and reciprocals beyond 2^126 kept where Metal flushes them."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "0817ebae0e2eee409821868213de1ae99ce4646438d3a9eaf27aaa58c08d9f49",
           "candidate_output_sha256": "1aa2a981b50fe59a9cdc0ef1f93f3f298c020ee8d829f55a3e1c7a487f9d420e",
           "golden_output_sha256": "0e3fa4fcb38b955530fa56bfb161e17c4418d5105ce9b16ef293daa1520aae18",
           "words": 192,
@@ -947,15 +875,6 @@
           "words": 192,
           "differing_words": 6,
           "values": "6 of 192 words, all in the precise division lane, each a denormal operand or result that Metal flushes and llvmpipe keeps: two denormal quotients where Metal answers +0, 2^127 and 2 where Metal divides by a flushed zero and answers infinity, and 1 twice where Metal flushes both operands and answers NaN."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "fc68214c5f7243c9bf9352a154ba886d746cc175c470553de0fd83bbe65063a9",
-          "candidate_output_sha256": "c3a22d491ea2f6fb8e6587a3510b233015d4e46bcdf9c7e1a9ecfa416c95da5a",
-          "golden_output_sha256": "463b4b22139a229ab33bcf98e1bc1dc7588b5148a8d85998ea6403301690080c",
-          "words": 192,
-          "differing_words": 6,
-          "values": "6 of 192 words, all in the precise division lane, each a denormal operand or result that Metal flushes and llvmpipe keeps: two denormal quotients where Metal answers +0, 2^127 and 2 where Metal divides by a flushed zero and answers infinity, and 1 twice where Metal flushes both operands and answers NaN."
         }
       ],
       "lanes": [
@@ -1129,15 +1048,6 @@
           "words": 13,
           "differing_words": 0,
           "values": "0 of 13 words: every zero is +0 on both devices."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "ab6a23894889492ae30bb3244c118aff85861833eab39d2e1601935d2af9a0bf",
-          "candidate_output_sha256": "9fe4aa061bd83377c8671a61edc1081eea2381371daf3e2645789c97310fccb7",
-          "golden_output_sha256": "9fe4aa061bd83377c8671a61edc1081eea2381371daf3e2645789c97310fccb7",
-          "words": 13,
-          "differing_words": 0,
-          "values": "0 of 13 words: every zero is +0 on both devices."
         }
       ],
       "lanes": [
@@ -1237,15 +1147,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "501f8560eeca50ab2a5f5a2f95bd1c97bc1fa9f904164228d591555f4f67e17a",
-          "candidate_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
-          "golden_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
-          "words": 13,
-          "differing_words": 0,
-          "values": "0 of 13 words: every zero is +0 on both devices."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "bd83aeff7fb18c032316efa6e04f76dde0b66ee5980fc63e7dc3d52c3687de6b",
           "candidate_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
           "golden_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
           "words": 13,
@@ -1375,15 +1276,6 @@
         {
           "environment_id": "ubuntu-26.04-lavapipe@engine",
           "spv_sha256": "501f8560eeca50ab2a5f5a2f95bd1c97bc1fa9f904164228d591555f4f67e17a",
-          "candidate_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
-          "golden_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
-          "words": 13,
-          "differing_words": 0,
-          "values": "0 of 13 words: every zero is +0 on both devices."
-        },
-        {
-          "environment_id": "ubuntu-26.04-lavapipe@engine+robustness-off",
-          "spv_sha256": "bd83aeff7fb18c032316efa6e04f76dde0b66ee5980fc63e7dc3d52c3687de6b",
           "candidate_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
           "golden_output_sha256": "ce6a853ebf4163d4ae4ab5f32c3ed2b41ed806cce2d6fc34f7d4b52f915f2fcf",
           "words": 13,

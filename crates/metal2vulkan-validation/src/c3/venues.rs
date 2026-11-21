@@ -31,13 +31,12 @@
 //! profile's as stale ([`VenueKeys`]).
 //!
 //! **Build drift**. A venue's record of another build stays current while what it executed is this
-//! build's artifact of its case on the slot's profile-leg: the digest the committed authored
+//! build's artifact of its case on the slot's profile: the digest the committed authored
 //! compile census records at this build ([`VenueKeys::artifact_is_current`]).
 
 use super::AnswerGap;
-use crate::authored_compile::{CurrentArtifacts, ProfileLeg};
+use crate::authored_compile::{CurrentArtifacts, ProfileStem};
 use crate::candidate::engine::artifact::ExecutedArtifact;
-use crate::coverage::Leg;
 use crate::cutover::list_path;
 use crate::observation::Backend;
 use metal2vulkan::device::ApiVersion;
@@ -81,7 +80,7 @@ impl VenueKind {
     }
 }
 
-/// The cases a venue's slots must cover, in the legs the venue lists.
+/// The cases a venue's slot must cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Population {
@@ -240,18 +239,16 @@ impl DeviceIdentity {
 #[serde(deny_unknown_fields)]
 pub struct Venue {
     pub kind: VenueKind,
-    /// The operator environment ID its rows are recorded under; the engine slots are
-    /// `ID@engine` and `ID@engine+robustness-off`. Stable across driver updates: the driver
-    /// is the declared [`DeviceIdentity`].
+    /// The operator environment ID its rows are recorded under; its engine slot is `ID@engine`.
+    /// Stable across driver updates: the driver is the declared [`DeviceIdentity`].
     pub environment_id: String,
     /// The committed profile (`validation/profiles/<profile>.json`) that describes the device, and
     /// whose translation key the venue's records hold ([`VenueProfile::fingerprint`]): the profile
     /// of one of [`Venue::devices`]. C1's reviewed list keys its device gaps by it.
     pub profile: String,
+    /// The cases the slot covers: every row it holds is judged, and every case of the population
+    /// a Metal row judges reads missing until the slot records it.
     pub population: Population,
-    /// The legs the population covers. Every row a slot holds is judged, in either leg, and in a
-    /// listed leg every case a Metal row judges reads missing until the slot records it.
-    pub legs: Vec<Leg>,
     /// The devices and driver every judged row must have run on: each a device identity with the
     /// committed capture of that device, which states the identity and derives the venue's
     /// translation key ([`Venues::check_profiles`]). Several devices make one venue only when
@@ -371,7 +368,7 @@ impl VenueProfile {
     /// every field, its feature and extension sets and every format bit the product reads among
     /// them, so a description that differs in anything the translator reads has another key. A
     /// run's own translation key (its `profile_fingerprint`) is that profile restricted to what its
-    /// context enabled, which its leg and executor decide, both keys of the record too.
+    /// context enabled, which its executor decides, a key of the record too.
     pub fn key_of(description: &DeviceDescription) -> Result<String, String> {
         crate::acceptance::derived_profile(description.clone())
             .map(|profile| crate::hash::hex_encode(profile.fingerprint()))
@@ -527,13 +524,13 @@ impl Venues {
     }
 }
 
-/// What each venue's records must hold. The key: by engine slot (each venue's native slot in
-/// both legs), the venue's backend and its committed profile's [`VenueProfile::fingerprint`]. The
+/// What each venue's records must hold. The key: by engine slot (each venue's native slot), the
+/// venue's backend and its committed profile's [`VenueProfile::fingerprint`]. The
 /// one currency rule (`index::candidate_slot_state`, `index::refusal_is_current`) reads a record in
 /// such a slot of that backend stale unless it recorded that fingerprint; a record anywhere else is
 /// no venue's, and the rule asks nothing of it.
 ///
-/// The artifacts: this build's digest of each case on each venue's profile-leg
+/// The artifacts: this build's digest of each case on each venue's profile
 /// ([`CurrentArtifacts`]). A venue's record of another build is current for its product while
 /// what it executed is that digest ([`VenueKeys::artifact_is_current`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -544,18 +541,18 @@ pub struct VenueKeys {
     gaps: BTreeMap<String, BTreeSet<AnswerGap>>,
 }
 
-/// A venue's native engine slot in one leg.
+/// A venue's native engine slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VenueSlot {
     backend: Backend,
     /// The committed profile's fingerprint.
     fingerprint: String,
-    /// The committed profile in the slot's leg.
-    leg: ProfileLeg,
+    /// The committed profile.
+    profile: ProfileStem,
 }
 
 impl VenueKeys {
-    /// Hold `environment_id`'s native slots in `backend` to `fingerprint`, the key of the
+    /// Hold `environment_id`'s native slot in `backend` to `fingerprint`, the key of the
     /// committed profile `profile` (its stem).
     pub fn insert(
         &mut self,
@@ -564,19 +561,16 @@ impl VenueKeys {
         fingerprint: &str,
         profile: &str,
     ) {
-        for leg in [Leg::Stated, Leg::RobustnessOff] {
-            self.by_slot.insert(
-                crate::candidate::engine::engine_slot(environment_id, None, leg),
-                VenueSlot {
-                    backend,
-                    fingerprint: fingerprint.into(),
-                    leg: ProfileLeg {
-                        stem: profile.into(),
-                        leg,
-                    },
+        self.by_slot.insert(
+            crate::candidate::engine::engine_environment_id(environment_id),
+            VenueSlot {
+                backend,
+                fingerprint: fingerprint.into(),
+                profile: ProfileStem {
+                    stem: profile.into(),
                 },
-            );
-        }
+            },
+        );
     }
 
     /// Hold the venues' records of another build to `artifacts`, this build's digests.
@@ -584,15 +578,13 @@ impl VenueKeys {
         VenueKeys { artifacts, ..self }
     }
 
-    /// Record that `environment_id`'s device has the answer gaps `gaps`, in both legs' slots
+    /// Record that `environment_id`'s device has the answer gaps `gaps`, in its slot
     /// ([`AnswerGap::of_device`] of its committed profile).
     pub fn insert_gaps(&mut self, environment_id: &str, gaps: &BTreeSet<AnswerGap>) {
-        for leg in [Leg::Stated, Leg::RobustnessOff] {
-            self.gaps.insert(
-                crate::candidate::engine::engine_slot(environment_id, None, leg),
-                gaps.clone(),
-            );
-        }
+        self.gaps.insert(
+            crate::candidate::engine::engine_environment_id(environment_id),
+            gaps.clone(),
+        );
     }
 
     /// Whether the device of the venue whose slot is `slot` has the answer gap `gap`: never for
@@ -623,9 +615,9 @@ impl VenueKeys {
     }
 
     /// Whether a venue's record of `case_id` in `slot` of `backend` executed `executed`, this
-    /// build's artifact of the case on the slot's profile-leg (`ExecutedArtifact::is_current`).
-    /// Never for a record no venue keys, one that recorded no digest, or a case and profile-leg
-    /// this build's file holds no digest of.
+    /// build's artifact of the case on the slot's profile (`ExecutedArtifact::is_current`).
+    /// Never for a record no venue keys, one that recorded no digest, or a case and profile this
+    /// build's file holds no digest of.
     pub fn artifact_is_current(
         &self,
         backend: Backend,
@@ -635,7 +627,7 @@ impl VenueKeys {
     ) -> bool {
         self.slot(backend, slot).is_some_and(|venue_slot| {
             executed.is_some_and(|executed| {
-                executed.is_current(self.artifacts.get(case_id, &venue_slot.leg))
+                executed.is_current(self.artifacts.get(case_id, &venue_slot.profile))
             })
         })
     }
@@ -747,7 +739,7 @@ impl Venues {
     }
 
     /// At least one venue; each with an operator environment ID (not an engine slot) no other
-    /// venue has, a committed profile, legs named once each, and at least one allowed device, its
+    /// venue has, a committed profile, and at least one allowed device, its
     /// profile among the devices' captures; each device listed once, with a committed capture and
     /// a declared identity with a device name and a driver info string, and a MoltenVK driver
     /// exactly when the venue's kind is MoltenVK; at most one venue holding the old engine's
@@ -781,12 +773,6 @@ impl Venues {
                     "{:?} is not a committed profile",
                     venue.profile
                 )));
-            }
-            if venue.legs.is_empty() {
-                return Err(at("lists no leg".into()));
-            }
-            if venue.legs.iter().collect::<BTreeSet<_>>().len() != venue.legs.len() {
-                return Err(at("lists a leg twice".into()));
             }
             if venue.devices.is_empty() {
                 return Err(at("allows no device".into()));

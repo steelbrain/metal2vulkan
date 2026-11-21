@@ -2182,7 +2182,7 @@ pub enum Dependency {
     /// The product build: the translator fingerprint this product derives from the device facts
     /// the record holds (missing or malformed facts count as another), and the product its census
     /// names. A venue's engine record of another build holds it while what it executed is
-    /// this build's artifact of its case on its profile-leg, under this product's runtime version
+    /// this build's artifact of its case on its profile, under this product's runtime version
     /// ([`crate::c3::VenueKeys::artifact_is_current`]).
     Product,
     /// The venue profile: a record in a venue's native slot recorded the key of the committed
@@ -3223,7 +3223,7 @@ mod tests {
             candidate_slot_state(&case, Backend::Moltenvk, &[&metal], row, keys)
         };
         assert_eq!(state(&row, &keys(&base)), EvidenceState::Current);
-        let mut refusal = crate::refusal::RefusalObservation {
+        let refusal = crate::refusal::RefusalObservation {
             timing: Some(crate::observation::test_timing()),
             case_id: case.case_id.clone(),
             air_sha256: case.air_sha256.clone(),
@@ -3238,7 +3238,6 @@ mod tests {
             ),
             artifact: None,
         };
-        refusal.environment["robustness"] = serde_json::json!({"leg": "stated"});
         assert!(refusal_is_current(
             &case,
             Backend::Moltenvk,
@@ -3406,7 +3405,6 @@ mod tests {
             device: Some(ExecutionClass::CpuIcd),
             product: product.into(),
             restricted_to: None,
-            leg: None,
             modules: Vec::new(),
             out_of_bounds: None,
             rate_map_pass: None,
@@ -3423,8 +3421,7 @@ mod tests {
             only(false, false, false, true)
         );
 
-        let mut environment = candidate.environment.clone();
-        environment["robustness"] = serde_json::json!({"leg": "stated"});
+        let environment = candidate.environment.clone();
         let refusal = crate::refusal::RefusalObservation {
             timing: Some(crate::observation::test_timing()),
             case_id: case.case_id.clone(),
@@ -3469,7 +3466,7 @@ mod tests {
 
     /// Artifact-keyed currency, over a synthetic store and its census file at two builds. A venue's
     /// row and refusal recorded at another build hold the product while this build's file records
-    /// the digest they executed, on their slot's profile-leg, under this runtime version. A moved
+    /// the digest they executed, on their slot's profile, under this runtime version. A moved
     /// digest, another runtime version, no recorded digest, a file at another build (a branch's
     /// copy of master's), no file, and a slot no venue keys all leave the record to the build that
     /// recorded it: stale for its product, and current only there.
@@ -3477,11 +3474,10 @@ mod tests {
     fn a_venue_record_of_another_build_is_current_while_it_executed_this_builds_artifact() {
         use crate::authored_compile::{
             expectations_path, ArtifactBuild, Cell, CellOutcome, CurrentArtifacts, Expectations,
-            ProfileLeg,
+            ProfileStem,
         };
         use crate::candidate::engine::artifact::ExecutedArtifact;
-        use crate::candidate::engine::engine_slot;
-        use crate::coverage::{ExecutedCensus, ExecutionClass, Leg};
+        use crate::coverage::{ExecutedCensus, ExecutionClass};
         use metal2vulkan::cache::RUNTIME_VERSION;
         let scratch = ScratchDir::new("index-artifact-currency").unwrap();
         let root = scratch.path();
@@ -3511,7 +3507,6 @@ mod tests {
                 device: Some(ExecutionClass::CpuIcd),
                 product: "an older build".into(),
                 restricted_to: None,
-                leg: None,
                 modules: Vec::new(),
                 out_of_bounds: None,
                 rate_map_pass: None,
@@ -3525,20 +3520,13 @@ mod tests {
         store.upsert_metal(metal.clone()).unwrap();
         store.upsert_candidate(row.clone()).unwrap();
 
-        let stated = ProfileLeg {
-            stem: "toy".into(),
-            leg: Leg::Stated,
-        };
-        let off = ProfileLeg {
-            stem: "toy".into(),
-            leg: Leg::RobustnessOff,
-        };
+        let stated = ProfileStem { stem: "toy".into() };
         let another_build = ArtifactBuild {
             product: "77".repeat(32),
             executor: ENGINE_EXECUTOR_ABI.into(),
         };
-        // The corpus's census file at `build`, with `stated` and `off` the case's digests.
-        let bless = |build: &ArtifactBuild, stated_digest: &str, off_digest: &str| {
+        // The corpus's census file at `build`, with `stated` the case's digest.
+        let bless = |build: &ArtifactBuild, stated_digest: &str| {
             let cell = |digest: &str| Cell {
                 outcome: CellOutcome::Compiled,
                 uncovered: 0,
@@ -3546,10 +3534,10 @@ mod tests {
             };
             Expectations {
                 build: Some(build.clone()),
-                profiles: vec![stated.clone(), off.clone()],
+                profiles: vec![stated.clone()],
                 cases: std::collections::BTreeMap::from([(
                     case.case_id.clone(),
-                    vec![cell(stated_digest), cell(off_digest)],
+                    vec![cell(stated_digest)],
                 )]),
             }
             .write(&expectations_path(root))
@@ -3585,7 +3573,7 @@ mod tests {
         assert_eq!(judged(), EvidenceState::Stale);
         assert_eq!(staleness(&row), product);
         // This build's file records what it executed: current.
-        bless(&ArtifactBuild::this(), &digest, &moved);
+        bless(&ArtifactBuild::this(), &digest);
         assert_eq!(judged(), EvidenceState::Current);
         assert!(staleness(&row).is_current());
         // Under another runtime version, or without a digest: its build's.
@@ -3601,12 +3589,12 @@ mod tests {
         executor.executor_abi = "vulkan-engine-v1".into();
         assert_eq!(staleness(&executor), Staleness::of([Dependency::Executor]));
         // The digest moved: stale.
-        bless(&ArtifactBuild::this(), &moved, &digest);
+        bless(&ArtifactBuild::this(), &moved);
         assert_eq!(judged(), EvidenceState::Stale);
         assert_eq!(staleness(&row), product);
         // The file is at another build, with the very digest: its digests are not this build's,
         // and the row is its own build's.
-        bless(&another_build, &digest, &digest);
+        bless(&another_build, &digest);
         assert_eq!(
             CurrentArtifacts::load(root).unwrap(),
             CurrentArtifacts::default()
@@ -3615,12 +3603,11 @@ mod tests {
         // A row of this build is current whatever the file says.
         store.upsert_candidate(this_build.clone()).unwrap();
         assert_eq!(judged(), EvidenceState::Current);
-        bless(&ArtifactBuild::this(), &moved, &moved);
+        bless(&ArtifactBuild::this(), &moved);
         assert_eq!(judged(), EvidenceState::Current);
 
-        // Each slot is judged on its own leg's digest; a slot no venue keys, on its build alone.
-        bless(&ArtifactBuild::this(), &digest, &moved);
-        let off_slot = engine_slot("moltenvk-env", None, Leg::RobustnessOff);
+        // The slot is judged on its profile's digest; a slot no venue keys, on its build alone.
+        bless(&ArtifactBuild::this(), &digest);
         let stated_slot = engine_environment_id("moltenvk-env");
         let current = |slot: &str, backend: Backend, sha256: &str| {
             keys().artifact_is_current(
@@ -3632,8 +3619,6 @@ mod tests {
         };
         assert!(current(&stated_slot, Backend::Moltenvk, &digest));
         assert!(!current(&stated_slot, Backend::Moltenvk, &moved));
-        assert!(current(&off_slot, Backend::Moltenvk, &moved));
-        assert!(!current(&off_slot, Backend::Moltenvk, &digest));
         assert!(!current(&stated_slot, Backend::Vulkan, &digest));
         assert!(!current("another-env@engine", Backend::Moltenvk, &digest));
 
@@ -3653,7 +3638,6 @@ mod tests {
             ),
             artifact: executed(Some(&digest), RUNTIME_VERSION),
         };
-        refusal.environment["robustness"] = serde_json::json!({"leg": "stated"});
         assert!(refusal_is_current(
             &case,
             Backend::Moltenvk,
@@ -3665,7 +3649,7 @@ mod tests {
             refusal_staleness(&case, Backend::Moltenvk, &refusal, &keys()),
             product
         );
-        bless(&another_build, &moved, &moved);
+        bless(&another_build, &moved);
         assert!(!refusal_is_current(
             &case,
             Backend::Moltenvk,

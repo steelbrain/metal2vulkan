@@ -9,7 +9,7 @@ fn main() {
     // Every pipeline this process or a run it starts creates compiles cold, so the ceiling times a
     // compile, not a hit in the driver's disk cache.
     metal2vulkan_validation::budgets::turn_driver_shader_caches_off();
-    // The batch modes run this executable once per (case, leg), --capture-formats writes a venue
+    // The batch modes run this executable once per case, --capture-formats writes a venue
     // profile's format supplement, and --probe-runtime measures the runtime's device facts; every
     // other invocation, the workers' included, is the single-case executor.
     let mut args = std::env::args().skip(1);

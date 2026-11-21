@@ -6,9 +6,9 @@
 //!
 //! The batch selects every committed case with a current Metal observation in one Metal
 //! environment ([`qualified_cases`]: the row the executor compares against, by
-//! [`MetalObservation::dependency_matches`] under the current oracle) and runs it, in each
-//! requested robustness leg, through its backend's executor (`corpus-vulkan` or
-//! `corpus-moltenvk`, the engine) with `--device-type TYPE`: one process per (case, leg), exactly
+//! [`MetalObservation::dependency_matches`] under the current oracle) and runs it through its
+//! backend's executor (`corpus-vulkan` or `corpus-moltenvk`, the engine) with
+//! `--device-type TYPE`: one process per case, exactly
 //! the run a single-case invocation makes, so a row or a refusal it records is the executor's own.
 //! The batch never runs Metal: it reads the committed Metal rows. With a profile to restrict to,
 //! every run is the executor's `--profiles-layer P` run, stored in the `ID@engine@P` slots.
@@ -31,7 +31,7 @@
 //!   compile and device workers included, is killed, and the scratch directory it was given
 //!   (`TMPDIR`) is removed.
 //! - **Resumable, by one build.** Every finished run appends one line to the out directory's
-//!   done-list ([`DONE_LIST`]); a later invocation skips each (case, leg) listed there, so a rerun
+//!   done-list ([`DONE_LIST`]); a later invocation skips each (case, pass) listed there, so a rerun
 //!   continues where an interrupted one stopped. Delete a line to run it again. A last line without
 //!   its newline (an append cut short) is not a finished run: the readers drop it and
 //!   [`open_lines`] truncates it before the next append. The out directory records the build and
@@ -46,14 +46,13 @@
 //!   into a store through [`CorpusStore::upsert_candidate`] and [`CorpusStore::upsert_refusal`],
 //!   the executor's own writes.
 //! - **Report.** [`report`] reads the done-list, rows, and refusals back beside the committed cases
-//!   and Metal rows: per leg, [`family`], and [`scope`], the runs by [`Class`], and every run that
+//!   and Metal rows: [`family`] and [`scope`], the runs by [`Class`], and every run that
 //!   did not match with its detail (for a mismatch, the 32-bit words that differ from Metal's
 //!   output; for a refusal, the class of its recorded refusal).
 
-use crate::candidate::engine::{engine_slot, is_robustness_off_slot, ENGINE_EXECUTOR_ABI};
+use crate::candidate::engine::{engine_slot, ENGINE_EXECUTOR_ABI};
 use crate::candidate::exit_status;
 use crate::case::{AuthoredCase, Stage};
-use crate::coverage::Leg;
 use crate::gpu::tripwire::{write_record, HangKind, HangRecord, TripwirePaths};
 use crate::gpu::wait::{SubmissionBackend, HANG_EXIT_CODE};
 use crate::gpu::DeviceType;
@@ -80,7 +79,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// The out directory's done-list: one tab-separated line per finished run
-/// (`case_id leg outcome ended seconds detail`), appended as each run ends.
+/// (`case_id pass outcome ended seconds detail`), appended as each run ends.
 pub const DONE_LIST: &str = "done.tsv";
 /// The out directory's rows: each row a run recorded, its store line verbatim, appended before
 /// the run's done-list line.
@@ -215,44 +214,29 @@ impl Class {
     }
 }
 
-/// What one run of a case is: a robustness leg of a candidate backend's executor, or the Metal
-/// oracle's qualification, which has no legs.
+/// What one run of a case is: a candidate backend's executor, or the Metal oracle's
+/// qualification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Pass {
-    Leg(Leg),
+    Engine,
     Metal,
 }
 
 impl Pass {
-    /// The done-list's spelling: the leg's ([`leg_label`]), or `metal`.
+    /// The done-list's spelling.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Leg(leg) => leg_label(leg),
+            Self::Engine => "engine",
             Self::Metal => "metal",
         }
     }
 
     pub fn parse(label: &str) -> Result<Self, String> {
         match label {
+            "engine" => Ok(Self::Engine),
             "metal" => Ok(Self::Metal),
-            _ => parse_leg(label).map(Self::Leg),
+            _ => Err(format!("unknown pass {label:?} (engine or metal)")),
         }
-    }
-}
-
-/// The command-line spelling of a robustness leg.
-pub fn leg_label(leg: Leg) -> &'static str {
-    match leg {
-        Leg::Stated => "stated",
-        Leg::RobustnessOff => "robustness-off",
-    }
-}
-
-pub fn parse_leg(label: &str) -> Result<Leg, String> {
-    match label {
-        "stated" => Ok(Leg::Stated),
-        "robustness-off" => Ok(Leg::RobustnessOff),
-        _ => Err(format!("unknown leg {label:?} (stated or robustness-off)")),
     }
 }
 
@@ -836,7 +820,7 @@ pub fn run_batch(
         }
     } else if runs.iter().any(|run| run.pass == Pass::Metal) {
         return Err(format!(
-            "a {} batch runs robustness legs, never a Metal qualification",
+            "a {} batch runs the engine, never a Metal qualification",
             config.backend.directory()
         ));
     }
@@ -1131,11 +1115,8 @@ fn execute_run(config: &BatchConfig, store: &Path, run: &Run) -> Result<Executed
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
-    if let Pass::Leg(leg) = run.pass {
+    if run.pass == Pass::Engine {
         command.args(["--metal-environment-id", &config.metal_environment_id]);
-        if leg == Leg::RobustnessOff {
-            command.arg("--robustness-off");
-        }
         if let Some(profile) = &config.restricted_to {
             command.args(["--profiles-layer", profile]);
         }
@@ -1157,12 +1138,12 @@ fn execute_run(config: &BatchConfig, store: &Path, run: &Run) -> Result<Executed
         .map(|error| format!("remove {}: {error}", tmp.display()));
 
     let recorded = match run.pass {
-        Pass::Leg(leg) => {
+        Pass::Engine => {
             let backend = config
                 .backend
                 .candidate()
-                .ok_or("a Metal batch has no robustness legs")?;
-            let slot = engine_slot(&config.environment_id, config.restricted_to.as_deref(), leg);
+                .ok_or("a Metal batch runs no engine")?;
+            let slot = engine_slot(&config.environment_id, config.restricted_to.as_deref());
             let row = find_row(store, backend, run, &slot)?;
             let refusal = find_refusal(store, backend, run, &slot)?;
             Recorded {
@@ -1409,9 +1390,8 @@ pub struct Installed {
 }
 
 /// Write the evidence of each slot's last run in the out directory `out` into `store` (rows, then
-/// refusals, each in (case, slot) order) through the store's own validated writes: for each
-/// (case, leg), the last
-/// done-list run that recorded evidence decides. A match or a mismatch installs the slot's last
+/// refusals, each in (case, slot) order) through the store's own validated writes: for each case,
+/// the last done-list run that recorded evidence decides. A match or a mismatch installs the slot's last
 /// row ([`ROWS`]), a typed refusal its last refusal ([`REFUSALS`]; a refusal before a device
 /// opened recorded none, and installs nothing). Evidence no finished run lists (an append cut
 /// before its done-list line) is not installed. The store keeps a slot's row or its refusal,
@@ -1447,13 +1427,6 @@ pub fn install(out: &Path, store: &CorpusStore, backend: Backend) -> Result<Inst
         };
         last.insert((run.case_id, run.pass), evidence);
     }
-    let leg_of = |slot: &str| {
-        Pass::Leg(if is_robustness_off_slot(slot) {
-            Leg::RobustnessOff
-        } else {
-            Leg::Stated
-        })
-    };
     let mut rows = BTreeMap::new();
     for row in output.rows {
         if row.backend != backend {
@@ -1481,8 +1454,8 @@ pub fn install(out: &Path, store: &CorpusStore, backend: Backend) -> Result<Inst
             refusal,
         );
     }
-    let decides = |(case_id, slot): &(String, String), evidence: Evidence| {
-        last.get(&(case_id.clone(), leg_of(slot))) == Some(&evidence)
+    let decides = |(case_id, _): &(String, String), evidence: Evidence| {
+        last.get(&(case_id.clone(), Pass::Engine)) == Some(&evidence)
     };
     let mut installed = Installed {
         build,
@@ -1556,29 +1529,28 @@ pub fn family(case: &AuthoredCase) -> String {
     format!("{stage}.{shape}")
 }
 
-/// The batch's report over `output` (the last run of each (case, leg) wins), against the
+/// The batch's report over `output` (the last engine run of each case wins), against the
 /// `selected` cases (what [`qualified_cases`] selects in `metal_environment_id`, narrowed by
-/// [`requested_cases`]: a run of any other case is not counted), for `legs` and the operator's
+/// [`requested_cases`]: a run of any other case is not counted), for the operator's
 /// `environment_id` (restricted to the profile `restricted_to`, if any: its rows and refusals are
 /// in that profile's slots). Lines:
 ///
-/// - `batch-report leg=L selected=N ran=N pending=N match=N mismatch=N refusal=N failure=N`, then
+/// - `batch-report selected=N ran=N pending=N match=N mismatch=N refusal=N failure=N`, then
 ///   the count of each refusal and failure [`Outcome`] (`not_supported=N ... failed=N`);
-/// - `batch-family leg=L family=F cases=N match=N mismatch=N refusal=N failure=N` per [`family`],
-///   and `batch-scope leg=L scope=S ...` the same per [`scope`];
-/// - `batch-run case=ID leg=L scope=S family=F outcome=O seconds=S name=NAME detail=D` for every
+/// - `batch-family family=F cases=N match=N mismatch=N refusal=N failure=N` per [`family`],
+///   and `batch-scope scope=S ...` the same per [`scope`];
+/// - `batch-run case=ID scope=S family=F outcome=O seconds=S name=NAME detail=D` for every
 ///   run that did not match; a mismatch adds `comparison=C words=DIFFERING/TOTAL
 ///   first=I:METAL/CANDIDATE` from its row and the case's current Metal row, and a typed refusal
 ///   `refusal=CLASS` from its recorded refusal (`device`, `product`, `executor`), or
 ///   `refusal=unrecorded` for one before a device opened;
-/// - `batch-slowest case=ID leg=L seconds=S outcome=O` for the slowest run.
+/// - `batch-slowest case=ID pass=P seconds=S outcome=O` for the slowest run.
 pub fn report(
     selected: &[AuthoredCase],
     metals: &[MetalObservation],
     metal_environment_id: &str,
     environment_id: &str,
     restricted_to: Option<&str>,
-    legs: &[Leg],
     output: &BatchOutput,
 ) -> Vec<String> {
     let BatchOutput {
@@ -1613,10 +1585,10 @@ pub fn report(
         .map(|metal| (metal.case_id.as_str(), metal))
         .collect::<HashMap<_, _>>();
     let mut lines = Vec::new();
-    for &leg in legs {
+    {
         let runs = latest
             .iter()
-            .filter(|((case_id, pass), _)| *pass == Pass::Leg(leg) && by_id.contains_key(case_id))
+            .filter(|((case_id, pass), _)| *pass == Pass::Engine && by_id.contains_key(case_id))
             .map(|(_, run)| *run)
             .collect::<Vec<_>>();
         let mut outcomes = BTreeMap::<Outcome, usize>::new();
@@ -1640,8 +1612,7 @@ pub fn report(
                 .sum::<usize>()
         };
         let mut line = format!(
-            "batch-report leg={} selected={} ran={} pending={}",
-            leg_label(leg),
+            "batch-report selected={} ran={} pending={}",
             selected.len(),
             runs.len(),
             selected.len() - runs.len()
@@ -1666,8 +1637,7 @@ pub fn report(
         lines.push(line);
         for ((kind, name), classes) in &groups {
             let mut line = format!(
-                "batch-{kind} leg={} {kind}={name} cases={}",
-                leg_label(leg),
+                "batch-{kind} {kind}={name} cases={}",
                 classes.values().sum::<usize>()
             );
             for class in CLASSES {
@@ -1679,14 +1649,12 @@ pub fn report(
             }
             lines.push(line);
         }
-        let slot = engine_slot(environment_id, restricted_to, leg);
+        let slot = engine_slot(environment_id, restricted_to);
         for run in runs.iter().filter(|run| run.outcome != Outcome::Match) {
             let case = by_id[run.case_id.as_str()];
             let mut line = format!(
-                "batch-run case={} leg={} scope={} family={} outcome={} seconds={:.3} name={} \
-                 detail={}",
+                "batch-run case={} scope={} family={} outcome={} seconds={:.3} name={} detail={}",
                 run.case_id,
-                leg_label(leg),
                 scope(case),
                 family(case),
                 run.outcome.label(),
@@ -1725,7 +1693,7 @@ pub fn report(
         .max_by(|left, right| left.seconds.total_cmp(&right.seconds))
     {
         lines.push(format!(
-            "batch-slowest case={} leg={} seconds={:.3} outcome={}",
+            "batch-slowest case={} pass={} seconds={:.3} outcome={}",
             slowest.case_id,
             slowest.pass.label(),
             slowest.seconds,

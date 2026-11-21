@@ -18,7 +18,6 @@ fn input(device: DeviceType) -> DeviceInput {
         input_sha256: "11".repeat(32),
         wait_timeout_ms: 7_000,
         restricted_to: None,
-        leg: Leg::Stated,
         generated_commands: true,
         venue: None,
         source_index: None,
@@ -85,7 +84,6 @@ fn run_restricted_to(restricted_to: Option<String>) -> DeviceRun {
             device: None,
             product: TRANSLATOR_FINGERPRINT.into(),
             restricted_to,
-            leg: Some(Leg::Stated),
             modules: Vec::new(),
             artifact: None,
         },
@@ -338,17 +336,13 @@ fn the_input_and_every_typed_result_cross_the_boundary() {
     for input in [
         input(DeviceType::Cpu),
         restricted(DeviceType::Cpu, "gate-lavapipe"),
-        DeviceInput {
-            leg: Leg::RobustnessOff,
-            ..restricted(DeviceType::Cpu, "runtime-floor")
-        },
+        restricted(DeviceType::Cpu, "runtime-floor"),
         DeviceInput {
             generated_commands: false,
             ..restricted(DeviceType::Cpu, "gate-lavapipe")
         },
     ] {
-        let mut own = run_restricted_to(input.restricted_to.clone());
-        own.census.leg = Some(input.leg);
+        let own = run_restricted_to(input.restricted_to.clone());
         let results = results.iter().cloned().chain([Ok(own)]);
         for result in results {
             let scratch = ScratchDir::new("device-worker-test").unwrap();
@@ -358,14 +352,8 @@ fn the_input_and_every_typed_result_cross_the_boundary() {
             };
             let worker = reporting(&scratch, &report);
             let expected = match result {
-                // An unrestricted run is the restricted parent's refusal, a stated one the
-                // robustness-off parent's ([`reported`]).
-                Ok(run)
-                    if run.census.restricted_to != input.restricted_to
-                        || run.census.leg != Some(input.leg) =>
-                {
-                    continue
-                }
+                // An unrestricted run is the restricted parent's refusal ([`reported`]).
+                Ok(run) if run.census.restricted_to != input.restricted_to => continue,
                 result => result,
             };
             assert_eq!(ran(worker, &input, no_tripwire), expected);
@@ -434,39 +422,6 @@ fn a_worker_run_under_another_restriction_is_refused() {
     }
 }
 
-/// A worker whose census names another robustness leg than its parent asked for compiled under
-/// other containment encodings than the row's slot would say: a stated run stored as the
-/// robustness-off leg, or the reverse; a census of no leg is no leg asked for.
-#[cfg(unix)]
-#[test]
-fn a_worker_run_in_another_leg_is_refused() {
-    let runs = [
-        (Leg::Stated, Some(Leg::RobustnessOff)),
-        (Leg::RobustnessOff, Some(Leg::Stated)),
-        (Leg::Stated, None),
-    ];
-    for (asked, ran_in) in runs {
-        let scratch = ScratchDir::new("device-worker-test").unwrap();
-        let mut reported = run();
-        reported.census.leg = ran_in;
-        let worker = reporting(&scratch, &output(Ok(reported)));
-        let parent = DeviceInput {
-            leg: asked,
-            ..input(DeviceType::Cpu)
-        };
-        match ran(worker, &parent, no_tripwire) {
-            Err(ExecutorError::Failed(error)) => {
-                assert!(
-                    error.starts_with("the device worker ran in robustness leg"),
-                    "{error}"
-                );
-                assert!(error.contains("not this tool's evidence"), "{error}");
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-}
-
 /// A venue's worker holds its device to the venue's profile and records the profile in its run
 /// and in the device it refused a case on: one that recorded another profile, none where the parent
 /// named a venue, or one where the parent named none, is not this tool's evidence.
@@ -482,7 +437,7 @@ fn a_worker_run_under_another_venue_profile_is_refused() {
         ..input(DeviceType::Gpu)
     };
     let recorded = |profile: Option<&str>| {
-        let mut environment = serde_json::json!({"robustness": {"leg": "stated"}});
+        let mut environment = serde_json::json!({"robustness": {"enabled": [], "unmet": []}});
         if let Some(profile) = profile {
             environment[crate::c3::VENUE_PROFILE] =
                 serde_json::json!({"profile": profile, "sha256": "00", "fingerprint": "11"});
@@ -628,8 +583,8 @@ fn a_worker_run_on_another_generated_commands_path_is_refused() {
 }
 
 /// A typed refusal after the device opened crosses the boundary with that device's facts; a device
-/// named beside anything but a typed refusal, or one opened in another leg or under another
-/// restriction than the parent asked for, is not this tool's evidence.
+/// named beside anything but a typed refusal, or one opened under another restriction than the
+/// parent asked for, is not this tool's evidence.
 #[cfg(unix)]
 #[test]
 fn a_refusal_names_the_device_it_was_refused_on() {
@@ -642,11 +597,10 @@ fn a_refusal_names_the_device_it_was_refused_on() {
         at_bind: false,
     }
     .into());
-    let opened = |leg: &str, profile: Option<&str>| OpenedDevice {
+    let opened = |profile: Option<&str>| OpenedDevice {
         timing: crate::observation::test_timing(),
         environment: serde_json::json!({
             "device": "AMD Radeon 780M Graphics (RADV PHOENIX)",
-            "robustness": {"leg": leg},
             "profiles_layer": profile.map(|profile| serde_json::json!({"profile": profile})),
         }),
         translator_fingerprint: "cd".repeat(32),
@@ -662,31 +616,28 @@ fn a_refusal_names_the_device_it_was_refused_on() {
     };
     let stated = input(DeviceType::Gpu);
     let named = DeviceOutput {
-        refused_on: Some(opened("stated", None)),
+        refused_on: Some(opened(None)),
         ..output(refusal.clone())
     };
     assert_eq!(
         outcome(&named, &stated),
         DeviceOutcome {
             result: refusal.clone(),
-            refused_on: Some(opened("stated", None)),
+            refused_on: Some(opened(None)),
         }
     );
-    // Restricted and in the robustness-off leg, as the parent asked.
-    let restricted_off = DeviceInput {
-        leg: Leg::RobustnessOff,
-        ..restricted(DeviceType::Gpu, "amd-rdna3-radv")
-    };
-    let named_off = DeviceOutput {
-        refused_on: Some(opened("robustness_off", Some("amd-rdna3-radv"))),
+    // Restricted, as the parent asked.
+    let restricted_to = restricted(DeviceType::Gpu, "amd-rdna3-radv");
+    let named_restricted = DeviceOutput {
+        refused_on: Some(opened(Some("amd-rdna3-radv"))),
         ..output(refusal.clone())
     };
     assert_eq!(
-        outcome(&named_off, &restricted_off).refused_on,
-        Some(opened("robustness_off", Some("amd-rdna3-radv")))
+        outcome(&named_restricted, &restricted_to).refused_on,
+        Some(opened(Some("amd-rdna3-radv")))
     );
-    // Another leg, or another restriction, than the parent's.
-    for (report, input) in [(&named, &restricted_off), (&named_off, &stated)] {
+    // Another restriction than the parent's.
+    for (report, input) in [(&named, &restricted_to), (&named_restricted, &stated)] {
         let refused = outcome(report, input);
         assert_eq!(refused.refused_on, None);
         let Err(ExecutorError::Failed(error)) = refused.result else {
@@ -700,7 +651,7 @@ fn a_refusal_names_the_device_it_was_refused_on() {
     // A device beside a run, or beside an outcome that is no typed refusal.
     for result in [Ok(run()), Err(ExecutorError::Failed("no device".into()))] {
         let report = DeviceOutput {
-            refused_on: Some(opened("stated", None)),
+            refused_on: Some(opened(None)),
             ..output(result)
         };
         let refused = outcome(&report, &stated);

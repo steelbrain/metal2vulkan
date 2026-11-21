@@ -510,7 +510,6 @@ fn every_kept_member_is_a_bounded_capability_member() {
 fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
     use crate::candidate::engine::{engine_fingerprint_of, engine_slot, ENGINE_EXECUTOR_ABI};
     use crate::check::admission::{ExecutorError, NotSupported};
-    use crate::coverage::Leg;
     use crate::observation::Backend;
     use crate::refusal::{Refusal, RefusalClass, RefusalObservation};
 
@@ -574,7 +573,6 @@ fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
         environment["profiles_layer"]["profile"],
         "nvidia-pascal-linux"
     );
-    assert_eq!(environment["robustness"]["leg"], "stated");
     let hex = environment["profile_fingerprint"].as_str().unwrap();
     let mut fingerprint = [0u8; 32];
     for (byte, pair) in fingerprint.iter_mut().zip(hex.as_bytes().chunks(2)) {
@@ -591,11 +589,7 @@ fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
         input_sha256: "c".repeat(64),
         translator_fingerprint: opened.translator_fingerprint.clone(),
         backend: Backend::Vulkan,
-        environment_id: engine_slot(
-            "nvidia-rtx5080-laptop",
-            Some("nvidia-pascal-linux"),
-            Leg::Stated,
-        ),
+        environment_id: engine_slot("nvidia-rtx5080-laptop", Some("nvidia-pascal-linux")),
         environment: opened.environment.clone(),
         executor_abi: ENGINE_EXECUTOR_ABI.into(),
         refusal: Refusal::of(&not_supported),

@@ -5,9 +5,6 @@
       "environment_id": "apple-m3-max-moltenvk",
       "profile": "moltenvk-m3",
       "population": "old_engine_matched",
-      "legs": [
-        "stated"
-      ],
       "devices": [
         {
           "profile": "moltenvk-m3",
@@ -28,10 +25,6 @@
       "environment_id": "ubuntu-26.04-lavapipe",
       "profile": "gate-lavapipe",
       "population": "public",
-      "legs": [
-        "stated",
-        "robustness_off"
-      ],
       "devices": [
         {
           "profile": "gate-lavapipe",
@@ -51,10 +44,6 @@
       "environment_id": "amd-780m-radv",
       "profile": "amd-780m-radv",
       "population": "metal_qualified",
-      "legs": [
-        "stated",
-        "robustness_off"
-      ],
       "devices": [
         {
           "profile": "amd-780m-radv",
@@ -74,10 +63,6 @@
       "environment_id": "intel-irisxe-rplp-anv",
       "profile": "intel-irisxe-rplp-anv",
       "population": "metal_qualified",
-      "legs": [
-        "stated",
-        "robustness_off"
-      ],
       "devices": [
         {
           "profile": "intel-irisxe-rplp-anv",
@@ -97,10 +82,6 @@
       "environment_id": "ubuntu-26.04-lavapipe-x86_64",
       "profile": "gate-lavapipe-x86_64",
       "population": "public",
-      "legs": [
-        "stated",
-        "robustness_off"
-      ],
       "devices": [
         {
           "profile": "gate-lavapipe-x86_64",
@@ -120,10 +101,6 @@
       "environment_id": "nvidia-rtx5080-laptop",
       "profile": "nvidia-rtx5080-laptop",
       "population": "metal_qualified",
-      "legs": [
-        "stated",
-        "robustness_off"
-      ],
       "devices": [
         {
           "profile": "nvidia-rtx5080-laptop",

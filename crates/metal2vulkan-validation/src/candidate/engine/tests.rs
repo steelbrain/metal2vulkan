@@ -1731,29 +1731,17 @@ fn identity_is_per_profile_and_per_engine_slot() {
     );
 }
 
-/// A row run under the profiles layer has its own slot per profile, and a row of the robustness-off
-/// leg its own beside each, every one an engine slot; an operator ID naming any engine slot
-/// is not one the executors accept.
+/// A row run under the profiles layer has its own slot per profile, every one an engine slot; an
+/// operator ID naming any engine slot is not one the executors accept, nor is a slot with a suffix
+/// after its profile.
 #[test]
 fn a_restricted_row_has_its_own_engine_slot() {
-    use crate::coverage::Leg;
-    let native = engine_slot("ubuntu-26.04-lavapipe", None, Leg::Stated);
-    let floor = engine_slot("ubuntu-26.04-lavapipe", Some("runtime-floor"), Leg::Stated);
-    let baseline = engine_slot("ubuntu-26.04-lavapipe", Some("gate-lavapipe"), Leg::Stated);
-    let off = engine_slot("ubuntu-26.04-lavapipe", None, Leg::RobustnessOff);
-    let floor_off = engine_slot(
-        "ubuntu-26.04-lavapipe",
-        Some("runtime-floor"),
-        Leg::RobustnessOff,
-    );
+    let native = engine_slot("ubuntu-26.04-lavapipe", None);
+    let floor = engine_slot("ubuntu-26.04-lavapipe", Some("runtime-floor"));
+    let baseline = engine_slot("ubuntu-26.04-lavapipe", Some("gate-lavapipe"));
     assert_eq!(native, engine_environment_id("ubuntu-26.04-lavapipe"));
     assert_eq!(floor, "ubuntu-26.04-lavapipe@engine@runtime-floor");
-    assert_eq!(off, "ubuntu-26.04-lavapipe@engine+robustness-off");
-    assert_eq!(
-        floor_off,
-        "ubuntu-26.04-lavapipe@engine@runtime-floor+robustness-off"
-    );
-    let slots = [&native, &floor, &baseline, &off, &floor_off];
+    let slots = [&native, &floor, &baseline];
     for (index, slot) in slots.iter().enumerate() {
         assert!(is_engine_slot(slot), "{slot}");
         assert!(!slots[..index].contains(slot), "{slot} twice");
@@ -1763,7 +1751,7 @@ fn a_restricted_row_has_its_own_engine_slot() {
         "ubuntu-26.04-lavapipe@engine-x",
         "x@engine@",
         "x@engine@a@b",
-        "x@engine+robustness-on",
+        "x@engine+robustness-off",
         "x@engine@+robustness-off",
         "x@engine@a+b",
     ] {

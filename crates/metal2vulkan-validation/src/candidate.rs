@@ -75,22 +75,6 @@ pub(crate) fn requested_restriction() -> Option<String> {
     platform::requested_restriction()
 }
 
-/// Run every engine context this process opens in the robustness-off leg (a command's
-/// `--robustness-off`): it enables no robustness feature, so the product compiles the in-shader
-/// containment encodings, and its rows are stored in the leg's own slot. Without it an engine
-/// context enables every robustness feature its device's description states (the stated leg). Call
-/// it once, before any device opens.
-pub fn run_robustness_off() -> Result<(), String> {
-    platform::run_robustness_off()
-}
-
-/// The robustness leg every engine context this process opens runs under
-/// ([`run_robustness_off`]), which an engine device worker applies before it opens a device.
-/// Reading it decides that it is the stated leg if none was set.
-pub fn requested_leg() -> crate::coverage::Leg {
-    platform::requested_leg()
-}
-
 /// Whether every engine context this process opens enables `VK_EXT_device_generated_commands`
 /// where its device supports it, so the device replay takes the generated-commands path: decided
 /// once, by [`run_without_generated_commands`] (or a device worker's
@@ -255,14 +239,6 @@ mod platform {
 
     pub fn check_presentable(_stem: &str) -> Result<(), String> {
         Err("profile restriction is supported only on Linux and macOS".into())
-    }
-
-    pub fn run_robustness_off() -> Result<(), String> {
-        Err("candidate execution is supported only on Linux and macOS".into())
-    }
-
-    pub fn requested_leg() -> crate::coverage::Leg {
-        crate::coverage::Leg::Stated
     }
 
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

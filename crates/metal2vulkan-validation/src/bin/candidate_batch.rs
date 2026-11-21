@@ -1,8 +1,7 @@
 //! `corpus-vulkan --batch`, `--batch-report`, and `--batch-install`, and the same of
 //! `corpus-moltenvk`: the command line of [`metal2vulkan_validation::vulkan_batch`], which runs
-//! this executable once per (case, leg).
+//! this executable once per case.
 
-use metal2vulkan_validation::coverage::Leg;
 use metal2vulkan_validation::gpu::tripwire::TripwirePaths;
 use metal2vulkan_validation::gpu::wait::parse_wait_timeout;
 use metal2vulkan_validation::gpu::DeviceType;
@@ -10,10 +9,10 @@ use metal2vulkan_validation::observation::Backend;
 use metal2vulkan_validation::source::corpus_root;
 use metal2vulkan_validation::store::CorpusStore;
 use metal2vulkan_validation::vulkan_batch::{
-    self, leg_label, parse_leg, plan, qualified_cases, read_done_list, report, requested_cases,
-    run_batch, BatchBuild, BatchConfig, BatchDevice, BatchOutput, Class, Outcome, Pass, DONE_LIST,
+    self, plan, qualified_cases, read_done_list, report, requested_cases, run_batch, BatchBuild,
+    BatchConfig, BatchDevice, BatchOutput, Class, Outcome, Pass, DONE_LIST,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -24,18 +23,18 @@ const DEFAULT_RUN_TIMEOUT_SECONDS: u64 = 300;
 const USAGE: &str =
     "usage: corpus-vulkan --batch --device-type cpu|gpu --out DIR \\\n\
     --metal-environment-id ID --environment-id ID [--corpus DIR] \\\n\
-    [--leg stated|robustness-off]... [--jobs N] [--run-timeout SECONDS] [--limit CASES] \\\n\
+    [--jobs N] [--run-timeout SECONDS] [--limit CASES] \\\n\
     [--case-id HASH]... [--gpu-wait-timeout SECONDS] [--profiles-layer P] [--source-index FILE]\n\
   corpus-vulkan --batch-report --out DIR --metal-environment-id ID --environment-id ID \\\n\
-    [--corpus DIR] [--leg stated|robustness-off]... [--case-id HASH]... [--profiles-layer P]\n\
+    [--corpus DIR] [--case-id HASH]... [--profiles-layer P]\n\
   corpus-vulkan --batch-install DIR --out DIR\n\
 corpus-moltenvk takes the same three modes (--device-type gpu only: MoltenVK has no CPU device);\n\
 each records, reports, and installs its own backend's rows, never Metal's. With --profiles-layer P\n\
 every run is the executor's --profiles-layer P run (the device restricted to the committed profile\n\
 P, which it must hold), its rows in the ID@engine@P slots; the build record names P.\n\
 --batch runs every case with a current Metal row in --metal-environment-id (or each --case-id,\n\
-which must have one), in each --leg (default both), through this executable (the engine)\n\
-with the --device-type, one process per (case, leg), each in its own session killed whole after\n\
+which must have one) through this executable (the engine)\n\
+with the --device-type, one process per case, each in its own session killed whole after\n\
 --run-timeout seconds (default 300) and in its own scratch store (links to --corpus, which is\n\
 never written). On a cpu device --jobs\n\
 run at a time (default: the available parallelism, in a container its CPU share); on a gpu one\n\
@@ -44,21 +43,21 @@ tripwire exists, and stops after a run whose device wait timed out, whose device
 or that it killed at --run-timeout (writing the tripwire if no one did). DIR/build.json records\n\
 the build and venue of DIR's runs; a batch refuses a DIR of another build or venue, or one with\n\
 runs and no record.\n\
-Each finished run appends a line to DIR/done.tsv (case, leg, outcome, exit, seconds, detail),\n\
+Each finished run appends a line to DIR/done.tsv (case, pass, outcome, exit, seconds, detail),\n\
 each row it recorded to DIR/rows.jsonl, and each refusal it recorded after a device opened to\n\
-DIR/refusals.jsonl; a (case, leg) done.tsv lists is skipped, so a rerun resumes. --limit bounds\n\
+DIR/refusals.jsonl; a case done.tsv lists is skipped, so a rerun resumes. --limit bounds\n\
 the cases of one invocation. Non-matching runs keep their output in DIR/logs/. Each run reads its\n\
 case from the one case shard its AIR selects and its Metal row from its own Metal shard, and its\n\
 private sources through --source-index (default: --corpus's .index.sqlite, when it has one) by\n\
 byte location, read only, falling back to the source's shard wherever the index is missing,\n\
 stale, or wrong.\n\
---batch-report prints DIR's build record against this build (batch-build), then per leg, over\n\
+--batch-report prints DIR's build record against this build (batch-build), then, over\n\
 the cases --batch selects with the same --case-id list (other cases' runs are not counted), the\n\
 runs by class (match, mismatch, refusal, failure), then the same per family (batch-family: the\n\
 stage and first resource family) and per scope (batch-scope: public or private AIR), and every\n\
 run that did not match (batch-run, with its scope and family, and a refusal's recorded class).\n\
 A last line of done.tsv, rows.jsonl, or refusals.jsonl without its newline (an append cut\n\
-short) is dropped. --batch-install writes into the store at DIR, for each (case, leg), the\n\
+short) is dropped. --batch-install writes into the store at DIR, for each case, the\n\
 evidence of its last run that recorded any (its row, or its refusal) through the store's\n\
 validated writes, and prints batch-install rows=N refusals=N store=DIR this_build=yes|no|unrecorded:\n\
 whether DIR/build.json is this build (executor, product, semantics, oracle, and validation\n\
@@ -92,7 +91,6 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
     let mut install = None;
     let mut metal_environment_id = None;
     let mut environment_id = None;
-    let mut legs = Vec::new();
     let mut jobs = None;
     let mut run_timeout = DEFAULT_RUN_TIMEOUT_SECONDS;
     let mut limit = None;
@@ -113,7 +111,6 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
                 metal_environment_id = Some(required(&mut args, "--metal-environment-id")?)
             }
             "--environment-id" => environment_id = Some(required(&mut args, "--environment-id")?),
-            "--leg" => legs.push(parse_leg(&required(&mut args, "--leg")?)?),
             "--jobs" => jobs = Some(positive(&required(&mut args, "--jobs")?, "--jobs")?),
             "--run-timeout" => {
                 run_timeout =
@@ -138,12 +135,6 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
         }
     }
     let out = out.ok_or("--out DIR is required")?;
-    if legs.is_empty() {
-        legs = vec![Leg::Stated, Leg::RobustnessOff];
-    }
-    if legs.iter().collect::<BTreeSet<_>>().len() != legs.len() {
-        return Err("duplicate --leg".into());
-    }
     let store = CorpusStore::new(&corpus);
     match mode {
         "--batch-install" => {
@@ -207,7 +198,6 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
                 &metal_environment_id,
                 &environment_id,
                 restricted_to.as_deref(),
-                &legs,
                 &BatchOutput::read(&out)?,
             ) {
                 println!("{line}");
@@ -242,8 +232,7 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
             let selected = qualified.len();
             let cases = requested_cases(qualified, &case_ids, &metal_environment_id)?;
             let done = read_done_list(&out.join(DONE_LIST))?;
-            let passes = legs.iter().copied().map(Pass::Leg).collect::<Vec<_>>();
-            let runs = plan(&cases, &passes, &done, limit);
+            let runs = plan(&cases, &[Pass::Engine], &done, limit);
             let jobs = match (jobs, &device) {
                 (Some(jobs), _) => jobs,
                 (None, BatchDevice::Gpu(_)) => 1,
@@ -273,15 +262,11 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
             };
             eprintln!(
                 "batch: selected={selected} cases={} done_before={} runs={} device={} jobs={jobs} \
-                 run_timeout={run_timeout}s legs={}",
+                 run_timeout={run_timeout}s",
                 cases.len(),
                 done.len(),
                 runs.len(),
                 config.device.device_type().as_str(),
-                legs.iter()
-                    .map(|leg| leg_label(*leg))
-                    .collect::<Vec<_>>()
-                    .join(",")
             );
             let finished = run_batch(&config, &runs, |run| {
                 println!(
@@ -294,33 +279,25 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
                     run.detail
                 );
             })?;
-            let mut counts = BTreeMap::<(&str, Outcome), usize>::new();
+            let mut counts = BTreeMap::<Outcome, usize>::new();
             for run in &finished {
-                *counts.entry((run.pass.label(), run.outcome)).or_default() += 1;
+                *counts.entry(run.outcome).or_default() += 1;
             }
-            for leg in &legs {
-                let leg = leg_label(*leg);
-                let of = |class: Class| -> usize {
-                    counts
-                        .iter()
-                        .filter(|((run_leg, outcome), _)| {
-                            *run_leg == leg && outcome.class() == class
-                        })
-                        .map(|(_, count)| count)
-                        .sum()
-                };
-                println!(
-                    "batch-summary leg={leg} ran={} match={} mismatch={} refusal={} failure={}",
-                    of(Class::Match)
-                        + of(Class::Mismatch)
-                        + of(Class::Refusal)
-                        + of(Class::Failure),
-                    of(Class::Match),
-                    of(Class::Mismatch),
-                    of(Class::Refusal),
-                    of(Class::Failure)
-                );
-            }
+            let of = |class: Class| -> usize {
+                counts
+                    .iter()
+                    .filter(|(outcome, _)| outcome.class() == class)
+                    .map(|(_, count)| count)
+                    .sum()
+            };
+            println!(
+                "batch-summary ran={} match={} mismatch={} refusal={} failure={}",
+                of(Class::Match) + of(Class::Mismatch) + of(Class::Refusal) + of(Class::Failure),
+                of(Class::Match),
+                of(Class::Mismatch),
+                of(Class::Refusal),
+                of(Class::Failure)
+            );
             if let Some(slowest) = finished
                 .iter()
                 .max_by(|left, right| left.seconds.total_cmp(&right.seconds))

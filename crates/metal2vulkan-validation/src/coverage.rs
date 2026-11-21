@@ -13,9 +13,10 @@
 //!
 //! A run's census ([`ExecutedCensus`]) is the class of the device it ran on ([`ExecutionClass`]:
 //! a CPU ICD, or a GPU's driver, [`HostClass`]), the product build that compiled its modules, and
-//! their censuses. Each committed profile is compiled twice where it states a robustness feature
-//! ([`Leg`]): as stated, which selects the robust encodings, and with every robustness feature
-//! removed ([`robustness_off`]), which selects the in-shader ones (validation runs both).
+//! their censuses. The tier table compiles each committed profile twice where it states a
+//! robustness feature ([`Leg`]): as stated, which selects the robust encodings, and with every
+//! robustness feature removed ([`robustness_off`]), which selects the in-shader ones, the ones the
+//! runtime's floor compiles, as it enables no robustness feature.
 //!
 //! A driver that advertises buffer robustness without containing some of its forms is a recorded
 //! limitation (MoltenVK leaves loads, stores, and atomics through buffer descriptors and
@@ -67,8 +68,8 @@ impl SubgroupShape {
 /// The device features whose enablement chooses a containment encoding: buffer robustness drops the
 /// in-shader check of descriptor views (`DeviceProfile::checks_buffers_in_shader`), image
 /// robustness the in-shader clamp and guard of images (`robust_image_access`). A tier-table
-/// profile's robustness-off leg removes them ([`Leg::RobustnessOff`]), and an engine executor
-/// enables exactly the ones its device's description states, or none in that leg.
+/// profile's robustness-off leg removes them ([`Leg::RobustnessOff`]), and the engine executor's
+/// own context enables exactly the ones its device's description states.
 pub const ROBUSTNESS_FEATURES: [VkFeature; 4] = [
     VkFeature::RobustBufferAccess,
     VkFeature::RobustBufferAccess2,
@@ -476,11 +477,6 @@ pub struct ExecutedCensus {
     /// if any (`--profiles-layer P`). `device` is then the device that executed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restricted_to: Option<String>,
-    /// The robustness leg the device ran under: the robustness features its description states
-    /// enabled, or none (`--robustness-off`). A row recorded before executors ran a leg (executor
-    /// ABI v33 and earlier, which enabled no robustness feature) has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub leg: Option<Leg>,
     pub modules: Vec<ModuleCensus>,
     /// How the run contained each out-of-bounds target of its case, and what escaped: the facts the
     /// candidate's verdict on such a case reads (`executor_contract::out_of_bounds::matches`).
@@ -517,21 +513,6 @@ pub struct RateMapPassRun {
 }
 
 impl ExecutedCensus {
-    /// Whether the modules' containment agrees with the leg: a run with no robustness feature
-    /// enabled compiles no robust encoding. A census of no leg (an older row) agrees with any.
-    pub fn leg_holds(&self) -> bool {
-        self.leg != Some(Leg::RobustnessOff)
-            || self.modules.iter().all(|module| {
-                module.containment.is_none_or(|containment| {
-                    containment.buffers != BufferEncoding::Robust
-                        && !matches!(
-                            containment.images,
-                            ImageEncoding::Robust | ImageEncoding::RobustWrites
-                        )
-                })
-            })
-    }
-
     /// The comparison class of an observation of these modules, derived from their notes and
     /// strategies: what a recorded class must equal.
     pub fn comparison_class(&self) -> ComparisonClass {
@@ -551,8 +532,7 @@ impl ExecutedCensus {
     }
 }
 
-/// Which robustness a tier-table entry compiles a committed profile under, and an engine
-/// executor runs its device under (validation runs robustness on and off).
+/// Which robustness a tier-table entry compiles a committed profile under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Leg {

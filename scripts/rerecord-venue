@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 # Re-record one execution venue at one product build: the engine batch of the
-# venue's backend over the cases with a current Metal row, in both legs, into an out
+# venue's backend over the cases with a current Metal row, into an out
 # directory kept on this host, resumable and measured. Metal is never run.
 #
 #   scripts/rerecord-venue --venue ID [--kind native-gpu|moltenvk|cpu-icd]
 #                          [--icd lavapipe] [--ref SHA] [--out-root DIR]
-#                          [--leg stated|robustness-off]... [--case-id HASH]...
+#                          [--case-id HASH]...
 #                          [--limit CASES] [--budget SECONDS] [--cpus N] [--slot NAME]
 #                          [--private-corpus DIR] [--metal-environment-id ID] [--retry-failed]
 #                          [--profiles-layer P]
 #
 # - The venue. --venue is the operator environment ID its rows record (the batch stores them in
 #   its engine slots). A venue of crates/metal2vulkan-validation/cutover/c3-venues.json takes its kind from
-#   there; any other needs --kind. Every venue runs both legs unless
-#   --leg says otherwise: C3 judges the legs c3-venues.json lists, but coverage needs both on every
-#   venue (a robustness-off requirement is met only by a robustness-off run). --icd names the CPU
-#   ICD of a cpu-icd venue (lavapipe, the default and only one). --profiles-layer P records a restricted leg: every
+#   there; any other needs --kind. --icd names the CPU
+#   ICD of a cpu-icd venue (lavapipe, the default and only one). --profiles-layer P records a restricted run: every
 #   run with the device restricted to the committed profile P, its rows in the ID@engine@P
 #   slots (a capability profile on a CPU ICD, or on a GPU where no CPU ICD takes it, or a GPU
 #   restricted to another profile of its own driver class). Where the device lacks what P states,
@@ -39,7 +37,7 @@
 #   which the native venues read through crates/metal2vulkan-validation/corpus/local), lavapipe at its native width.
 # - Resumable. The out directory is OUT_ROOT/VENUE/scratch/batch-<12 hex of the ref> (OUT_ROOT
 #   defaults to ~/.cache/m2v-rerecord) and is kept between invocations: the batch skips every
-#   (case, leg) its done-list holds and refuses an out directory of another build or venue
+#   case its done-list holds and refuses an out directory of another build or venue
 #   (build.json). An invocation runs the batch in rounds of --limit cases (default 50 on a GPU, 200
 #   on a CPU ICD) until nothing is pending or --budget seconds (default 1800) are spent; exit 3
 #   means runs are pending, or some ended `failed` (a tooling failure, such as Metal's compiler
@@ -53,13 +51,13 @@
 #   the device. Each GPU round is under a 2-hour alarm; if it fires, this script writes the
 #   tripwire itself (only a human clears it, after the suspected-hang protocol).
 # - Measured. OUT_ROOT/VENUE/summary.txt (printed at the end) has the build time, each round's
-#   exit, runs, pending count and elapsed time, --batch-report's build, per-leg, and slowest lines,
+#   exit, runs, pending count and elapsed time, --batch-report's build, report, and slowest lines,
 #   and, for a venue of c3-venues.json, how many rows and refusals record each device identity and
 #   how many a device the venue does not allow (C3 reads those as stale). done.tsv holds every run's seconds.
 # - Output. The out directory (build.json, done.tsv, rows.jsonl, refusals.jsonl, logs/) is what
 #   scripts/rerecord-commit installs; copy it as it is to the checkout that commits the rows.
 #   Nothing tracked is written. A GPU venue's executor runs from a copy in OUT_ROOT/VENUE/bin. A
-#   restricted leg's directory is OUT_ROOT/VENUE@P.
+#   restricted run's directory is OUT_ROOT/VENUE@P.
 # Exit: 0 nothing pending; 3 runs pending; 86 a hang tripwire stopped it; 2 a usage or
 # precondition error; 1 any other failure.
 set -o pipefail
@@ -74,7 +72,6 @@ kind=
 icd=lavapipe
 ref=
 out_root=${XDG_CACHE_HOME:-$HOME/.cache}/m2v-rerecord
-leg_flags=
 case_flags=
 limit=
 budget=1800
@@ -91,7 +88,6 @@ while [ "$#" -gt 0 ]; do
         --icd) [ "$#" -ge 2 ] || usage; icd=$2; shift 2 ;;
         --ref) [ "$#" -ge 2 ] || usage; ref=$2; shift 2 ;;
         --out-root) [ "$#" -ge 2 ] || usage; out_root=$2; shift 2 ;;
-        --leg) [ "$#" -ge 2 ] || usage; leg_flags="$leg_flags --leg $2"; shift 2 ;;
         --case-id) [ "$#" -ge 2 ] || usage; case_flags="$case_flags --case-id $2"; shift 2 ;;
         --limit) [ "$#" -ge 2 ] || usage; limit=$2; shift 2 ;;
         --budget) [ "$#" -ge 2 ] || usage; budget=$2; shift 2 ;;
@@ -107,8 +103,8 @@ while [ "$#" -gt 0 ]; do
 done
 fail() { echo "rerecord-venue: $*" >&2; exit 2; }
 [ -n "$venue" ] || fail "--venue is required"
-case "$venue$leg_flags$case_flags$slot$icd$profile" in
-    *[!A-Za-z0-9_.@+\ -]*) fail "IDs, legs, cases, slot, and ICD are plain words" ;;
+case "$venue$case_flags$slot$icd$profile" in
+    *[!A-Za-z0-9_.@+\ -]*) fail "IDs, cases, slot, and ICD are plain words" ;;
 esac
 case "$budget" in ''|*[!0-9]*) fail "--budget takes whole seconds" ;; esac
 case "$limit" in *[!0-9]*) fail "--limit takes a whole number" ;; esac
@@ -135,7 +131,6 @@ if [ -n "$declared" ]; then
         fail "$venue is a $declared_kind venue in c3-venues.json, not $kind"
     kind=$declared_kind
 fi
-[ -n "$leg_flags" ] || leg_flags=" --leg stated --leg robustness-off"
 case "$kind" in
     native-gpu) exe=corpus-vulkan; device=gpu; : "${limit:=50}" ;;
     moltenvk) exe=corpus-moltenvk; device=gpu; : "${limit:=50}" ;;
@@ -160,7 +155,7 @@ elapsed() { echo $(( $(date +%s) - start )); }
 {
     echo "rerecord-venue $venue ($kind, $exe on a $device device) at $ref on $(hostname) $(uname -sm), $(date)"
     echo "out $out"
-    echo "legs:$leg_flags cases:${case_flags:- every case with a current Metal row in $metal}"
+    echo "cases:${case_flags:- every case with a current Metal row in $metal}"
     [ -z "$profile" ] || echo "restricted to the profile $profile (--profiles-layer)"
 } > "$log"
 trip=$HOME/.cache/m2v-gpu/hang
@@ -180,7 +175,7 @@ PY
     echo "retry: dropped the failed runs from done.tsv" >> "$log"
 fi
 restrict=${profile:+ --profiles-layer $profile}
-batch_flags="--device-type $device --metal-environment-id $metal --environment-id $venue$leg_flags$case_flags$restrict"
+batch_flags="--device-type $device --metal-environment-id $metal --environment-id $venue$case_flags$restrict"
 stopped=
 pending=unknown
 
@@ -206,7 +201,7 @@ while [ $(( $(date +%s) - start )) -lt '"$budget"' ]; do
   grep -q "^batch-pending runs=0$" /scratch/round.out && break
 done
 "$bin" --batch-report --corpus crates/metal2vulkan-validation/corpus --out /scratch/batch-'"$hex"' \
-  --metal-environment-id '"$metal"' --environment-id '"$venue$leg_flags$restrict"' > /scratch/report.txt 2>&1
+  --metal-environment-id '"$metal"' --environment-id '"$venue$restrict"' > /scratch/report.txt 2>&1
 exit $rc'
     gate_flags="--cpus $cpus --slot $slot --icd $icd --scratch $scratch"
     [ -z "$private" ] || gate_flags="$gate_flags --private-corpus $private"
@@ -267,11 +262,11 @@ else
     done
     # shellcheck disable=SC2086
     "$bin" --batch-report --corpus "$root/crates/metal2vulkan-validation/corpus" --out "$out" \
-        --metal-environment-id "$metal" --environment-id "$venue"$leg_flags$restrict > "$d/report.txt" 2>&1
+        --metal-environment-id "$metal" --environment-id "$venue"$restrict > "$d/report.txt" 2>&1
 fi
 
 grep -E '^batch-(build|report|slowest)' "$d/report.txt" 2>/dev/null | cut -c1-400 >> "$log"
-# A restricted leg's rows record what the profiles layer reports; C3 judges unrestricted slots only.
+# A restricted run's rows record what the profiles layer reports; C3 judges unrestricted slots only.
 if [ -n "$declared" ] && [ -z "$profile" ]; then
     python3 - "$root/crates/metal2vulkan-validation/cutover/c3-venues.json" "$out" "$venue" >> "$log" 2>&1 <<'PY'
 import collections, json, os, sys
@@ -297,7 +292,7 @@ for name in ("rows.jsonl", "refusals.jsonl"):
         print(f"  {n} x {dict(zip(fields, k))}{'' if k in allowed else ' (not allowed)'}")
 PY
 fi
-# The failed runs among each (case, leg)'s last: no evidence, so the venue is not complete.
+# The failed runs among each case's last: no evidence, so the venue is not complete.
 failed=$(awk -F '\t' 'NF >= 3 { last[$1 FS $2] = $3 } END { n = 0; for (k in last) if (last[k] == "failed") n++; print n }' \
     "$out/done.tsv" 2>/dev/null)
 status=0

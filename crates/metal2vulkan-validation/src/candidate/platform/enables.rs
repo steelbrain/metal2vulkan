@@ -18,10 +18,9 @@
 //!   `tests::every_committed_profiles_context_enables_its_pinned_chain` hold it).
 //! - [`engine_list`] (engine contexts, on top of the old list): the product's
 //!   `DeviceDescription::recommended_enables` for the device's queried description, less what no
-//!   encoding reads ([`NOT_ENABLED`]), with the robustness features its leg decides
-//!   (`coverage::ROBUSTNESS_FEATURES`): every one the description states in the stated leg, so the
-//!   opened profile compiles the robust containment encodings the device states, and none in the
-//!   robustness-off leg, so it compiles the in-shader ones. Extended dynamic state is enabled where
+//!   encoding reads ([`NOT_ENABLED`]), with every robustness feature the description states
+//!   (`coverage::ROBUSTNESS_FEATURES`), so the opened profile compiles the robust containment
+//!   encodings the device states. Extended dynamic state is enabled where
 //!   the device lists it: a render pipeline states it as a requirement, and the render executor
 //!   records its states. The [`ExecutorFeature`]s (sparse binding and residency) are enabled where
 //!   the device supports them, for the executor's own sparse case textures: no pipeline requires
@@ -31,7 +30,7 @@
 //! one table ([`MEMBERS`]) that also writes it: [`enabled_set`] in the engine's vocabulary
 //! (the `EnableSet` that restricts the queried description, `DeviceDescription::with_enabled`).
 
-use crate::coverage::{Leg, ROBUSTNESS_FEATURES};
+use crate::coverage::ROBUSTNESS_FEATURES;
 use ash::{vk, Instance};
 use metal2vulkan::device::{ApiVersion, VkExtension, VkFeature};
 use metal2vulkan::device::{DeviceDescription, EnableSet};
@@ -1261,11 +1260,11 @@ members! {
 /// changes nothing the product reads. `extendedDynamicState` is not here: a render pipeline
 /// requires it where it makes a state dynamic, and the render executor records every such state but
 /// a per-bind stride. The robustness features are not here either: the product reads them to choose
-/// the containment encoding, and the context's leg decides them.
+/// the containment encoding, and a context enables every one its description states.
 pub(super) const NOT_ENABLED: &[(VkFeature, &str)] = &[(
     F::NullDescriptor,
     "no encoding reads it; it shares `VK_EXT_robustness2`'s structure with the robust-access \
-         members, which the leg decides",
+         members, which the description decides",
 )];
 
 /// One device extension a context can enable, with its name in the engine's vocabulary.
@@ -1448,7 +1447,7 @@ pub(super) struct Enables {
     pub(super) linked: BTreeSet<Structure>,
     /// The device extensions enabled, each with what it requires.
     pub(super) extensions: BTreeSet<&'static CStr>,
-    /// The robustness features the device's description states that the stated leg could not
+    /// The robustness features the device's description states that the context could not
     /// enable (its chain does not report one, or no enabled extension exposes its structure):
     /// no robustness feature is then enabled, and every run on the context is a typed refusal
     /// naming these ([`engine_list`]).
@@ -1679,9 +1678,8 @@ pub(super) fn enable_runtime_probe(
 /// The engine's enable list: on top of `enables`, the product's
 /// `DeviceDescription::recommended_enables` for `description` (the device's own queried
 /// description, at the context's API 1.2, or the profile a restriction reports) under the default
-/// policy the opened device is derived with, less [`NOT_ENABLED`], with the robustness features
-/// ([`ROBUSTNESS_FEATURES`]) `leg` decides: every one the description states in
-/// [`Leg::Stated`], none in [`Leg::RobustnessOff`]. Each recommended extension is enabled by the
+/// policy the opened device is derived with, less [`NOT_ENABLED`], with every robustness feature
+/// ([`ROBUSTNESS_FEATURES`]) the description states. Each recommended extension is enabled by the
 /// first name the device lists for it, each recommended feature by its member (chaining its
 /// structure through an enabled extension), and each member no vocabulary names
 /// (`textureCompressionASTC_HDR` and the rest, by their registry names, [`Member::registry`])
@@ -1691,7 +1689,7 @@ pub(super) fn enable_runtime_probe(
 /// A stated robustness feature the feature chain does not report, or whose structure no enabled
 /// extension exposes, is not an error: no robustness feature is enabled then, and the stated ones
 /// are [`Enables::unmet_robustness`], so the context opens and every run on it is a typed refusal
-/// rather than a run of the in-shader encoding in the stated leg. Any other disagreement between
+/// rather than a run of the in-shader encoding. Any other disagreement between
 /// the product's description and this device's own lists (a recommended extension with no listed
 /// name, a recommended feature with no member, one the feature chain does not report, or one
 /// whose structure no enabled extension exposes) is an error: the context is not opened on a list
@@ -1701,7 +1699,6 @@ pub(super) fn engine_list(
     description: &DeviceDescription,
     supported: &FeatureChain,
     available: &Available,
-    leg: Leg,
 ) -> Result<Enables, String> {
     let recommended = description.recommended_enables();
     for &extension in &recommended.extensions {
@@ -1724,9 +1721,7 @@ pub(super) fn engine_list(
             continue;
         }
         if ROBUSTNESS_FEATURES.contains(&feature) {
-            if leg == Leg::Stated {
-                robustness.push(feature);
-            }
+            robustness.push(feature);
             continue;
         }
         let member = member_of(feature)

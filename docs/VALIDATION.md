@@ -338,8 +338,8 @@ scripts/linux-gate --cpus N [--slot NAME] [--platform amd64|arm64] \
   slot's volumes when you are done with it.
 - The default command, `scripts/linux-gate-ci`, runs every Linux step of `ci.yml` in order: change
   the two together.
-- `scripts/qualify-public-cases` (also run by CI) runs the public cases on lavapipe in both
-  robustness legs against their committed Metal rows, and fails on anything but a match.
+- `scripts/qualify-public-cases` (also run by CI) runs the public cases on lavapipe against their
+  committed Metal rows, and fails on anything but a match.
 - lavapipe's vector width follows the host (128 bits on arm64, 256 on x86 with AVX2);
   `LP_NATIVE_VECTOR_WIDTH=256` forces the wider one.
 
@@ -377,7 +377,7 @@ worker under the 20-second and 500-MiB ceilings, resumable in bounded batches (`
 | `translation --profile P...` | Each row translated for each committed profile, recorded as a typed outcome class under the current product fingerprint (`--current-fingerprint`, `--retry-failures`, `--hash-file PATH` select rows). It fails when a row breaks a ceiling |
 | `budgets --profile P...` | The budget gates from recorded rows: no row above 20 s or 500 MiB, no stopped worker, and each row's ledger peak at least 0.7 of its allocator peak |
 | `specialization --profile P...` | Rows translated under planned function-constant value sets and the pipeline inputs their AIR states, not only with none |
-| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, on each profile and leg of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
+| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, on each profile of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
 | `bitcode-reader` | The bitcode reader's decode compared with `llvm-dis`, and the intrinsic census |
 | focused audits (`rasterization-rate-maps`, `sample-rate`, `ulong-textures`, `fragment-varyings`, `linked-functions`, `tile-functions`, `mesh-draws`) | One structural family, selected by current facts, translated in batches |
 
@@ -451,11 +451,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   opens, to screen cases.
 - **The Vulkan candidate** (`corpus-vulkan` on Linux, `corpus-moltenvk` on macOS) translates the
   case through the public API in a killable compile worker, executes exactly what the binder plans,
-  and compares the observations with Metal's. Every context runs under the validation layer, in a
-  robustness leg: the stated leg enables every robustness feature the device states, and the
-  `robustness-off` leg none, so both encodings of a buffer-slot access's bounds run (the
-  device's robustness and the shader's check).
-- **Through the runtime.** On Linux, in the stated leg and without a profile restriction, a kernel
+  and compares the observations with Metal's. Every context runs under the validation layer and
+  enables every robustness feature the device states.
+- **Through the runtime.** On Linux, without a profile restriction, a kernel
   case of buffers (device buffer arrays included), bound textures and samplers, argument buffers
   of buffers, textures and samplers, threadgroup memory, function constants and linked functions,
   dispatched by threads or threadgroups and observing a buffer, a texture, an argument-buffer
@@ -542,13 +540,13 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
 ### Venues
 
 `cutover/c3-venues.json` lists the venues the cases must pass on: each is one translation key under
-one driver, with its environment ID, committed profile, devices and the legs it records. Today:
+one driver, with its environment ID, committed profile and devices. Today:
 MoltenVK on Apple's M3 Max, lavapipe on arm64 and x86, the AMD Radeon 780M under RADV, Intel's
 Raptor Lake Xe graphics under ANV, and the NVIDIA GeForce RTX 5080 Laptop GPU.
 `cutover/c3-references.json` names the Metal environment that is the reference (the Apple M3 Max),
 with its declared identity; each case is judged against its row.
 
-`corpus-status --c3` judges every venue's slot of every case, in both legs: `match`, `reviewed`,
+`corpus-status --c3` judges every venue's slot of every case: `match`, `reviewed`,
 `device_gap`, `out_of_scope_ray_tracing`, `reference_gap`, `mismatch`, `refused`, `stale` or
 `missing`. A row recorded on a device or driver its venue does not allow is rejected. A change that
 moves a venue's profile fingerprint without changing any artifact is handled by rekeying its

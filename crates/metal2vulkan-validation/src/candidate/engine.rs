@@ -57,7 +57,7 @@ use crate::check::admission::{
 use crate::check::interface::AirInterface;
 use crate::check::CheckedCase;
 use crate::companion::{Companion, Spelling};
-use crate::coverage::{ExecutedCensus, ExecutionClass, Leg};
+use crate::coverage::{ExecutedCensus, ExecutionClass};
 use crate::engine::{bounded_detail, Outcome, RowSource};
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun, TargetRun};
 use crate::executor_contract::stage_inputs;
@@ -1549,42 +1549,30 @@ pub struct RuntimeDraw<'a> {
 /// The suffix of an engine store slot.
 const ENGINE_SLOT_SUFFIX: &str = "@engine";
 
-/// The suffix of a robustness-off engine slot.
-const ROBUSTNESS_OFF_SLOT_SUFFIX: &str = "+robustness-off";
-
-/// The store slot of an engine observation for the operator's `environment_id` in the stated
-/// leg: its own slot, so an engine row never replaces the old engine's row of the same
-/// environment.
+/// The store slot of an engine observation for the operator's `environment_id`: its own slot, so
+/// an engine row never replaces the old engine's row of the same environment.
 pub fn engine_environment_id(environment_id: &str) -> String {
-    engine_slot(environment_id, None, Leg::Stated)
+    engine_slot(environment_id, None)
 }
 
 /// The store slot of an engine observation for the operator's `environment_id` on a device
 /// `VK_LAYER_KHRONOS_profiles` restricted to the committed profile `restricted_to`
-/// (`ENV@engine@P`), or on the device as it is ([`engine_environment_id`]), in robustness
-/// leg `leg` (`+robustness-off` for that leg): a row run under a profile never replaces a native
-/// row, nor one run under another profile, nor one of the other leg.
-pub fn engine_slot(environment_id: &str, restricted_to: Option<&str>, leg: Leg) -> String {
-    let leg = match leg {
-        Leg::Stated => "",
-        Leg::RobustnessOff => ROBUSTNESS_OFF_SLOT_SUFFIX,
-    };
+/// (`ENV@engine@P`), or on the device as it is ([`engine_environment_id`]): a row run under a
+/// profile never replaces a native row, nor one run under another profile.
+pub fn engine_slot(environment_id: &str, restricted_to: Option<&str>) -> String {
     match restricted_to {
-        None => format!("{environment_id}{ENGINE_SLOT_SUFFIX}{leg}"),
-        Some(profile) => format!("{environment_id}{ENGINE_SLOT_SUFFIX}@{profile}{leg}"),
+        None => format!("{environment_id}{ENGINE_SLOT_SUFFIX}"),
+        Some(profile) => format!("{environment_id}{ENGINE_SLOT_SUFFIX}@{profile}"),
     }
 }
 
 /// Whether a candidate row's `environment_id` is an engine slot ([`engine_slot`], native or
-/// restricted, in either leg): the row kind the evidence census judges by the new executor's
-/// dependency rule. Neither executor accepts an operator environment ID that already names a
-/// engine slot, so the slot alone decides the kind.
+/// restricted): the row kind the evidence census judges by the new executor's dependency rule.
+/// Neither executor accepts an operator environment ID that already names a engine slot, so the
+/// slot alone decides the kind.
 pub fn is_engine_slot(environment_id: &str) -> bool {
     match environment_id.rsplit_once(ENGINE_SLOT_SUFFIX) {
-        Some((_, rest)) => {
-            let restricted = rest
-                .strip_suffix(ROBUSTNESS_OFF_SLOT_SUFFIX)
-                .unwrap_or(rest);
+        Some((_, restricted)) => {
             restricted.is_empty()
                 || restricted
                     .strip_prefix('@')
@@ -1592,13 +1580,6 @@ pub fn is_engine_slot(environment_id: &str) -> bool {
         }
         None => false,
     }
-}
-
-/// Whether a candidate row's `environment_id` is an engine slot of the robustness-off leg
-/// ([`engine_slot`] with [`Leg::RobustnessOff`]): the slot a row whose census ran in that leg
-/// is stored in, and no other row.
-pub fn is_robustness_off_slot(environment_id: &str) -> bool {
-    is_engine_slot(environment_id) && environment_id.ends_with(ROBUSTNESS_OFF_SLOT_SUFFIX)
 }
 
 /// How a compiled module contains each of `targets` (`out_of_bounds::containment`: its slot's
@@ -3230,14 +3211,13 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
-    // A case the runtime runs, run so in this process's default run: the native backend, no
-    // profiles-layer restriction, the stated leg. It records no artifact: the runtime keeps
-    // what it compiled to itself.
+    // A case the runtime runs, run so in this process's default run: the native backend and no
+    // profiles-layer restriction. It records no artifact: the runtime keeps what it compiled to
+    // itself.
     if let Mapped::Compute(compute) = &prepared.mapped {
         if backend == Backend::Vulkan
             && runs_through_runtime(case, compute)
             && super::requested_restriction().is_none()
-            && super::requested_leg() == Leg::Stated
         {
             return run_on_runtime(prepared, compute);
         }
@@ -3246,7 +3226,6 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
         if backend == Backend::Vulkan
             && runs_render_through_runtime(case, render)
             && super::requested_restriction().is_none()
-            && super::requested_leg() == Leg::Stated
         {
             return run_render_on_runtime(prepared, render);
         }
@@ -3553,7 +3532,6 @@ pub fn execute_prepared(
         input_sha256: checked.primary.input_sha256.clone(),
         wait_timeout_ms: u64::try_from(wait_timeout().as_millis()).unwrap_or(u64::MAX),
         restricted_to,
-        leg: super::requested_leg(),
         generated_commands: super::requested_generated_commands(),
         venue,
         source_index: crate::source::source_index(),
@@ -3572,11 +3550,7 @@ pub fn execute_prepared(
                     input_sha256: input.input_sha256.clone(),
                     translator_fingerprint: opened.translator_fingerprint,
                     backend,
-                    environment_id: engine_slot(
-                        environment_id,
-                        input.restricted_to.as_deref(),
-                        input.leg,
-                    ),
+                    environment_id: engine_slot(environment_id, input.restricted_to.as_deref()),
                     environment: opened.environment,
                     executor_abi: ENGINE_EXECUTOR_ABI.into(),
                     refusal: Refusal::of(&not_supported),
@@ -3588,11 +3562,7 @@ pub fn execute_prepared(
         }
         Err(error) => return Err(error),
     };
-    let leg = run
-        .census
-        .leg
-        .ok_or("the device worker's census names no robustness leg")?;
-    let slot = engine_slot(environment_id, run.census.restricted_to.as_deref(), leg);
+    let slot = engine_slot(environment_id, run.census.restricted_to.as_deref());
     let candidate_output_sha256 = sha256_bytes(&run.output);
     let golden = base64::engine::general_purpose::STANDARD
         .decode(&metal.output_b64)

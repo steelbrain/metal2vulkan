@@ -55,7 +55,7 @@ impl ExecutedArtifact {
 
     /// Whether this build would execute what the run did: the run recorded a digest, under this
     /// product's `cache::RUNTIME_VERSION`, equal to `current`, this build's digest of the case on
-    /// the run's profile-leg (`authored_compile::CurrentArtifacts`).
+    /// the run's profile (`authored_compile::CurrentArtifacts`).
     pub fn is_current(&self, current: Option<&str>) -> bool {
         self.runtime_version == metal2vulkan::cache::RUNTIME_VERSION
             && self.sha256.is_some()
