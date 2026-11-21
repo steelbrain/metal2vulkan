@@ -735,6 +735,10 @@ pub(crate) enum FieldValue {
     /// attachment's texture's second element: its view in the feedback layout, or of its image's
     /// shadow on a device without the attachment feedback loop (`crate::render_encoder`).
     FetchedColor(u32),
+    /// A `u32`: the layers the draw's pass renders (`renderTargetArrayLength`, at least 1), at or
+    /// past which a vertex function's `[[render_target_array_index]]` stores `Layer` 0
+    /// (`PushField::RenderTargetArrayLength`).
+    RenderTargetArrayLength,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the

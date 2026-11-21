@@ -817,13 +817,15 @@ pub enum Refusal {
         /// The attachment's pixel format.
         pixel_format: PixelFormat,
     },
-    /// A render pass attachment of a level or slice past its texture's.
+    /// A render pass attachment or resolve texture of a level or slice past its texture's: its own
+    /// slice, or the last of the slices a layered pass renders from it
+    /// (`renderTargetArrayLength`).
     ///
     /// Basis: ours (no texel of the texture is there to render into).
     AttachmentPlace {
         /// The level asked for.
         level: u32,
-        /// The slice asked for.
+        /// The slice asked for: the attachment's own, or the last its pass renders.
         slice: u32,
     },
     /// A render pass color attachment of a depth or stencil pixel format, a depth attachment of a
@@ -1555,6 +1557,10 @@ pub enum RenderPassKind {
     ClearFormat,
     /// A pass with no attachment, its size from `renderTargetWidth` and `renderTargetHeight` alone.
     NoAttachment,
+    /// A `renderTargetArrayLength` past the device's `maxFramebufferLayers`: Vulkan's rendering
+    /// renders at most that many layers (VUID-VkRenderingInfo-layerCount-07817), and requires 256
+    /// of it, where Metal's arrays hold 2048 slices.
+    ArrayLength,
 }
 
 /// What a texture view changes that the runtime does not build ([`Gap::TextureView`]).

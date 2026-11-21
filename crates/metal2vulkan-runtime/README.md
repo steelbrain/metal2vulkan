@@ -2920,15 +2920,30 @@ or does not check is rebuilt from the generations' names, with young counted ful
   into the pass's attachments, and `end_encoding` ends it (`vkCmdEndRendering`): one Vulkan
   rendering a Metal render encoder, with no render pass object or framebuffer.
 - `RenderPassDescriptor` is `MTLRenderPassDescriptor`: eight color attachments
-  (`MAX_COLOR_ATTACHMENTS`), a depth and a stencil attachment, `renderTargetWidth` and
-  `renderTargetHeight`. Each attachment is one level and slice of its texture: a 2D texture, a 2D
+  (`MAX_COLOR_ATTACHMENTS`), a depth and a stencil attachment, `renderTargetWidth`,
+  `renderTargetHeight` and `renderTargetArrayLength`. Each attachment is one level of its texture
+  and, from its `slice`, the pass's layers (below): a 2D texture, a 2D
   array, a cube or a cube array, or a 2D multisample texture or array, of `RenderTarget` usage;
   every attachment of a pass has one sample count, and a draw's pipeline state that count as its
   `rasterSampleCount` (`DrawKind::AttachmentFormats` otherwise). The device's counts are
   `Device::supports_texture_sample_count`'s. A multisample attachment is stored as its samples:
   a shader reads them through `texture2d_ms` or `depth2d_ms`. The texture keeps an
-  image view of that level and layer with the identity swizzle, made at the first pass that
-  renders into it and freed with the texture (`Gauges::attachment_views`).
+  image view of that level and those layers with the identity swizzle (a 2D view of one layer, a
+  2D array view of more), made at the first pass that renders into it and freed with the texture
+  (`Gauges::attachment_views`).
+- A pass of `renderTargetArrayLength` N of 2 or more is one rendering of `layerCount` N: every
+  attachment and every resolve texture renders N slices from its own `slice` (a cube's faces are
+  its slices), and the rendering's load, store and resolve act on all N, so a layer no draw
+  reaches carries the pass's clear. At 0 and 1 the pass renders the attachment's slice alone, as
+  Metal's does. A vertex function's `[[render_target_array_index]]` has one form, in every pass:
+  it stores `Layer`, its index where that is below the pass's length and 0 at or past it, the
+  length each draw pushes (`renderTargetArrayLength`, at least 1); so at 0 and 1 every index
+  renders the attachment's slice, as Metal's does. A fragment function reads the index as the
+  vertex function wrote it, through a flat varying, so it reads 3 where the vertex function wrote
+  3 into a pass of one layer. Device creation enables `shaderOutputLayer` (Floor). Metal's rules
+  (the conformance case `layered-render-target-array-length`, recorded on an Apple M3 Max, macOS
+  27.0.1): at 0 and 1 the index is ignored, at 2 or more index `i` renders slice `slice + i`, and
+  the load and store cover every layer.
 - Load actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load operations of
   those names. `Store`, `DontCare` and `Unknown` store: a pass may end its rendering before the
   encoder ends and begin it again, loading what it stored (below), so a `DontCare` store keeps the
@@ -3257,12 +3272,30 @@ or does not check is rebuilt from the generations' names, with young counted ful
   rendering began resolving, as Vulkan fixes the resolve as it begins), a 1D or 3D texture's
   attachment, a 3D resolve texture's plane (`TextureType`), the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
-  range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
+  range, bfloat, YCbCr), a `renderTargetArrayLength` past the device's `maxFramebufferLayers`
+  (`ArrayLength`: Vulkan renders at most that many layers,
+  `VUID-VkRenderingInfo-layerCount-07817`, and requires 256 of it, where Metal's arrays hold 2048
+  slices), and a pass with no attachment. The descriptor has no field for a
   rasterization rate map, tile sizes, imageblock and threadgroup memory, sample buffer
-  attachments, layered rendering or store action options. The replay
+  attachments or store action options. The replay
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
   `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.
+- Layered rendering (`renderTargetArrayLength` 2 or more) is refused: for an attachment or a
+  resolve texture with fewer slices from its own `slice` than the pass's length
+  (`Refusal::AttachmentPlace`, naming the last slice the pass would render); for a 3D texture's
+  depth planes, which are no attachment's layers (`Gap::RenderPass`, `TextureType`, as for any 3D
+  attachment); for a draw that reads one of its pass's attachments through a texture on a device
+  without the attachment feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow
+  holds one layer); and, at creation on every device, for a vertex function whose
+  `[[render_target_array_index]]` the translator cannot show the same at every vertex of a
+  primitive, an `Error::Translation` naming `LayeredRendering` and `geometryShader`. Vulkan
+  requires one `Layer` at every vertex of a primitive
+  (`VUID-VkPipelineShaderStageCreateInfo-stage-02596`), so such a function cannot store its index
+  as written; the translator's other form, a generated geometry stage that selects the layer,
+  needs `geometryShader`, which device creation does not enable; and Metal documents a differing
+  index as undefined (the Metal Shading Language specification). An index read from a buffer at
+  the vertex's `[[instance_id]]` is the same at every vertex of a primitive.
 - A `Clear` pass of one layer that encodes no draw clears Metal's render area rounded up to 32
   pixels a side, where a Mac clears the whole level and slice of a texture it keeps losslessly
   compressed, which no Vulkan query tells. A pass whose attachments differ in size reaches the
@@ -3507,6 +3540,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |
+| `shaderOutputLayer` | `VkPhysicalDeviceVulkan12Features` | a vertex function's `[[render_target_array_index]]`, stored to `Layer` in every pass; every venue's driver reports it (RADV on the 780M, the RX 550 and the RX 7900 XTX, NVIDIA's on the RTX 3090 and RTX 2080, lavapipe, KosmicKrisp on the M3 Max, and the UHD 630's Windows driver, a Vulkan 1.3 device; jobs m3-max-61359 to 61362 and 61366) |
 | `largePoints` | `VkPhysicalDeviceFeatures` | a draw of points at the `[[point_size]]` its vertex function writes, up to the device's `pointSizeRange`; without it a device draws only points of size 1.0; Vulkan 1.4 and Roadmap 2022 require it |
 | `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `sampleRateShading` | `VkPhysicalDeviceFeatures` | a fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, run once per covered sample as Metal runs it; Vulkan 1.4 requires it |

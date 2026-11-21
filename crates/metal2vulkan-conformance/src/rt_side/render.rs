@@ -364,6 +364,7 @@ impl RtSide<'_> {
             descriptor.render_target_width = size[0];
             descriptor.render_target_height = size[1];
         }
+        descriptor.render_target_array_length = pass.array_length;
         for (at, color) in pass.colors.iter().enumerate() {
             let Some(held) = color.texture else { continue };
             plain(&color.place, color.options)?;
@@ -421,9 +422,6 @@ impl RtSide<'_> {
         // writes, and the runtime builds `Disabled` alone.
         if let Some(visibility) = pass.visibility {
             descriptor.visibility_result_buffer = Some(self.held(visibility)?.clone());
-        }
-        if pass.array_length != 0 {
-            return Err(Failure::unavailable("renderTargetArrayLength"));
         }
         if !pass.positions.is_empty() {
             return Err(Failure::unavailable("setSamplePositions:count:"));

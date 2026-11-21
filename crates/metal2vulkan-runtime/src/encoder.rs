@@ -1462,7 +1462,8 @@ impl Parameters {
                 FieldValue::Word(_)
                 | FieldValue::TessellationFactors
                 | FieldValue::AlphaTestReference
-                | FieldValue::FetchedColor(_) => {}
+                | FieldValue::FetchedColor(_)
+                | FieldValue::RenderTargetArrayLength => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

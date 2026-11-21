@@ -443,6 +443,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // takes. Without it the device draws every such point at size 1. Every floor driver reports
     // it.
     feature!(core.shader_tessellation_and_geometry_point_size => ShaderTessellationAndGeometryPointSize),
+    // A vertex function's `[[render_target_array_index]]` in a layered pass: one form, its `Layer`
+    // output (written 0 for an index at or past the pass's length), in every pass. Every venue's
+    // driver reports it.
+    feature!(vulkan12.shader_output_layer => ShaderOutputLayer),
     // A point drawn at the size its vertex function writes, up to the device's `pointSizeRange`:
     // without it a device draws only points of size 1.0. Vulkan 1.4 and Roadmap 2022 require it
     // of every device.

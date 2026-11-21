@@ -188,11 +188,11 @@ struct Moved {
     home: vk::ImageLayout,
 }
 
-/// An image a draw moves to the feedback layout: its attachment's level and layer from the layout
+/// An image a draw moves to the feedback layout: its attachment's level and layers from the layout
 /// the pass renders it in, the rest of it from home.
 struct Move {
     moved: Moved,
-    /// The attachment's level and layer.
+    /// The attachment's level and layers.
     rendered: vk::ImageSubresourceRange,
     from: vk::ImageLayout,
 }
@@ -2076,7 +2076,7 @@ impl RenderCommandEncoder {
                 continue;
             };
             let a = &target.attachment;
-            let reaches = texture.reaches(a.level, a.layer);
+            let reaches = texture.reaches(a.level, a.layer, a.layers);
             let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
                 || (found.moves.iter()).any(|m| m.moved.hazard == hazard);
             if !reaches && !moved {
@@ -2093,6 +2093,12 @@ impl RenderCommandEncoder {
                 }));
             }
             if !texture.looped() {
+                // A shadow holds what one layer of its attachment rendered.
+                if a.layers > 1 {
+                    return Err(Error::Unsupported(Gap::Draw {
+                        kind: DrawKind::AttachmentRead,
+                    }));
+                }
                 // What the slot reads: at the fragment's own pixel, or all its texture reaches.
                 let own = (table == FRAGMENT && draws.own_pixel.binary_search(&slot).is_ok())
                     .then_some(drawn);
@@ -2653,6 +2659,9 @@ fn fill_push(
                     .map_or(0, |target| target.texture.second_resource_id().index);
                 bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
+            FieldValue::RenderTargetArrayLength => {
+                bytes[at..at + 4].copy_from_slice(&pass.layers.to_le_bytes());
+            }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
         }
@@ -2686,7 +2695,7 @@ fn region(area: &Area, aspects: vk::ImageAspectFlags) -> vk::ImageCopy {
     }
 }
 
-/// `whole` but `rendered`, one level and layer of it: at most four ranges.
+/// `whole` but `rendered`, one level and its layers: at most four ranges.
 fn around(
     whole: vk::ImageSubresourceRange,
     rendered: vk::ImageSubresourceRange,
@@ -2712,7 +2721,10 @@ fn around(
         levels(whole.base_mip_level, level),
         levels(level + 1, whole.base_mip_level + whole.level_count),
         layers(whole.base_array_layer, layer),
-        layers(layer + 1, whole.base_array_layer + whole.layer_count),
+        layers(
+            layer + rendered.layer_count,
+            whole.base_array_layer + whole.layer_count,
+        ),
     ]
     .into_iter()
     .flatten()

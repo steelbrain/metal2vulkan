@@ -128,7 +128,8 @@ RUNTIME_FLOOR = {
             "shaderStorageImageArrayNonUniformIndexing", "samplerMirrorClampToEdge",
             "shaderInt8", "storageBuffer8BitAccess", "scalarBlockLayout",
             "uniformBufferStandardLayout", "vulkanMemoryModel", "vulkanMemoryModelDeviceScope",
-            "shaderSubgroupExtendedTypes", "timelineSemaphore", "hostQueryReset")},
+            "shaderSubgroupExtendedTypes", "timelineSemaphore", "hostQueryReset",
+            "shaderOutputLayer")},
         "VkPhysicalDeviceVulkan13Features": {member: True for member in (
             "subgroupSizeControl", "computeFullSubgroups", "robustImageAccess",
             "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",

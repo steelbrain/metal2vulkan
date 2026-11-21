@@ -1767,6 +1767,7 @@ field	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor.store_action	pub
 field	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor.texture	pub texture: Option<Texture>
 field	metal2vulkan-runtime::RenderPassDescriptor.color_attachments	pub color_attachments: [RenderPassColorAttachmentDescriptor; MAX_COLOR_ATTACHMENTS]
 field	metal2vulkan-runtime::RenderPassDescriptor.depth_attachment	pub depth_attachment: RenderPassDepthAttachmentDescriptor
+field	metal2vulkan-runtime::RenderPassDescriptor.render_target_array_length	pub render_target_array_length: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.render_target_height	pub render_target_height: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.render_target_width	pub render_target_width: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.stencil_attachment	pub stencil_attachment: RenderPassStencilAttachmentDescriptor
@@ -9450,6 +9451,7 @@ variant	metal2vulkan-runtime::Refusal::ViewportNotFinite	ViewportNotFinite
 variant	metal2vulkan-runtime::Refusal::WaitOnOwnThread	WaitOnOwnThread
 variant	metal2vulkan-runtime::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-runtime::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
+variant	metal2vulkan-runtime::RenderPassKind::ArrayLength	ArrayLength
 variant	metal2vulkan-runtime::RenderPassKind::ClearDepth	ClearDepth
 variant	metal2vulkan-runtime::RenderPassKind::ClearFormat	ClearFormat
 variant	metal2vulkan-runtime::RenderPassKind::DepthStencilViews	DepthStencilViews

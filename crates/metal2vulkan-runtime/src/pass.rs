@@ -192,7 +192,8 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
-    /// `slice`: the array slice or cube face rendered into.
+    /// `slice`: the array slice or cube face rendered into, the first of a layered pass's
+    /// ([`RenderPassDescriptor::render_target_array_length`]).
     pub slice: u32,
     /// `loadAction`: `DontCare` by default.
     pub load_action: LoadAction,
@@ -211,7 +212,8 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub resolve_texture: Option<Texture>,
     /// `resolveLevel`: the resolve texture's mipmap level resolved into.
     pub resolve_level: u32,
-    /// `resolveSlice`: the resolve texture's array slice or cube face resolved into.
+    /// `resolveSlice`: the resolve texture's array slice or cube face resolved into, the first of a
+    /// layered pass's.
     pub resolve_slice: u32,
     /// `resolveDepthPlane`: a 3D resolve texture's depth plane. A plane but 0 is
     /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`], as a 3D attachment is.
@@ -239,7 +241,8 @@ pub struct RenderPassDepthAttachmentDescriptor {
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
-    /// `slice`: the array slice or cube face rendered into.
+    /// `slice`: the array slice or cube face rendered into, the first of a layered pass's
+    /// ([`RenderPassDescriptor::render_target_array_length`]).
     pub slice: u32,
     /// `loadAction`: `Clear` by default.
     pub load_action: LoadAction,
@@ -294,7 +297,8 @@ pub struct RenderPassStencilAttachmentDescriptor {
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
-    /// `slice`: the array slice or cube face rendered into.
+    /// `slice`: the array slice or cube face rendered into, the first of a layered pass's
+    /// ([`RenderPassDescriptor::render_target_array_length`]).
     pub slice: u32,
     /// `loadAction`: `Clear` by default.
     pub load_action: LoadAction,
@@ -338,8 +342,8 @@ impl Default for RenderPassStencilAttachmentDescriptor {
 /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)).
 ///
 /// Not built, and so not fields: a rasterization rate map, tile sizes, imageblock and threadgroup
-/// memory lengths, sample buffer attachments, layered rendering (`renderTargetArrayLength`) and a
-/// pass with no attachment (`defaultRasterSampleCount`); a pass with no attachment is refused,
+/// memory lengths, sample buffer attachments and a pass with no attachment
+/// (`defaultRasterSampleCount`); a pass with no attachment is refused,
 /// [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`]. `visibilityResultType` is not a field:
 /// it decides only what an enabled visibility result mode writes, and no mode but `Disabled` is
 /// built.
@@ -358,6 +362,17 @@ pub struct RenderPassDescriptor {
     /// `renderTargetHeight`: where nonzero, the height of Metal's render area, cut to the smallest
     /// attachment's, rounded up as the width is for the load, store and resolve.
     pub render_target_height: u32,
+    /// `renderTargetArrayLength`: the layers the pass renders, 0 by default. At 2 or more every
+    /// attachment and every resolve texture renders that many slices from its own `slice` (a
+    /// cube's faces are slices), the pass's load, store and resolve act on each of them, and a
+    /// vertex function's `[[render_target_array_index]]` `i` renders slice `slice + i`, an index at
+    /// or past the length rendering the first; at 0 and 1 the pass renders the attachment's slice
+    /// alone, whatever index the vertex function writes, as Metal's does. A fragment function reads
+    /// the index as the vertex function wrote it. An attachment or resolve texture with fewer
+    /// slices from its own is refused, [`Refusal::AttachmentPlace`] naming the last slice the pass
+    /// would render; a length past the device's `maxFramebufferLayers`, [`Gap::RenderPass`] of
+    /// [`RenderPassKind::ArrayLength`].
+    pub render_target_array_length: u32,
     /// `visibilityResultBuffer`: `None` by default. The command buffer keeps it until it retires,
     /// and the pass leaves its bytes as they were: Metal's pass does so under either
     /// `visibilityResultType` where its encoder enables no mode (an Apple M3 Max, macOS 27.0.1),
@@ -401,7 +416,7 @@ pub(crate) struct ResolveModes {
 }
 
 /// The resolve of an attachment of a checked pass: a view of its resolve texture's level and
-/// slice, and the mode Vulkan resolves by.
+/// the pass's layers from its slice, and the mode Vulkan resolves by.
 pub(crate) struct Resolve {
     pub(crate) texture: Texture,
     pub(crate) attachment: Attachment,
@@ -417,8 +432,8 @@ impl Resolve {
         self.layout != self.attachment.home
     }
 
-    /// The barrier that moves its level and layer, every aspect, from `old` to `new`, after every
-    /// earlier command and before every later one.
+    /// The barrier that moves its level and layers, every aspect, from `old` to `new`, after
+    /// every earlier command and before every later one.
     pub(crate) fn barrier(
         &self,
         old: vk::ImageLayout,
@@ -429,14 +444,14 @@ impl Resolve {
     }
 }
 
-/// The level and layer of `a`, every aspect.
+/// The level and layers of `a`, every aspect.
 fn range(a: &Attachment) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
         aspect_mask: a.aspects,
         base_mip_level: a.level,
         level_count: 1,
         base_array_layer: a.layer,
-        layer_count: 1,
+        layer_count: a.layers,
     }
 }
 
@@ -495,8 +510,8 @@ impl Target {
         }
     }
 
-    /// The barrier that moves its level and layer, every aspect, from `old` to `new`, after every
-    /// earlier command and before every later one.
+    /// The barrier that moves its level and layers, every aspect, from `old` to `new`, after
+    /// every earlier command and before every later one.
     pub(crate) fn barrier(
         &self,
         old: vk::ImageLayout,
@@ -506,7 +521,7 @@ impl Target {
         layout_barrier(a.image, self.range(), old, new)
     }
 
-    /// Its level and layer, every aspect.
+    /// Its level and layers, every aspect.
     pub(crate) fn range(&self) -> vk::ImageSubresourceRange {
         range(&self.attachment)
     }
@@ -555,6 +570,11 @@ pub(crate) struct Pass {
     pub(crate) reach: [u32; 2],
     /// Every attachment's samples, one bit: the pass refuses attachments of two counts.
     pub(crate) samples: vk::SampleCountFlags,
+    /// The layers every attachment and resolve renders from its own slice:
+    /// `renderTargetArrayLength`, at least 1. The rendering's `layerCount`, and the length each
+    /// draw pushes to a vertex function that writes `[[render_target_array_index]]`
+    /// (`PushField::RenderTargetArrayLength`), which stores `Layer` 0 for an index at or past it.
+    pub(crate) layers: u32,
     /// Whether any attachment resolves: a pass that resolves nothing walks no resolve as its
     /// encoder begins and ends ([`Pass::resolves`]).
     pub(crate) resolving: bool,
@@ -618,7 +638,7 @@ impl Pass {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D { width, height },
             })
-            .layer_count(1)
+            .layer_count(self.layers)
             .color_attachments(&colors);
         if let Some(depth) = &depth {
             info = info.depth_attachment(depth);
@@ -627,9 +647,10 @@ impl Pass {
             info = info.stencil_attachment(stencil);
         }
         // SAFETY: as the caller states; the render area (`reach`) lies inside every attachment,
-        // and every draw's scissor inside Metal's area, which lies inside it; each attachment is a
-        // view of one level and layer of its image, and a depth and a stencil attachment both set
-        // are one view.
+        // and every draw's scissor inside Metal's area, which lies inside it; each attachment and
+        // resolve is a view of one level and the pass's layers of its image, at most the device's
+        // `maxFramebufferLayers` (`Pass::check`), and a depth and a stencil attachment both set are
+        // one view.
         unsafe { device.cmd_begin_rendering(command, &info) };
     }
 
@@ -642,6 +663,11 @@ impl Pass {
     /// attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
         let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
+        // Metal's 0 and 1 both render the attachment's slice alone.
+        let layers = d.render_target_array_length.max(1);
+        if layers > core.limits.max_framebuffer_layers {
+            return Err(gap(RenderPassKind::ArrayLength));
+        }
         let mine = |texture: &Texture| match texture.is_of(core) {
             true => Ok(()),
             false => Err(Error::Refused(Refusal::OtherDevice)),
@@ -664,7 +690,7 @@ impl Pass {
                     pixel_format: pf,
                 }));
             }
-            let attachment = texture.attachment(c.level, c.slice)?;
+            let attachment = texture.attachment(c.level, c.slice, layers)?;
             let resolve = match (
                 resolving(c.store_action, c.resolve_texture.is_some())?,
                 &c.resolve_texture,
@@ -728,7 +754,7 @@ impl Pass {
                         pixel_format: pf,
                     }));
                 }
-                let attachment = texture.attachment(z.level, z.slice)?;
+                let attachment = texture.attachment(z.level, z.slice, layers)?;
                 let resolve = match (
                     resolving(z.store_action, z.resolve_texture.is_some())?,
                     &z.resolve_texture,
@@ -790,7 +816,7 @@ impl Pass {
                         pixel_format: pf,
                     }));
                 }
-                let attachment = texture.attachment(s.level, s.slice)?;
+                let attachment = texture.attachment(s.level, s.slice, layers)?;
                 let resolve = match (
                     resolving(s.store_action, s.resolve_texture.is_some())?,
                     &s.resolve_texture,
@@ -863,6 +889,7 @@ impl Pass {
             area: [u32::MAX; 2],
             reach: [u32::MAX; 2],
             samples: vk::SampleCountFlags::empty(),
+            layers,
             resolving: any_resolve,
         };
         let colors = pass.colors.iter().flatten();
@@ -991,7 +1018,7 @@ struct ResolveInto<'a> {
 }
 
 /// The resolve of `texture`'s attachment `attachment` into `into` by `mode`: a view of the
-/// resolve texture's level and slice, as an attachment's.
+/// resolve texture's level and the attachment's layers from its slice, as an attachment's.
 ///
 /// Err: [`Refusal::OtherDevice`] for another device's resolve texture; [`Gap::RenderPass`] of
 /// [`RenderPassKind::Resolve`] for an attachment of one sample, and for a resolve texture of
@@ -1018,7 +1045,7 @@ fn resolve(
     {
         return gap(RenderPassKind::Resolve);
     }
-    let view = into.texture.resolve_attachment(into.level, into.slice)?;
+    let view = (into.texture).resolve_attachment(into.level, into.slice, attachment.layers)?;
     if into.depth_plane != 0 {
         return gap(RenderPassKind::TextureType);
     }

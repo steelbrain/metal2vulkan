@@ -1170,7 +1170,8 @@
           "vulkanMemoryModelDeviceScope": true,
           "shaderSubgroupExtendedTypes": true,
           "timelineSemaphore": true,
-          "hostQueryReset": true
+          "hostQueryReset": true,
+          "shaderOutputLayer": true
         },
         "VkPhysicalDeviceVulkan13Features": {
           "subgroupSizeControl": true,

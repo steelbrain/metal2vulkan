@@ -30,19 +30,19 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 592 |
+| implemented Metal items | 593 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 591 |
-| of the reachable, exercised by the suite's Metal leg | 518 |
+| so reachable by some case | 592 |
+| of the reachable, exercised by the suite's Metal leg | 519 |
 | of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
 | of those exercised, no case reaching it loosens anything | 302 |
-| of those exercised, a case reaching it loosens some site | 216 |
+| of those exercised, a case reaching it loosens some site | 217 |
 | case modules | 179 |
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7689 |
+| ledger rows (a case whose gap is recorded) | 7688 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -418,7 +418,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRenderPassColorAttachmentDescriptor` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassColorAttachmentDescriptorArray` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassDepthAttachmentDescriptor` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
-| `MTLRenderPassDescriptor` | 8 | 0 | 8 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderPassDescriptor` | 9 | 0 | 9 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassStencilAttachmentDescriptor` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPipelineColorAttachmentDescriptor` | 10 | 0 | 10 | 0 | `alpha_coverage_pairs`, `binary_archives`, `blend_interactions`, `blend_sweeps`… |
 | `MTLRenderPipelineDescriptor` | 33 | 0 | 33 | 0 | `alpha_coverage_pairs`, `binary_archives`, `blend_interactions`, `blend_sweeps`… |
@@ -465,7 +465,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLEvent.h` | 6 | 5 | 1 |
 | `MTLFence.h` | 1 | 0 | 1 |
 | `MTLPipeline.h` | 5 | 4 | 1 |
-| `MTLRenderPass.h` | 30 | 29 | 1 |
+| `MTLRenderPass.h` | 31 | 30 | 1 |
 | `MTLTexture.h` | 39 | 38 | 1 |
 | `MTLAllocation.h` | 1 | 1 | 0 |
 | `MTLBlitCommandEncoder.h` | 12 | 12 | 0 |
@@ -527,7 +527,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 
 | family | cases | Metal ran | compared | items reached |
 |---|---|---|---|---|
-| `alpha_coverage_pairs` | 17 | 17 | 1 tolerance(s): `Degradation` | 113 |
+| `alpha_coverage_pairs` | 17 | 17 | 1 tolerance(s): `Degradation` | 114 |
 | `argument_encoder_crossings` | 4 | 4 | every field | 41 |
 | `argument_encoders` | 5 | 5 | every field | 57 |
 | `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 41 |
@@ -535,20 +535,20 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `attribute_strides` | 4 | 4 | every field | 46 |
 | `bicubic_texel_classes` | 1 | 1 | every field | 31 |
 | `binary_archives` | 6 | 6 | every field | 27 |
-| `blend_interactions` | 4 | 4 | every field | 117 |
-| `blend_sweeps` | 12 | 12 | every field | 117 |
+| `blend_interactions` | 4 | 4 | every field | 118 |
+| `blend_sweeps` | 12 | 12 | every field | 118 |
 | `blit_encoder_commands` | 11 | 11 | every field | 48 |
-| `blit_indirect_commands` | 3 | 3 | every field | 83 |
+| `blit_indirect_commands` | 3 | 3 | every field | 84 |
 | `border_swizzles` | 8 | 8 | every field | 58 |
 | `buffer_bind_off_alignment` | 1 | 1 | every field | 22 |
 | `buffer_blits` | 4 | 4 | every field | 21 |
 | `buffer_depth_samples` | 5 | 5 | every field | 59 |
 | `buffer_tails` | 2 | 2 | every field | 50 |
-| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 58 |
+| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 59 |
 | `buffer_texture_blits` | 2 | 2 | every field | 38 |
 | `buffer_textures` | 3 | 2 | every field | 44 |
 | `chroma_pairs` | 6 | 6 | every field | 66 |
-| `color_write_masks` | 5 | 5 | every field | 114 |
+| `color_write_masks` | 5 | 5 | every field | 115 |
 | `command_buffer_facts` | 1 | 1 | every field | 23 |
 | `command_queues` | 1 | 1 | every field | 5 |
 | `compressed_blits` | 4 | 4 | every field | 40 |
@@ -558,38 +558,38 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `compute_encoder_commands` | 8 | 8 | every field | 62 |
 | `compute_heap_residency` | 1 | 1 | every field | 42 |
 | `compute_pipeline_descriptors` | 3 | 3 | 1 tolerance(s): `AcceptedDifference` | 22 |
-| `compute_render_chains` | 3 | 3 | every field | 141 |
+| `compute_render_chains` | 3 | 3 | every field | 142 |
 | `compute_threadgroups` | 2 | 1 | every field | 27 |
 | `copy_out_strides` | 1 | 1 | every field | 38 |
 | `denormal_word_fetches` | 1 | 1 | every field | 41 |
-| `depth_resolve_pairs` | 2 | 2 | every field | 131 |
-| `depth_stencil_space` | 8 | 8 | every field | 134 |
+| `depth_resolve_pairs` | 2 | 2 | every field | 132 |
+| `depth_stencil_space` | 8 | 8 | every field | 135 |
 | `depth_texel_reads` | 1 | 1 | every field | 48 |
 | `device_queries` | 5 | 5 | every field | 3 |
-| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 135 |
-| `draw_state_changes` | 1 | 1 | every field | 137 |
+| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 136 |
+| `draw_state_changes` | 1 | 1 | every field | 138 |
 | `dynamic_libraries` | 3 | 3 | every field | 6 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
 | `etc_textures` | 10 | 10 | every field | 41 |
 | `event_orders` | 5 | 5 | 4 tolerance(s): `AcceptedDifference` | 27 |
-| `extended_range_blends` | 18 | 18 | every field | 124 |
-| `extended_range_gamut` | 39 | 39 | every field | 115 |
-| `extended_range_gradients` | 8 | 8 | every field | 116 |
+| `extended_range_blends` | 18 | 18 | every field | 125 |
+| `extended_range_gamut` | 39 | 39 | every field | 116 |
+| `extended_range_gradients` | 8 | 8 | every field | 117 |
 | `extended_range_planes` | 4 | 4 | every field | 28 |
-| `extended_range_targets` | 22 | 22 | every field | 121 |
+| `extended_range_targets` | 22 | 22 | every field | 122 |
 | `extended_range_two_planes` | 2 | 2 | every field | 32 |
 | `extended_swizzles` | 15 | 15 | every field | 58 |
 | `fence_orders` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 27 |
-| `fetch_ordered` | 6 | 6 | every field | 116 |
+| `fetch_ordered` | 6 | 6 | every field | 117 |
 | `format_copies` | 16 | 16 | every field | 39 |
 | `format_footprints` | 6 | 6 | 1 tolerance(s): `AcceptedDifference` | 19 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
-| `frame_chains` | 1 | 1 | every field | 138 |
+| `frame_chains` | 1 | 1 | every field | 139 |
 | `fresh_contents` | 87 | 87 | every field | 41 |
 | `function_bindings` | 15 | 15 | every field | 64 |
 | `function_constants_half3` | 1 | 1 | every field | 27 |
 | `function_facts` | 15 | 15 | every field | 32 |
-| `half_output_blends` | 6 | 6 | every field | 117 |
+| `half_output_blends` | 6 | 6 | every field | 118 |
 | `half_read_nans` | 6 | 6 | every field | 48 |
 | `half_storage_writes` | 9 | 9 | every field | 32 |
 | `half_texel_nans` | 8 | 8 | every field | 31 |
@@ -598,12 +598,12 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `heap_facts` | 5 | 5 | every field | 5 |
 | `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `AcceptedDifference` | 14 |
 | `host_detach` | 1 | 1 | every field | 18 |
-| `host_page_writes` | 4 | 4 | every field | 123 |
-| `indirect_command_depth` | 6 | 6 | every field | 147 |
-| `indirect_commands` | 9 | 9 | every field | 149 |
+| `host_page_writes` | 4 | 4 | every field | 124 |
+| `indirect_command_depth` | 6 | 6 | every field | 148 |
+| `indirect_commands` | 9 | 9 | every field | 150 |
 | `indirect_private_types` | 1 | 0 | every field | 0 |
-| `int_attributes` | 1 | 1 | every field | 102 |
-| `layered_targets` | 5 | 5 | every field | 131 |
+| `int_attributes` | 1 | 1 | every field | 103 |
+| `layered_targets` | 5 | 5 | every field | 132 |
 | `level_sizes` | 2 | 2 | every field | 41 |
 | `library_facts` | 9 | 9 | every field | 38 |
 | `math_routines` | 2 | 2 | every field | 25 |
@@ -616,13 +616,13 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `nan_integer_conversions` | 1 | 1 | 1 tolerance(s): `AcceptedDifference` | 56 |
 | `nearest_positions` | 1 | 1 | every field | 48 |
 | `norm_storage_writes` | 7 | 7 | every field | 43 |
-| `padded_blends` | 17 | 17 | every field | 116 |
-| `padded_fetch` | 11 | 11 | every field | 116 |
-| `pass_attachment_pairs` | 2 | 2 | every field | 116 |
-| `pass_bound_pairs` | 1 | 1 | every field | 117 |
+| `padded_blends` | 17 | 17 | every field | 117 |
+| `padded_fetch` | 11 | 11 | every field | 117 |
+| `pass_attachment_pairs` | 2 | 2 | every field | 117 |
+| `pass_bound_pairs` | 1 | 1 | every field | 118 |
 | `pass_bytes` | 4 | 4 | every field | 25 |
-| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 132 |
-| `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 122 |
+| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 133 |
+| `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 123 |
 | `pipeline_descriptors` | 3 | 3 | every field | 75 |
 | `pipeline_facts` | 9 | 9 | every field | 67 |
 | `pipeline_functions` | 8 | 8 | every field | 5 |
@@ -632,7 +632,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `pipeline_options` | 21 | 21 | every field | 76 |
 | `pixel_downscales` | 7 | 7 | every field | 51 |
 | `pixel_samplers` | 20 | 20 | every field | 51 |
-| `primitive_type_crossings` | 1 | 1 | every field | 115 |
+| `primitive_type_crossings` | 1 | 1 | every field | 116 |
 | `pvrtc_cpu_order` | 6 | 6 | every field | 39 |
 | `pvrtc_rows` | 8 | 8 | every field | 39 |
 | `rate_map_degenerate_forms` | 3 | 3 | every field | 19 |
@@ -640,69 +640,69 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `rate_maps` | 2 | 2 | every field | 14 |
 | `read_through` | 13 | 13 | every field | 61 |
 | `read_write_tiers` | 6 | 6 | every field | 46 |
-| `render_chains` | 3 | 3 | every field | 135 |
-| `render_depth_stencil_state` | 3 | 3 | every field | 135 |
-| `render_draw_forms` | 4 | 4 | every field | 120 |
-| `render_pass_descriptors` | 12 | 12 | every field | 29 |
-| `render_residency` | 2 | 2 | every field | 121 |
-| `render_state` | 3 | 3 | every field | 155 |
-| `resolve_then_load` | 1 | 1 | every field | 123 |
+| `render_chains` | 3 | 3 | every field | 136 |
+| `render_depth_stencil_state` | 3 | 3 | every field | 136 |
+| `render_draw_forms` | 4 | 4 | every field | 121 |
+| `render_pass_descriptors` | 12 | 12 | every field | 30 |
+| `render_residency` | 2 | 2 | every field | 122 |
+| `render_state` | 3 | 3 | every field | 156 |
+| `resolve_then_load` | 1 | 1 | every field | 124 |
 | `resource_facts` | 4 | 4 | every field | 23 |
 | `rgb10a2_srgb` | 8 | 8 | every field | 76 |
-| `rotated_planes` | 20 | 20 | every field | 114 |
-| `rotated_targets` | 14 | 14 | every field | 117 |
+| `rotated_planes` | 20 | 20 | every field | 115 |
+| `rotated_targets` | 14 | 14 | every field | 118 |
 | `sample_fills` | 17 | 0 | every field | 0 |
-| `sample_positions` | 19 | 16 | every field | 115 |
+| `sample_positions` | 19 | 16 | every field | 116 |
 | `sampler_crossings` | 8 | 8 | every field | 59 |
 | `sampler_filtering` | 15 | 15 | every field | 59 |
 | `scheduled_handlers` | 1 | 1 | every field | 16 |
-| `shader_stencil` | 2 | 2 | every field | 131 |
+| `shader_stencil` | 2 | 2 | every field | 132 |
 | `shared_creator_formats` | 2 | 2 | every field | 23 |
 | `shared_events` | 2 | 2 | every field | 13 |
 | `shared_exponent_storage` | 5 | 5 | every field | 42 |
 | `simdgroup_lockstep` | 2 | 2 | every field | 25 |
-| `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 114 |
+| `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 115 |
 | `sparse_heaps` | 6 | 6 | every field | 15 |
 | `sparse_mappings` | 14 | 14 | every field | 32 |
 | `sparse_tiles` | 4 | 4 | every field | 1 |
-| `srgb_fetch` | 2 | 2 | every field | 130 |
+| `srgb_fetch` | 2 | 2 | every field | 131 |
 | `stage_in_regions` | 1 | 1 | every field | 48 |
 | `stage_in_unread` | 1 | 1 | every field | 48 |
-| `stencil_resolve_pairs` | 2 | 2 | every field | 132 |
-| `stencil_resolved_sample` | 1 | 1 | every field | 132 |
+| `stencil_resolve_pairs` | 2 | 2 | every field | 133 |
+| `stencil_resolved_sample` | 1 | 1 | every field | 133 |
 | `surface_fills` | 1 | 0 | every field | 0 |
 | `surface_textures` | 10 | 10 | every field | 29 |
 | `swizzled_storage` | 6 | 6 | every field | 43 |
-| `tessellation_crossings` | 6 | 6 | every field | 102 |
-| `tessellation_rendered` | 1 | 1 | every field | 118 |
-| `tessellation_sweeps` | 7 | 7 | every field | 103 |
+| `tessellation_crossings` | 6 | 6 | every field | 103 |
+| `tessellation_rendered` | 1 | 1 | every field | 119 |
+| `tessellation_sweeps` | 7 | 7 | every field | 104 |
 | `texel_swizzles` | 6 | 6 | every field | 41 |
 | `texture_accesses` | 1 | 1 | every field | 20 |
 | `texture_buffer_fills` | 3 | 0 | every field | 0 |
 | `texture_buffer_tails` | 1 | 1 | every field | 49 |
 | `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `AcceptedDifference` | 27 |
 | `texture_fills` | 54 | 2 | every field | 42 |
-| `texture_view_casts` | 5 | 5 | every field | 77 |
+| `texture_view_casts` | 5 | 5 | every field | 78 |
 | `texture_views` | 4 | 4 | every field | 37 |
 | `textures` | 76 | 76 | every field | 10 |
 | `threadgroup_start` | 1 | 1 | every field | 24 |
 | `tile_pipeline_descriptors` | 3 | 3 | every field | 31 |
 | `tile_pipeline_reflection` | 1 | 1 | every field | 77 |
 | `tile_threadgroups` | 8 | 8 | every field | 49 |
-| `topology_classes` | 2 | 2 | every field | 113 |
+| `topology_classes` | 2 | 2 | every field | 114 |
 | `two_plane_copies` | 3 | 1 | every field | 42 |
 | `two_plane_heap_blits` | 1 | 1 | every field | 40 |
 | `two_plane_samples` | 16 | 16 | every field | 48 |
 | `vector_word_phases` | 4 | 4 | every field | 23 |
-| `vertex_attribute_strides` | 2 | 2 | every field | 102 |
-| `vertex_constant_step` | 1 | 1 | every field | 103 |
-| `vertex_fetch_reach` | 1 | 1 | every field | 103 |
-| `vertex_formats` | 4 | 4 | every field | 102 |
-| `vertex_step_rate` | 1 | 1 | every field | 102 |
-| `visibility` | 16 | 16 | every field | 127 |
+| `vertex_attribute_strides` | 2 | 2 | every field | 103 |
+| `vertex_constant_step` | 1 | 1 | every field | 104 |
+| `vertex_fetch_reach` | 1 | 1 | every field | 104 |
+| `vertex_formats` | 4 | 4 | every field | 103 |
+| `vertex_step_rate` | 1 | 1 | every field | 103 |
+| `visibility` | 16 | 16 | every field | 128 |
 | `visible_tables` | 18 | 18 | every field | 38 |
-| `wide_int_attributes` | 2 | 2 | every field | 102 |
-| `wide_points` | 1 | 1 | every field | 116 |
+| `wide_int_attributes` | 2 | 2 | every field | 103 |
+| `wide_points` | 1 | 1 | every field | 117 |
 | `ycbcr_gathers` | 4 | 4 | every field | 50 |
 | `ycbcr_minify` | 2 | 2 | every field | 50 |
 | `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 39 |
@@ -1336,6 +1336,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `depthAttachment` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 381 |
 | `stencilAttachment` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 381 |
 | `visibilityResultBuffer` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 376 |
+| `renderTargetArrayLength` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 376 |
 | `renderTargetWidth` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 376 |
 | `renderTargetHeight` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 376 |
 
@@ -1921,7 +1922,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRenderPassDescriptor` `getSamplePositions:count:` | missing | programmable sample positions | `render_pass_descriptors` |
 | `MTLRenderPassDescriptor` `imageblockSampleLength` | missing | a pass's imageblock memory, which tile functions use | `render_pass_descriptors` |
 | `MTLRenderPassDescriptor` `rasterizationRateMap` | missing | rasterization rate maps | `render_pass_descriptors` |
-| `MTLRenderPassDescriptor` `renderTargetArrayLength` | missing | layered rendering | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassDescriptor` `setSamplePositions:count:` | missing | programmable sample positions | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassDescriptor` `threadgroupMemoryLength` | missing | a pass's threadgroup memory, which tile functions use | `render_pass_descriptors` |
 | `MTLRenderPassDescriptor` `tileHeight` | missing | tile render pipelines; metal2vulkan-runtime makes none | `render_pass_descriptors`, `tile_threadgroups` |
@@ -3244,7 +3244,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): a shared-exponent (`RGB9E5Float`) texel's channel below half's normal range through a `half` `read()` of a read-access texture… |
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): a shared-exponent (`RGB9E5Float`) texel's channel below half's normal range through a `half` `read()` of a sample-access textu… |
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): the shader's `float` widening of the `half` this case read, a shared-exponent texel's channel below half's normal range. Metal… |
-| `layered-render-target-array-length` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `level-sizes-storage` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |

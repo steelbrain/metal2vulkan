@@ -41,6 +41,7 @@ mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
 mod large;
+mod layered;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod layouts;
 mod linear_planes;

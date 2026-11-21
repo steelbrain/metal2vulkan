@@ -497,6 +497,14 @@ fn draws(
             // names (`FieldValue::FetchedColor`); one read through an input attachment or a storage
             // image is a descriptor, which the translator refuses under the identity domains.
             RuntimeFact::FramebufferFetch { .. } => {}
+            // A vertex function's `[[render_target_array_index]]`, in its one form: the variant
+            // that writes `Layer`, which reads the pass's length from its push field
+            // (`FieldValue::RenderTargetArrayLength`). The variant that writes none renders every
+            // index into the pass's first layer, so a draw of it in a layered pass is not
+            // supplied.
+            RuntimeFact::RenderTargetArrayLength {
+                layer_dropped: false,
+            } => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does
             // not supply.
             _ => return Err(draw_input()),
@@ -640,6 +648,10 @@ fn draws(
                 PushField::FetchedColor { color, .. } if at == FRAGMENT => {
                     fetched.push(color);
                     FieldValue::FetchedColor(color)
+                }
+                // The pass's length, below which the vertex function's index selects its layer.
+                PushField::RenderTargetArrayLength if at == VERTEX => {
+                    FieldValue::RenderTargetArrayLength
                 }
                 _ => return Err(draw_input()),
             };

@@ -1718,7 +1718,7 @@ MTLRenderPass.h	MTLRenderPassDescriptor	property	colorAttachments		I	runtime	Ren
 MTLRenderPass.h	MTLRenderPassDescriptor	property	depthAttachment		I	runtime	RenderPassDescriptor.depth_attachment			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	stencilAttachment		I	runtime	RenderPassDescriptor.stencil_attachment			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultBuffer		I	runtime	RenderPassDescriptor.visibility_result_buffer			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetArrayLength		M			layered rendering	M	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetArrayLength		I	runtime	RenderPassDescriptor.render_target_array_length			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	imageblockSampleLength		M			a pass's imageblock memory, which tile functions use	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	threadgroupMemoryLength		M			a pass's threadgroup memory, which tile functions use	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	tileWidth		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile

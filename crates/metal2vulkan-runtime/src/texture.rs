@@ -283,17 +283,21 @@ impl ShadowView {
 struct AttachmentView {
     level: u32,
     layer: u32,
+    layers: u32,
     view: vk::ImageView,
 }
 
-/// A level and slice of a texture as a render pass attachment ([`Texture::attachment`]).
+/// A level and slices of a texture as a render pass attachment ([`Texture::attachment`]).
 pub(crate) struct Attachment {
-    /// The image view of the level and layer, every aspect, with the identity swizzle.
+    /// The image view of the level and layers, every aspect, with the identity swizzle.
     pub(crate) view: vk::ImageView,
     pub(crate) image: vk::Image,
-    /// The level and layer in the image.
+    /// The level and first layer in the image.
     pub(crate) level: u32,
     pub(crate) layer: u32,
+    /// The layers the view holds from `layer`: its pass's length (`renderTargetArrayLength`), at
+    /// least 1.
+    pub(crate) layers: u32,
     /// Every aspect of the image's format.
     pub(crate) aspects: vk::ImageAspectFlags,
     /// The image's home layout.
@@ -4208,13 +4212,14 @@ pub(crate) trait TextureObject {
         self.object().image.image
     }
 
-    /// Whether it reaches `level` and `layer` of its image: a view reaches its own levels and
-    /// slices alone.
-    fn reaches(&self, level: u32, layer: u32) -> bool {
+    /// Whether it reaches `level` and one of the `layers` layers from `layer` of its image: a view
+    /// reaches its own levels and slices alone.
+    fn reaches(&self, level: u32, layer: u32, layers: u32) -> bool {
         let d = &self.object().descriptor;
         let [first_level, first_layer] = TextureInner::base(self.object());
         (first_level..first_level + d.mipmap_level_count).contains(&level)
-            && (first_layer..first_layer + slices(d)).contains(&layer)
+            && layer < first_layer + slices(d)
+            && first_layer < layer + layers
     }
 
     /// Whether a draw may read an attachment of its own pass through it ([`Image`]'s
@@ -4360,25 +4365,28 @@ pub(crate) trait TextureObject {
         self.object().emulation
     }
 
-    /// `level` and `slice` of the texture as a render pass attachment: the image view of that
-    /// one level and layer of its image, every aspect, with the identity swizzle, made at the
-    /// first pass that renders into it and kept with the texture.
+    /// `level` and the `layers` slices from `slice` of the texture as a render pass attachment:
+    /// the image view of that one level and those layers of its image (a 2D view of one layer, a
+    /// 2D array view of more), every aspect, with the identity swizzle, made at the first pass
+    /// that renders into it and kept with the texture.
     ///
     /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
     /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D
-    /// array, a cube, a cube array or a 2D multisample texture or array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
-    /// [`Error::Vulkan`] where the view cannot be made.
-    fn attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+    /// array, a cube, a cube array or a 2D multisample texture or array;
+    /// [`Refusal::AttachmentPlace`] for a level or slice past the texture's, the last of the
+    /// `layers` slices included; [`Error::Vulkan`] where the view cannot be made.
+    fn attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
         let d = &self.object().descriptor;
         if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
             return Err(Error::Refused(Refusal::AttachmentUsage {
                 pixel_format: d.pixel_format,
             }));
         }
-        self.attachment_view(level, slice)
+        self.attachment_view(level, slice, layers)
     }
 
-    /// `level` and `slice` of the texture as a pass's resolve attachment, as [`attachment`]
+    /// `level` and the `layers` slices from `slice` of the texture as a pass's resolve
+    /// attachment, as [`attachment`]
     /// views them, of any usage, as Metal resolves into a texture of any usage: where its image
     /// has an attachment usage, which `RenderTarget` usage gives it and a one-sample colour
     /// texture takes where its format renders (`Plan::resolves`).
@@ -4390,7 +4398,7 @@ pub(crate) trait TextureObject {
     /// for the rest.
     ///
     /// [`attachment`]: TextureObject::attachment
-    fn resolve_attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+    fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
         let renders =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
         if !self.object().image.usage.intersects(renders) {
@@ -4398,16 +4406,17 @@ pub(crate) trait TextureObject {
                 kind: RenderPassKind::ResolveUsage,
             }));
         }
-        self.attachment_view(level, slice)
+        self.attachment_view(level, slice, layers)
     }
 
-    /// `level` and `slice` of the texture as a render pass attachment, as [`attachment`] views
-    /// them, whatever its usage: the caller checked that its image has the attachment usage.
+    /// `level` and the `layers` slices from `slice` of the texture as a render pass attachment,
+    /// as [`attachment`] views them, whatever its usage: the caller checked that its image has
+    /// the attachment usage.
     ///
     /// Err: as [`attachment`] but [`Refusal::AttachmentUsage`].
     ///
     /// [`attachment`]: TextureObject::attachment
-    fn attachment_view(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+    fn attachment_view(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
         let d = &self.object().descriptor;
         let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
         match d.texture_type {
@@ -4421,6 +4430,12 @@ pub(crate) trait TextureObject {
         }
         if level >= d.mipmap_level_count || slice >= slices(d) {
             return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
+        }
+        if slices(d) - slice < layers {
+            return Err(Error::Refused(Refusal::AttachmentPlace {
+                level,
+                slice: slice + layers - 1,
+            }));
         }
         let [first_level, first_layer] = TextureInner::base(self.object());
         let (level_in_image, layer) = (first_level + level, first_layer + slice);
@@ -4441,7 +4456,7 @@ pub(crate) trait TextureObject {
         };
         let mut views = lock(&self.object().attachments);
         let kept = (views.iter())
-            .find(|a| a.level == level_in_image && a.layer == layer)
+            .find(|a| a.level == level_in_image && a.layer == layer && a.layers == layers)
             .map(|a| a.view);
         let view = match kept {
             Some(view) => view,
@@ -4452,16 +4467,20 @@ pub(crate) trait TextureObject {
                     base_mip_level: level_in_image,
                     level_count: 1,
                     base_array_layer: layer,
-                    layer_count: 1,
+                    layer_count: layers,
                 };
-                // SAFETY: the image is bound, of the texture's format, holds the level and layer
+                let kind = match layers {
+                    1 => vk::ImageViewType::TYPE_2D,
+                    _ => vk::ImageViewType::TYPE_2D_ARRAY,
+                };
+                // SAFETY: the image is bound, of the texture's format, holds the level and layers
                 // (the texture's own, which lie in its image), and has the attachment usage its
                 // render target usage or its resolves gave it (the caller's check).
                 let view = unsafe {
                     image_view(
                         &core.device,
                         image.image,
-                        vk::ImageViewType::TYPE_2D,
+                        kind,
                         self.object().format,
                         vk::ComponentMapping::default(),
                         range,
@@ -4472,6 +4491,7 @@ pub(crate) trait TextureObject {
                 views.push(AttachmentView {
                     level: level_in_image,
                     layer,
+                    layers,
                     view,
                 });
                 view
@@ -4482,6 +4502,7 @@ pub(crate) trait TextureObject {
             image: image.image,
             level: level_in_image,
             layer,
+            layers,
             aspects: image.aspects,
             home: image.home,
             extent: [(d.width >> level).max(1), (d.height >> level).max(1)],

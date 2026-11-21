@@ -677,6 +677,7 @@ impl Device {
             max_shared_memory: limits.max_compute_shared_memory_size,
             max_viewport: limits.max_viewport_dimensions,
             viewport_bounds: limits.viewport_bounds_range,
+            max_framebuffer_layers: limits.max_framebuffer_layers,
         };
         let max_block_len = vulkan11
             .max_memory_allocation_size
@@ -1396,6 +1397,8 @@ pub(crate) struct EncoderLimits {
     pub(crate) max_viewport: [u32; 2],
     /// `viewportBoundsRange`.
     pub(crate) viewport_bounds: [f32; 2],
+    /// `maxFramebufferLayers`: the most layers a render pass renders (`renderTargetArrayLength`).
+    pub(crate) max_framebuffer_layers: u32,
 }
 
 impl Core {
