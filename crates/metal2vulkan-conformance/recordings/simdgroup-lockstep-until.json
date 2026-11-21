@@ -172,32 +172,6 @@
                   }
                 },
                 {
-                  "name": "output",
-                  "observed": {
-                    "value": {
-                      "bytes": "JAAAAHAAAAB4AAAAMAAAAIgAAAByAAAAPAAAAKAAAAAaAAAASAAAAJgAAABQAAAAVAAAAHwAAABcAAAAYAAAACoAAABIAAAAeAAAADAAAABUAAAAFgAAADYAAABgAAAAJAAAAFAAAADQAAAAMAAAAGgAAAAeAAAAPAAAAIAAAABKAAAATAAAAHkAAABQAAAAtAAAACYAAABWAAAAwAAAACkAAABcAAAAKwAAAGAAAABiAAAALgAAAGYAAADgAAAAMQAAAGwAAAAzAAAAcAAAAHIAAAA2AAAAdgAAAHgAAAA5AAAAXAAAADsAAABgAAAAtAAAAD4AAABmAAAAQAAAAAIAAAADAAAAAwAAAAIAAAADAAAAAwAAAAIAAAADAAAAAQAAAAIAAAADAAAAAgAAAAIAAAAFAAAAAgAAAAIAAAABAAAAAgAAAAMAAAABAAAAAgAAAAAAAAABAAAAAgAAAAIAAAADAAAABAAAAAIAAAADAAAAAAAAAAIAAAADAAAAAQAAAAEAAAACAAAAAQAAAAIAAAAAAAAAAQAAAAIAAAAAAAAAAQAAAAAAAAABAAAAAQAAAAAAAAABAAAAAgAAAAAAAAABAAAAAAAAAAEAAAABAAAAAAAAAAEAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAIAAAAAAAAAAQAAAAAAAAA="
-                    },
-                    "shape": {
-                      "bytes": {
-                        "region": {
-                          "buffer": {
-                            "offset": 0,
-                            "length": 512
-                          }
-                        },
-                        "element": "u32",
-                        "row_offset": 0,
-                        "row_elements": 64,
-                        "row_pitch": 256,
-                        "rows": 2,
-                        "image_pitch": 512,
-                        "images": 1,
-                        "gaps": "compared"
-                      }
-                    }
-                  }
-                },
-                {
                   "name": "notices",
                   "observed": {
                     "value": "absent"

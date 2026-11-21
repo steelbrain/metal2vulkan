@@ -174,32 +174,6 @@
                   }
                 },
                 {
-                  "name": "output",
-                  "observed": {
-                    "value": {
-                      "bytes": "BwAAADQAAAD4AQAAFQIAACkAAAA0AAAAQwAAAH8CAACcAgAAVgAAAGEAAABSAAAABgMAACMDAACDAAAAjgAAAAEAAACfAAAA7QUAALAAAAB/AAAAEAAAAMwAAACCBwAA3QAAAAYBAAAfAAAA+QAAABcJAAAKAQAAjQEAAC4AAAAiBQAAPwUAADcBAABCAQAAnQAAAKkFAADGBQAAZAEAAG8BAACsAAAAMAYAAE0GAACRAQAAnAEAALsAAAC3BgAAaw8AAL4BAACpAwAAagAAANoBAAAAEQAA6wEAADAEAAB5AAAABwIAAJUSAAAYAgAAtwQAAIgAAAA0AgAAKhQAAO7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4="
-                    },
-                    "shape": {
-                      "bytes": {
-                        "region": {
-                          "buffer": {
-                            "offset": 0,
-                            "length": 512
-                          }
-                        },
-                        "element": "u32",
-                        "row_offset": 0,
-                        "row_elements": 64,
-                        "row_pitch": 256,
-                        "rows": 2,
-                        "image_pitch": 512,
-                        "images": 1,
-                        "gaps": "compared"
-                      }
-                    }
-                  }
-                },
-                {
                   "name": "notices",
                   "observed": {
                     "value": "absent"

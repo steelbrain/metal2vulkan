@@ -1061,26 +1061,24 @@ fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
     );
 }
 
+/// The bytes a lockstep case's output buffer reads back as when no word changed: its 512 bytes
+/// of the `0xee` the cases make it with.
+fn lockstep_untouched() -> Vec<u8> {
+    vec![0xee; 512]
+}
+
 /// **The lockstep cases declare the SIMD groups' static note.** A device whose answer lacks maximal
 /// reconvergence announces `device-reconvergence` for both kernels, as Intel's
-/// Windows driver on the UHD 630 does through the rt side; with Metal's own words that is each case
-/// announced, by that notice, where it read divergent at its notices site before the cases declared
-/// it. A device with maximal reconvergence announces nothing, and the words still compare exactly.
+/// Windows driver on the UHD 630 does through the rt side; that is each case announced, by that
+/// notice. A device with maximal reconvergence announces nothing, and the case is exact.
 #[test]
 fn the_lockstep_cases_declare_the_reconvergence_note() {
     let code = Degradation::DeviceReconvergence.code();
     for case in crate::cases::simdgroup_lockstep::all() {
         let recording = crate::recording::read(case.name())
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
-        let output = recording.answers[0].outcomes[0]
-            .transcript
-            .root
-            .child("output")
-            .expect("the recording holds the output");
-        let Value::Bytes(words) = &output.observed.value else {
-            panic!("{}: the recording holds no bytes", case.name());
-        };
-        let mut side = StubSide::new(words.clone()).announcing(&[Degradation::DeviceReconvergence]);
+        let mut side =
+            StubSide::new(lockstep_untouched()).announcing(&[Degradation::DeviceReconvergence]);
         let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
         let Verdict::Announced { fields } = &replayed.verdict else {
             panic!("{}: not announced: {}", case.name(), replayed.verdict);
@@ -1090,35 +1088,29 @@ fn the_lockstep_cases_declare_the_reconvergence_note() {
             "{}: {fields:?}",
             case.name()
         );
-        // The words compare exactly either way: on a device that announces nothing the case is
-        // exact.
-        let mut side = StubSide::new(words.clone());
+        let mut side = StubSide::new(lockstep_untouched());
         let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
         assert_eq!(replayed.verdict, Verdict::Exact, "{}", case.name());
     }
 }
 
-/// **The lockstep cases' words are the access-order note's.** Both kernels hold a pair only
-/// lockstep orders, so the runtime's pipeline of each carries `SimdgroupAccessOrder`, which its
-/// side announces: an output word other than Metal's is that notice's, announced, not divergent.
+/// **The lockstep cases compare no raced word.** Both kernels hold a pair only lockstep orders, so
+/// the runtime's pipeline of each carries `SimdgroupAccessOrder`, which its side announces, and the
+/// words the race decides are not recorded: whatever they are, the case is that notice's,
+/// announced. What no order changes still compares: a byte the divergent loop does not write, moved,
+/// is divergent.
 #[test]
-fn the_lockstep_cases_justify_their_words_by_the_access_order_note() {
+fn the_lockstep_cases_compare_no_raced_word() {
     let code = Degradation::SimdgroupAccessOrder.code();
     for case in crate::cases::simdgroup_lockstep::all() {
         let recording = crate::recording::read(case.name())
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
-        let output = recording.answers[0].outcomes[0]
-            .transcript
-            .root
-            .child("output")
-            .expect("the recording holds the output");
-        let Value::Bytes(words) = &output.observed.value else {
-            panic!("{}: the recording holds no bytes", case.name());
-        };
-        // Thread 0's word, in the half both kernels write.
-        let mut other = words.clone();
-        other[0] ^= 1;
-        let mut side = StubSide::new(other).announcing(&[Degradation::SimdgroupAccessOrder]);
+        let mut raced = lockstep_untouched();
+        raced[..256].copy_from_slice(&words(&[7; 64]));
+        if case.name() == "simdgroup-lockstep-until" {
+            raced[256..].copy_from_slice(&words(&[3; 64]));
+        }
+        let mut side = StubSide::new(raced).announcing(&[Degradation::SimdgroupAccessOrder]);
         let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
         let Verdict::Announced { fields } = &replayed.verdict else {
             panic!("{}: not announced: {}", case.name(), replayed.verdict);
@@ -1129,6 +1121,17 @@ fn the_lockstep_cases_justify_their_words_by_the_access_order_note() {
             case.name()
         );
     }
+    let divergent_loop = crate::cases::simdgroup_lockstep::divergent_loop();
+    let recording = crate::recording::read(divergent_loop.name()).unwrap();
+    let mut moved = lockstep_untouched();
+    moved[256] ^= 1;
+    let mut side = StubSide::new(moved).announcing(&[Degradation::SimdgroupAccessOrder]);
+    let replayed = replay_against(&divergent_loop, &mut side, &recording).unwrap();
+    assert!(
+        matches!(replayed.verdict, Verdict::Divergent { .. }),
+        "{}",
+        replayed.verdict
+    );
 }
 
 /// The suite's central claim, at the one site it is stated: a difference is a bug unless we

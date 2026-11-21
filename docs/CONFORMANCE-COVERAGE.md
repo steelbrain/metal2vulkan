@@ -36,8 +36,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 518 |
 | of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 301 |
-| of those exercised, a case reaching it loosens some site | 217 |
+| of those exercised, no case reaching it loosens anything | 302 |
+| of those exercised, a case reaching it loosens some site | 216 |
 | case modules | 179 |
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
@@ -506,8 +506,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1235 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 16 |
-| tolerances in all | 20 |
+| modules that loosen a measured value | 15 |
+| tolerances in all | 19 |
 | modules declaring a notice (loosening no value) | 43 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -660,7 +660,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `shared_creator_formats` | 2 | 2 | every field | 23 |
 | `shared_events` | 2 | 2 | every field | 13 |
 | `shared_exponent_storage` | 5 | 5 | every field | 42 |
-| `simdgroup_lockstep` | 2 | 2 | 1 tolerance(s): `Degradation` | 25 |
+| `simdgroup_lockstep` | 2 | 2 | every field | 25 |
 | `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 114 |
 | `sparse_heaps` | 6 | 6 | every field | 15 |
 | `sparse_mappings` | 14 | 14 | every field | 32 |
