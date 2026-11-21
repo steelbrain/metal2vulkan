@@ -32,7 +32,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 82 | 82 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 83 | 83 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 
@@ -46,7 +46,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 25 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 22 | 26 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
 
@@ -284,7 +284,8 @@ Columns:
 | `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-runtime/src/pipeline.rs (number_samplers)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor reads a vertex buffer index where none is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change, and none whose vertices the draw reads; Metal's validation stops such a draw | 3: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (find)` (+1) | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for the kernel (a required size's threads, where the... | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`, `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)` | `-` |
-| `IndirectOffset` | An indirect dispatch's or draw's argument offset that is not a multiple of 4, or that leaves fewer than the arguments' bytes in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` read their 32-bit words at a 4-byte aligned offset inside the buffer | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
+| `IndirectOffset` | An indirect dispatch's or draw's argument offset that is not a multiple of 4, which Metal's `indirectBufferOffset` must be... | every device (a public call's own check of its arguments) | `metal-documented`: MTLComputeCommandEncoder.h for `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`, and MTLRenderCommandEncoder.h for the indirect `drawPrimitives` and `drawIndexedPrimitives`: "indirectBufferOffset must be a multiple of 4"; Apple's page for the indirect `drawPatches` sends its offset to the feature set tables, whose minimum constant buffer offset alignment is 4 bytes | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
+| `IndirectArgumentsPastEnd` | An indirect dispatch's or draw's arguments, at an offset that is a multiple of 4, that run past the buffer's end | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` read their arguments inside the buffer, `VUID-vkCmdDispatchIndirect-offset-00407`, `VUID-vkCmdDrawIndirect-drawCount-00487` and `VUID-vkCmdDrawIndexedIndirect-drawCount-00539` | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
 | `BufferOffsetAlignment` | A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer bound where its address, the buffer's `gpuAddress` plus the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's API validation refuses the bind offset: "must be a multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max, macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-runtime/src/arrays.rs (grant)` | `-` |
 | `IndicesNotGranted` | A texture, a sampler state or a pipeline state's constexpr sampler at an index no grant of its class holds (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an object takes an index the consumer was granted | 1: `crates/metal2vulkan-runtime/src/arrays.rs (place)` | `-` |
@@ -587,6 +588,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (find)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`; `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)`
+- `rt:Refusal::IndirectArgumentsPastEnd`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)`
 - `rt:Refusal::BufferOffsetAlignment`: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)`
 - `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-runtime/src/arrays.rs (grant)`
 - `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-runtime/src/arrays.rs (place)`

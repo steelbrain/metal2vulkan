@@ -2030,11 +2030,11 @@ impl RenderCommandEncoder {
     /// nothing.
     ///
     /// Err: as [`draw_primitives`](Self::draw_primitives); [`Refusal::OtherDevice`] for another
-    /// device's buffer; [`Refusal::IndirectOffset`] for an offset not a multiple of 4 or without
-    /// 16 bytes after it in the buffer; [`Refusal::ArgumentPlace`] for arguments at a byte of the
-    /// buffer's block's allocation that is not a multiple of 4; [`Gap::Draw`] of
-    /// [`DrawKind::DividedBaseInstance`] for a state whose base instance the device takes as 0
-    /// alone.
+    /// device's buffer; [`Refusal::IndirectOffset`] for an offset not a multiple of 4;
+    /// [`Refusal::IndirectArgumentsPastEnd`] for one without 16 bytes after it in the buffer;
+    /// [`Refusal::ArgumentPlace`] for arguments at a byte of the buffer's block's allocation that
+    /// is not a multiple of 4; [`Gap::Draw`] of [`DrawKind::DividedBaseInstance`] for a state whose
+    /// base instance the device takes as 0 alone.
     pub fn draw_primitives_indirect(
         &mut self,
         primitive_type: PrimitiveType,
@@ -2221,8 +2221,15 @@ impl RenderCommandEncoder {
         }
         let bytes = indirect_bytes(indices.is_some());
         let length = arguments.length();
-        if offset % 4 != 0 || offset.checked_add(bytes).is_none_or(|end| end > length) {
+        if offset % 4 != 0 {
             return Err(Error::Refused(Refusal::IndirectOffset { offset, length }));
+        }
+        if offset.checked_add(bytes).is_none_or(|end| end > length) {
+            return Err(Error::Refused(Refusal::IndirectArgumentsPastEnd {
+                offset,
+                length,
+                needed: bytes,
+            }));
         }
         let place = arguments.device_range().1 + offset;
         if !place.is_multiple_of(4) {

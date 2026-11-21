@@ -9485,6 +9485,7 @@ variant	metal2vulkan-runtime::Refusal::InScheduledHandler	InScheduledHandler
 variant	metal2vulkan-runtime::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-runtime::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
+variant	metal2vulkan-runtime::Refusal::IndirectArgumentsPastEnd	IndirectArgumentsPastEnd { offset: u64, length: u64, needed: u64 }
 variant	metal2vulkan-runtime::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::ManagedBlockPrivate	ManagedBlockPrivate { block: BlockId }
 variant	metal2vulkan-runtime::Refusal::ManagedCopyMissing	ManagedCopyMissing

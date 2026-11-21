@@ -416,17 +416,38 @@ pub enum Refusal {
         /// The state's `maxTotalThreadsPerThreadgroup`.
         max: u32,
     },
-    /// An indirect dispatch's or draw's argument offset that is not a multiple of 4, or that leaves
-    /// fewer than the arguments' bytes in the buffer: 12 for a dispatch (three 32-bit counts), 20
-    /// for an indexed draw, 16 for another draw.
+    /// An indirect dispatch's or draw's argument offset that is not a multiple of 4, which Metal's
+    /// `indirectBufferOffset` must be
+    /// ([`ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer`](crate::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer)
+    /// and the indirect draws of [`RenderCommandEncoder`](crate::RenderCommandEncoder)).
     ///
-    /// Basis: ours (`vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect`
-    /// read their 32-bit words at a 4-byte aligned offset inside the buffer).
+    /// Basis: metal-documented (MTLComputeCommandEncoder.h for
+    /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`, and
+    /// MTLRenderCommandEncoder.h for the indirect `drawPrimitives` and `drawIndexedPrimitives`:
+    /// "indirectBufferOffset must be a multiple of 4"; Apple's page for the indirect
+    /// `drawPatches` sends its offset to the feature set tables, whose minimum constant buffer
+    /// offset alignment is 4 bytes).
     IndirectOffset {
         /// The offset asked for.
         offset: u64,
         /// The buffer's length.
         length: u64,
+    },
+    /// An indirect dispatch's or draw's arguments, at an offset that is a multiple of 4, that run
+    /// past the buffer's end: fewer than the arguments' bytes lie after the offset, 12 for a
+    /// dispatch (three 32-bit counts), 20 for an indexed draw, 16 for another draw. The calls'
+    /// Metal headers state no such rule.
+    ///
+    /// Basis: ours (`vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect`
+    /// read their arguments inside the buffer, `VUID-vkCmdDispatchIndirect-offset-00407`,
+    /// `VUID-vkCmdDrawIndirect-drawCount-00487` and `VUID-vkCmdDrawIndexedIndirect-drawCount-00539`).
+    IndirectArgumentsPastEnd {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+        /// The arguments' bytes.
+        needed: u64,
     },
     /// A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer
     /// bound where its address, the buffer's `gpuAddress` plus the bind offset, is not a multiple
@@ -2334,7 +2355,15 @@ impl fmt::Display for Refusal {
             ),
             Refusal::IndirectOffset { offset, length } => write!(
                 f,
-                "indirect arguments at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+                "indirect arguments at offset {offset} of a {length}-byte buffer are not at a multiple of 4"
+            ),
+            Refusal::IndirectArgumentsPastEnd {
+                offset,
+                length,
+                needed,
+            } => write!(
+                f,
+                "{needed} bytes of indirect arguments at offset {offset} run past a {length}-byte buffer's end"
             ),
             Refusal::BufferOffsetAlignment {
                 index,

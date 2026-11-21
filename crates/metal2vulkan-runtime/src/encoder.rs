@@ -896,9 +896,10 @@ impl ComputeCommandEncoder {
     /// the runtime never does, so a count above the device's limit is not refused (a known gap).
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups); [`Refusal::OtherDevice`];
-    /// [`Refusal::IndirectOffset`] for an offset not a multiple of 4 or without 12 bytes after
-    /// it in the buffer; [`Refusal::ArgumentPlace`] for arguments at a byte of the buffer's
-    /// block's allocation that is not a multiple of 4, as a buffer placed at such a byte has.
+    /// [`Refusal::IndirectOffset`] for an offset not a multiple of 4;
+    /// [`Refusal::IndirectArgumentsPastEnd`] for one without 12 bytes after it in the buffer;
+    /// [`Refusal::ArgumentPlace`] for arguments at a byte of the buffer's block's allocation that
+    /// is not a multiple of 4, as a buffer placed at such a byte has.
     pub fn dispatch_threadgroups_with_indirect_buffer(
         &mut self,
         buffer: &Buffer,
@@ -908,14 +909,15 @@ impl ComputeCommandEncoder {
         if !buffer.is_of(self.building().device.core()) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
-        if offset % 4 != 0
-            || offset
-                .checked_add(12)
-                .is_none_or(|end| end > buffer.length())
-        {
-            return Err(Error::Refused(Refusal::IndirectOffset {
+        let length = buffer.length();
+        if offset % 4 != 0 {
+            return Err(Error::Refused(Refusal::IndirectOffset { offset, length }));
+        }
+        if offset.checked_add(12).is_none_or(|end| end > length) {
+            return Err(Error::Refused(Refusal::IndirectArgumentsPastEnd {
                 offset,
-                length: buffer.length(),
+                length,
+                needed: 12,
             }));
         }
         let place = buffer.device_range().1 + offset;

@@ -3484,11 +3484,12 @@ cache is answered compile-required on both.
   buffer does, and the command buffer keeps it until it retires; the pass's first barrier, and the
   encoder's memory barrier after a draw that wrote, make earlier writes visible to the GPU's read.
   The runtime never reads the arguments, so a count of 0 is recorded and draws nothing. An offset
-  that is not a multiple of 4 or leaves fewer than the arguments' 16 bytes in the buffer (20 for an
-  indexed draw) is `Refusal::IndirectOffset`, as Metal's validation stops it; arguments at a byte of
-  the block's allocation that is not a multiple of 4 are `Refusal::ArgumentPlace`; an indexed draw's
-  index offset that is not a multiple of the index size or is at or past the buffer's end is
-  `Refusal::IndexBufferOffset`.
+  that is not a multiple of 4 is `Refusal::IndirectOffset`, as Metal's headers require; one that
+  leaves fewer than the arguments' 16 bytes in the buffer (20 for an indexed draw) is
+  `Refusal::IndirectArgumentsPastEnd`, the runtime's own check, as Vulkan's indirect draws read
+  inside the buffer; arguments at a byte of the block's allocation that is not a multiple of 4 are
+  `Refusal::ArgumentPlace`; an indexed draw's index offset that is not a multiple of the index size
+  or is at or past the buffer's end is `Refusal::IndexBufferOffset`.
 - A viewport is Vulkan's with its height negated (from `y + height`): framebuffer rows, the
   fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
   front-facing winding is Vulkan's front face of the same name. A viewport of no width or height,

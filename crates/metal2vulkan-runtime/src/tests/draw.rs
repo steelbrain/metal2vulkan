@@ -127,9 +127,9 @@ pub(crate) mod on_device {
         Block, Buffer, ColorAttachmentDescriptor, CommandBuffer, CompareFunction, CullMode,
         DepthStencilDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,
         IndexClass, IndexType, Library, MemoryClass, NumberedSampler, PixelFormat, PrimitiveType,
-        Refusal, Region, RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
-        ScissorRect, StageSource, StencilOperation, StorageMode, Texture, TextureDescriptor,
-        TextureType, TextureUsage, Viewport, VisibilityResultMode,
+        Refusal, RefusalBasis, Region, RenderPassDescriptor, RenderPipelineDescriptor,
+        RenderPipelineState, ScissorRect, StageSource, StencilOperation, StorageMode, Texture,
+        TextureDescriptor, TextureType, TextureUsage, Viewport, VisibilityResultMode,
     };
     use metal2vulkan::error::Feature;
     use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
@@ -2569,6 +2569,104 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: 32-bit indices at byte 2 refused before recording; 16-bit ones drew");
+        });
+    }
+
+    /// An indirect draw's offset that is not a multiple of 4 is Metal's documented refusal,
+    /// `Refusal::IndirectOffset`, which is checked first: at 2, and at 26, whose 16 bytes would
+    /// also run past the 40-byte buffer's end. Arguments at a multiple of 4 that run past the end
+    /// are the runtime's own refusal, `Refusal::IndirectArgumentsPastEnd`: a draw's 16 bytes at
+    /// 28 and at an offset whose end overflows, and an indexed draw's 20 at 24, where a draw's 16
+    /// fit. Each kind's arguments in its buffer's last bytes then draw: the indexed draw's whole
+    /// blue triangle, then the draw's top half green one over it.
+    #[test]
+    fn every_device_refuses_an_indirect_draw_off_4_or_past_the_buffer_s_end() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_indirect_offset", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let indices = buffers.of(&device, &[3, 0, 4, 0, 5, 0]);
+            // 40 bytes, `last` the last words.
+            let arguments = |last: &[u32]| -> Vec<u8> {
+                let lead = [0xeeee_eeee_u32; 10];
+                let words = [&lead[..10 - last.len()], last].concat();
+                words.iter().flat_map(|w| w.to_le_bytes()).collect()
+            };
+            // The top triangle from vertex 0, and the whole one from index 0 (vertices 3 to 5).
+            let plain = buffers.of(&device, &arguments(&[3, 1, 0, 0]));
+            let indexed = buffers.of(&device, &arguments(&[3, 1, 0, 0, 0]));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            let index_buffer = IndexBuffer {
+                buffer: &indices,
+                offset: 0,
+                index_type: IndexType::UInt16,
+            };
+            let triangle = PrimitiveType::Triangle;
+            let refused = |result: Result<(), Error>, case: &str| match result {
+                Err(Error::Refused(refusal)) => (refusal, refusal.basis()),
+                other => panic!("{name}: {case}: {other:?}"),
+            };
+            let length = 40;
+            for offset in [2, 26] {
+                let got = refused(
+                    encoder.draw_primitives_indirect(triangle, &plain, offset),
+                    "draw",
+                );
+                let off_4 = Refusal::IndirectOffset { offset, length };
+                assert_eq!(
+                    got,
+                    (off_4, RefusalBasis::MetalDocumented),
+                    "{name}: at {offset}"
+                );
+            }
+            for offset in [28, u64::MAX - 3] {
+                let got = refused(
+                    encoder.draw_primitives_indirect(triangle, &plain, offset),
+                    "draw",
+                );
+                let needed = 16;
+                let past = Refusal::IndirectArgumentsPastEnd {
+                    offset,
+                    length,
+                    needed,
+                };
+                assert_eq!(got, (past, RefusalBasis::Ours), "{name}: at {offset}");
+            }
+            let got = refused(
+                encoder.draw_indexed_primitives_indirect(triangle, index_buffer, &indexed, 24),
+                "indexed draw",
+            );
+            let past = Refusal::IndirectArgumentsPastEnd {
+                offset: 24,
+                length,
+                needed: 20,
+            };
+            assert_eq!(got, (past, RefusalBasis::Ours), "{name}: indexed at 24");
+            draw(encoder.draw_indexed_primitives_indirect(triangle, index_buffer, &indexed, 20));
+            draw(encoder.draw_primitives_indirect(triangle, &plain, 24));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let want = texels(|_, y| match y {
+                0..4 => GREEN,
+                _ => BLUE,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
         });
     }
 

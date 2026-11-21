@@ -16,7 +16,7 @@ pub(crate) mod on_device {
     use crate::tests::kernels;
     use crate::{
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
-        Error, Gap, HeapRange, Limit, MemoryClass, Refusal,
+        Error, Gap, HeapRange, Limit, MemoryClass, Refusal, RefusalBasis,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -845,6 +845,80 @@ pub(crate) mod on_device {
         });
     }
 
+    /// An indirect dispatch's offset that is not a multiple of 4 is Metal's documented refusal,
+    /// `Refusal::IndirectOffset`, which is checked first: at 2, and at 246, whose 12 bytes would
+    /// also run past the 256-byte buffer's end. Arguments at a multiple of 4 that run past the end
+    /// are the runtime's own refusal, `Refusal::IndirectArgumentsPastEnd`: at 248, and at an
+    /// offset whose end overflows. The arguments in the buffer's last 12 bytes, at 244, dispatch.
+    #[test]
+    fn every_device_refuses_an_indirect_dispatch_off_4_or_past_the_buffer_s_end() {
+        each_device("compute_indirect_offset", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b, o, arguments) = (
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+            );
+            write_words(&a, |index| index);
+            write_words(&b, |index| 1000 * index);
+            write_words(&arguments, |index| match index {
+                61 => 4,
+                62 | 63 => 1,
+                _ => 0,
+            });
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            for (slot, buffer) in [&a, &b, &o].into_iter().enumerate() {
+                encoder
+                    .set_buffer(Some(buffer), 0, slot as u32)
+                    .expect("a buffer");
+            }
+            let mut refused = |offset: u64| {
+                let result = encoder.dispatch_threadgroups_with_indirect_buffer(
+                    &arguments,
+                    offset,
+                    [16, 1, 1],
+                );
+                match result {
+                    Err(Error::Refused(refusal)) => (refusal, refusal.basis()),
+                    other => panic!("{name}: arguments at {offset}: {other:?}"),
+                }
+            };
+            let length = 256;
+            for offset in [2, 246] {
+                let off_4 = Refusal::IndirectOffset { offset, length };
+                let want = (off_4, RefusalBasis::MetalDocumented);
+                assert_eq!(refused(offset), want, "{name}: at {offset}");
+            }
+            for offset in [248, u64::MAX - 3] {
+                let needed = 12;
+                let past = Refusal::IndirectArgumentsPastEnd {
+                    offset,
+                    length,
+                    needed,
+                };
+                assert_eq!(
+                    refused(offset),
+                    (past, RefusalBasis::Ours),
+                    "{name}: at {offset}"
+                );
+            }
+            encoder
+                .dispatch_threadgroups_with_indirect_buffer(&arguments, 244, [16, 1, 1])
+                .expect("an indirect dispatch of the buffer's last 12 bytes");
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 1001 * index).collect();
+            assert_eq!(words(&o), expected, "{name}");
+        });
+    }
+
     /// A dispatch of a kernel that writes no memory (`Interface::has_effects` false, from the
     /// translator's `PipelineInterface::writes_memory`) records nothing: given the step kernel's
     /// words under such an interface, a direct and an indirect dispatch leave its buffer as it was,
@@ -1021,24 +1095,6 @@ pub(crate) mod on_device {
                 encoder.dispatch_threads([60, 1, 1], [16, 1, 1]),
                 Err(Error::Unsupported(Gap::PartialThreadgroups { .. }))
             ));
-            assert_eq!(
-                refused(encoder.dispatch_threadgroups_with_indirect_buffer(&buffer, 2, [1, 1, 1])),
-                Refusal::IndirectOffset {
-                    offset: 2,
-                    length: 256
-                }
-            );
-            assert_eq!(
-                refused(encoder.dispatch_threadgroups_with_indirect_buffer(
-                    &buffer,
-                    248,
-                    [1, 1, 1]
-                )),
-                Refusal::IndirectOffset {
-                    offset: 248,
-                    length: 256
-                }
-            );
             // While the encoder is open, the command buffer takes no other call.
             assert!(matches!(
                 command_buffer.compute_command_encoder(DispatchType::Serial),
