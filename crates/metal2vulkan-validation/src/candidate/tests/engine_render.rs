@@ -334,41 +334,77 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             Some(metal2vulkan::bind::StatusReport::default())
         );
     }
-    // Through the runtime, each aspect alone: an attachment of both is the oracle's two
-    // textures, which the runtime renders into in no one pass.
+    // Through the runtime, each aspect alone, as the executor's own context draws it: depth under
+    // `sample_rate_depth` (an eighth at one sample), stencil under `fragment_no_writes` (the state's
+    // reference replaces it). Neither takes a texture index: shaders neither read nor
+    // write it. An attachment of both is the oracle's two textures, which the runtime renders
+    // into in no one pass; a fragment function's stencil output, `fragment_depth_stencil`'s, it
+    // refuses at creation (its README's known gaps of render pipeline states).
     #[cfg(target_os = "linux")]
     {
-        for (depth, output, expected) in [
-            (
-                true,
-                OutputSelection::Depth {
-                    origin: [0, 0],
-                    dimensions: [1, 1],
-                },
-                0.5f32.to_le_bytes().to_vec(),
-            ),
-            (
-                false,
-                OutputSelection::Stencil {
-                    origin: [0, 0],
-                    dimensions: [1, 1],
-                },
-                vec![7],
-            ),
-        ] {
-            authored.depth_stencil = Some(crate::case::DepthStencilResource {
+        let depth_stencil = |of_depth: bool| {
+            Some(crate::case::DepthStencilResource {
                 dimensions: [1, 1],
-                initial_depth_b64: depth.then(|| b64(&1.0f32.to_le_bytes())),
-                initial_stencil_b64: (!depth).then(|| b64(&[0xab])),
+                initial_depth_b64: of_depth.then(|| b64(&1.0f32.to_le_bytes())),
+                initial_stencil_b64: (!of_depth).then(|| b64(&[0xab])),
                 state: None,
-            });
+            })
+        };
+        let depth = OutputSelection::Depth {
+            origin: [0, 0],
+            dimensions: [1, 1],
+        };
+        let stencil = OutputSelection::Stencil {
+            origin: [0, 0],
+            dimensions: [1, 1],
+        };
+        let attachmentless =
+            metal2vulkan_devtools::llvm_assemble_text(crate::case::ATTACHMENTLESS_FRAGMENT_AIR)
+                .expect("llvm-as on the device lane");
+        for (own, entry, aspect, output) in [
+            (
+                public("engine/sample_rate.ll"),
+                "sample_rate_depth",
+                true,
+                depth,
+            ),
+            (attachmentless, "fragment_no_writes", false, stencil.clone()),
+        ] {
+            let mut authored =
+                crate::companion::tests::case(Stage::Fragment, entry, TextureFormat::Rgba32Float);
+            authored.render_targets.clear();
+            authored.depth_stencil = depth_stencil(aspect);
             authored.output = output;
-            let (case, companion) = with_companion(&authored, &fragment);
+            let (case, companion) = with_companion(&authored, &own);
             assert!(crate::candidate::engine::runs_render_through_runtime(
                 &authored, &case
             ));
-            let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-            assert_eq!(through.output, expected, "{:?}", authored.output);
+            let drawn = run(
+                &case,
+                RenderLibraries {
+                    vertex: &companion,
+                    fragment: Some(&own),
+                },
+            )
+            .unwrap();
+            let through = run_on_runtime(&case, &own, Some(&companion)).unwrap();
+            assert_eq!(through.output, drawn.output, "{entry}");
+            if aspect {
+                assert_eq!(through.output, 0.125f32.to_le_bytes().to_vec());
+            }
+        }
+        authored.depth_stencil = depth_stencil(false);
+        authored.output = stencil;
+        let (case, companion) = with_companion(&authored, &fragment);
+        assert!(crate::candidate::engine::runs_render_through_runtime(
+            &authored, &case
+        ));
+        match run_on_runtime(&case, &fragment, Some(&companion)) {
+            Err(error @ ExecutorError::NotSupported(_)) => {
+                assert!(error.to_string().contains("StencilExport"), "{error}")
+            }
+            Err(error) => panic!("{error}"),
+            Ok(run) => panic!("a stencil output ran through the runtime: {:?}", run.output),
         }
     }
 }
