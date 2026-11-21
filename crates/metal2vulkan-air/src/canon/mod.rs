@@ -51,8 +51,10 @@
 //!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
 //!    bound where they now are, each inlined copy with its own call site's constants. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
-//!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
-//!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
+//!    trip count SCCP made constant, and whose counter decides a texel offset of its body, is
+//!    unrolled where it runs at most 25 times with the loops nested in it, and kept, so the
+//!    offset is a constant; then one whose counter decides a branch of its body is unrolled
+//!    within fixed ceilings, and SCCP runs again over the copies; that result is kept where it is
 //!    no larger than the loops it replaces (`unroll`). **Private reach**: then each private array
 //!    of nested arrays whose every index the constants bound (constants, and the counters of loops
 //!    whose trip count they decide), and whose address reaches only element accesses, is allocated
