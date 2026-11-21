@@ -180,6 +180,20 @@ pub struct TextureLayout {
     pub sample_count: u32,
 }
 
+impl TextureLayout {
+    /// The `arrayLength` a Metal texture of `texture_type` with this layout is made with: its
+    /// layers for a 1D, 2D or multisampled 2D array, its cubes for a cube array, and 1 otherwise.
+    pub fn metal_array_length(self, texture_type: TextureType) -> u32 {
+        match texture_type {
+            TextureType::D1Array | TextureType::D2Array | TextureType::D2MultisampleArray => {
+                self.array_layers
+            }
+            TextureType::CubeArray => self.array_layers / 6,
+            _ => 1,
+        }
+    }
+}
+
 /// The Metal subresource a `(origin, dimensions)` selection names, resolved once.
 ///
 /// An authored case spells a texture's extent the way Metal declares it, which is not the way

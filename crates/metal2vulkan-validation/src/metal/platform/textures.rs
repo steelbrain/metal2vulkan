@@ -162,7 +162,7 @@ pub(super) fn make_texture(
         descriptor.setWidth(layout.width as usize);
         descriptor.setHeight(layout.height as usize);
         descriptor.setDepth(layout.depth as usize);
-        descriptor.setArrayLength(metal_array_length(texture_type, layout));
+        descriptor.setArrayLength(layout.metal_array_length(texture_type) as usize);
         descriptor.setSampleCount(layout.sample_count as usize);
         descriptor.setMipmapLevelCount(mip_levels as usize);
     }
@@ -289,7 +289,7 @@ fn make_sparse_texture(
         descriptor.setWidth(layout.width as usize);
         descriptor.setHeight(layout.height as usize);
         descriptor.setDepth(layout.depth as usize);
-        descriptor.setArrayLength(metal_array_length(literal.texture_type, layout));
+        descriptor.setArrayLength(layout.metal_array_length(literal.texture_type) as usize);
         descriptor.setSampleCount(1);
         descriptor.setMipmapLevelCount(crate::case::sparse::LITERAL_LEVELS as usize);
     }
@@ -726,17 +726,6 @@ fn metal_texture_type(texture_type: TextureType) -> MTLTextureType {
         TextureType::D3 => MTLTextureType::Type3D,
         TextureType::Cube => MTLTextureType::TypeCube,
         TextureType::CubeArray => MTLTextureType::TypeCubeArray,
-    }
-}
-
-fn metal_array_length(texture_type: TextureType, layout: crate::literal::TextureLayout) -> usize {
-    match texture_type {
-        TextureType::Buffer => 1,
-        TextureType::D1Array | TextureType::D2Array | TextureType::D2MultisampleArray => {
-            layout.array_layers as usize
-        }
-        TextureType::CubeArray => (layout.array_layers / 6) as usize,
-        _ => 1,
     }
 }
 

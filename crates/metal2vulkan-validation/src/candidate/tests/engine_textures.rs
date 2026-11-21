@@ -1,16 +1,18 @@
 //! The engine compute candidate with textures, texture buffers, texture arrays, and samplers
 //! on a device: the owned `texture_ops`, `sampling`, and `msf_mip_levels` kernels and the public
 //! `texture_array_width` kernel, planned by the binder and executed on the executor's own context
-//! under `VK_LAYER_KHRONOS_validation`, against expectations derived from their MSL. `G-linux`'s
-//! `m2v_cpu_icd` step runs these on lavapipe. Every kernel is loop-free.
+//! under `VK_LAYER_KHRONOS_validation`, against expectations derived from their MSL; the cases
+//! the runtime makes run through it too on Linux ([`runs`]). `G-linux`'s `m2v_cpu_icd` step runs
+//! these on lavapipe. Every kernel is loop-free.
 
 use super::engine_compute::run;
-use crate::candidate::engine::{resources, ComputeCase, ComputeOutput};
+use crate::candidate::engine::{resources, ComputeCase, ComputeOutput, ComputeRun};
 use crate::case::mips::level_dimensions;
 use crate::case::{
     ResourceRole, SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource,
     TextureFormat, TextureType,
 };
+use crate::check::admission::ExecutorError;
 use crate::literal::{LiteralTexture, LiteralTextureArray};
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan::library::FunctionConstantValues;
@@ -104,6 +106,25 @@ fn fixture(name: &str) -> Vec<u8> {
     llvm_assemble(&engine_dir().join(name)).expect("llvm-as on the device lane")
 }
 
+/// A run of a case.
+type Run = fn(&ComputeCase, &[u8]) -> Result<ComputeRun, ExecutorError>;
+
+/// The runs a case the runtime makes takes: on the executor's own context, and on Linux through
+/// the runtime (`engine::runs_through_runtime`), each named.
+#[cfg(target_os = "linux")]
+fn runs() -> [(&'static str, Run); 2] {
+    [
+        ("own context", run),
+        ("runtime", super::engine_compute::run_through_runtime),
+    ]
+}
+
+/// The runs a case the runtime makes takes: on the executor's own context alone, off Linux.
+#[cfg(not(target_os = "linux"))]
+fn runs() -> [(&'static str, Run); 1] {
+    [("own context", run)]
+}
+
 /// Each element of a texture array is the texture bound at its own slot: the public
 /// `texture_array_width` kernel (`array<texture2d<float>, 2> [[texture(0)]]`) writes the width of
 /// element 1, which is 7 texels wide where element 0 is 2.
@@ -137,8 +158,10 @@ fn a_texture_array_element_is_the_texture_at_its_slot() {
     .unwrap();
     let bitcode = llvm_assemble(&fixtures_dir().join("kernel_texture_array_width.ll"))
         .expect("llvm-as on the device lane");
-    let run = run(&case, &bitcode).unwrap();
-    assert_eq!(run.output, words(&[7]));
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(run.output, words(&[7]), "{name}");
+    }
 }
 
 /// A uniform texel buffer read and a storage texel buffer written and observed.
@@ -261,13 +284,16 @@ fn a_read_write_texture_sees_its_own_fenced_write() {
             dimensions: [2, 1, 1],
         },
     );
-    let run = run(&case, &fixture("texture_ops.ll")).unwrap();
     let expected: Vec<u32> = initial
         .iter()
         .zip([1, 2, 3, 4].iter().cycle())
         .map(|(value, add)| (value + add) * 2)
         .collect();
-    assert_eq!(run.output, words(&expected));
+    let bitcode = fixture("texture_ops.ll");
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(run.output, words(&expected), "{name}");
+    }
 }
 
 /// Cube and cube-array reads by face and layer, and their size queries.
@@ -588,6 +614,9 @@ fn a_runtime_sampler_samples_the_bound_texture() {
             normalized_coordinates: true,
         },
     );
-    let run = run(&case, &fixture("sampling.ll")).unwrap();
-    assert_eq!(run.output, floats(&texels));
+    let bitcode = fixture("sampling.ll");
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(run.output, floats(&texels), "{name}");
+    }
 }

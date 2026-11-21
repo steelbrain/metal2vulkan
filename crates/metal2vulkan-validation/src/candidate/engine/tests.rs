@@ -2569,12 +2569,17 @@ fn plain_kernel() -> ComputeCase {
     }
 }
 
-/// The runtime runs a kernel case of buffers, threadgroup memory and constants, dispatched by
-/// threads or threadgroups and observing a buffer or nothing; a case with anything else (a
-/// pipeline state in an argument buffer, an explicit imageblock, an indirect dispatch, a texture
-/// output) stays on the executor's own context.
+/// The runtime runs a kernel case of buffers, threadgroup memory and constants, bound textures it
+/// makes and bound samplers, dispatched by threads or threadgroups and observing a buffer, a bound
+/// texture or nothing; a case with anything else (a pipeline state in an argument buffer, an
+/// explicit imageblock, an indirect dispatch, a texture the runtime does not make: multisampled,
+/// sparse, a texture buffer or a cube array) stays on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
+    use crate::case::{
+        sparse::SparseTextureResource, ResourceRole, SamplerAddressMode, SamplerFilter,
+        SamplerMipFilter, SamplerResource, TextureFormat, TextureType,
+    };
     let authored = kernel_case();
     let plain = plain_kernel();
     assert!(runs_through_runtime(&authored, &plain));
@@ -2587,8 +2592,48 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         ..plain.clone()
     };
     assert!(runs_through_runtime(&authored, &groups));
+    let texture = |texture_type, sample_count| LiteralTexture {
+        binding: 0,
+        role: ResourceRole::InOut,
+        texture_type,
+        format: TextureFormat::Rgba8Unorm,
+        dimensions: [4, 4, 1],
+        sample_count,
+        bytes: vec![0; 64 * sample_count as usize],
+        sparse: None,
+        mip_levels: 1,
+    };
+    let textured = |texture: LiteralTexture| {
+        let mut case = plain.clone();
+        case.textures.insert(0, texture);
+        case.output = ComputeOutput::Texture {
+            binding: 0,
+            origin: [0; 3],
+            dimensions: [1; 3],
+        };
+        case
+    };
+    let mut sampled = textured(texture(TextureType::D2, 1));
+    sampled.samplers.insert(
+        0,
+        SamplerResource {
+            binding: 0,
+            address_mode: SamplerAddressMode::ClampToEdge,
+            min_filter: SamplerFilter::Linear,
+            mag_filter: SamplerFilter::Linear,
+            mip_filter: SamplerMipFilter::NotMipmapped,
+            normalized_coordinates: true,
+        },
+    );
+    assert!(runs_through_runtime(&authored, &sampled));
     let mut object = plain.clone();
     object.objects.insert((1, 0), 7);
+    let sparse = LiteralTexture {
+        sparse: Some(SparseTextureResource {
+            mappings: Vec::new(),
+        }),
+        ..texture(TextureType::D2, 1)
+    };
     let others = [
         object,
         ComputeCase {
@@ -2599,14 +2644,10 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
             dispatch: replay_dispatch([2, 1, 1]),
             ..plain.clone()
         },
-        ComputeCase {
-            output: ComputeOutput::Texture {
-                binding: 0,
-                origin: [0; 3],
-                dimensions: [1; 3],
-            },
-            ..plain.clone()
-        },
+        textured(texture(TextureType::D2Multisample, 4)),
+        textured(sparse),
+        textured(texture(TextureType::Buffer, 1)),
+        textured(texture(TextureType::CubeArray, 1)),
     ];
     for other in &others {
         assert!(!runs_through_runtime(&authored, other), "{other:?}");

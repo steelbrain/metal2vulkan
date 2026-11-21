@@ -4,9 +4,9 @@
 //! it, on the runtime's public API alone: its instance, the loader's first physical device of the
 //! requested kind (as the executor's own context selects one), a device with the default
 //! options, a library and a function from the row's AIR with the case's constants and linked
-//! functions, one compute pipeline state, one Shared buffer per bound buffer, and one command
-//! buffer of one compute encoder and one dispatch, waited for under the hang protocol, then read
-//! back.
+//! functions, one compute pipeline state, one Shared buffer per bound buffer, each bound texture
+//! and sampler as the Metal oracle makes it (`runtime_textures`), and one command buffer of one
+//! compute encoder and one dispatch, waited for under the hang protocol, then read back.
 //!
 //! The process runs it under `VK_LAYER_KHRONOS_validation`, which the loader's and the layer's
 //! own variables enable before the instance is made: core and synchronization validation, every
@@ -29,8 +29,8 @@
 
 use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
 use crate::candidate::engine::{
-    product_refusal, runtime_fingerprint, select_output, ComputeCase, ComputeRun, RefusedOn,
-    RunAttempt, RuntimeKernel,
+    product_refusal, runtime_fingerprint, select_output, ComputeCase, ComputeOutput, ComputeRun,
+    RefusedOn, RunAttempt, RuntimeKernel,
 };
 use crate::case::Stage;
 use crate::check::admission::ExecutorError;
@@ -348,9 +348,10 @@ fn run(
     identity: &Identity,
     environment: &serde_json::Value,
 ) -> Result<ComputeRun, ExecutorError> {
-    // Each constexpr sampler the kernel numbers takes an index of the device's sampler range,
-    // one per state words, as Metal gives equal samplers one ID; a read's or a write's takes
-    // nothing at its index.
+    // Each constexpr sampler the kernel numbers takes an index of the device's sampler range from
+    // its bottom, one per state words, as Metal gives equal samplers one ID; a read's or a
+    // write's takes nothing at its index. Each bound sampler takes one from its top
+    // (`runtime_textures`).
     let range = rt::IndexClass::Sampler.range();
     let _grant = device
         .grant_indices(
@@ -400,6 +401,7 @@ fn run(
         .iter()
         .map(|(&index, bytes)| Ok((index, Placed::new(device, index, bytes)?)))
         .collect::<Result<BTreeMap<u32, Placed>, ExecutorError>>()?;
+    let bound = super::runtime_textures::make(device, case, kernel, runtime_error)?;
     let label = SubmissionLabel {
         case_id: case_id.into(),
         module_sha256: sha256_bytes(kernel.bitcode),
@@ -410,25 +412,45 @@ fn run(
             device_type,
             &state,
             &buffers,
+            &bound,
             case,
             dispatch,
             threads_per_group,
         )
     })?;
-    let finals = buffers
-        .iter()
-        .map(|(&index, placed)| (index, placed.bytes()))
-        .collect::<BTreeMap<u32, Vec<u8>>>();
-    // A run through the runtime binds no argument buffer, texture or attachment.
-    let output = select_output(
-        case.output,
-        &finals,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    )
-    .map_err(ExecutorError::Failed)?;
+    // A texture output is read back as the oracle reads one; a run through the runtime binds no
+    // argument buffer or attachment.
+    let output = match case.output {
+        ComputeOutput::Texture {
+            binding,
+            origin,
+            dimensions,
+        } => {
+            let (Some(made), Some(texture)) =
+                (bound.textures.get(&binding), case.textures.get(&binding))
+            else {
+                return Err(ExecutorError::Failed(format!(
+                    "output texture {binding} is not bound"
+                )));
+            };
+            super::runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
+        }
+        output => {
+            let finals = buffers
+                .iter()
+                .map(|(&index, placed)| (index, placed.bytes()))
+                .collect::<BTreeMap<u32, Vec<u8>>>();
+            select_output(
+                output,
+                &finals,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .map_err(ExecutorError::Failed)?
+        }
+    };
     let census = ExecutedCensus {
         out_of_bounds: None,
         rate_map_pass: None,
@@ -598,14 +620,15 @@ impl Placed {
     }
 }
 
-/// Encode `case`'s dispatch of `state` over `buffers` in one command buffer, commit it and wait
-/// until it has retired, under the hang protocol; a command buffer that did not complete fails
-/// the run.
+/// Encode `case`'s dispatch of `state` over `buffers` and `bound`'s textures and samplers in one
+/// command buffer, commit it and wait until it has retired, under the hang protocol; a command
+/// buffer that did not complete fails the run.
 fn dispatched(
     device: &rt::Device,
     device_type: DeviceType,
     state: &rt::ComputePipelineState,
     buffers: &BTreeMap<u32, Placed>,
+    bound: &super::runtime_textures::Bound,
     case: &ComputeCase,
     dispatch: rt::Dispatch,
     threads_per_group: [u32; 3],
@@ -624,6 +647,16 @@ fn dispatched(
         encoder
             .set_buffer(Some(&placed.buffer), 0, index)
             .map_err(fail("a buffer"))?;
+    }
+    for (&index, texture) in &bound.textures {
+        encoder
+            .set_texture(Some(texture), index)
+            .map_err(fail("a texture"))?;
+    }
+    for (&index, sampler) in &bound.samplers {
+        encoder
+            .set_sampler_state(Some(sampler), index)
+            .map_err(fail("a sampler"))?;
     }
     for (&index, &length) in &case.threadgroup_lengths {
         encoder

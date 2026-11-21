@@ -502,9 +502,18 @@ fn an_oracle_instance_mask_is_refused_typed() {
     }
 }
 
+/// [`run`] through the runtime ([`run_on_runtime`] with no linked module).
+#[cfg(target_os = "linux")]
+pub(crate) fn run_through_runtime(
+    case: &ComputeCase,
+    bitcode: &[u8],
+) -> Result<ComputeRun, ExecutorError> {
+    run_on_runtime(case, bitcode, &[])
+}
+
 /// [`run_linked`] through the runtime (`platform::execute_runtime`): the kernel and the modules it
-/// links as the engine hands them over, its buffers as the case holds them, and no float
-/// reduction.
+/// links as the engine hands them over, its buffers as the case holds them, each texture made
+/// with its role's usage, and no float reduction.
 #[cfg(target_os = "linux")]
 fn run_on_runtime(
     case: &ComputeCase,
@@ -519,6 +528,14 @@ fn run_on_runtime(
             bitcode,
             linked,
             buffers: &case.buffers,
+            texture_usages: &case
+                .textures
+                .iter()
+                .map(|(&slot, texture)| {
+                    let usage = crate::check::interface::texture_shader_usage(texture.role, None);
+                    (slot, usage)
+                })
+                .collect(),
             reductions: &std::collections::BTreeSet::new(),
         },
     )

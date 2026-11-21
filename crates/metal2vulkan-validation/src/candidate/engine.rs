@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v186";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v187";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1171,10 +1171,11 @@ pub fn runtime_fingerprint() -> String {
 
 /// Whether `case`, mapped from `authored`, runs through the runtime (`metal2vulkan-runtime`'s
 /// public API, `platform::execute_runtime`) in place of the executor's own context: a kernel
-/// case of buffers (each device buffer array's elements among them), threadgroup memory
-/// lengths, function constants and linked functions, dispatched by `dispatchThreads` or
-/// `dispatchThreadgroups`, and observing a buffer or nothing. Decided by the case's structure
-/// alone: every field the mapping fills is named here, so a new one is decided when it is added.
+/// case of buffers (each device buffer array's elements among them), bound textures the runtime
+/// makes ([`runtime_texture`]) and bound samplers, threadgroup memory lengths, function
+/// constants and linked functions, dispatched by `dispatchThreads` or `dispatchThreadgroups`,
+/// and observing a buffer, a bound texture or nothing. Decided by the case's structure alone:
+/// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool {
     let ComputeCase {
         entry: _,
@@ -1188,7 +1189,7 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         objects,
         command_buffers,
         textures,
-        samplers,
+        samplers: _,
         function_tables,
         acceleration_structures,
         threadgroup_lengths: _,
@@ -1209,8 +1210,7 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         && argument_buffer_samplers.is_empty()
         && objects.is_empty()
         && command_buffers.is_empty()
-        && textures.is_empty()
-        && samplers.is_empty()
+        && textures.values().all(runtime_texture)
         && function_tables.is_empty()
         && acceleration_structures.is_empty()
         && imageblock.is_none()
@@ -1223,8 +1223,24 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
             dispatch,
             Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
         )
-        && matches!(output, ComputeOutput::None | ComputeOutput::Buffer { .. })
+        && matches!(
+            output,
+            ComputeOutput::None | ComputeOutput::Buffer { .. } | ComputeOutput::Texture { .. }
+        )
         && authored.intersection_function_tables.is_empty()
+}
+
+/// Whether the runtime makes `texture` as the Metal oracle makes it: one sample and no sparse
+/// mapping (multisampled and sparse textures stay on the executor's own context), and of a type
+/// the runtime builds, so neither a texture buffer (`Gap::TextureBuffer`) nor a cube array
+/// (`Gap::CubeArrayTexture`).
+fn runtime_texture(texture: &LiteralTexture) -> bool {
+    texture.sample_count == 1
+        && texture.sparse.is_none()
+        && !matches!(
+            texture.texture_type,
+            TextureType::Buffer | TextureType::CubeArray
+        )
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
@@ -1297,6 +1313,7 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
         Err(error) => return RunAttempt::of(Err(error)),
     };
     let buffers = runtime_buffers(&primary.case, &primary.reflection, compute);
+    let texture_usages = runtime_texture_usages(&primary.case, &primary.interface);
     super::platform::execute_runtime(
         prepared.device,
         &primary.case.case_id,
@@ -1305,19 +1322,62 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
             bitcode: &kernel,
             linked: &prepared.linked,
             buffers: &buffers,
+            texture_usages: &texture_usages,
             reductions: &reductions,
         },
     )
 }
 
+/// The usage each texture slot of `case` is made with in a run through the runtime, as the Metal
+/// oracle makes it (`metal::platform::textures`): its role's, narrowed by what the function
+/// declares of the slot (`check::interface::texture_shader_usage`), with `ShaderAtomic` where the
+/// function's texture there is atomic; an element of a texture array its array's, by the array's
+/// declaration, at its slot ([`resources::texture_array_slot`]), never atomic. An array element
+/// at a direct texture's slot replaces it, as the array's bind does ([`resources::bound_textures`]).
+fn runtime_texture_usages(
+    case: &AuthoredCase,
+    interface: &AirInterface,
+) -> BTreeMap<u32, metal2vulkan::metal::TextureUsage> {
+    use crate::check::interface::{
+        declared_texture_atomic, declared_texture_writable, texture_shader_usage,
+    };
+    use metal2vulkan::metal::TextureUsage;
+    let mut usages = BTreeMap::new();
+    for texture in &case.textures {
+        let mut usage = texture_shader_usage(
+            texture.role,
+            declared_texture_writable(interface, texture.binding),
+        );
+        if declared_texture_atomic(interface, texture.binding) {
+            usage = usage | TextureUsage::SHADER_ATOMIC;
+        }
+        usages.insert(texture.binding, usage);
+    }
+    for array in &case.texture_arrays {
+        let usage = texture_shader_usage(
+            array.role,
+            declared_texture_writable(interface, array.binding),
+        );
+        let slots = (0..array.elements.len())
+            .filter_map(|element| u32::try_from(element).ok())
+            .filter_map(|element| resources::texture_array_slot(array.binding, element));
+        for slot in slots {
+            usages.insert(slot, usage);
+        }
+    }
+    usages
+}
+
 /// What a run through the runtime makes its kernel and binds from, beside its mapped case: the
 /// row's AIR, the modules it links, its buffers' bytes by Metal index (each bound buffer padded to
-/// its declared size, as the oracle makes it), and the float reductions it executes
+/// its declared size, as the oracle makes it), the usage of each texture slot it binds
+/// ([`runtime_texture_usages`]), and the float reductions it executes
 /// (`check::interface::float_reductions`).
 pub struct RuntimeKernel<'a> {
     pub bitcode: &'a [u8],
     pub linked: &'a [LinkedModule],
     pub buffers: &'a BTreeMap<u32, Vec<u8>>,
+    pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 

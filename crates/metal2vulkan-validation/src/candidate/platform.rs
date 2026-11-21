@@ -17,6 +17,7 @@ mod profiles;
 mod render;
 mod runtime;
 mod runtime_probe;
+mod runtime_textures;
 mod sparse_images;
 pub use acceptance::create_acceptance_pipeline;
 pub use compute::execute_engine;
