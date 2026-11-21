@@ -56,7 +56,8 @@ clamped to the edge; the comparison array's compares with `NEVER`) in each sampl
 Vulkan has no null sampler, and writes an element back to that once its owner goes. An index
 nobody owns, nil, freed or stale, reads as nil and cannot reach a destroyed view or sampler. Each
 texture class a shader declares (its shape, numeric type and depth
-comparison, sampled, or storage without a format) is a variable of its descriptor type's binding.
+comparison, sampled, or storage without a format, or storage of `R32Uint` or `R32Sint` for a
+texture atomic) is a variable of its descriptor type's binding.
 
 A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`), and an
 argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the

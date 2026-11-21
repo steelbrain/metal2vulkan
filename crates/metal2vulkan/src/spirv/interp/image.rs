@@ -1,7 +1,9 @@
 //! Images: bound images, texel addressing, and the image instructions the new core emits for
 //! textures (`OpImageFetch`, `OpImageRead`, `OpImageWrite`, `OpImageQuery*`). A combined image
 //! sampler binds its image, and `OpImage` of it is that image (a pixel sampler's exact fetch);
-//! there is no sampler state, so sampling itself is not modelled.
+//! there is no sampler state, so sampling itself is not modelled. `OpImageTexelPointer` points to
+//! a texel inside the image (`Root::Texel`): an atomic through it reads and writes the texel's
+//! first component, as an atomic of an `R32ui` / `R32i` image does.
 //!
 //! **Sparse residency**. An image may leave texels unmapped ([`Image::unmapped`]), as a sparse
 //! image with unbound memory does. `OpImageSparseFetch` and `OpImageSparseRead` return the struct
@@ -36,7 +38,7 @@ use crate::spirv::ir::{Dim, ImageOperands, ImageQuery, ImageType, Inst, Type};
 
 use super::memory::Shared;
 use super::sched::{Lane, Prog};
-use super::value::{Root, Val};
+use super::value::{Ptr, Root, Val};
 use super::{malformed, IResult, TrapKind, Unmodelled};
 
 /// One image bound to a `UniformConstant` image binding (sampled, storage, or texel buffer), or
@@ -354,6 +356,37 @@ pub(super) fn exec(
                 }
             }
             None
+        }
+        // A pointer to a texel inside the image, an atomic's operand. Robustness's atomic outside
+        // the image, and one on an unmapped texel, are not modelled.
+        Inst::ImageTexelPointer {
+            image,
+            coord,
+            sample,
+        } => {
+            let unmodelled = || Unmodelled::Opcode(crate::spv::Op::ImageTexelPointer).err();
+            let Val::P(Ptr {
+                root: Root::Image(k),
+                ..
+            }) = l.get(p, *image)?
+            else {
+                return Err(malformed("a texel pointer into no image"));
+            };
+            let (_, ty) = p.t.pointee(p.t.value_ty(*image)?)?;
+            let Type::Image(img) = p.t.get(ty)? else {
+                return Err(malformed("a texel pointer into a pointer to no image"));
+            };
+            let img = *img;
+            let c = l.get(p, *coord)?.comps()?;
+            let sample = l.get(p, *sample)?.s()?;
+            match texel(sh, k, &img, &c, 0, sample)? {
+                Ok(i) if !bound(sh, k)?.unmapped.contains(&i) => Some(Val::P(Ptr {
+                    root: Root::Texel(k),
+                    off: i as u64,
+                    ms: None,
+                })),
+                _ => return Err(unmodelled()),
+            }
         }
         Inst::ImageQuery { query, image } => {
             let (k, img) = image_of(p, l, *image)?;

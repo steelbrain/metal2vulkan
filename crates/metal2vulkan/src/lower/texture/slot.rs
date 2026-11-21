@@ -1787,10 +1787,12 @@ impl SlotPlan {
 
 /// Under the identity domains, the class of the set-1 array whose elements texture slot
 /// declaration `decl` takes: its shape, numeric type and depth comparison, sampled, or a storage
-/// image without a format (the floor's `shaderStorageImageWriteWithoutFormat`). `None` for a
-/// declaration the identity arrays hold no element of yet: a cube viewed as an array, level views,
-/// a texture buffer, its parts or rows, planes, an extended-range, RGBX or `ulong` form, or a
-/// storage image with a format or a conversion.
+/// image without a format (the floor's `shaderStorageImageWriteWithoutFormat`) or of a texture
+/// atomic's `R32ui` / `R32i` ([`atomic_format`]: the format Metal requires of the bound texture
+/// there, whose storage element is of that format). `None` for a declaration the identity arrays
+/// hold no element of yet: a cube viewed as an array, level views, a texture buffer, its parts or
+/// rows, planes, an extended-range, RGBX or `ulong` form, or a storage image with another format
+/// or a conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let plain = !decl.cube_as_array
         && decl.level_views.is_none()
@@ -1810,7 +1812,14 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         _ => return None,
     };
     let storage = decl.usage == ImageUsage::Storage;
-    if !plain || (storage && decl.format != crate::spv::ImageFormat::Unknown) {
+    let format = match (storage, decl.format) {
+        (false, _) => StorageFormatClass::NotStorage,
+        (true, crate::spv::ImageFormat::Unknown) => StorageFormatClass::Unknown,
+        (true, crate::spv::ImageFormat::R32ui) => StorageFormatClass::Format(vk::Format::R32_UINT),
+        (true, crate::spv::ImageFormat::R32i) => StorageFormatClass::Format(vk::Format::R32_SINT),
+        (true, _) => return None,
+    };
+    if !plain {
         return None;
     }
     Some(ImageHandleClass {
@@ -1823,9 +1832,6 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
             true => ImageAccess::Storage,
             false => ImageAccess::Sampled,
         },
-        format: match storage {
-            true => StorageFormatClass::Unknown,
-            false => StorageFormatClass::NotStorage,
-        },
+        format,
     })
 }

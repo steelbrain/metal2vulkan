@@ -426,7 +426,6 @@ pub(super) fn exec(p: &Prog<'_>, l: &mut Lane, sh: &mut Shared, node: &InstNode)
                 "a collective instruction reached lane evaluation",
             ))
         }
-        Inst::ImageTexelPointer { .. } => return unmodelled(crate::spv::Op::ImageTexelPointer),
         Inst::SampledImage { .. } => return unmodelled(crate::spv::Op::SampledImage),
         // The image half of a loaded combined image sampler is its bound image (`sched`).
         Inst::Image(x) => match get(l, *x)? {
@@ -451,6 +450,7 @@ pub(super) fn exec(p: &Prog<'_>, l: &mut Lane, sh: &mut Shared, node: &InstNode)
         | Inst::ImageRead { .. }
         | Inst::ImageSparseTexelsResident(_)
         | Inst::ImageWrite { .. }
+        | Inst::ImageTexelPointer { .. }
         | Inst::ImageQuery { .. } => match super::image::exec(p, l, sh, &node.inst)? {
             Some(Some(v)) => v,
             Some(None) => return Ok(Flow::Next),

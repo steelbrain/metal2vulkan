@@ -32,6 +32,11 @@
 //!   the textures there, answers the width and `is_null_texture` by the index (0 for nil), and,
 //!   where the shader checks reads (no `robustImageAccess2`), takes a format's missing alpha out of
 //!   bounds from the word, as `tests/resource_words.tsv` gives it.
+//! - A kernel's texture atomic (`ta`, generated: `atomic_fetch_add` on a `texture2d<uint,
+//!   access::read_write>`) declares its slot `R32ui`, a class whose variable is the storage-image
+//!   array's. It passes L3 and, on the CPU interpreter, adds to the texels of the element its
+//!   pushed resource ID names and answers the texels they held, guarded by the element's size on
+//!   a device without robust image access.
 //! - The same kernel with its textures in an argument buffer (`tex` with `ab`) reads their
 //!   resource IDs from the buffer's members, at its pushed address, and answers the same at the
 //!   same elements, with no handle table and no descriptor; IDs whose indices are 65,536 past
@@ -120,7 +125,10 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::link::{link, LinkInputs};
-use crate::pipeline::sym::{Axis, PushField, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage};
+use crate::pipeline::sym::{
+    Axis, HandleClass, ImageAccess, PushField, ResourceKind, ResourceSlot, SampledType, SlotClass,
+    SlotRef, SpecKey, Stage, StorageFormatClass,
+};
 use crate::pipeline::testing::{
     compile, compile_kept, compile_with, engine_dir, link_and_validate, llvm_assemble, profile,
     typed_module_with, AssembleError,
@@ -1618,6 +1626,158 @@ fn textures_at_their_resource_ids(ab: bool) {
             assert_eq!(
                 dst.texels, written,
                 "{stem}: dst, alpha {alpha}, indices {past:#x} past"
+            );
+        }
+    }
+}
+
+/// A kernel over a `4 × 2` grid that adds 5 to the texel at its position of `tex` (a
+/// `texture2d<uint, access::read_write>`, slot 0) by `atomic_fetch_add`, and stores the texel's
+/// old first component at word `y · 4 + x` of `out` (buffer 0).
+const ATOMIC_KERNEL: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @ta(ptr addrspace(1) %tex, ptr addrspace(1) noundef \"air-buffer-no-alias\" %out, <2 x i32> noundef %tid) {\n\
+entry:\n\
+  %old = tail call <4 x i32> @air.atomic_fetch_add_explicit_texture_2d.u.v4i32(ptr addrspace(1) %tex, <2 x i32> %tid, <2 x i32> zeroinitializer, <4 x i32> <i32 5, i32 5, i32 5, i32 5>, i32 0, i32 3)\n\
+  %x = extractelement <4 x i32> %old, i64 0\n\
+  %tx = extractelement <2 x i32> %tid, i64 0\n\
+  %ty = extractelement <2 x i32> %tid, i64 1\n\
+  %row = mul i32 %ty, 4\n\
+  %idx = add i32 %row, %tx\n\
+  %e = zext i32 %idx to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %e\n\
+  store i32 %x, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+declare <4 x i32> @air.atomic_fetch_add_explicit_texture_2d.u.v4i32(ptr addrspace(1), <2 x i32>, <2 x i32>, <4 x i32>, i32, i32)\n\n\
+!air.kernel = !{!9}\n!air.version = !{!17}\n!air.language_version = !{!18}\n\
+!9 = !{ptr @ta, !10, !11}\n!10 = !{}\n!11 = !{!12, !13, !14}\n\
+!12 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.arg_type_name\", !\"texture2d<uint, read_write>\", !\"air.arg_name\", !\"tex\"}\n\
+!13 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
+!14 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"tid\"}\n\
+!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n";
+
+/// A texture atomic's slot under the identity domains ([`ATOMIC_KERNEL`]: `atomic_fetch_add` on a
+/// `texture2d<uint, access::read_write>`) is declared `R32ui`, a class of its own whose variable is
+/// the storage-image array's (set 1, binding 1). On the CPU interpreter each thread adds to its
+/// texel of the element the slot's pushed resource ID names and answers the texel it held, with the
+/// atomic left to the device where it drops one outside the image, and guarded by the image's size
+/// where it does not (no `robustImageAccess`); no other element changes.
+#[test]
+fn a_texture_atomic_is_the_r32_storage_element_its_resource_id_names() {
+    let Some(bc) = assemble_text("ta", ATOMIC_KERNEL) else {
+        return;
+    };
+    const L: [u32; 3] = [4, 2, 1];
+    // The texture at index 2 of the storage array; the elements below it are other textures.
+    const TEX: u32 = 2;
+    let word = vector_word(PixelFormat::R32Uint);
+    let held = |x: u32, y: u32| [0x100 * (y * 4 + x + 1), 0, 0, 1];
+    let filler = |_: u32, _: u32| [0xdead_beef; 4];
+    let mut profiles: Vec<(String, DeviceProfile)> = PROFILES
+        .iter()
+        .map(|stem| {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            (stem.to_string(), p)
+        })
+        .collect();
+    profiles.push((
+        "moltenvk-m3 without robust image access".to_string(),
+        identity_without(
+            "moltenvk-m3",
+            &[VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2],
+        ),
+    ));
+    for (stem, p) in &profiles {
+        let (a, plan, module) =
+            compile_kept(&bc, "ta", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let linked = link(&[&a], &LinkInputs::standalone(), p).unwrap_or_else(|e| panic!("{e}"));
+        let classes: Vec<_> = (linked.table.bindings.iter())
+            .filter_map(|(slot, at)| match slot.kind {
+                ResourceKind::Heap(HandleClass::Image(c)) => Some((*slot, c, *at)),
+                _ => None,
+            })
+            .collect();
+        let [(storage, class, at)] = classes[..] else {
+            panic!("{stem}: {classes:?}");
+        };
+        assert_eq!(
+            (class.access, class.sampled_type, class.format, at),
+            (
+                ImageAccess::Storage,
+                SampledType::Uint,
+                StorageFormatClass::Format(vk::Format::R32_UINT),
+                (1, 1)
+            ),
+            "{stem}"
+        );
+        // The guard reads the element's size; a device that drops the atomic outside has none.
+        let queries = (module.functions().iter())
+            .flat_map(|f| f.blocks.iter())
+            .flat_map(|b| module.blocks()[b.index()].insts.iter())
+            .filter(|n| matches!(n.inst, crate::spirv::ir::Inst::ImageQuery { .. }))
+            .count();
+        let guarded = !p.fields().images.robust_image_access;
+        assert_eq!(queries > 0, guarded, "{stem}: {queries} size queries");
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        for field in &plan.push.fields {
+            let PushLoc::Push { offset } = field.loc else {
+                panic!("{stem}: {field:?} spilled");
+            };
+            let o = offset as usize;
+            let bytes = match field.field {
+                PushField::SlotGuestBase(s) if s.class == SlotClass::Buffer => slot_word(OUT),
+                PushField::SlotGuestBase(s) if s.class == SlotClass::Texture => {
+                    resource_id(TEX, word)
+                }
+                PushField::DispatchRegion => {
+                    let region = region_bytes([0; 3], L, L).expect("packs");
+                    push[o..o + 32].copy_from_slice(&region);
+                    continue;
+                }
+                PushField::SlotBounds(_) => {
+                    push[o..o + 8].copy_from_slice(&bounds_word(4 * 8, 0));
+                    continue;
+                }
+                PushField::ZeroAddress => ZERO_UNMAPPED,
+                _ => panic!("{stem}: unexpected push field {field:?}"),
+            };
+            push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
+        }
+        let mut images: Vec<Image> = (0..TEX)
+            .map(|e| texture(storage, e, [1, 1], filler, None))
+            .collect();
+        images.push(texture(storage, TEX, [4, 2], held, None));
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 4 * 8],
+            }],
+            push,
+            spec: local_size3(L),
+        };
+        let (got, images) = run_with_images(&module, &Config::default(), res, images)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let texels = || (0..2).flat_map(|y| (0..4).map(move |x| (x, y)));
+        let old: Vec<u8> = texels()
+            .flat_map(|(x, y)| held(x, y)[0].to_le_bytes())
+            .collect();
+        assert_eq!(got.buffers[0], old, "{stem}: out");
+        let added: Vec<[u32; 4]> = texels()
+            .map(|(x, y)| {
+                let [r, g, b, a] = held(x, y);
+                [r + 5, g, b, a]
+            })
+            .collect();
+        assert_eq!(images[TEX as usize].texels, added, "{stem}: the texture");
+        for other in &images[..TEX as usize] {
+            assert_eq!(
+                other.texels,
+                [[0xdead_beef; 4]],
+                "{stem}: element {}",
+                other.element
             );
         }
     }

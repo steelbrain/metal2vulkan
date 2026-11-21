@@ -236,7 +236,16 @@ pub(super) fn emit(
     let (Some(decl), Some((g, _))) = (decl, global) else {
         return Err(cx.fail(format!("texture slot {index} is not declared")));
     };
-    let ptr = fb.module().global_value(g)?;
+    let base = fb.module().global_value(g)?;
+    // Under the identity domains the slot's image is the element of its class's set-1 array at
+    // the index its resource ID holds (`emit::identity_id`).
+    let ptr = match cx.plan.families.access.identity {
+        true => {
+            let (element, _) = super::emit::identity_id(cx, fb, index)?;
+            fb.access_chain(base, &[element])?
+        }
+        false => base,
+    };
     let coord = super::emit::coordinate(cx, fb, &decl, &a.at)?;
     // A texture buffer's parts: the part that holds the texel, at its index there; the guard
     // tests the texel against the whole width.

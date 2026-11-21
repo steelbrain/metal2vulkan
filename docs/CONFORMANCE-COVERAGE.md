@@ -3939,7 +3939,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `surface-textures-420v-luma-r8` | rt's own gap: this device lays the case's two-plane surface in place under neither the dma-buf nor the opaque fd (53626: 0 in place, 2 copied), so the surface t… |
 | `surface-textures-x420-chroma-rg16` | rt's own gap: this device lays the case's two-plane surface in place under neither the dma-buf nor the opaque fd (53626: 0 in place, 2 copied), so the surface t… |
 | `surface-textures-x420-luma-r16` | rt's own gap: this device lays the case's two-plane surface in place under neither the dma-buf nor the opaque fd (53626: 0 in place, 2 copied), so the surface t… |
-| `swizzled-storage-atomics` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `swizzled-storage-atomics` | Known gap (rt README, Known gaps of textures): a read_write slot bound to a swizzled texture is Gap::SwizzledReadWrite, a texture atomic's slot among them, thou… |
 | `swizzled-storage-made-rgba8unorm` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Unknown usage). A swizz… |
 | `swizzled-storage-r32float` | Known gap (rt README, Known gaps of textures): a read_write slot bound to a swizzled texture is Gap::SwizzledReadWrite, as its read would answer the texel unswi… |
 | `swizzled-storage-r32uint` | Known gap (rt README, Known gaps of textures): a read_write slot bound to a swizzled texture is Gap::SwizzledReadWrite, as its read would answer the texel unswi… |

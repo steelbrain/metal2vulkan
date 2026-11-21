@@ -83,6 +83,10 @@ pub(super) enum Root {
     Physical,
     /// Bound image `n` (`UniformConstant`): loading the variable yields the image itself.
     Image(u32),
+    /// A texel of bound image `n` (`OpImageTexelPointer`, an atomic's operand): the offset is the
+    /// texel's index in its texels, and the pointer reaches the texel's first component, a 32-bit
+    /// integer.
+    Texel(u32),
 }
 
 /// A pointer: its memory object, byte offset, and the matrix stride of the matrix (or array of

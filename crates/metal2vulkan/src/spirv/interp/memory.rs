@@ -180,6 +180,7 @@ impl Mem<'_> {
             Root::Buffer(i) => Ok((self.sh.bufs.get_mut(i as usize).ok_or_else(missing)?, off)),
             Root::Push => Ok((&mut self.sh.push, off)),
             Root::Image(_) => Err(super::malformed("a byte access to an image")),
+            Root::Texel(_) => Err(super::malformed("a byte region of a texel")),
             Root::BufferArray(_) => Err(super::malformed("a byte access to a descriptor array")),
             Root::Physical => {
                 let hit = self.sh.bufs.iter_mut().find_map(|b| {
@@ -200,12 +201,39 @@ impl Mem<'_> {
         }
     }
 
+    /// The first component of texel `i` of bound image `k` ([`Root::Texel`]), for an access of
+    /// `len` bytes, which must be the component's 4.
+    fn texel(&mut self, k: u32, i: u64, len: usize) -> IResult<&mut u32> {
+        if len != 4 {
+            return Err(super::malformed(
+                "a texel access that is not one 32-bit component",
+            ));
+        }
+        let image = self.sh.images.get_mut(k as usize);
+        let texel = image.and_then(|img| img.texels.get_mut(usize::try_from(i).ok()?));
+        let [first, ..] =
+            texel.ok_or_else(|| super::malformed(format!("texel {i} of image {k}")))?;
+        Ok(first)
+    }
+
     pub(super) fn read(&mut self, root: Root, off: u64, out: &mut [u8]) -> IResult<()> {
+        if let Root::Texel(k) = root {
+            let t = *self.texel(k, off, out.len())?;
+            out.copy_from_slice(&t.to_le_bytes());
+            return Ok(());
+        }
         let (r, rel) = self.region(root, off, out.len())?;
         r.read(rel, out)
     }
 
     pub(super) fn write(&mut self, root: Root, off: u64, data: &[u8]) -> IResult<()> {
+        if let Root::Texel(k) = root {
+            let t = self.texel(k, off, data.len())?;
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(data);
+            *t = u32::from_le_bytes(bytes);
+            return Ok(());
+        }
         let (r, rel) = self.region(root, off, data.len())?;
         r.write(rel, data)
     }
@@ -218,6 +246,14 @@ impl Mem<'_> {
         len: usize,
         f: impl FnOnce(u64, u64) -> IResult<(u64, u64)>,
     ) -> IResult<u64> {
+        // A texel's component is always defined.
+        if let Root::Texel(k) = root {
+            let t = self.texel(k, off, len)?;
+            let old = u64::from(*t);
+            let (new, _) = f(old, u64::from(u32::MAX))?;
+            *t = new as u32;
+            return Ok(old);
+        }
         let (r, rel) = self.region(root, off, len)?;
         r.atomic(rel, len, f)
     }
