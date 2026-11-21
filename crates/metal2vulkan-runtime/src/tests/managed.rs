@@ -1585,7 +1585,10 @@ pub(crate) mod on_device {
     /// the other rows and, with two copies, the new bytes in the named row; with one, W's write
     /// there races the consumer's, which Metal leaves undefined. With `held`, [`UNSEEN_JOINS`]
     /// command buffers join the queue's group held first, so W is held for room in no group when
-    /// R commits; else W is in the group held.
+    /// R commits; else W is in the group held. There, with two copies, R, which takes the copy-in,
+    /// leads its own group, so W's group goes first (`crate::capture::Captured::names_written`):
+    /// W's submission is counted before R is scheduled, while the busy work still holds the GPU.
+    /// Held for room, or with one copy, nothing goes before the busy work ends.
     fn over_write_before_a_capture(test: &str, held: bool) {
         each_device(test, |name, _, device| {
             let counters = device.counters();
@@ -1598,7 +1601,7 @@ pub(crate) mod on_device {
             write(&pattern, 0, &vec![0x3C; len]);
             let queue = device.new_command_queue(16).expect("a queue");
             let mut kept = Vec::new();
-            let (mut counted, mut unsent, mut in_flight) = (0, false, (0, false));
+            let (mut counted, mut unsent, mut in_flight, mut split) = (0, false, (0, false), false);
             behind_busy(name, &device, &queue, |_, _, _| {
                 for _ in 0..UNSEEN_JOINS * usize::from(held) {
                     let joins = queue.command_buffer().expect("a command buffer");
@@ -1625,6 +1628,7 @@ pub(crate) mod on_device {
                 in_flight = device.core().work.in_flight(writer.queue());
                 reader.commit().expect("a commit");
                 within(name, || reader.status() == CommandBufferStatus::Scheduled);
+                split = counters.metrics().submissions > sent;
                 kept.extend([writer, reader]);
             });
             for command_buffer in &kept {
@@ -1639,7 +1643,8 @@ pub(crate) mod on_device {
             println!(
                 "{test}: {name}: {form}; W held for room {counted}, the queue's submissions in \
                  flight and group held as R commits {in_flight:?}, W not yet submitted as R's \
-                 commit took the capture {unsent}; R read W's bytes outside the named row \
+                 commit took the capture {unsent}, W's group sent ahead of R as R came, the busy \
+                 work still holding the GPU {split}; R read W's bytes outside the named row \
                  {outside} (its first texels {:?}), the new bytes in it {inside} (its first \
                  texels there {:?})",
                 &r_bytes[..8],
@@ -1650,8 +1655,14 @@ pub(crate) mod on_device {
                 unsent,
                 "{name}: W not yet submitted as the capture is taken"
             );
+            let two = !device.has_unified_memory();
+            assert_eq!(
+                split,
+                two && !held,
+                "{name}: W's group goes ahead of R as R comes only in the group held, with two copies"
+            );
             assert!(outside, "{name}: R reads W's bytes outside the named row");
-            if !device.has_unified_memory() {
+            if two {
                 assert!(inside, "{name}: R reads the new bytes in the named row");
             }
             drop((texture, managed, pattern, r_read, arena, queue, kept));
