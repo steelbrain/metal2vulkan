@@ -1786,9 +1786,11 @@ made, with no lock, and never rewritten for layouts.
   set, and it runs before the command buffer's completed handlers. `wait_until_scheduled` returns
   once the scheduled handlers have returned, as Metal's does: Apple's page for
   `waitUntilScheduled` names both events, the command buffer scheduled and its scheduled
-  handlers invoked. The queue's
-  later submissions wait while it runs, and it may run while another command buffer's completed
-  handler runs on the completion thread. A scheduled handler may read the command buffer's status
+  handlers invoked. Every queue's later submissions wait while it runs, those of command buffers
+  held in a group or for room included, so a scheduled handler that blocks outside the runtime
+  until such a command buffer completes never returns, where Metal, running it on a thread of its
+  own, would go on: a known gap. It may run while another command buffer's completed handler
+  runs on the completion thread. A scheduled handler may read the command buffer's status
   and times, enqueue command buffers, make objects that take no upload, and do the consumer's own
   work. Each call that may wait for the submit thread is `Refusal::InScheduledHandler` in it, on
   every device: `commit`, the waits (`wait_until_scheduled`, `wait_until_completed`,
