@@ -1118,9 +1118,8 @@ made, with no lock, and never rewritten for layouts.
   (`IndexClass::range`): textures of every usage take 1 to 65,535, one index valid in both
   texture arrays, so a texture of any usage can be made at any index of a texture grant; samplers
   take 1 to 3,999. Index 0 is nil and never granted. A range that is empty or leaves its class's is
-  `Limit::IndexRange`, and one holding an index granted already `Refusal::IndicesGranted`.
-  `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`, and
-  one where an object still holds an index `Refusal::IndicesInUse`.
+  `Limit::IndexRange`, and one holding an index granted already `Refusal::IndicesGranted`. A
+  grant lasts as long as the device.
 - An index has one owner: the object placed there last, in each class. Making an object at an
   index another object holds, a live one or one the program released that a command buffer not
   yet retired still holds, takes the index at once, as Metal's later texture at a resource ID
@@ -1149,7 +1148,7 @@ made, with no lock, and never rewritten for layouts.
   committed before that has retired and the block-maker thread has vacated it, on its first pass
   after the completion thread's round that retired them, behind the frees ahead of it there
   (`Gauges::releases_waiting` reads 0 only after that). Its elements read their default again
-  from then, and `Device::release_indices` may return its grant.
+  from then, and `Gauges::descriptor_slots` no longer counts it.
 
 ## Textures
 

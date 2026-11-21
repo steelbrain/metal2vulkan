@@ -305,7 +305,7 @@ mod on_device {
         };
         each_device("sampling_runtime_and_constexpr", |name, _, device| {
             let counters = device.counters();
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, 4096),
                 (IndexClass::Texture, 1),
                 (IndexClass::Sampler, 1),
@@ -413,11 +413,6 @@ mod on_device {
             drop((command_buffer, queue, down, up));
             assert_eq!(counters.gauges().descriptor_slots, slots, "{name}");
             drop((sampler, source, middle, output));
-            for grant in grants {
-                device
-                    .release_indices(grant)
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -432,7 +427,7 @@ mod on_device {
         };
         each_device("sampling_any_usage_at_any_index", |name, _, device| {
             let range = IndexClass::Texture.range();
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, range.start, range.end - range.start),
                 (IndexClass::Sampler, 1, 1),
             ]
@@ -459,9 +454,6 @@ mod on_device {
             let (got, want) = (texels(&written, SIDE / 2), means());
             assert!(near(&got, &want), "{name}: {got:?} {want:?}");
             drop((queue, down, sampler, source, written));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -483,7 +475,7 @@ mod on_device {
         };
         each_device("sampling_through_views", |name, _, device| {
             let counters = device.counters();
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, 4096, 4),
                 (IndexClass::Texture, 1, 4),
                 (IndexClass::Sampler, 1, 1),
@@ -565,9 +557,6 @@ mod on_device {
             }
             drop((queue, down, sampler, first, twin, of_twin));
             drop((written, written_twin, source, target));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -587,7 +576,7 @@ mod on_device {
         each_device("sampling_index_placed_last", |name, _, device| {
             let counters = device.counters();
             let range = IndexClass::Texture.range();
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, range.start, range.end - range.start),
                 (IndexClass::Sampler, 1, 1),
             ]
@@ -662,9 +651,6 @@ mod on_device {
             drop(d);
             assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
             drop((queue, down, sampler, source, target));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -681,7 +667,7 @@ mod on_device {
         };
         each_device("sampling_constexpr_index_placed_last", |name, _, device| {
             let counters = device.counters();
-            let grants = [IndexClass::Texture, IndexClass::Sampler].map(|class| {
+            let _grants = [IndexClass::Texture, IndexClass::Sampler].map(|class| {
                 (device.grant_indices(class, 1, 4))
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             });
@@ -737,9 +723,6 @@ mod on_device {
             drop((up, again));
             assert_eq!(counters.gauges().descriptor_slots, slots, "{name}");
             drop((queue, down, sampler, source, middle, output));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -760,7 +743,7 @@ mod on_device {
         };
         each_device("sampling_released_index_next", |name, _, device| {
             let counters = device.counters();
-            let grants =
+            let _grants =
                 [(IndexClass::Texture, 8), (IndexClass::Sampler, 1)].map(|(class, count)| {
                     (device.grant_indices(class, 1, count))
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
@@ -826,9 +809,6 @@ mod on_device {
             drop((b, sb));
             assert_eq!(counters.gauges().descriptor_slots, slots - 2, "{name}");
             drop((pending, queue, other, down, first, second));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -846,7 +826,7 @@ mod on_device {
         };
         each_device("sampling_equal_sampler_held", |name, _, device| {
             let counters = device.counters();
-            let grants =
+            let _grants =
                 [(IndexClass::Texture, 8), (IndexClass::Sampler, 1)].map(|(class, count)| {
                     (device.grant_indices(class, 1, count))
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
@@ -900,9 +880,6 @@ mod on_device {
                 "{name}: another descriptor at the index writes its elements"
             );
             drop((sb, other, held, queue, down, a, target));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 
@@ -914,7 +891,7 @@ mod on_device {
             return;
         };
         each_device("sampling_constexpr_refused", |name, _, device| {
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Sampler, 1, 4)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let cap = lock(&device.core().samplers).set_cap(|held| held);
@@ -943,9 +920,6 @@ mod on_device {
             )
             .unwrap_or_else(|error| panic!("{name}: sample_up: {error}"));
             drop(up);
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 

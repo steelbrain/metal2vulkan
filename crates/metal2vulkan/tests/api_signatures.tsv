@@ -6638,7 +6638,6 @@ method	metal2vulkan-runtime::Device::quiesce	pub fn quiesce(&self, timeout: Dura
 method	metal2vulkan-runtime::Device::raw	pub fn raw(&self) -> RawDevice<'_>
 method	metal2vulkan-runtime::Device::read_write_texture_support	pub fn read_write_texture_support(&self) -> ReadWriteTextureTier
 method	metal2vulkan-runtime::Device::release_block	pub fn release_block(&self, block: Block) -> Result<(), Error>
-method	metal2vulkan-runtime::Device::release_indices	pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::report_loss	pub fn report_loss(&self, loss: DeviceLoss)
 method	metal2vulkan-runtime::Device::supports_texture_sample_count	pub fn supports_texture_sample_count(&self, count: u32) -> bool
 method	metal2vulkan-runtime::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error>
@@ -9482,7 +9481,6 @@ variant	metal2vulkan-runtime::Refusal::HeapTexturePlace	HeapTexturePlace { offse
 variant	metal2vulkan-runtime::Refusal::InScheduledHandler	InScheduledHandler
 variant	metal2vulkan-runtime::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
-variant	metal2vulkan-runtime::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-runtime::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-runtime::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::ManagedBlockPrivate	ManagedBlockPrivate { block: BlockId }

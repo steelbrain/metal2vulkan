@@ -899,8 +899,7 @@ impl Pool {
     /// sampler), which work committed before now may reach with no handle of it, through set 1:
     /// it goes once that work retired ([`Wait`]): an index on the block-maker thread, an object
     /// on the reaper thread. Where none is in flight, it goes at once, an index on this thread,
-    /// so its grant may be returned at once
-    /// ([`Device::release_indices`](crate::Device::release_indices)). Releases keep their order.
+    /// so it is vacated before the program's release returns. Releases keep their order.
     pub(crate) fn release(&self, core: &Core, object: Free) {
         let wait = self.noted();
         let now = matches!(wait, Wait::Progress(0));
@@ -1613,7 +1612,7 @@ pub(crate) fn run(core: Arc<Core>) {
         (state, object) = ripe(&core, state, |state| &mut state.held, &mut held);
         if let Some(object) = object {
             drop(state);
-            // An index goes here, before the gauge falls, so its grant may be returned once
+            // An index goes here, before the gauge falls, so every released index is vacated once
             // nothing waits; an object goes to the reaper.
             match object {
                 Free::TextureIndex(..) | Free::SamplerIndex(..) => {

@@ -277,7 +277,7 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
             };
             let kernels =
                 ["rw_tier_f", "rw_tier_u", "rw_tier_s"].map(|entry| (entry, states(entry)));
-            let grant = (device.grant_indices(IndexClass::Texture, 1, FORMATS.len() as u32))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, FORMATS.len() as u32))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let queue = device.new_command_queue(1).expect("a queue");
             let mut arena = Arena::new(&device);
@@ -392,7 +392,6 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                 }
                 drop((texture, command_buffer));
             }
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!(
                 "read_write_tier: {name}: the 18 formats read and write, {without_format} \
                  declared without a format, {declared} with it"
@@ -426,7 +425,7 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
             let state = (device
                 .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()])))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let grant = (device.grant_indices(IndexClass::Texture, 1, BEYOND.len() as u32))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, BEYOND.len() as u32))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let queue = device.new_command_queue(1).expect("a queue");
             let mut arena = Arena::new(&device);
@@ -472,7 +471,6 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                 }
                 drop((texture, command_buffer));
             }
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("read_write_beyond: {name}: read {read:?}; refused {refused:?}");
         });
     }

@@ -109,9 +109,9 @@ mod on_device {
             return;
         };
         each_device("border_swizzle", |name, _, device| {
-            let textures = (device.grant_indices(IndexClass::Texture, 1, 2))
+            let _textures = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let samplers = (device.grant_indices(IndexClass::Sampler, 1, 8))
+            let _samplers = (device.grant_indices(IndexClass::Sampler, 1, 8))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
 
             // The note, decided by the descriptor on every device.
@@ -275,9 +275,6 @@ mod on_device {
                 texture,
                 sampler,
             ));
-            for grant in [textures, samplers] {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
         });
     }
 }

@@ -114,7 +114,7 @@ mod on_device {
                 Ok(vec![0])
             }))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 3))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 3))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Level 0's texel (x, y) is (10 + 40x, 20 + 40y, 30, 200), level 1's (5 + 50x,
             // 7 + 50y, 99, 150); the red texture's 64 + x + 4y.
@@ -176,7 +176,6 @@ mod on_device {
                 );
             }
             drop((two_levels, one_level, red, command_buffer));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("image reads out of range: {name}: the 11 reads answer Metal's texels");
         });
     }

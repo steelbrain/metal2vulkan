@@ -151,12 +151,8 @@ impl Bits {
         self.0[(index / 64) as usize] & (1 << (index % 64)) != 0
     }
 
-    fn put(&mut self, index: u32, on: bool) {
-        let word = &mut self.0[(index / 64) as usize];
-        match on {
-            true => *word |= 1 << (index % 64),
-            false => *word &= !(1 << (index % 64)),
-        }
+    fn put(&mut self, index: u32) {
+        self.0[(index / 64) as usize] |= 1 << (index % 64);
     }
 }
 
@@ -195,8 +191,8 @@ impl Grants {
         self.granted[class.slot()].get(index)
     }
 
-    fn set(&mut self, class: IndexClass, index: u32, on: bool) {
-        self.granted[class.slot()].put(index, on);
+    fn set(&mut self, class: IndexClass, index: u32) {
+        self.granted[class.slot()].put(index);
     }
 
     /// Places an object at `index` of `class`, where it is granted: the object owns the index
@@ -255,37 +251,9 @@ impl Grants {
             return Err(Error::Refused(Refusal::IndicesGranted { class, index }));
         }
         for index in grant.indices() {
-            self.set(class, index, true);
+            self.set(class, index);
         }
         Ok(grant)
-    }
-
-    /// Returns `grant`, where every index of it is granted and no object holds one.
-    pub(crate) fn release(&mut self, grant: IndexGrant) -> Result<(), Error> {
-        let IndexGrant { class, .. } = grant;
-        let range = class.range();
-        let inside = grant.first >= range.start
-            && grant
-                .first
-                .checked_add(grant.count)
-                .is_some_and(|end| end <= range.end);
-        let missing = match inside {
-            true => grant.indices().find(|&index| !self.bit(class, index)),
-            false => Some(grant.first),
-        };
-        if let Some(index) = missing {
-            return Err(Error::Refused(Refusal::IndicesNotGranted { class, index }));
-        }
-        let held = (self.owners[class.slot()].keys().copied())
-            .filter(|index| grant.indices().contains(index))
-            .min();
-        if let Some(index) = held {
-            return Err(Error::Refused(Refusal::IndicesInUse { class, index }));
-        }
-        for index in grant.indices() {
-            self.set(class, index, false);
-        }
-        Ok(())
     }
 }
 
@@ -980,8 +948,8 @@ fn write(
 impl Device {
     /// No Metal counterpart: grants the consumer `first..first + count` of `class`, the range it
     /// names, so the resource IDs it chooses from it reproduce in replay. A texture or a sampler
-    /// state is made at an index of a live grant of its class, and so is each constexpr sampler a
-    /// pipeline state numbers.
+    /// state is made at an index of a grant of its class, and so is each constexpr sampler a
+    /// pipeline state numbers. A grant lasts as long as the device.
     ///
     /// Err: [`Limit::IndexRange`] where the range is empty or leaves the class's
     /// ([`IndexClass::range`]); [`Refusal::IndicesGranted`] where one of its indices is granted
@@ -993,17 +961,5 @@ impl Device {
         count: u32,
     ) -> Result<IndexGrant, Error> {
         lock(&self.core().arrays.grants).grant(class, first, count)
-    }
-
-    /// No Metal counterpart: returns a grant [`Device::grant_indices`] made, so its indices may be
-    /// granted again.
-    ///
-    /// Err: [`Refusal::IndicesNotGranted`] where one of its indices is not granted;
-    /// [`Refusal::IndicesInUse`] where a texture or a sampler state lives at one, until its last
-    /// handle is gone and, where work was in flight then, the block-maker thread has vacated the
-    /// index: on its first pass after the completion thread's round that retired the command
-    /// buffers committed before the release, behind the frees ahead of it there.
-    pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error> {
-        lock(&self.core().arrays.grants).release(grant)
     }
 }

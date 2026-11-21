@@ -8,12 +8,12 @@
 //!   its plain and integer-texture uses, and an equal state, or one differing only in a border
 //!   colour no address mode reads, shares it; a linear state with a compare function takes three;
 //!   an anisotropic state is made. A cubic filter is `Gap::CubicSampler`. A state made at an index
-//!   another holds takes it, and the earlier state's going leaves it; the grant waits for the
-//!   index's owner, and the index is free once that state is gone. The device's samplers come
-//!   back to zero with the device. A state's constexpr samplers numbered up to one the
-//!   translator refuses give back what the earlier ones took. A state binds with LOD clamps that
-//!   read as its own on the compute encoder and the render encoder's vertex and fragment
-//!   functions, and clamps that read otherwise are `Gap::LodClamps`.
+//!   another holds takes it, and the earlier state's going leaves it; the descriptor-slot gauge
+//!   counts the index until its owner is gone. The device's samplers come back to zero with the
+//!   device. A state's constexpr samplers numbered up to one the translator refuses give back
+//!   what the earlier ones took. A state binds with LOD clamps that read as its own on the
+//!   compute encoder and the render encoder's vertex and fragment functions, and clamps that
+//!   read otherwise are `Gap::LodClamps`.
 
 use crate::error::{Error, Limit};
 use crate::sampler::SamplerTable;
@@ -50,20 +50,10 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         CompareFunction, Device, DeviceOptions, DispatchType, Error, Gap, IndexClass,
-        KernelInputKind, PixelFormat, Refusal, RenderPassDescriptor, SamplerBorderColor,
-        SamplerDescriptor, SamplerMinMagFilter, SamplerState, TextureDescriptor, TextureType,
-        TextureUsage,
+        KernelInputKind, PixelFormat, RenderPassDescriptor, SamplerBorderColor, SamplerDescriptor,
+        SamplerMinMagFilter, SamplerState, TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::metal::sampler::SamplerWord;
-
-    /// The refusal of `result`.
-    fn refused(result: Result<impl Sized, Error>) -> Refusal {
-        match result {
-            Err(Error::Refused(refusal)) => refusal,
-            Err(other) => panic!("not a refusal: {other}"),
-            Ok(_) => panic!("not a refusal: it was made"),
-        }
-    }
 
     #[test]
     fn every_device_shares_sampler_states_device_samplers() {
@@ -77,7 +67,7 @@ mod on_device {
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Sampler, 1, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let state = |descriptor: &SamplerDescriptor, index| -> SamplerState {
@@ -123,14 +113,6 @@ mod on_device {
             );
             // A state at the index `a` holds takes it; `a`'s going leaves it.
             let later = state(&nearest, 1);
-            assert_eq!(
-                refused(device.release_indices(grant)),
-                Refusal::IndicesInUse {
-                    class: IndexClass::Sampler,
-                    index: 1
-                },
-                "{name}"
-            );
             assert_eq!(counters.gauges().samplers, 6, "{name}");
             assert_eq!(counters.gauges().descriptor_slots, 5, "{name}");
             drop(a);
@@ -140,9 +122,6 @@ mod on_device {
             state(&linear, 1);
             drop((b, c, d, e));
             assert_eq!(counters.gauges().descriptor_slots, 0, "{name}");
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             let gauges = counters.gauges();
             assert_eq!(
@@ -240,7 +219,7 @@ mod on_device {
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Sampler, 1, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let before = counters.gauges();
@@ -273,9 +252,6 @@ mod on_device {
             crate::tests::command::on_device::within("the reaper frees the device sampler", || {
                 counters.gauges().device_samplers == before.device_samplers
             });
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: index 1 is free: {error}"));
         }
     }
 }

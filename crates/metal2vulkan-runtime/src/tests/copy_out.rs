@@ -308,7 +308,7 @@ mod on_device {
     #[test]
     fn every_device_copies_a_textures_rows_out_at_their_stride() {
         each_device("copy_out_rows", |name, _, device| {
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 256)).expect("indices");
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 256)).expect("indices");
             let (mut index, mut class) = (0, 0);
             let before = SPLIT.load(Ordering::SeqCst);
             for format in [
@@ -339,7 +339,6 @@ mod on_device {
                 class > 0 && split >= u64::from(class),
                 "{name}: the class's copies split"
             );
-            (device.release_indices(grant)).expect("a release");
         });
     }
 }

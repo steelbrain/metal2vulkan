@@ -109,7 +109,7 @@ pub(crate) mod on_device {
                 vk::FormatFeatureFlags2::STORAGE_IMAGE
                     | vk::FormatFeatureFlags2::STORAGE_WRITE_WITHOUT_FORMAT,
             );
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8UnormSRGB, 2, 2);
@@ -140,7 +140,6 @@ pub(crate) mod on_device {
             let read = state(&device, &library, "rrp_sw_read_f");
             (dispatch(&device, &read, &texture, &out)).unwrap_or_else(|e| panic!("{name}: {e}"));
             drop(texture);
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: the device stores 8-bit sRGB {stores}; stored slots answered so");
         });
     }
@@ -238,7 +237,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
             Err(error) => panic!("the argument kernels: {error:?}"),
         };
         each_device("declared storage elements", |name, _, device| {
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 16))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 16))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let write = state(&device, &library, "argument_write");
             let read = state(&device, &library, "argument_read");
@@ -338,7 +337,6 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
             }
             drop((cases, parent));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!(
                 "{name}: a declared write refused for {refused:?}; every other case and every \
                  used heap dispatched"
@@ -422,7 +420,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
         each_device("declared storage elements in draws", |name, _, device| {
             let writing = render_state(name, &device, &writing);
             let plain = render_state(name, &device, &plain);
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 16))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 16))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let descriptor = |pixel_format, storage_mode| {
                 let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, 2, 2);
@@ -524,7 +522,6 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                 "{name}: the fragment function's write"
             );
             drop((cases, parent, written));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!(
                 "{name}: a draw after a declared write refused for {refused:?}; every other case \
                  and every draw of no such access drew"

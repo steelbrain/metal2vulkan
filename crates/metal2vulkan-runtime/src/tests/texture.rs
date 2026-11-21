@@ -6,9 +6,8 @@
 //!   the type does not take, and levels past the full chain (one for 1D and multisample types).
 //! - An index has one owner, the object placed there last, in each class: a placement where
 //!   another object holds the index displaces it, and only the owner's vacating frees the index;
-//!   placing at one not granted is `Refusal::IndicesNotGranted`, and a grant is not released while
-//!   an object holds one of its indices (`Refusal::IndicesInUse`); vacated, it is placed at and
-//!   released again.
+//!   placing at one not granted is `Refusal::IndicesNotGranted`; the owner owns the index until
+//!   it vacates it, and vacated, it is placed at again.
 //! - A view's components are Metal's swizzle over the format's own mapping: zero and one stay,
 //!   and a channel source reads through the format's mapping. A view's swizzle combines with its
 //!   parent's as Metal's does: each channel it names is the parent's as the parent's swizzle
@@ -23,9 +22,10 @@
 //!   padding, a 3D region two images deep, a slice of an array, a cube's face, a depth texture,
 //!   and a block-compressed texture where the device makes one; padding in the caller's bytes is
 //!   left alone. A Private texture's bytes are refused. A texture's ID is its index and its
-//!   format's word. An index is taken while its texture lives and free once it is gone, and its
-//!   grant is released only then. The gauges of textures, descriptor slots and blocks come back to
-//!   zero with the device, and the copies are counted in `bytes_copied`.
+//!   format's word. An index is taken while its texture lives and free once it is gone: the
+//!   descriptor-slot gauge counts it while it lives and is back to its count before the
+//!   placements once the textures are gone. The gauges of textures, descriptor slots and blocks
+//!   come back to zero with the device, and the copies are counted in `bytes_copied`.
 //! - Under a device cfg, `replace_region` reads its bytes in place through `HostBytes::from_raw`,
 //!   from memory no slice covers, and copies the region's bytes once: `bytes_copied` grows by the
 //!   region's rows alone, not the padding between them, and the texture reads them back.
@@ -195,7 +195,7 @@ fn each_shape_metal_stops_is_refused() {
 fn an_index_has_one_owner_the_object_placed_there_last() {
     for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
         let mut grants = Grants::new();
-        let grant = grants.grant(class, first, 4).expect("the grant");
+        grants.grant(class, first, 4).expect("the grant");
         let at = first + 1;
         let place = |grants: &mut Grants| grants.place(class, at).expect("a placement");
         let earlier = place(&mut grants);
@@ -211,16 +211,12 @@ fn an_index_has_one_owner_the_object_placed_there_last() {
             grants.place(class, first + 4),
             Err(Error::Refused(Refusal::IndicesNotGranted { index, .. })) if index == first + 4
         ));
-        assert_eq!(
-            refused(grants.release(grant)),
-            Refusal::IndicesInUse { class, index: at }
-        );
+        // The owner's vacating frees the index.
         assert!(grants.vacate(class, at, later.owner), "{class:?}");
         assert!(!grants.owns(class, at, later.owner), "{class:?}");
         let again = place(&mut grants);
         assert!(!again.displaced, "{class:?}");
         assert!(grants.vacate(class, at, again.owner), "{class:?}");
-        assert!(grants.release(grant).is_ok(), "{class:?}");
     }
     // The classes are apart: a texture grant grants no sampler index.
     let mut grants = Grants::new();
@@ -411,10 +407,10 @@ mod on_device {
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            let sampled = device
+            let _sampled = device
                 .grant_indices(IndexClass::Texture, 4096, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let storage = device
+            let _storage = device
                 .grant_indices(IndexClass::Texture, 1, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let make = |d: &TextureDescriptor, index| {
@@ -573,18 +569,10 @@ mod on_device {
                 "{name}"
             );
 
-            // An index holds its texture until it is gone, and its grant waits for it.
+            // An index holds its texture until it is gone.
             assert_eq!(
                 refused(device.new_texture(&d, None)),
                 Refusal::TextureIndex { index: None },
-                "{name}"
-            );
-            assert_eq!(
-                refused(device.release_indices(sampled)),
-                Refusal::IndicesInUse {
-                    class: IndexClass::Texture,
-                    index: 4096
-                },
                 "{name}"
             );
             // Seven live at their indices; a dropped texture's image may wait for its upload.
@@ -594,12 +582,6 @@ mod on_device {
             drop(private);
             make(&d, Some(4102));
             drop((rgba, half, volume, array, cube, depth));
-            device
-                .release_indices(sampled)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            device
-                .release_indices(storage)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(counters.gauges().descriptor_slots, 0, "{name}");
             assert!(counters.metrics().bytes_copied > 0, "{name}");
             drop(device);
@@ -695,7 +677,7 @@ mod on_device {
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Format, type, extent, levels, slices, an element's bytes and the texels across it.
@@ -936,9 +918,6 @@ mod on_device {
                     });
                 }
             }
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             println!(
                 "texture zeros: {name}: {cleared} new textures read zero where another was written"
             );
@@ -966,7 +945,7 @@ mod on_device {
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let d = descriptor(
@@ -1070,9 +1049,6 @@ mod on_device {
                 "{name}: {barriers} barriers, the moves home and the zeroing's among them"
             );
             drop((buffer, block, new, queue));
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             println!(
                 "texture zeros: {name}: one upload cleared 2 new textures and counted 1 zeroing \
                  barrier of its {barriers}"

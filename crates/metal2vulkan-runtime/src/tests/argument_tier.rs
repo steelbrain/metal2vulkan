@@ -172,7 +172,7 @@ mod on_device {
                 "{name}"
             );
             let state = state(name, &device, &library, "a8r_held");
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 2))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let rw = texture(name, &device, 2, 1, &TEXELS);
             let w = texture(name, &device, 2, 2, &[[0.0; 4]; 4]);
@@ -223,7 +223,6 @@ mod on_device {
                 "{name}: the write member"
             );
             drop((rw, w, command_buffer));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: an argument buffer's read_write and write textures read and wrote");
         });
     }
@@ -238,7 +237,7 @@ mod on_device {
         each_device("argument_tier_gpu_written", |name, _, device| {
             let copy = state(name, &device, &library, "ab_copy");
             let read = state(name, &device, &library, "ab_read");
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let texture = texture(name, &device, 1, 1, &TEXELS[..1]);
             let mut shared = Shared::new(&device);
@@ -267,7 +266,6 @@ mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}");
             assert_eq!(float4s(&out, 1), [TEXELS[0]], "{name}");
             drop((texture, command_buffer));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: a texture read through an argument buffer a kernel wrote");
         });
     }
@@ -281,7 +279,7 @@ mod on_device {
         };
         each_device("argument_tier_private", |name, _, device| {
             let read = state(name, &device, &library, "ab_read");
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let texture = texture(name, &device, 1, 1, &TEXELS[1..2]);
             let mut shared = Shared::new(&device);
@@ -317,7 +315,6 @@ mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}");
             assert_eq!(float4s(&out, 1), [TEXELS[1]], "{name}");
             drop((texture, held, command_buffer));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: a texture read through a Private argument buffer");
         });
     }
@@ -332,7 +329,7 @@ mod on_device {
         };
         each_device("argument_tier_indexed", |name, _, device| {
             let read = state(name, &device, &library, "ab_indexed");
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 4))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 4))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let textures: Vec<Texture> = (TEXELS.iter().zip(1..))
                 .map(|(texel, index)| texture(name, &device, 1, index, std::slice::from_ref(texel)))
@@ -365,7 +362,6 @@ mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}");
             assert_eq!(float4s(&out, 4), TEXELS, "{name}");
             drop((textures, command_buffer));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: the textures argument buffers a pointer member reaches hold, read");
         });
     }
@@ -542,19 +538,19 @@ mod on_device {
     /// A release under work committed before it waits for that work (`crate::memory::Wait`): a
     /// command buffer that waits on an event, committed before the last handles of a 17 MiB
     /// Shared block (an allocation of its own) and of a texture at an index drop, holds both.
-    /// Nothing reads either. Past twice the idle age the allocation is not freed, the index is in
-    /// use and `releases_waiting` counts what waits; once the event is set and the command buffer
-    /// retires, the allocation is freed, nothing waits and the grant may be returned. The reaper
-    /// thread is held from before the releases until then, so the grant's return waits on the
-    /// block-maker thread alone, as `releases_waiting` falls only after it vacated the index.
+    /// Nothing reads either. Past twice the idle age the allocation is not freed, the
+    /// descriptor-slot gauge counts the index and `releases_waiting` counts what waits; once the
+    /// event is set and the command buffer retires, the allocation is freed, nothing waits and
+    /// the gauge no longer counts the index. The reaper thread is held from before the releases
+    /// until then, so the index's vacating waits on the block-maker thread alone, as
+    /// `releases_waiting` falls only after it vacated the index.
     #[test]
     fn every_device_holds_a_release_until_the_work_committed_before_it_retires() {
         use crate::tests::command::on_device::{shared_event, within};
-        use crate::{Error, Refusal};
         const LEN: u64 = 17 << 20;
         each_device("argument_tier_held_release", |name, _, device| {
             let counters = device.counters();
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 2, 2);
             d.usage = TextureUsage::SHADER_READ;
@@ -578,27 +574,25 @@ mod on_device {
             std::thread::sleep(std::time::Duration::from_nanos(
                 2 * crate::memory::IDLE_AGE_NANOS,
             ));
-            let (held, waiting) = (
+            let (held, waiting, slots) = (
                 counters.metrics().allocations_freed,
                 counters.gauges().releases_waiting,
+                counters.gauges().descriptor_slots,
             );
-            let in_use = device.release_indices(grant);
             event.set_signaled_value(1);
             finished(name, &command_buffer);
             assert_eq!(held, freed, "{name}: an allocation freed under the work");
             assert!(waiting >= 1, "{name}: {waiting} releases waiting");
-            assert!(
-                matches!(
-                    in_use,
-                    Err(Error::Refused(Refusal::IndicesInUse { index: 1, .. }))
-                ),
-                "{name}: the index under the work: {in_use:?}"
-            );
+            assert_eq!(slots, 1, "{name}: the index under the work");
             within("the releases once the work retired", || {
                 counters.metrics().allocations_freed > freed
                     && counters.gauges().releases_waiting == 0
             });
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                counters.gauges().descriptor_slots,
+                0,
+                "{name}: the index once nothing waits"
+            );
             drop(resume);
             println!("{name}: {waiting} releases held under the work, then gone");
         });

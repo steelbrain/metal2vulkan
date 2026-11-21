@@ -90,7 +90,7 @@ mod on_device {
             return;
         };
         each_device("swizzled kernels", |name, _, device| {
-            let grant = (device.grant_indices(IndexClass::Texture, 1, 2))
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 2, 2);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
@@ -172,7 +172,6 @@ mod on_device {
                 "{name}: a write through the view stores the value unswizzled"
             );
             drop((view, texture));
-            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: a swizzled view read through, written past, read_write refused");
         });
     }

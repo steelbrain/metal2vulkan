@@ -32,7 +32,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 78 | 78 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 77 | 77 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 
@@ -46,7 +46,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 21 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 22 | 21 | 0 | 0 | 34 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
 
@@ -289,8 +289,7 @@ Columns:
 | `IndirectOffset` | An indirect dispatch's or draw's argument offset that is not a multiple of 4, or that leaves fewer than the arguments' bytes in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` read their 32-bit words at a 4-byte aligned offset inside the buffer | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
 | `BufferOffsetAlignment` | A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer bound where its address, the buffer's `gpuAddress` plus the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's API validation refuses the bind offset: "must be a multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max, macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-runtime/src/arrays.rs (grant)` | `-` |
-| `IndicesNotGranted` | A texture, a sampler state or a pipeline state's constexpr sampler at an index no live grant of its class holds (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an object takes an index the consumer was granted, and a grant is returned once | 2: `crates/metal2vulkan-runtime/src/arrays.rs (place)`, `crates/metal2vulkan-runtime/src/arrays.rs (release)` | `-` |
-| `IndicesInUse` | A release of a grant while a texture, a sampler state or a constexpr sampler holds one of its indices (`Device::release_indices`), a released one... | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object holds it | 1: `crates/metal2vulkan-runtime/src/arrays.rs (release)` | `-` |
+| `IndicesNotGranted` | A texture, a sampler state or a pipeline state's constexpr sampler at an index no grant of its class holds (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an object takes an index the consumer was granted | 1: `crates/metal2vulkan-runtime/src/arrays.rs (place)` | `-` |
 | `TextureIndex` | A texture shaders reach made without an index, or one they do not reach made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 4: `crates/metal2vulkan-runtime/src/texture.rs (new_drawable_texture)`, `crates/metal2vulkan-runtime/src/texture.rs (surface_texture)` (+2) | `-` |
 | `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-runtime/src/texture.rs (shape)` | `-` |
 | `TextureExtentForType` | A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-runtime/src/texture.rs (shape)` | `-` |
@@ -586,8 +585,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)`
 - `rt:Refusal::BufferOffsetAlignment`: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)`
 - `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-runtime/src/arrays.rs (grant)`
-- `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-runtime/src/arrays.rs (place)`; `crates/metal2vulkan-runtime/src/arrays.rs (release)`
-- `rt:Refusal::IndicesInUse`: `crates/metal2vulkan-runtime/src/arrays.rs (release)`
+- `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-runtime/src/arrays.rs (place)`
 - `rt:Refusal::TextureIndex`: `crates/metal2vulkan-runtime/src/texture.rs (new_drawable_texture)`; `crates/metal2vulkan-runtime/src/texture.rs (surface_texture)`; `crates/metal2vulkan-runtime/src/texture.rs (texture)`; `crates/metal2vulkan-runtime/src/texture.rs (view)`
 - `rt:Refusal::TextureZeroExtent`: `crates/metal2vulkan-runtime/src/texture.rs (shape)`
 - `rt:Refusal::TextureExtentForType`: `crates/metal2vulkan-runtime/src/texture.rs (shape)`

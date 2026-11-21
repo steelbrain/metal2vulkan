@@ -426,31 +426,17 @@ pub enum Refusal {
         /// The first index of the range that is granted already.
         index: u32,
     },
-    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index no live
-    /// grant of its class holds ([`Device::new_texture`](crate::Device::new_texture),
+    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index no grant
+    /// of its class holds ([`Device::new_texture`](crate::Device::new_texture),
     /// [`Device::new_sampler_state`](crate::Device::new_sampler_state),
-    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)), or a
-    /// release of an index that is not granted
-    /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)). Metal
+    /// has no counterpart.
     ///
-    /// Basis: ours (an object takes an index the consumer was granted, and a grant is returned
-    /// once).
+    /// Basis: ours (an object takes an index the consumer was granted).
     IndicesNotGranted {
         /// The class of the index.
         class: IndexClass,
-        /// The first index of the range that is not granted.
-        index: u32,
-    },
-    /// A release of a grant while a texture, a sampler state or a constexpr sampler holds one of
-    /// its indices ([`Device::release_indices`](crate::Device::release_indices)), a released one
-    /// until the command buffers committed before its release retired and the runtime vacated
-    /// the index. Metal has no counterpart.
-    ///
-    /// Basis: ours (an object's index stays granted while the object holds it).
-    IndicesInUse {
-        /// The class of the index.
-        class: IndexClass,
-        /// The first index of the grant where an object lives.
+        /// The index that is not granted.
         index: u32,
     },
     /// A texture shaders reach made without an index, or one they do not reach made with one
@@ -2137,9 +2123,6 @@ impl fmt::Display for Refusal {
             }
             Refusal::IndicesNotGranted { class, index } => {
                 write!(f, "{class:?} index {index} is not granted")
-            }
-            Refusal::IndicesInUse { class, index } => {
-                write!(f, "an object lives at {class:?} index {index} of the grant")
             }
             Refusal::TextureIndex { index: Some(index) } => write!(
                 f,

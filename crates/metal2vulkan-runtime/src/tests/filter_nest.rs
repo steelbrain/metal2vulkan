@@ -176,9 +176,9 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
             return;
         };
         each_device("filter nest", |name, _, device| {
-            let textures = (device.grant_indices(IndexClass::Texture, 1, 2))
+            let _textures = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
+            let _samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let unrolled = sums(name, &device, &decided, 1);
             let switched = sums(name, &device, &loaded, 2);
@@ -199,8 +199,6 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
                     "{name}: thread {tid}: {got} against {want}"
                 );
             }
-            (device.release_indices(textures)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            (device.release_indices(samplers)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("filter nest: {name}: the unrolled and switched forms write the same 64 sums");
         });
     }

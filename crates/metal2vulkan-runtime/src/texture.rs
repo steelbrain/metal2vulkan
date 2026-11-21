@@ -927,11 +927,11 @@ impl Device {
     /// duty, as it is Metal's; nothing checks it). A released one it may: its index, elements,
     /// views and image go once every command buffer committed before the release retired
     /// ([`Gauges::releases_waiting`](crate::Gauges::releases_waiting)), the index then on the
-    /// block-maker thread's next pass ([`Device::release_indices`]), so that work reads it as
-    /// it was. Metal leaves that read undefined: a program that released textures a frame in
-    /// flight still sampled finished every run with no command buffer error on two Macs, with the
-    /// answer it gave with the textures held on a Radeon Pro 5300M, and one a few channel levels
-    /// off it, differing from run to run, on an Apple M3 Max. The runtime gives the first answer.
+    /// block-maker thread's next pass, so that work reads it as it was. Metal leaves that read
+    /// undefined: a program that released textures a frame in flight still sampled finished every
+    /// run with no command buffer error on two Macs, with the answer it gave with the textures
+    /// held on a Radeon Pro 5300M, and one a few channel levels off it, differing from run to run,
+    /// on an Apple M3 Max. The runtime gives the first answer.
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a

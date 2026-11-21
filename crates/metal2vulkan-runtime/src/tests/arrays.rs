@@ -3,8 +3,7 @@
 //! - A grant takes a range inside its class's (textures 1 to 65,535, samplers 1 to 3,999); index
 //!   0, an empty range and one past the class's are
 //!   `Limit::IndexRange`. An index granted already is `Refusal::IndicesGranted`, of any range that
-//!   holds it; a release of an index not granted is `Refusal::IndicesNotGranted`. A released range
-//!   is granted again.
+//!   holds it.
 //! - Under a device cfg, on every device of the cfg's kind, the device writes every element of
 //!   set 1 its default at creation, and holds two `VkSampler`s for it; grants work through the
 //!   device; `Device::new`, and making and destroying a second set 1, are timed and reported,
@@ -52,7 +51,6 @@ fn a_grant_takes_a_range_inside_its_class() {
             (whole.class, whole.first, whole.count),
             (class, first, end - first)
         );
-        grants.release(whole).expect("the release");
         for (first, count) in [(0, 1), (first - 1, 2), (end - 1, 2), (end, 1), (first, 0)] {
             assert_eq!(
                 limit(grants.grant(class, first, count)),
@@ -75,12 +73,12 @@ fn a_grant_takes_a_range_inside_its_class() {
     }
 }
 
-/// An index has one grant at a time; a released range is granted again; the classes are apart.
+/// An index has one grant; the classes are apart.
 #[test]
 fn an_index_has_one_grant_at_a_time() {
     let mut grants = Grants::new();
     let class = IndexClass::Sampler;
-    let held = grants.grant(class, 10, 5).expect("the grant");
+    grants.grant(class, 10, 5).expect("the grant");
     for (first, count, index) in [(10, 5, 10), (14, 3, 14), (8, 3, 10)] {
         assert_eq!(
             refusal(grants.grant(class, first, count)),
@@ -92,21 +90,7 @@ fn an_index_has_one_grant_at_a_time() {
     grants
         .grant(IndexClass::Texture, 10, 5)
         .expect("another class's grant");
-    let next = grants.grant(class, 15, 1).expect("the next index");
-    grants.release(held).expect("the release");
-    assert_eq!(
-        refusal(grants.release(held)),
-        Refusal::IndicesNotGranted { class, index: 10 }
-    );
-    // A range partly granted is not released.
-    let mut partly = next;
-    partly.first = 14;
-    partly.count = 2;
-    assert_eq!(
-        refusal(grants.release(partly)),
-        Refusal::IndicesNotGranted { class, index: 14 }
-    );
-    grants.grant(class, 10, 5).expect("the range again");
+    grants.grant(class, 15, 1).expect("the next index");
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -129,7 +113,7 @@ mod on_device {
     /// One object `make` makes at every index of `indices` of `class`, through one grant of
     /// them, then [`AGAIN`] of them each dropped and made again at the index it left, as a
     /// consumer reuses an index: the descriptor-slot gauge counts them on top of what it counted
-    /// before while they live, and is back to that once they are gone and the grant is released.
+    /// before while they live, and is back to that once they are gone.
     fn fill_past_capacity<T>(
         name: &str,
         device: &Device,
@@ -139,7 +123,7 @@ mod on_device {
         let counters = device.counters();
         let before = counters.gauges().descriptor_slots;
         let Range { start, end } = indices;
-        let grant = (device.grant_indices(class, start, end - start))
+        let _grant = (device.grant_indices(class, start, end - start))
             .unwrap_or_else(|error| panic!("{name}: {class:?}: {error}"));
         let mut live: Vec<Option<T>> = (start..end).map(|index| Some(make(index))).collect();
         let full = before + u64::from(end - start);
@@ -163,7 +147,6 @@ mod on_device {
             before,
             "{name}: {class:?}"
         );
-        (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 
     /// Set 1's arrays filled past their capacity: 3,999 sampler states and 128 more, through one
@@ -193,7 +176,7 @@ mod on_device {
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
             d.storage_mode = StorageMode::Private;
             let Range { start, end } = IndexClass::Texture.range();
-            let first = (device.grant_indices(IndexClass::Texture, start, 1))
+            let _first = (device.grant_indices(IndexClass::Texture, start, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let texture = (device.new_texture(&d, Some(start)))
                 .unwrap_or_else(|error| panic!("{name}: texture {start}: {error}"));
@@ -203,7 +186,6 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: view {index}: {error}"))
             });
             drop(texture);
-            (device.release_indices(first)).unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             let gauges = counters.gauges();
             assert_eq!(
@@ -259,7 +241,7 @@ mod on_device {
             println!("M2V-MATRIX device_new/{name} {micros} us");
             let counters = device.counters();
             assert_eq!(counters.gauges().device_samplers, 2, "{name}");
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 64)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(
@@ -270,7 +252,6 @@ mod on_device {
                 },
                 "{name}"
             );
-            device.release_indices(grant).expect("the release");
             let core = device.core();
             let start = Instant::now();
             // SAFETY: the device is live and made at the floor.

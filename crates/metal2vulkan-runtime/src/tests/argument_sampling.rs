@@ -154,7 +154,7 @@ mod on_device {
             return;
         };
         each_device("argument_sampling", |name, _, device| {
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, 1),
                 (IndexClass::Sampler, SLOT_SAMPLER),
             ]
@@ -217,9 +217,6 @@ mod on_device {
                 );
             }
             drop((command_buffer, queue, state, sampler, h, f));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
             println!(
                 "{name}: an argument buffer's textures sampled through slot and constexpr samplers"
             );
@@ -437,7 +434,7 @@ mod on_device {
             return;
         };
         each_device("argument_sampling", |name, _, device| {
-            let grants = [(IndexClass::Texture, 1, 1), (IndexClass::Sampler, 1, 4)].map(
+            let _grants = [(IndexClass::Texture, 1, 1), (IndexClass::Sampler, 1, 4)].map(
                 |(class, first, count)| {
                     (device.grant_indices(class, first, count))
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
@@ -503,9 +500,6 @@ mod on_device {
                 );
             }
             drop((command_buffer, queue, state, t));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
             println!(
                 "{name}: an argument buffer's texture sampled through a table of constexpr samplers"
             );
@@ -527,7 +521,7 @@ mod on_device {
             return;
         };
         each_device("argument_sampling", |name, _, device| {
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, 1),
                 (IndexClass::Sampler, SLOT_SAMPLER),
             ]
@@ -606,9 +600,6 @@ mod on_device {
                 "{name}: through a resource ID whose index is past the sampler arrays"
             );
             drop((command_buffer, queue, state, sampler, t));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
             println!(
                 "{name}: an argument buffer's texture sampled through the argument buffer's sampler"
             );
@@ -687,7 +678,7 @@ mod on_device {
         let uv = normalized_grid(WIDTH, HEIGHT);
         let count = uv.len();
         each_device("argument_sampling", |name, _, device| {
-            let grants = [
+            let _grants = [
                 (IndexClass::Texture, 1, 1),
                 (IndexClass::Sampler, SLOT_SAMPLER, 4),
             ]
@@ -838,9 +829,6 @@ mod on_device {
                 samplers,
                 t,
             ));
-            for grant in grants {
-                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
             println!(
                 "{name}: one texture sampled alike through an argument buffer's sampler and a \
                  slot's, under {} address modes at {count} coordinates",

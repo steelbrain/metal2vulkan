@@ -2788,8 +2788,9 @@ pub struct Gauges {
     /// indices and device samplers that wait for the command buffers committed before them to
     /// retire, which may reach them through set 1 with no handle of them; none where nothing was
     /// in flight at the release. One stops counting once that work has retired and the
-    /// block-maker thread has taken it: an index vacated, so its grant may be returned, an object
-    /// handed to the reaper thread, which frees it next.
+    /// block-maker thread has taken it: an index vacated, so
+    /// [`descriptor_slots`](Self::descriptor_slots) no longer counts it, an object handed to the
+    /// reaper thread, which frees it next.
     pub releases_waiting: u64,
     /// Indirect command buffers alive, each with its records' block
     /// ([`Device::new_indirect_command_buffer`](crate::Device::new_indirect_command_buffer)).

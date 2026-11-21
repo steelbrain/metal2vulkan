@@ -125,7 +125,7 @@ mod on_device {
             let base = counters.gauges().blocks;
             let made = counters.metrics().blocks_made;
             let most = 2 * MemoryClass::Private.block_len() / MIB;
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, most as u32)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 512, 512);
@@ -190,9 +190,6 @@ mod on_device {
                 "{name}: after the rounds"
             );
 
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
             println!(
@@ -250,7 +247,7 @@ mod on_device {
                         .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
                 }
             }
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 1)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let d =
@@ -264,9 +261,6 @@ mod on_device {
             );
             drop(texture);
             wait_until("the texture freed", || counters.gauges().textures == 0);
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
         }
     }
 
@@ -342,7 +336,7 @@ mod on_device {
             );
 
             // A small texture alone in its texture block, then a sixteenth of the block beside it.
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let tiny = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 32, 32);
@@ -406,9 +400,6 @@ mod on_device {
                 [1, 0],
                 "{name}: the kept texture block alone holds its unit"
             );
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
@@ -430,7 +421,7 @@ mod on_device {
             let core = device.core();
             let counters = device.counters();
             core.pool.await_internals();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // A texture longer than a block whose block, of its length rounded up to the pool's
@@ -516,9 +507,6 @@ mod on_device {
             wait_until("the small texture freed", || {
                 counters.gauges().textures == 0
             });
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
@@ -542,7 +530,7 @@ mod on_device {
             let core = device.core();
             let counters = device.counters();
             core.pool.await_internals();
-            let grant = device
+            let _grant = device
                 .grant_indices(IndexClass::Texture, 4096, count)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut state = 0x2545_F491_4F6C_DD1D_u64;
@@ -620,9 +608,6 @@ mod on_device {
                 (0, [0; 4], [unit, 0, 0, 0]),
                 "{name}: nothing placed"
             );
-            device
-                .release_indices(grant)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
