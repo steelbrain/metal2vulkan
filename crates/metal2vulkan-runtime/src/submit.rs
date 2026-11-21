@@ -1026,6 +1026,16 @@ impl Work {
         (state.region.as_ref()).map_or_else(Vec::new, |region| region.ring.live())
     }
 
+    /// For the device tests: `queue`'s submissions not seen complete when the submit thread last
+    /// looked, and whether it holds a group not yet submitted.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn in_flight(&self, queue: &QueueInner) -> (usize, bool) {
+        let state = self.lock();
+        (state.fifos.iter().find(|fifo| fifo.queue.is(queue))).map_or((0, false), |fifo| {
+            (fifo.in_flight.len(), fifo.group.is_some())
+        })
+    }
+
     /// For the device tests: the queues whose head's next segment the submit thread holds for an
     /// event's value ([`WorkState::mark_holds`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

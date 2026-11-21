@@ -985,6 +985,13 @@ impl Pool {
         }
     }
 
+    /// For the device tests: the completion thread's rounds of retirements so far
+    /// ([`retired`](Self::retired)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn rounds(&self) -> u64 {
+        self.rounds.load(Ordering::SeqCst)
+    }
+
     fn wait<'a>(&self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
         self.changed
             .wait(state)

@@ -10,6 +10,7 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::submit::IN_FLIGHT;
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{behind_busy, each_device, finished, within, word};
     use crate::tests::draw::on_device::{pass, target};
@@ -313,9 +314,11 @@ mod on_device {
     }
 
     /// A wait on a fence no encoder updated waits for nothing, while queue A holds in a group an
-    /// update of another fence: on queue B, an encoder that only waits on it completes at once,
-    /// and a command buffer with work after the wait goes in one submission of its own, A's group
-    /// staying held.
+    /// update of another fence: on queue B, a command buffer with work after the wait goes in one
+    /// submission of its own, A's group staying held, and on a third queue an encoder that only
+    /// waits on it completes at once. The submissions are counted first: a command buffer with
+    /// nothing for the GPU retires in a round of the completion thread, and a group held goes
+    /// during such a round (`crate::submit`), so none runs while they are counted.
     #[test]
     fn every_device_runs_a_wait_on_a_fence_never_updated_at_once() {
         each_device("fence_never_updated", |name, _, device| {
@@ -325,25 +328,48 @@ mod on_device {
             let counters = device.counters();
             let a = device.new_command_queue(8).expect("a queue");
             let b = device.new_command_queue(8).expect("a queue");
+            let c = device.new_command_queue(8).expect("a queue");
             behind_busy(name, &device, &a, |busy, _, _| {
+                let work = &device.core().work;
                 let updater = update(&a, &written, &updated);
                 staged(name, &updater);
-                let empty = b.command_buffer().expect("a command buffer");
+                let waiter = wait(&b, &written, &copy, &never, None);
+                assert_eq!(
+                    (
+                        work.in_flight(updater.queue()),
+                        work.in_flight(waiter.queue())
+                    ),
+                    ((IN_FLIGHT, true), (0, false)),
+                    "{name}: A's busy work in flight and its group held, nothing of B's"
+                );
+                let (before, rounds) = (counters.metrics(), device.core().pool.rounds());
+                waiter.commit().expect("a commit");
+                staged(name, &waiter);
+                thread::sleep(Duration::from_millis(50));
+                // Nothing is seen complete behind the busy work: each queue's submissions since
+                // are all in flight, and the rest are the runtime's own uploads sent alone.
+                let after = counters.metrics();
+                let all = after.submissions - before.submissions;
+                let (a_sent, a_held) = work.in_flight(updater.queue());
+                let a_sent = a_sent.saturating_sub(IN_FLIGHT) as u64;
+                let b_sent = work.in_flight(waiter.queue()).0 as u64;
+                let alone = all.saturating_sub(a_sent + b_sent);
+                let own = after.runtime_command_buffers - before.runtime_command_buffers;
+                let rounds = device.core().pool.rounds() - rounds;
+                assert_eq!(
+                    (all, b_sent, a_sent, a_held, alone, own, rounds),
+                    (1, 1, 0, true, 0, 0, 0),
+                    "{name}: after the wait's commit, the submissions: all of them; B's, the \
+                     wait's; A's group's, and whether A still holds it; the runtime's own uploads \
+                     sent alone; the runtime's own command buffers in them (uploads, copy-ins); \
+                     and the completion thread's rounds, during which a group held goes"
+                );
+                let empty = c.command_buffer().expect("a command buffer");
                 let mut compute =
                     (empty.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
                 compute.wait_for_fence(&never).expect("a wait");
                 compute.end_encoding();
                 run(name, &empty);
-                let before = counters.metrics().submissions;
-                let waiter = wait(&b, &written, &copy, &never, None);
-                waiter.commit().expect("a commit");
-                staged(name, &waiter);
-                thread::sleep(Duration::from_millis(50));
-                assert_eq!(
-                    counters.metrics().submissions - before,
-                    1,
-                    "{name}: the wait's submission alone, the group A holds held"
-                );
                 busy.open();
                 finished(name, &waiter);
                 finished(name, &updater);
