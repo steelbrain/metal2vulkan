@@ -1032,7 +1032,7 @@ impl ComputeCommandEncoder {
             _ => {
                 let (set, max) = (&self.threadgroup_lengths, limits.max_shared_memory);
                 let lengths = threadgroup_memory(kernel, set, local, max)?;
-                kernel.pipeline(core, inner.variant(module, local, lengths))?
+                kernel.pipeline(core, inner.dispatch_key(module, local, lengths))?
             }
         };
         self.last = Some(Last {

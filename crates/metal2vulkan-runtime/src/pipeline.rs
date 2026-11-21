@@ -989,7 +989,7 @@ impl Compiled {
         };
         if let Some((kernel, module, size)) = first {
             let lengths = Lengths::zeros(kernel.interface.threadgroups.len());
-            let variant = compiled.variant(module, size, lengths);
+            let variant = compiled.dispatch_key(module, size, lengths);
             let more = lock(&kernel.variants.more);
             kernel.make_pending(&compiled.core, more, variant, VariantStart::State, None)?;
         }
@@ -1012,7 +1012,7 @@ impl Compiled {
                 let found = compiled.dispatched(dispatch, size, &[]);
                 if let Some((kernel, module, local, lengths)) = found {
                     if kernel.interface.threadgroups.is_empty() {
-                        let variant = compiled.variant(module, local, lengths);
+                        let variant = compiled.dispatch_key(module, local, lengths);
                         kernel.make_ahead(&compiled.core, variant, VariantStart::State);
                     }
                 }
@@ -1608,7 +1608,7 @@ impl ComputePipelineState {
             return;
         };
         let core = &compiled.core;
-        let variant = compiled.variant(module, local, lengths);
+        let variant = compiled.dispatch_key(module, local, lengths);
         if let Some(nanos) = kernel.make_ahead(core, variant, VariantStart::Ahead) {
             core.counters.made_ahead(nanos);
         }
@@ -1642,7 +1642,7 @@ impl ComputePipelineState {
         let compiled = &self.inner.compiled;
         let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
         let (kernel, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
-        let variant = compiled.variant(module, local, lengths);
+        let variant = compiled.dispatch_key(module, local, lengths);
         Some((variant, kernel.is_made(variant.key())))
     }
 
@@ -1809,7 +1809,7 @@ impl Compiled {
 
     /// The key of the dispatches that run `module` at workgroup size `local` with threadgroup
     /// memory `lengths`: its [`DispatchVariant`].
-    pub(crate) fn variant(
+    pub(crate) fn dispatch_key(
         &self,
         module: Module,
         local: [u32; 3],
