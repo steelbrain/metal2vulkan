@@ -1897,7 +1897,9 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
 /// and stencil attachment. On every committed profile that orders fetch through the interlock the
 /// shader blends color 0: it reads the texel, blends the output over its tile value and stores the
 /// encode (one image read and one write more than the pipeline unblended), the fact names the
-/// blend, and the module passes L3. The whole pipeline is made on `moltenvk-m3`
+/// blend, and the module passes L3. Color 0 and color 2 are `RGB10A2Unorm_sRGB`, the
+/// four-channel padded form, where the guest's were `RGB10A8_2P_XR10`, whose blend is refused
+/// (`blended_pipelines`). The whole pipeline is made on `moltenvk-m3`
 /// (no vertex descriptor), color 0 a written storage attachment of the raw format, as are its
 /// pipelines blending one plus one, one and zero, and source alpha over, and a stage compiled under
 /// its state links into no pipeline of another blend there. The `float4` fill
@@ -1907,76 +1909,8 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
 /// consumer's mask blend (G345: color source factor zero over one minus the source's alpha) is
 /// computed in the shader too, for the `half4` output and for the `float4` fill, and makes the
 /// whole pipeline on the MoltenVK profile.
-/// A fast-math function's source-alpha-over blend (source alpha and one minus it, added, for
-/// color and alpha, every channel written) into color 0 of `BGR10_XR_sRGB`,
-/// `RGB10A8_2P_XR10_sRGB` or `BGRA10_XR_sRGB`, beside an `R8Unorm` color 1 under the same blend (a
-/// consumer's pipeline): on every committed profile that orders fetch through the interlock, the
-/// shader blends color 0 by the device's arithmetic, a `half4` output's and a `float4` one's, and
-/// the module passes L3.
 #[test]
-fn a_fast_source_alpha_over_blend_into_an_srgb_extended_range_attachment_is_made() {
-    use crate::metal::BlendFactor;
-    let Some(fills) = fixture("rt6_samples") else {
-        return;
-    };
-    let colors = |pf: PixelFormat| {
-        let over = |pf| {
-            let mut c = ColorAttachmentDescriptor::new(pf);
-            c.blending_enabled = true;
-            c.source_rgb_blend_factor = BlendFactor::SourceAlpha;
-            c.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-            c.source_alpha_blend_factor = BlendFactor::SourceAlpha;
-            c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-            c
-        };
-        vec![Some(over(pf)), Some(over(PixelFormat::R8Unorm))]
-    };
-    let state = |colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
-        let mut inputs = LoweringInputs::new();
-        inputs.color_writes = crate::pipeline::color_writes::color_writes(
-            0..colors.len() as u32,
-            colors,
-            (false, Default::default()),
-            p,
-        );
-        inputs.extended_range_colors =
-            crate::pipeline::color_writes::extended_range_colors(colors, Default::default());
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0], colors, true, false, 1));
-        inputs
-    };
-    let mut checked = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        if !crate::lower::fragment::interlock_orders(&p) {
-            continue;
-        }
-        for pf in [
-            PixelFormat::BGR10XRSRGB,
-            PixelFormat::RGB10A82PXR10SRGB,
-            PixelFormat::BGRA10XRSRGB,
-        ] {
-            let inputs = state(&colors(pf), &p);
-            for entry in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
-                let a = match compile_with(&fills, entry, &p, &inputs) {
-                    Ok(a) => a,
-                    // A device without the raw formats' storage refuses the form whatever the
-                    // blend.
-                    Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
-                    Err(e) => panic!("{stem}: {pf:?} {entry}: {e}"),
-                };
-                link_and_validate(&a, &p)
-                    .unwrap_or_else(|e| panic!("{stem}: {pf:?} {entry}: L3: {e}"));
-                checked += 1;
-            }
-        }
-    }
-    assert!(
-        checked > 0,
-        "no profile blends an extended-range attachment in the shader"
-    );
-}
-
-#[test]
-fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_shader() {
+fn a_premultiplied_blend_into_a_padded_attachment_is_computed_in_the_shader() {
     use crate::metal::format::ExtendedRange;
     use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask};
     use crate::pipeline::lower_inputs::BlendEquation;
@@ -2002,14 +1936,14 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
     // The guest's attachments, color 0 blended with source factor `source` for color and
     // destination factor `destination` for color and alpha.
     let colors = |source: BlendFactor, destination: BlendFactor| {
-        let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+        let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A2UnormSRGB);
         blended.blending_enabled = true;
         blended.source_rgb_blend_factor = source;
         blended.destination_rgb_blend_factor = destination;
         blended.destination_alpha_blend_factor = destination;
         let mut read = ColorAttachmentDescriptor::new(PixelFormat::RG16Float);
         read.write_mask = ColorWriteMask::NONE;
-        let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+        let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A2UnormSRGB);
         unwritten.write_mask = ColorWriteMask::NONE;
         vec![Some(blended), Some(read), Some(unwritten)]
     };
@@ -2202,7 +2136,7 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
         assert_eq!(
             uses,
             [
-                (0, ExtendedRange::Planes { srgb: false }.raw_format(), true),
+                (0, ExtendedRange::Rgb10A2Srgb.raw_format(), true),
                 (1, vk::Format::R16G16_SFLOAT, true),
             ],
             "{stem}"
@@ -2293,7 +2227,7 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
         destination_alpha: BlendFactor::OneMinusSource1Color,
         alpha_operation: crate::metal::BlendOperation::Add,
     };
-    let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+    let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A2UnormSRGB);
     blended.blending_enabled = true;
     blended.source_rgb_blend_factor = equation.source_rgb;
     blended.destination_rgb_blend_factor = equation.destination_rgb;
@@ -2326,7 +2260,7 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
             .collect();
         assert_eq!(
             uses,
-            [(0, ExtendedRange::Planes { srgb: false }.raw_format(), true)],
+            [(0, ExtendedRange::Rgb10A2Srgb.raw_format(), true)],
             "{stem}"
         );
         assert!(
@@ -2426,370 +2360,31 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
     }
 }
 
-/// On a device that orders framebuffer fetch through rasterization-order input attachments (every
-/// committed profile with that access and no ordering through the pixel interlock alone), the
-/// function computes an extended-range attachment's blend over its input attachment. Into each of
-/// the six forms, under the premultiplied blend (source one, destination one minus the source's
-/// alpha), one plus one, and one and zero, `rt6_samples`' `half4` and `float4` fills make the
-/// pipeline exactly where `moltenvk-m3`, which blends in the pixel interlock, makes it, and refuse
-/// it by the same gap elsewhere. A made pipeline's color 0 is a color attachment of the raw format
-/// with no Vulkan blend and a write of every raw component, read through an input attachment of
-/// `uint` texels, and states the blend (`RuntimeFact::ExtendedRangeInputBlend`, keeping no channel)
-/// beside the fetch; the function compiled under the pipeline's state passes L3 and its plan bounds
-/// its emission. A write mask of the color channels alone keeps alpha: made, the fact naming it,
-/// every raw component written. A mask of no channel stores nothing: made, written nowhere and read
-/// through no input attachment. A function compiled under one blend links into no pipeline of
-/// another (`NeedsInput(FramebufferFetch)`). With and without fast math the second source's blend
-/// reads `stage_io`'s index-1 output: made, with no dual-source output. Every made pipeline records
-/// the blend-source notes the interlock's records, `xrb_computed`'s whole-vector `float4` among
-/// them.
-#[test]
-fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader() {
-    use crate::metal::format::ExtendedRange;
-    use crate::metal::{BlendFactor, ColorWriteMask};
-    use crate::pipeline::lower_inputs::BlendEquation;
-    use crate::pipeline::sym::SampledType;
-    let (Some(fills), Some(fast), Some(computed)) = (
-        fixture("rt6_samples"),
-        fixture("stage_io"),
-        fixture("xrb_computed"),
-    ) else {
-        return;
-    };
-    let text = std::fs::read_to_string(engine_dir().join("stage_io.ll")).expect("text");
-    let enable = "air.compile.fast_math_enable";
-    assert_eq!(text.matches(enable).count(), 1);
-    let safe = match metal2vulkan_devtools::llvm_assemble_text(
-        &text.replace(enable, "air.compile.fast_math_disable"),
-    ) {
-        Ok(b) => b,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the safe stage_io: {why}"),
-    };
-    let function = |bc: &[u8], name: &str| {
-        FunctionDescriptor::new(
-            Library::from_air(bc)
-                .expect("library")
-                .function(name)
-                .expect("function"),
-        )
-    };
-    let device = |stem: &str| {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles")
-            .join(format!("{stem}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
-    };
-    let interlock = device("moltenvk-m3");
-    // Color 0 of `pf`, blended with source factor one and destination factor `destination`
-    // (color and alpha alike), under `mask`.
-    let color = |pf: PixelFormat, destination: BlendFactor, mask: ColorWriteMask| {
-        let mut c = ColorAttachmentDescriptor::new(pf);
-        c.blending_enabled = true;
-        c.destination_rgb_blend_factor = destination;
-        c.destination_alpha_blend_factor = destination;
-        c.write_mask = mask;
-        c
-    };
-    let pipeline = |dev: &Device, (bc, vertex, fragment): (&[u8], &str, &str), c| {
-        let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(bc, vertex)));
-        d.fragment = Some(StageSource::Function(function(bc, fragment)));
-        d.color_attachments[0] = Some(c);
-        dev.compile_render_pipeline(&d, &Budget::standard())
-    };
-    // The pipeline's state for the fill, as the render pipeline compile sets it.
-    let state = |c: ColorAttachmentDescriptor, p: &DeviceProfile| {
-        let colors = [Some(c)];
-        let mut inputs = LoweringInputs::new();
-        inputs.color_writes = crate::pipeline::color_writes::color_writes(
-            0..1,
-            &colors,
-            (false, Default::default()),
-            p,
-        );
-        inputs.extended_range_colors =
-            crate::pipeline::color_writes::extended_range_colors(&colors, Default::default());
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0], &colors, false, false, 1));
-        inputs
-    };
-    // The pipeline on `dev` where `moltenvk-m3` makes it too; `None` where both refuse it by the
-    // same gap of Metal's model.
-    // The blend-source notes a pipeline's stages record, which follow the blend whatever form
-    // computes it.
-    let sources = |a: &crate::pipeline::artifact::RenderPipeline| {
-        a.stages
-            .iter()
-            .flat_map(|s| &s.precision_notes)
-            .filter(|n| {
-                matches!(
-                    n,
-                    PrecisionNote::ExtendedRangeBlendSource
-                        | PrecisionNote::ExtendedRangeFloatBlendSource
-                )
-            })
-            .copied()
-            .collect::<Vec<_>>()
-    };
-    let both = |dev: &Device, fragment: (&[u8], &str, &str), c, what: &str| match (
-        pipeline(dev, fragment, c),
-        pipeline(&interlock, fragment, c),
-    ) {
-        (Ok(a), Ok(theirs)) => {
-            assert_eq!(sources(&a), sources(&theirs), "{what}: the source notes");
-            Some(a)
-        }
-        (Err(e), Err(theirs)) => {
-            assert_eq!(e, theirs, "{what}");
-            assert!(
-                matches!(
-                    e,
-                    Error::Unsupported(ref u)
-                        if matches!(u.feature, Feature::ExtendedRangeBlend(_))
-                ),
-                "{what}: {e}"
-            );
-            None
-        }
-        (made, theirs) => panic!(
-            "{what}: here {:?}, in the interlock {:?}",
-            made.map(|_| ()),
-            theirs.map(|_| ())
-        ),
-    };
-    let blend_of = |a: &crate::pipeline::artifact::RenderPipeline| {
-        a.dependencies
-            .iter()
-            .filter_map(|d| match d.fact {
-                RuntimeFact::ExtendedRangeInputBlend { color, blend, kept } => {
-                    Some((color, blend, kept))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    };
-    let fetches = |a: &crate::pipeline::artifact::RenderPipeline| {
-        a.dependencies
-            .iter()
-            .any(|d| d.fact == RuntimeFact::FramebufferFetch { color: 0 })
-    };
-    use vk::ColorComponentFlags as C;
-    let mut checked = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        let f = p.fields().fragment;
-        if !f.rasterization_order_color_access || crate::lower::fragment::interlock_orders(&p) {
-            continue;
-        }
-        let dev = device(&stem);
-        for raw in 550..=555u32 {
-            let pf = PixelFormat::try_from(raw).expect("format");
-            let form = ExtendedRange::of(pf).expect("an extended-range format");
-            let written = match form.raw_components() {
-                1 => C::R,
-                2 => C::R | C::G,
-                _ => C::R | C::G | C::B | C::A,
-            };
-            for destination in [
-                BlendFactor::OneMinusSourceAlpha,
-                BlendFactor::One,
-                BlendFactor::Zero,
-            ] {
-                let c = color(pf, destination, ColorWriteMask::ALL);
-                let equation = BlendEquation::of(&c).expect("a blend");
-                // The computed `float4` (whole-vector arithmetic over loads under fast math): its
-                // source notes as the interlock's.
-                let fragment = (
-                    computed.as_slice(),
-                    "xrb_computed_vertex",
-                    "xrb_computed_float",
-                );
-                both(
-                    &dev,
-                    fragment,
-                    c,
-                    &format!("{stem}: {pf:?} {destination:?} computed"),
-                );
-                for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
-                    let what = format!("{stem}: {pf:?} {destination:?} {fill}");
-                    checked += 1;
-                    let fragment = (fills.as_slice(), "rt6_fill_vertex", fill);
-                    let Some(a) = both(&dev, fragment, c, &what) else {
-                        continue;
-                    };
-                    let g = &a.graphics;
-                    let state0 = g.color_attachments[0].expect("color 0");
-                    assert_eq!(state0.format, form.raw_format(), "{what}");
-                    assert_eq!(state0.write_mask, written, "{what}");
-                    assert!(state0.blend.is_none(), "{what}");
-                    let inputs: Vec<(u32, SampledType)> = g
-                        .input_attachments
-                        .iter()
-                        .map(|i| (i.color_index, i.format_class))
-                        .collect();
-                    assert_eq!(inputs, [(0, SampledType::Uint)], "{what}");
-                    assert!(g.storage_attachments.is_empty(), "{what}");
-                    assert_eq!(blend_of(&a), [(0, equation, C::empty())], "{what}");
-                    assert!(fetches(&a), "{what}");
-                    // The function under the pipeline's state: L3, and its plan's bound.
-                    let inputs = state(c, &p);
-                    let artifact = compile_with(&fills, fill, &p, &inputs)
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    link_and_validate(&artifact, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                    let consts = crate::library::FunctionConstantValues::defaults();
-                    let plan = crate::pipeline::compile::plan_bitcode(
-                        &fills,
-                        crate::pipeline::compile::EntryRef::Name(fill),
-                        &consts,
-                        &p,
-                        &inputs,
-                        &mut crate::pipeline::testing::meter(),
-                    )
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    assert!(
-                        plan.estimate.words >= artifact.module.words.len() as u64,
-                        "{what}: estimate {} < emitted {}",
-                        plan.estimate.words,
-                        artifact.module.words.len()
-                    );
-                }
-            }
-            let what = format!("{stem}: {pf:?}");
-            let fragment = (fills.as_slice(), "rt6_fill_vertex", "rt6_fill_rgba16float");
-            // The color channels alone: alpha kept where the format has it.
-            let rgb = ColorWriteMask::RED
-                .union(ColorWriteMask::GREEN)
-                .union(ColorWriteMask::BLUE);
-            let c = color(pf, BlendFactor::OneMinusSourceAlpha, rgb);
-            if let Some(a) = both(&dev, fragment, c, &format!("{what}: the color channels")) {
-                let kept = match form.channels().contains(ColorWriteMask::ALPHA) {
-                    true => C::A,
-                    false => C::empty(),
-                };
-                assert_eq!(
-                    blend_of(&a).iter().map(|b| b.2).collect::<Vec<_>>(),
-                    [kept],
-                    "{what}"
-                );
-                assert_eq!(
-                    a.graphics.color_attachments[0].map(|s| s.write_mask),
-                    Some(written),
-                    "{what}"
-                );
-            }
-            // No channel: stored nowhere, read through no input attachment.
-            let c = color(pf, BlendFactor::OneMinusSourceAlpha, ColorWriteMask::NONE);
-            let a = both(&dev, fragment, c, &format!("{what}: no channel"))
-                .unwrap_or_else(|| panic!("{what}: no channel refused"));
-            assert_eq!(
-                blend_of(&a).iter().map(|b| b.2).collect::<Vec<_>>(),
-                [C::R | C::G | C::B | C::A],
-                "{what}"
-            );
-            assert_eq!(
-                a.graphics.color_attachments[0].map(|s| (s.write_mask, s.blend.is_none())),
-                Some((C::empty(), true)),
-                "{what}"
-            );
-            assert!(a.graphics.input_attachments.is_empty(), "{what}");
-            assert!(!fetches(&a), "{what}");
-        }
-        // Compiled under the premultiplied blend, linked into one plus one.
-        let premul = color(
-            PixelFormat::RGB10A82PXR10,
-            BlendFactor::OneMinusSourceAlpha,
-            ColorWriteMask::ALL,
-        );
-        let compiled = dev
-            .compile_function(
-                &function(&fills, "rt6_fill_rgba16float"),
-                &state(premul, dev.profile()),
-                &Budget::standard(),
-            )
-            .expect("fragment");
-        let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
-            &fills,
-            "rt6_fill_vertex",
-        )));
-        d.fragment = Some(StageSource::Compiled(compiled));
-        d.color_attachments[0] = Some(color(
-            PixelFormat::RGB10A82PXR10,
-            BlendFactor::One,
-            ColorWriteMask::ALL,
-        ));
-        assert_eq!(
-            dev.compile_render_pipeline(&d, &Budget::standard())
-                .map(|_| ())
-                .unwrap_err(),
-            Error::NeedsInput(RuntimeInput::FramebufferFetch),
-            "{stem}"
-        );
-        // The second source's blend without fast math reads the index-1 output.
-        let mut dual = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
-        dual.blending_enabled = true;
-        dual.source_rgb_blend_factor = BlendFactor::Source1Color;
-        dual.destination_rgb_blend_factor = BlendFactor::OneMinusSource1Alpha;
-        dual.source_alpha_blend_factor = BlendFactor::Source1Alpha;
-        dual.destination_alpha_blend_factor = BlendFactor::OneMinusSource1Color;
-        let fragment = (
-            safe.as_slice(),
-            "stage_io_vertex_position",
-            "stage_io_fragment_dual_source",
-        );
-        let a = pipeline(&dev, fragment, dual)
-            .unwrap_or_else(|e| panic!("{stem}: the second source without fast math: {e}"));
-        assert_eq!(blend_of(&a).len(), 1, "{stem}");
-        assert!(
-            !a.requirements.features.contains(&VkFeature::DualSrcBlend),
-            "{stem}"
-        );
-        let fragment = (
-            fast.as_slice(),
-            "stage_io_vertex_position",
-            "stage_io_fragment_dual_source",
-        );
-        let a = pipeline(&dev, fragment, dual)
-            .unwrap_or_else(|e| panic!("{stem}: the second source under fast math: {e}"));
-        assert_eq!(blend_of(&a).len(), 1, "{stem}: fast math");
-    }
-    assert!(checked > 0, "no profile fetches through input attachments");
-}
-
 /// In the shape of a pipeline a guest made: a function that reads color 0, an `RGB10A8_2P_XR10`
 /// attachment, and writes it back under every channel with blending disabled, beside an `RG16Float`
-/// color 1 and a second `RGB10A8_2P_XR10` attachment, both of mask none, and a depth and stencil
-/// attachment. On every committed profile that orders fetch through the interlock the storage form
-/// takes color 0: the write stores Metal's unblended write of the output (`exf_fetch_blend`'s
-/// `float4`, and `exf_fetch_three`'s `float4` and `half4` to two such attachments, the `_sRGB` twin
-/// among them), the fact names no blend, and the module passes L3. A mask of some of the channels
-/// keeps the masked codes from the texel the function read (`extended_range::encode_keeping`;
-/// refused `NotImplemented` before); a blend of the `float4` output is the device's arithmetic. The whole
-/// pipeline is made on `moltenvk-m3` (no vertex descriptor), color 0 a written
-/// storage attachment of the raw format, and a stage compiled under it links into no pipeline that
-/// blends color 0.
+/// color 1 and a second `RGB10A8_2P_XR10` attachment, both of mask none. Metal's tile holds such an
+/// attachment as `half` through the pass, which the codes it holds do not keep, so the fetch is
+/// refused `NotImplemented(Format)` at color 0 on every committed profile, in whichever form the
+/// device fetches, for each of Apple's extended-range forms at color 0 (`exf_fetch_blend`'s `float4`)
+/// and for the `_sRGB` twin among two such attachments (`exf_fetch_three`'s `float4` and `half4`).
+/// The whole pipeline is refused so on `moltenvk-m3`.
 #[test]
-fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
-    use crate::metal::format::ExtendedRange;
-    use crate::metal::{BlendFactor, ColorWriteMask};
+fn a_fetched_extended_range_attachment_is_refused() {
+    use crate::metal::ColorWriteMask;
     let (Some(blend), Some(three)) = (fixture("exf_fetch_blend"), fixture("exf_fetch_three"))
     else {
         return;
     };
-    // The guest's attachments: color 0 of `pf`, unblended under `mask`, beside the two of mask
-    // none.
-    let colors = |pf: PixelFormat, mask: ColorWriteMask| {
-        let mut fetched = ColorAttachmentDescriptor::new(pf);
-        fetched.write_mask = mask;
+    // The guest's attachments: color 0 of `pf`, unblended under every channel, beside the two of
+    // mask none.
+    let colors = |pf: PixelFormat| {
+        let fetched = ColorAttachmentDescriptor::new(pf);
         let mut read = ColorAttachmentDescriptor::new(PixelFormat::RG16Float);
         read.write_mask = ColorWriteMask::NONE;
         let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
         unwritten.write_mask = ColorWriteMask::NONE;
         vec![Some(fetched), Some(read), Some(unwritten)]
     };
-    let guest = || colors(PixelFormat::RGB10A82PXR10, ColorWriteMask::ALL);
     let state = |read: &[u32], colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
         let mut inputs = LoweringInputs::new();
         inputs.color_writes = crate::pipeline::color_writes::color_writes(
@@ -2809,69 +2404,42 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
         ));
         inputs
     };
-    let fetched = |a: &crate::library::FunctionArtifact, color: u32| {
-        a.facts.iter().find_map(|f| match f {
-            RuntimeFact::InterlockedFramebufferFetch {
-                color: c,
-                writes,
-                blend,
-                ..
-            } if *c == color => Some((*writes, *blend)),
-            _ => None,
-        })
+    let refused = |r: Result<std::sync::Arc<crate::library::FunctionArtifact>, Error>,
+                   what: &str| match r {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::Format, "{what}: {u:?}");
+            assert_eq!(u.needs, Needs::NotImplemented, "{what}: {u:?}");
+            let at = u.location.as_ref().and_then(|l| l.attachment());
+            assert_eq!(
+                at,
+                Some(crate::error::Attachment::Color(0)),
+                "{what}: {u:?}"
+            );
+        }
+        other => panic!("{what}: {:?}", other.map(|a| a.facts)),
     };
+    let xr = [
+        PixelFormat::BGR10XR,
+        PixelFormat::BGR10XRSRGB,
+        PixelFormat::BGRA10XR,
+        PixelFormat::BGRA10XRSRGB,
+        PixelFormat::RGB10A82PXR10,
+        PixelFormat::RGB10A82PXR10SRGB,
+    ];
     let mut checked = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        if !crate::lower::fragment::interlock_orders(&p) {
-            continue;
+        for pf in xr {
+            let r = compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &colors(pf), &p));
+            refused(r, &format!("{stem}: {pf:?}"));
+            checked += 1;
         }
-        let a = match compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &guest(), &p)) {
-            Ok(a) => a,
-            // A device without the raw formats' storage refuses the form.
-            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
-            Err(e) => panic!("{stem}: {e}"),
-        };
-        checked += 1;
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        assert_eq!(fetched(&a, 0), Some((true, None)), "{stem}: {:?}", a.facts);
-        // Two such attachments, a `float4` to the `_sRGB` twin and a `half4`, beside an integer
-        // color.
-        let mut both = colors(PixelFormat::RGB10A82PXR10SRGB, ColorWriteMask::ALL);
+        let mut both = colors(PixelFormat::RGB10A82PXR10SRGB);
         both[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
         both[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10));
-        let a = compile_with(&three, "exf_fetch_three", &p, &state(&[0, 1, 2], &both, &p))
-            .unwrap_or_else(|e| panic!("{stem}: three: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: three: L3: {e}"));
-        assert_eq!(fetched(&a, 0), Some((true, None)), "{stem}: {:?}", a.facts);
-        assert_eq!(fetched(&a, 2), Some((true, None)), "{stem}: {:?}", a.facts);
-        // A mask of some of the channels, whose kept codes the write takes from the texel it
-        // read; a `float4` output's blend, its own model.
-        for mask in [
-            ColorWriteMask::RED,
-            ColorWriteMask::ALPHA,
-            ColorWriteMask::RED.union(ColorWriteMask::ALPHA),
-        ] {
-            let some = colors(PixelFormat::RGB10A82PXR10, mask);
-            let a = compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &some, &p))
-                .unwrap_or_else(|e| panic!("{stem}: mask {}: {e}", mask.as_raw()));
-            link_and_validate(&a, &p)
-                .unwrap_or_else(|e| panic!("{stem}: mask {}: L3: {e}", mask.as_raw()));
-            assert_eq!(fetched(&a, 0), Some((true, None)), "{stem}: {:?}", a.facts);
-        }
-        let mut over = guest();
-        if let Some(c) = over[0].as_mut() {
-            c.blending_enabled = true;
-            c.source_rgb_blend_factor = BlendFactor::SourceAlpha;
-            c.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-        }
-        let a = compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &over, &p))
-            .unwrap_or_else(|e| panic!("{stem}: over: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: over: L3: {e}"));
+        let r = compile_with(&three, "exf_fetch_three", &p, &state(&[0, 1, 2], &both, &p));
+        refused(r, &format!("{stem}: three"));
     }
-    assert!(
-        checked > 0,
-        "no interlock profile compiled the storage form"
-    );
+    assert!(checked > 0, "no committed profile");
     let Some(io) = fixture("stage_io") else {
         return;
     };
@@ -2883,61 +2451,29 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
                 .expect("function"),
         )
     };
-    {
-        let stem = "moltenvk-m3";
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles")
-            .join(format!("{stem}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
-        let pipeline = |fragment: StageSource, colors: Vec<Option<ColorAttachmentDescriptor>>| {
-            let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
-                &io,
-                "stage_io_vertex_position",
-            )));
-            d.fragment = Some(fragment);
-            for (i, c) in colors.into_iter().enumerate() {
-                d.color_attachments[i] = c;
-            }
-            d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
-            d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
-            dev.compile_render_pipeline(&d, &Budget::standard())
-        };
-        let source = StageSource::Function(function(&blend, "exf_fetch_blend"));
-        let pipe = pipeline(source, guest())
-            .unwrap_or_else(|e| panic!("{stem}: the guest's pipeline: {e}"));
-        let uses: Vec<(u32, vk::Format, bool)> = pipe
-            .graphics
-            .storage_attachments
-            .iter()
-            .map(|s| (s.color_index, s.format, s.writes))
-            .collect();
-        assert_eq!(
-            uses,
-            [(0, ExtendedRange::Planes { srgb: false }.raw_format(), true)],
-            "{stem}"
-        );
-        let fragment = dev
-            .compile_function(
-                &function(&blend, "exf_fetch_blend"),
-                &state(&[0], &guest(), dev.profile()),
-                &Budget::standard(),
-            )
-            .expect("fragment");
-        let mut added = guest();
-        if let Some(c) = added[0].as_mut() {
-            c.blending_enabled = true;
-            c.destination_rgb_blend_factor = BlendFactor::One;
-            c.destination_alpha_blend_factor = BlendFactor::One;
+    let stem = "moltenvk-m3";
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles")
+        .join(format!("{stem}.json"));
+    let text = std::fs::read_to_string(path).expect("profile");
+    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
+        &io,
+        "stage_io_vertex_position",
+    )));
+    d.fragment = Some(StageSource::Function(function(&blend, "exf_fetch_blend")));
+    for (i, c) in colors(PixelFormat::RGB10A82PXR10).into_iter().enumerate() {
+        d.color_attachments[i] = c;
+    }
+    d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+    d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+    match dev.compile_render_pipeline(&d, &Budget::standard()) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::Format, "{stem}: {u:?}");
+            assert_eq!(u.needs, Needs::NotImplemented, "{stem}: {u:?}");
         }
-        assert_eq!(
-            pipeline(StageSource::Compiled(fragment), added)
-                .map(|_| ())
-                .unwrap_err(),
-            Error::NeedsInput(RuntimeInput::FramebufferFetch),
-            "{stem}"
-        );
+        other => panic!("{stem}: the guest's pipeline: {:?}", other.map(|_| ())),
     }
 }
 
@@ -2948,7 +2484,9 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
 /// profile that orders fetch through the interlock the function compiles, its color 0 write before
 /// the tests, and states `TestedStorageWrites` without early tests; under `read_only_tests` it
 /// declares early tests and states the fact with them; each module passes L3. `con_fetch_coverage`,
-/// which declares early tests, states no such fact. On `moltenvk-m3` the whole pipeline is made; a
+/// which declares early tests, states no such fact. Color 0 and color 2 are
+/// `RGB10A2Unorm_sRGB`, the four-channel padded form, where the guest's were `RGB10A8_2P_XR10`,
+/// whose blend is refused (`blended_pipelines`). On `moltenvk-m3` the whole pipeline is made; a
 /// draw whose tests drop no fragment runs it as compiled, one whose tests drop fragments but write
 /// and count nothing asks for the early-tests variant, whose plan states the same key, and any
 /// other (or one that states nothing) is refused `NotImplemented(FramebufferFetch)`.
@@ -2964,13 +2502,13 @@ fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
         return;
     };
     let colors = || {
-        let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+        let mut blended = ColorAttachmentDescriptor::new(PixelFormat::RGB10A2UnormSRGB);
         blended.blending_enabled = true;
         blended.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
         blended.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
         let mut read = ColorAttachmentDescriptor::new(PixelFormat::RG16Float);
         read.write_mask = ColorWriteMask::NONE;
-        let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+        let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A2UnormSRGB);
         unwritten.write_mask = ColorWriteMask::NONE;
         vec![Some(blended), Some(read), Some(unwritten)]
     };
@@ -4481,7 +4019,7 @@ fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
     }
 }
 
-/// A fragment function blended into an `RGB10A8_2P_XR10` attachment (premultiplied over, and a
+/// A fragment function blended into an `RG10Unorm_X12` attachment (premultiplied over, and a
 /// blend of source alpha into the color channels) records its output's blend note on every
 /// interlock profile that makes the storage form, whatever the module's math and however it
 /// computes the output: the shader blends it by the device's arithmetic, where Metal's compiler
@@ -4492,7 +4030,7 @@ fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
 /// arithmetic or with a lane moved alone, under fast math, without it (into the `_sRGB` form too)
 /// and naming no math mode. Unblended, the constant output records none.
 #[test]
-fn a_blended_extended_range_output_records_its_blend_note() {
+fn a_blended_padded_output_records_its_blend_note() {
     use crate::metal::BlendFactor;
     let (Some(fills), Some(resolves)) = (fixture("rt6_samples"), fixture("rt6_resolves")) else {
         return;
@@ -4570,7 +4108,7 @@ fn a_blended_extended_range_output_records_its_blend_note() {
         c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
         vec![Some(c)]
     };
-    let colors = |blended: bool| colors_of(PixelFormat::RGB10A82PXR10, blended);
+    let colors = |blended: bool| colors_of(PixelFormat::RG10UnormX12, blended);
     let state = |colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
         let mut inputs = LoweringInputs::new();
         inputs.color_writes = crate::pipeline::color_writes::color_writes(
@@ -4639,7 +4177,7 @@ fn a_blended_extended_range_output_records_its_blend_note() {
             "{stem}: a computed float4 under fast math"
         );
         let keyed = {
-            let mut c = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+            let mut c = ColorAttachmentDescriptor::new(PixelFormat::RG10UnormX12);
             c.blending_enabled = true;
             c.destination_rgb_blend_factor = BlendFactor::SourceAlpha;
             c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
@@ -4666,7 +4204,7 @@ fn a_blended_extended_range_output_records_its_blend_note() {
             Ok(None),
             "{stem}: a constant float4 unblended"
         );
-        let srgb = state(&colors_of(PixelFormat::RGB10A82PXR10SRGB, true), &p);
+        let srgb = state(&colors_of(PixelFormat::RG10UnormX12SRGB, true), &p);
         for (name, note) in [
             ("rt6_fill_rgba32float", float),
             ("rt6_fill_rgba16float", half),

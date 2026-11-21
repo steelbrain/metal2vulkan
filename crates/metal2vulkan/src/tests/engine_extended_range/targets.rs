@@ -9,25 +9,21 @@
 //!   estimate, and links: the attachment takes the raw format, a write of every raw component
 //!   under a full mask and of none under an empty one, no blend, and both modules pass L3.
 //! - A blended attachment the function does not write (no fragment function) links with no blend
-//!   and an empty mask, as Metal leaves an unwritten attachment; one it writes, where the device
-//!   orders fetch only through the pixel interlock, or through rasterization-order input
-//!   attachments, the shader blends a `half4` or `float4` output into every form by the device's
-//!   arithmetic, noted `ExtendedRangeBlendSource` or `ExtendedRangeFloatBlendSource`. A mask of some
+//!   and an empty mask, as Metal leaves an unwritten attachment; one it writes is refused
+//!   `NotImplemented(Format)` on every device (`lower::fragment::fetch::codes_round_the_tile`;
+//!   a padded form's blend is `engine_padded_blends`'). A mask of some
 //!   of `BGRA10_XR`'s channels is the mask of its fields (red and blue traded; a padded format's
 //!   are its raw words, so its mask is theirs).
 //!   A two-plane form's mask of its three color codes alone is its color word's, of alpha alone its
 //!   alpha byte's. A blended attachment no first output writes links so whatever its form, a padded
 //!   or bfloat one's too.
-//! - Refused, typed: a blended attachment the function writes on a device with neither ordering
-//!   (framebuffer fetch needing either, by the lowering), a mask of some of the codes one word
+//! - Refused, typed: a blended attachment the function writes, a fetch of the attachment
+//!   (`NotImplemented(Format)`, on every device), a mask of some of the codes one word
 //!   holds from a stage compiled without the pipeline's fetch state
 //!   (`NeedsInput(FramebufferFetch)`; a stage compiled for the pipeline merges them in the storage
 //!   form or over the input attachment, `blended_pipelines`), an
 //!   integer or a `float` output (Metal's pipeline errors, `ColorAttachment`), a fragment compiled
 //!   without the pipeline's attachments (`NeedsInput(ColorWrites)`).
-//! - A framebuffer fetch of such an attachment through an input attachment (lavapipe) reads the
-//!   raw format's `uint`s and decodes them: it links, and a fragment compiled without the
-//!   pipeline's attachments does not.
 
 use super::*;
 use crate::error::{DescriptorError, Error, MetalAnswer, Needs, RuntimeInput};
@@ -460,26 +456,11 @@ fn unmodelled_extended_range_targets_are_refused() {
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
         for (pf, _) in FORMATS {
             let what = format!("{stem} {pf:?}");
-            // Blended: where the device orders fetch only through the interlock, or through
-            // rasterization-order input attachments, the shader blends the `float4` output by the
-            // device's arithmetic, into every form; elsewhere the lowering refuses it.
+            // Blended: refused on every device, whichever form it fetches in.
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
-            let blended = compile_with(&bc, "rt6_fill_rgba32float", &p, &blended_inputs(&r, &p));
-            match blends_in_shader(&p) {
-                true => {
-                    let a = blended.unwrap_or_else(|e| panic!("{what} blended: {e}"));
-                    assert!(
-                        a.precision.contains(
-                            &crate::pipeline::artifact::PrecisionNote::ExtendedRangeFloatBlendSource
-                        ),
-                        "{what} blended: {:?}",
-                        a.precision
-                    );
-                }
-                false => {
-                    let e = blended.expect_err(&what);
-                    assert!(is_format_refusal(&e), "{what} blended: {e}");
-                }
+            match compile_with(&bc, "rt6_fill_rgba32float", &p, &blended_inputs(&r, &p)) {
+                Err(e) => assert!(is_format_refusal(&e), "{what} blended: {e}"),
+                Ok(a) => panic!("{what} blended: made, {:?}", a.precision),
             }
             // Blended but not written (no fragment function): the draw leaves the attachment as
             // it is, as Metal leaves an unwritten one, so it takes no blend and an empty mask,
@@ -579,44 +560,19 @@ fn unmodelled_extended_range_targets_are_refused() {
         }
     }
     // A framebuffer fetch of such an attachment (`exf_fetch_blend` reads `float4 [[color(0)]]`
-    // and writes color 0 unblended), on lavapipe, which reads it through an input attachment:
-    // of the raw format's `uint`s, decoded in the shader. The fragment records the attachment,
-    // links, and passes L3; compiled without the pipeline's attachments, it does not link.
+    // and writes color 0 unblended), on lavapipe, which reads it through an input attachment: refused,
+    // as on every device; compiled without the pipeline's attachments, it does not link.
     let Ok(fetch) = llvm_assemble(&engine_dir().join("exf_fetch_blend.ll")) else {
         return;
     };
     let p = venue("lavapipe");
     let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
-    for (pf, form) in FORMATS {
+    for (pf, _) in FORMATS {
         let what = format!("{pf:?} fetch");
         let r = pipeline_of(pf, ColorWriteMask::ALL, false);
-        let f = compile_with(&fetch, "exf_fetch_blend", &p, &fragment_inputs(&r, &p))
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert_eq!(
-            f.interface.io.extended_range_colors,
-            BTreeMap::from([(0, ExtendedRangeColor::new(form, false))]),
-            "{what}"
-        );
-        let l = link(&[&v, &f], &render(&r), &p).unwrap_or_else(|e| panic!("{what}: link: {e}"));
-        let g = l.graphics.as_ref().expect("graphics");
-        let inputs: Vec<(u32, crate::pipeline::sym::SampledType)> = g
-            .input_attachments
-            .iter()
-            .map(|i| (i.color_index, i.format_class))
-            .collect();
-        assert_eq!(
-            inputs,
-            [(0, crate::pipeline::sym::SampledType::Uint)],
-            "{what}"
-        );
-        assert_eq!(
-            g.color_attachments[0].expect("attachment").format,
-            form.raw_format()
-        );
-        for s in [&*v, &*f] {
-            let w = relocate(s, &l.table).expect("relocate");
-            check_words_valid(&w, &s.requirements, &p)
-                .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        match compile_with(&fetch, "exf_fetch_blend", &p, &fragment_inputs(&r, &p)) {
+            Err(e) => assert!(is_format_refusal(&e), "{what}: {e}"),
+            Ok(_) => panic!("{what}: made"),
         }
         let f = compile(&fetch, "exf_fetch_blend", &p).expect("fragment");
         let e = link(&[&v, &f], &render(&r), &p).expect_err(&what);

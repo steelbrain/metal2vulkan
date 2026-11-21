@@ -148,21 +148,19 @@
 //! texels in the raw unsigned format, so the storage image is declared of that format's
 //! `uint` texels ([`StorageView::extended`]), and a read decodes the texel into Metal's tile value
 //! (`extended_range::tile_value`: each code as the tile holds it, rounded to `half`, a `float` read
-//! alike). Such an attachment the function writes under blending takes
+//! alike). A padded attachment the function writes under blending takes
 //! this form whether or not the function reads it, since no device blends the raw texels: the write
 //! reads the texel's tile value, blends the output over it by the device's arithmetic, and stores
 //! the kernel write's encode of the result ([`StorageView::blend`]), the channels a write mask
 //! keeps as Metal keeps them (`extended_range::encode_keeping`). The blend
 //! (`extended_range::blend::native`) takes a `half4` or `float4` output under every factor,
 //! operation and write mask, the second source the function's index-1 output and the blend color
-//! read as push data (`PushField::HalfBlendColor`): the source, the second source and the blend
-//! color clamped to the form's range (its color lanes to the source range, alpha to `[0, 1]`, a
-//! NaN to the low end), then `S·Fs op D·Fd` in `f32` in the equation's order, where Metal's
-//! compiler folds the blend into the function in forms of its own; the function notes
-//! `PrecisionNote::ExtendedRangeBlendSource` (`ExtendedRangeFloatBlendSource` for a `float4`
-//! output). Another output is refused (`Feature::ExtendedRangeBlend` `Output`). A write of every
-//! channel with blending disabled stores the
-//! texel Metal's unblended write stores, a `float` output rounded to `half` and encoded as a
+//! read as push data (`PushField::HalfBlendColor`), each as it is, then `S·Fs op D·Fd` in `f32` in
+//! the equation's order, where Metal's compiler folds the blend into the function in forms of its
+//! own; the function notes `PrecisionNote::ExtendedRangeBlendSource`
+//! (`ExtendedRangeFloatBlendSource` for a `float4` output). Another output is refused
+//! (`Feature::ExtendedRangeBlend` `Output`). A write of every channel with blending disabled stores
+//! the texel Metal's unblended write stores, a `float` output rounded to `half` and encoded as a
 //! kernel's write (`stage_io::extended_color::texel`). An unblended write that stores some of its
 //! channels encodes them so and keeps the others' codes from the texel it reads first
 //! (`extended_range::encode_keeping`), as Metal keeps a masked channel's code: the form a mask of
@@ -173,11 +171,16 @@
 //! (`stage_io::extended_color::bfloat_output`), and keeps the code of each channel a mask leaves
 //! out, a component of its own; its blend is Metal's pipeline error, and a fetch of it is refused.
 //!
-//! **Across draws**: Metal's tile memory holds such an attachment as `half` through a render pass
-//! and rounds it to the codes only at the store, so a blend or a fetch onto what an earlier draw of
-//! the pass wrote sees that draw's `half`. A read here takes the codes the earlier draw stored
-//! (`extended_range::tile_value`), which differ from that `half` where it is not a code's value.
-//! `metal2vulkan-runtime` makes no extended-range texture (`Gap::TextureFormat`).
+//! **Apple's extended-range forms** (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their
+//! `_sRGB` twins, [`codes_round_the_tile`]): Metal's tile memory holds such an attachment as `half`
+//! through a render pass and rounds it to the codes only at the store, so a fetch or a blend onto
+//! what an earlier draw of the pass wrote sees that draw's `half`, which the codes the attachment
+//! holds do not keep. A fetch of one, and a blend into one the function writes, are not
+//! implemented: refused on every device (`Feature::Format`, at the attachment; here, in
+//! `color::select_param`, and in `stage_io::extended_color` where the device orders fetch in
+//! neither form). An unblended write, a masked one included, is built as above: a kept channel's
+//! code is the encode of the `half` the tile keeps there. `metal2vulkan-runtime` makes no
+//! extended-range texture (`Gap::TextureFormat`).
 //!
 //! **A 16-bit float attachment's blend** (`R16Float`, `RG16Float`, `RGBA16Float`): no Vulkan blend
 //! applies to a storage write, so the shader computes Metal's: the write reads the texel at the pixel inside the interlock, blends the function's `half`
@@ -351,6 +354,15 @@ pub(crate) fn inputs_order(p: &DeviceProfile) -> bool {
 /// over its own read ([`unordered_extended_fetch`]) is refused.
 pub(crate) fn fetch_unordered(p: &DeviceProfile) -> bool {
     !interlock_orders(p) && !inputs_order(p)
+}
+
+/// Whether Metal's tile memory holds an attachment of `form` as `half` through a render pass and
+/// rounds it to the codes only at the store, where the attachment holds the codes: Apple's
+/// extended-range forms (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins), not
+/// a padded or bfloat one. A fetch of such an attachment, and a blend into one, are not
+/// implemented (`Feature::Format`, module docs).
+pub(crate) fn codes_round_the_tile(form: ExtendedRange) -> bool {
+    !form.padded() && !form.bfloat()
 }
 
 /// The refusal of a blend into an extended-range attachment, or of a write of some of the codes
@@ -1271,7 +1283,9 @@ pub(crate) fn storage_form(
 /// extended-range formats (`metal::format::extended_range_blend`, its public door): the decision
 /// [`plan`] and [`storage_form`] make for such an attachment, written whole by the function's
 /// first output under a blend Metal's model holds (premultiplied source-over, one), in a pipeline
-/// of one sample with no depth or stencil attachment. `Ok` where the device orders fetch through
+/// of one sample with no depth or stencil attachment. One of Apple's extended-range forms
+/// ([`codes_round_the_tile`]) answers `NotImplemented(Format)` on every device. Another's: `Ok`
+/// where the device orders fetch through
 /// the pixel interlock alone ([`interlock_orders`]) and that storage form is exact there; `Ok`
 /// where it orders fetch through rasterization-order input attachments and the function's blend
 /// over the attachment's input attachment holds (`input_blend`); else what blocks it, without
@@ -1289,6 +1303,9 @@ pub(crate) fn extended_range_blend(
     };
     if form.bfloat() {
         return Err(Unsupported::not_representable(Feature::Format));
+    }
+    if codes_round_the_tile(form) {
+        return Err(Unsupported::not_implemented(Feature::Format));
     }
     let equation = BlendEquation {
         source_rgb: F::One,
@@ -1434,7 +1451,8 @@ pub(super) fn colors_read(cx: &SelectCx<'_>, used: &BTreeSet<u32>) -> Result<BTr
 
 /// The extended-range attachments the function writes through a first output where the
 /// pipeline blends them (`LoweringInputs::extended_range_colors`), which only the storage form
-/// writes, and the AIR type of each output.
+/// writes, and the AIR type of each output. A blend into one of Apple's extended-range forms
+/// ([`codes_round_the_tile`]) is refused (`Feature::Format`, at the attachment).
 pub(super) fn blended_extended_range(cx: &SelectCx<'_>) -> Result<Vec<(u32, AirTypeId)>, Error> {
     let mut out = Vec::new();
     for (o, ty) in cx
@@ -1450,13 +1468,13 @@ pub(super) fn blended_extended_range(cx: &SelectCx<'_>) -> Result<Vec<(u32, AirT
             ..
         } = o.role
         {
-            if cx
-                .inputs
-                .extended_range_colors
-                .get(&color)
-                .is_some_and(|e| e.blended)
-            {
-                out.push((color, ty));
+            match cx.inputs.extended_range_colors.get(&color) {
+                Some(e) if e.blended && codes_round_the_tile(e.form) => {
+                    let refused = Unsupported::not_implemented(Feature::Format);
+                    return Err(refused.at_attachment(Attachment::Color(color)).into());
+                }
+                Some(e) if e.blended => out.push((color, ty)),
+                _ => {}
             }
         }
     }
@@ -1957,10 +1975,9 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         return Err(refused.at_attachment(Attachment::Color(c.color)).into());
     }
     class_of(c.form, sc.view.read_class(), c.color, false)?;
-    // An extended-range or padded 10-bit texel converts by the device's arithmetic, its read the
-    // tile value of its codes ([`value`]). After a clear or an earlier draw of the pass Metal's
-    // tile holds their `half`, which the codes do not keep: the runtime announces
-    // `extended-range-blends-stored-codes` there.
+    // A padded 10-bit texel converts by the device's arithmetic, its read the tile value of its
+    // codes ([`value`]). An Apple extended-range form's read is refused before
+    // (`color::select_param`).
     if let Some(e) = sc.view.extended {
         cx.families.arith.converts(e);
     }
@@ -3127,8 +3144,7 @@ fn blended(
     let texel = read_texel(cx, fb, color, sc)?;
     let d = extended_range::tile_value(fb, range, texel)?;
     let constant = blend_constant(cx, fb, &b)?;
-    let ranges = extended_range::blend::extended_ranges(range);
-    let v = extended_range::blend::native(fb, &b, ranges, (part, s1, d), constant)?;
+    let v = extended_range::blend::native(fb, &b, (part, s1, d), constant)?;
     if !sc.view.merges() {
         return extended_range::encode(fb, range, v);
     }

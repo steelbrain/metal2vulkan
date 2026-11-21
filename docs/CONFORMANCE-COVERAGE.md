@@ -4639,11 +4639,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-masked-bgr10xr-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
@@ -4654,21 +4654,21 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-masked-bgr10xr-srgb-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-red` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
-| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |

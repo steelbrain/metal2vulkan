@@ -3,8 +3,9 @@
 //! `probes/padded_and_bfloat_blends.m` of the conformance crate), and which no device blends: the
 //! attachment holds the raw words in an unsigned integer format.
 //!
-//! The function computes the blend over an ordered read of the attachment, as an extended-range
-//! form's (`lower::fragment::fetch`, `lower::fragment::input_blend`). On every committed profile
+//! The function computes the blend over an ordered read of the attachment (`lower::fragment::fetch`,
+//! `lower::fragment::input_blend`); a blend into one of Apple's extended-range forms, which Metal's
+//! tile holds as `half`, is refused (`blended_pipelines`). On every committed profile
 //! that orders fetch through the pixel interlock alone, `rt6_samples`' `half4` and `float4` fills
 //! compile with color 0 in the storage form under premultiplied source-over and one plus one, the
 //! fact naming the blend, and pass L3; so do `xrb_dual`'s second-source blends, whose index-1

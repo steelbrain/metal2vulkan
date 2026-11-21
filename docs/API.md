@@ -833,7 +833,12 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   fetching draw after the earlier draws of its pass. Linking refuses an attachment the read
   cannot take: none attached, or one of another numeric class than the read's
   (`InvalidDescriptor` at the color attachment), or one of a rotated, Y'CbCr or extended-range
-  format (`Unsupported{Format}`). A
+  format (`Unsupported{Format}`). A read of one of Apple's extended-range formats (`BGR10_XR`,
+  `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins), and a blend into one, are refused on
+  every device in either form (`Unsupported{Format}` at the color attachment): Metal's tile holds
+  such an attachment as `half` through the render pass and rounds it to the codes only at the
+  store, so a read or a blend after an earlier draw's write sees that draw's `half`, which the
+  stored codes do not keep. An unblended write, under any write mask, is built. A
   raster order group on such a color input, or on a color output of an attachment the function
   reads, orders that read alone there and takes no interlock; a group on anything else still
   needs the pixel interlock (`Unsupported{RasterOrderGroups}`).
@@ -2350,12 +2355,12 @@ bound.
   `PrecisionNote::HalfOutputFastMathBlend` instead).
 - `metal2vulkan-degrade-extended-range-blend-source` (precision).
   `PrecisionNote::ExtendedRangeBlendSource`: A fragment function's `half` color output (a scalar or
-  vector of AIR's `half`) is blended into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`,
-  `RGB10A8_2P_XR10`, or an `_sRGB` twin) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`,
-  their `_sRGB` twins, `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the
-  function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in `float`, in the blend
-  equation's order, the source, second source and blend color clamped to the format's range first
-  (a padded format's not clamped, as Metal clamps none there). The device's compiler may contract a
+  vector of AIR's `half`) is blended into a padded 10-bit attachment (`R10Unorm_X6`,
+  `RG10Unorm_X12`, their `_sRGB` twins, `RGB10A2Unorm_sRGB`), whose raw codes no device's blend
+  unit reads, so the function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in
+  `float`, in the blend equation's order, the source, second source and blend color unclamped, as
+  Metal takes them there (a blend into one of Apple's extended-range formats is refused, section
+  4). The device's compiler may contract a
   product into its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an
   RTX 5080 compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
   rounds each step to `half`, so a blended channel may store another code than Metal's: within two
@@ -2365,8 +2370,8 @@ bound.
   its sign picks where Metal's sum is NaN, stored as code 0.
 - `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
   `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
-  `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range or
-  padded 10-bit attachment in the shader in the device's arithmetic, which the device's compiler
+  `float` color output (a scalar or vector of AIR's `float`): blended into a padded 10-bit
+  attachment in the shader in the device's arithmetic, which the device's compiler
   may contract and regroup, where Metal's compiler rounds the output and each step of the blend to
   `half`; a blended channel within `ExtendedRangeBlendSource`'s bound of Metal's.
 - `metal2vulkan-degrade-anisotropic-filter` (precision). `PrecisionNote::AnisotropicFilter`: The

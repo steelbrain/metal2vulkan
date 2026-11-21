@@ -1033,7 +1033,10 @@ fn copies_only_repr(pf: PixelFormat) -> Repr {
 /// texels: the fragment function computes Metal's blend in the shader, inside the pixel
 /// interlock, from the texel it reads. `Ok` where the device orders fetch through the pixel
 /// interlock alone and that form is exact for an attachment of `pf` written whole under a blend
-/// Metal's model holds (a padded 10-bit form's among them); else what blocks it. A pipeline's own
+/// Metal's model holds (a padded 10-bit form's); else what blocks it. `BGR10_XR`, `BGRA10_XR`,
+/// `RGB10A8_2P_XR10` and their `_sRGB` twins answer `NotImplemented(Format)` on every device: Metal's
+/// tile holds such an attachment as `half` through the render pass, which the codes the attachment
+/// holds do not keep, so its blend over an earlier draw's write is not built. A pipeline's own
 /// blend, write mask or output may still be refused by name (`Feature::ExtendedRangeBlend`), as
 /// [`rotated_channels`]' blends are per pipeline. A bfloat format answers `NotRepresentable(Format)`:
 /// Metal blends none (`compile_render_pipeline` refuses such a blend

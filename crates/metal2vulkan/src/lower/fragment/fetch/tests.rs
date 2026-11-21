@@ -1091,21 +1091,24 @@ fn a_missing_attachment_is_a_descriptor_error() {
     );
 }
 
-/// An extended-range format's blend (`extended_range_blend`): taken where the device orders fetch
-/// through the pixel interlock alone and the storage form holds, for every form Metal's model
-/// blends and its `_sRGB` twin and every padded form, and where it orders fetch through
-/// rasterization-order input attachments, over which the function blends; the two orderings named
-/// where it has neither; a bfloat form, which Metal blends nowhere, Metal's refusal; any other
-/// format refused.
+/// An extended-range format's blend (`extended_range_blend`): a padded form's taken where the device
+/// orders fetch through the pixel interlock alone and the storage form holds, and where it orders
+/// fetch through rasterization-order input attachments, over which the function blends; the two
+/// orderings named where it has neither; one of Apple's extended-range forms not implemented on
+/// every device (`codes_round_the_tile`); a bfloat form, which Metal blends nowhere, Metal's
+/// refusal; any other format refused.
 #[test]
 fn an_extended_range_blend_follows_the_ordered_storage_form() {
-    let blended = [
+    let xr = [
         PixelFormat::BGR10XR,
         PixelFormat::BGR10XRSRGB,
         PixelFormat::BGRA10XR,
         PixelFormat::BGRA10XRSRGB,
         PixelFormat::RGB10A82PXR10,
         PixelFormat::RGB10A82PXR10SRGB,
+    ];
+    let not_implemented = Err(Unsupported::not_implemented(Feature::Format));
+    let blended = [
         PixelFormat::R10UnormX6,
         PixelFormat::R10UnormX6SRGB,
         PixelFormat::RG10UnormX12,
@@ -1131,6 +1134,13 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         for pf in blended {
             assert_eq!(extended_range_blend(pf, &p), Ok(()), "{stem}: {pf:?}");
         }
+        for pf in xr {
+            assert_eq!(
+                extended_range_blend(pf, &p),
+                not_implemented,
+                "{stem}: {pf:?}"
+            );
+        }
         for pf in bfloat {
             assert_eq!(
                 extended_range_blend(pf, &p),
@@ -1149,6 +1159,13 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         assert!(!interlock_orders(&p), "{stem}");
         for pf in blended {
             assert_eq!(extended_range_blend(pf, &p), Ok(()), "{stem}: {pf:?}");
+        }
+        for pf in xr {
+            assert_eq!(
+                extended_range_blend(pf, &p),
+                not_implemented,
+                "{stem}: {pf:?}"
+            );
         }
         for pf in bfloat {
             assert_eq!(
@@ -1170,12 +1187,17 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
     );
     let p = profile("runtime-floor", &[]);
     assert_eq!(
-        extended_range_blend(PixelFormat::BGRA10XR, &p),
+        extended_range_blend(PixelFormat::R10UnormX6, &p),
         Err(unordered)
+    );
+    // One of Apple's extended-range forms is refused there too, whatever the device orders.
+    assert_eq!(
+        extended_range_blend(PixelFormat::BGRA10XR, &p),
+        not_implemented
     );
     // The storage form's own device needs, named where the device lacks one.
     let p = profile("moltenvk-m3", &[VkFeature::FragmentStoresAndAtomics]);
-    assert!(extended_range_blend(PixelFormat::BGRA10XR, &p)
+    assert!(extended_range_blend(PixelFormat::R10UnormX6, &p)
         .is_err_and(|u| u.feature == Feature::FramebufferFetch));
 }
 

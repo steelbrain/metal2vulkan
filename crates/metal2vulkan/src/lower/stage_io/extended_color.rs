@@ -29,7 +29,10 @@
 //! read of the attachment (below, and `lower::fragment::fetch`'s storage form), and a dual-source
 //! second output to such an attachment is that blend's second source: on a device that orders fetch
 //! in neither form the blend is refused naming what it needs (`fetch::unordered_extended_fetch`:
-//! `fragmentShaderPixelInterlock` or `rasterizationOrderColorAttachmentAccess`).
+//! `fragmentShaderPixelInterlock` or `rasterizationOrderColorAttachmentAccess`). A blend into one
+//! of Apple's extended-range forms (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB`
+//! twins) is not implemented on any device (`Feature::Format`, `fetch::codes_round_the_tile`):
+//! only a padded form's blend is built.
 //!
 //! On a device that orders framebuffer fetch through rasterization-order input attachments, a blend
 //! the function computes over the attachment's input attachment (`lower::fragment`'s `input_blend`)
@@ -88,6 +91,10 @@ pub(super) fn plan(
             metal: MetalAnswer::EndsProcess,
         };
         return Err(Error::InvalidDescriptor(invalid));
+    }
+    // A blend into one of Apple's extended-range forms, whatever the device orders.
+    if e.blended && crate::lower::fragment::fetch::codes_round_the_tile(e.form) {
+        return Err(Unsupported::not_implemented(Feature::Format).into());
     }
     let blended = e.blended && !cx.families.fragment.input_blends.contains_key(&color);
     // A blend the function computes over an ordered read of the attachment (the storage form, or

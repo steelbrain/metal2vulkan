@@ -8,9 +8,8 @@
 //! `float`, in the blend equation's order, for the color lanes the write stores and for alpha;
 //! `Min` and `Max` read no factor; `SourceAlphaSaturated` is `min(sa, 1 - da)` in color and one in
 //! alpha; each `1 - x` is computed in `float`. The source, the second source and the blend color
-//! are clamped first, as a blend unit clamps a normalized format's: a color lane to the form's
-//! range ([`super::source_range`]), alpha to `[0, 1]`, a NaN to the low end
-//! ([`extended_ranges`]); a padded form's are not clamped at all, as Metal clamps none there.
+//! are taken as they are: the attachment is a padded form's, which Metal clamps none of (a blend
+//! into one of Apple's extended-range forms is refused, `fragment::fetch::codes_round_the_tile`).
 //! Metal's compiler instead fuses, regroups and rounds each step to `half`;
 //! the stored value can differ from Metal's in the last bits of the encode, which the artifact
 //! records (`PrecisionNote::ExtendedRangeBlendSource`, `ExtendedRangeFloatBlendSource`).
@@ -46,14 +45,13 @@
 //! and `max` as the fast forms. Every `1 - x` is `h(1 - x)` of the value it reads
 //! ([`Node::OneMinus`]).
 
-use super::{floats, per_lane_f, source_range};
+use super::{floats, per_lane_f};
 use crate::error::{Error, ExtendedRangeBlend, Feature, Unsupported};
 use crate::lower::arith::fma::{float_fma_exact, half_sum};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, splat, ty};
 use crate::lower::arith::texel_round::{f32_to_half, HalfRounding};
-use crate::metal::format::ExtendedRange;
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::lower_inputs::BlendEquation;
 use crate::spirv::builder::{FunctionBuilder, QuantizeForm};
@@ -269,29 +267,14 @@ fn native_class(
     }
 }
 
-/// `v` (a `vec4` of `f32`) clamped to `ranges` (each lane's low and high end), a NaN to the low
-/// end.
-fn clamped_lanes(
-    fb: &mut FunctionBuilder<'_>,
-    v: Value,
-    (lo, hi): ([f32; 4], [f32; 4]),
-) -> BResult<Value> {
-    let low = per_lane_f(fb, lo)?;
-    let high = per_lane_f(fb, hi)?;
-    let nan = fb.unary(UnOp::IsNan, v)?;
-    let v = fb.select(nan, low, v)?;
-    fb.glsl(GlslOp::FClamp, &[v, low, high])
-}
-
 /// The blend `b` ([`NativeBlend`]) of output `s` (a `vec4` of `f32`: the function's `half4` or
 /// `float4` output as it computed it) over `d` (a `vec4` of `f32`, the destination as the write
 /// reads it) by the device's arithmetic: a `vec4` of `f32` holding each blended lane, which the
-/// caller converts to the attachment. Where `ranges` names them (the format's range: an
-/// extended-range form's color lanes to its source range, alpha to `[0, 1]`), the source, the
-/// second source `s1` (the function's index-1 output, where `b` reads it) and the blend color
-/// `color` (the encoder's blend color, a `uvec4` of its `f32`s' bits, `PushField::HalfBlendColor`,
-/// where `b` reads it) are clamped first, a NaN to the low end: that is the format's, not
-/// arithmetic. Each class then computes `S·Fs op D·Fd` in `f32`, in the equation's order, each
+/// caller converts to the attachment. The source, the second source `s1` (the function's index-1
+/// output, where `b` reads it) and the blend color `color` (the encoder's blend color, a `uvec4`
+/// of its `f32`s' bits, `PushField::HalfBlendColor`, where `b` reads it) are taken as they are, as
+/// Metal takes a padded form's. Each class computes `S·Fs op D·Fd` in `f32`, in the equation's
+/// order, each
 /// factor (`1 - x`, `SourceAlphaSaturated`'s `min(sa, 1 - da)`), product and sum one device
 /// instruction, nothing rounded to `half` between them, the device free to contract a product into
 /// its sum as it contracts the module's own arithmetic. A lane the write does not store holds
@@ -299,25 +282,15 @@ fn clamped_lanes(
 pub fn native(
     fb: &mut FunctionBuilder<'_>,
     b: &NativeBlend,
-    ranges: Option<([f32; 4], [f32; 4])>,
     (s, s1, d): (Value, Option<Value>, Value),
     color: Option<Value>,
 ) -> BResult<Value> {
     let f = floats();
-    let clamp = |fb: &mut FunctionBuilder<'_>, v: Value| match ranges {
-        Some(r) => clamped_lanes(fb, v, r),
-        None => Ok(v),
-    };
-    let s = clamp(fb, s)?;
-    let s1 = match s1 {
-        Some(v) if b.reads_second() => Some(clamp(fb, v)?),
-        _ => None,
-    };
+    let s1 = s1.filter(|_| b.reads_second());
     let c = match color {
         Some(words) if b.reads_constant() => {
             let ft = ty(fb, f)?;
-            let c = fb.convert(ConvOp::Bitcast, words, ft)?;
-            Some(clamp(fb, c)?)
+            Some(fb.convert(ConvOp::Bitcast, words, ft)?)
         }
         _ => None,
     };
@@ -342,20 +315,6 @@ pub fn native(
         false => d,
     };
     fb.vector_shuffle(rgb, alpha, &[0, 1, 2, 7])
-}
-
-/// The ranges an extended-range form's blend clamps its source, second source and blend color to
-/// ([`native`]): the color lanes to the form's source range ([`source_range`]), alpha to `[0, 1]`.
-/// `None` for a padded form, whose blend Metal computes over them as they are, every lane
-/// unclamped (the M3 Max under macOS 27.0.1: sources, second sources and blend colors past both
-/// ends of `[0, 1]`, alpha among them, into every padded form; `probes/padded_and_bfloat_blends.m`
-/// of the conformance crate).
-pub fn extended_ranges(form: ExtendedRange) -> Option<([f32; 4], [f32; 4])> {
-    if form.padded() {
-        return None;
-    }
-    let (lo, hi) = source_range(form);
-    Some(([lo, lo, lo, 0.0], [hi, hi, hi, 1.0]))
 }
 
 /// A value a blend lane reads.

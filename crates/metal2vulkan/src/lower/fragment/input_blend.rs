@@ -1,5 +1,6 @@
 //! The blend into an extended-range attachment on a device that orders framebuffer fetch through
-//! rasterization-order input attachments.
+//! rasterization-order input attachments: a padded one's (a blend into one of Apple's
+//! extended-range forms is refused, `fetch::codes_round_the_tile`).
 //!
 //! Such an attachment holds Metal's raw texels in its raw unsigned format, which no device blends.
 //! On a device that fetches in the pixel interlock the storage form computes the blend in the
@@ -459,8 +460,7 @@ pub(crate) fn texel(
     let codes = super::color::input_texel(cx, fb, color)?;
     let d = extended_range::tile_value(fb, ib.form, codes)?;
     let constant = fetch::blend_constant(cx, fb, b)?;
-    let ranges = extended_range::blend::extended_ranges(ib.form);
-    let v = extended_range::blend::native(fb, b, ranges, (part, s1, d), constant)?;
+    let v = extended_range::blend::native(fb, b, (part, s1, d), constant)?;
     if ib.kept.is_empty() {
         return extended_range::encode(fb, ib.form, v);
     }

@@ -1040,20 +1040,18 @@ pub enum FactorLane {
 /// (`LoweringInputs::extended_range_colors`), as Metal stores its output there (measured on an
 /// Apple M3 Max and an M4): a `float` output is rounded to `half` (nearest
 /// even), a `half` one is taken as it is, and the value is stored as a kernel write stores it.
-/// Under blending Metal first clamps the output to the format's range (each color channel to the
-/// values of codes 0 and 1022 as `half`s, an `_sRGB` color channel of `BGRA10_XR_sRGB` to its
-/// decoded codes 0 and 1022, a NaN to the low end; alpha to `[0, 1]`, a NaN to 0); a padded
-/// form's output it blends unclamped.
+/// A padded form's output Metal blends unclamped; a blend into one of Apple's extended-range forms
+/// is not implemented (`lower::fragment::fetch::codes_round_the_tile`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExtendedRangeColor {
     /// The attachment's format.
     pub form: metal::format::ExtendedRange,
-    /// The pipeline enables blending at the attachment: the output is clamped to the format's
-    /// range first, and the fragment function computes the blend over an ordered read of the
-    /// attachment (`lower::fragment`). A blend into a bfloat attachment is Metal's pipeline
-    /// error (`InvalidDescriptor(ColorAttachment)`).
+    /// The pipeline enables blending at the attachment: the fragment function computes a padded
+    /// form's blend over an ordered read of the attachment (`lower::fragment`). A blend into a
+    /// bfloat attachment is Metal's pipeline error (`InvalidDescriptor(ColorAttachment)`), and one
+    /// into one of Apple's extended-range forms is not implemented (`Unsupported(Format)`).
     pub blended: bool,
     /// A bfloat attachment of a pipeline whose `textureWriteRoundingMode` is
     /// `metal::TextureWriteRoundingMode::NearestEven`: a `float` output rounds to `half` to

@@ -1366,13 +1366,13 @@ pub enum PrecisionNote {
     /// mismatch for review, deferred in C3 until an exact path exists.
     HalfOutputPrecision,
     /// A fragment function's `half` color output (a scalar or vector of AIR's `half`) is blended
-    /// into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, or an
-    /// `_sRGB` twin) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB` twins,
+    /// into a padded 10-bit attachment (`R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB` twins,
     /// `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the function blends
     /// in the shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a
     /// blend unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the
-    /// second source and the blend color clamped to the format's range first (a padded format's
-    /// not clamped, as Metal clamps none there). The device's compiler may contract a product into
+    /// second source and the blend color unclamped, as Metal takes them there (a blend into one of
+    /// Apple's extended-range forms, `BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB`
+    /// twins, is refused). The device's compiler may contract a product into
     /// its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an RTX 5080
     /// compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
     /// folds the blend into the function and fuses, regroups and rounds each step to `half`
@@ -1389,7 +1389,7 @@ pub enum PrecisionNote {
     /// mismatch for review.
     ExtendedRangeBlendSource,
     /// [`PrecisionNote::ExtendedRangeBlendSource`] for a `float` color output (a scalar or vector
-    /// of AIR's `float`): blended into an extended-range or padded 10-bit attachment in the shader
+    /// of AIR's `float`): blended into a padded 10-bit attachment in the shader
     /// in the device's arithmetic, which the device's compiler may contract and regroup, where
     /// Metal's compiler rounds the output and each step of the blend to `half`. A blended channel
     /// may store another code than Metal's, within `ExtendedRangeBlendSource`'s bound. Its own

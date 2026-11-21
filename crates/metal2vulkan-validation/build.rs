@@ -125,9 +125,8 @@ fn main() {
     // and state word (`src/lower/fragment/stencil.rs`), a patch's factor bytes
     // (`src/lower/tessellation/factors.rs`),
     // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
-    // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), the blend color an
-    // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), and half-float
-    // conversion. The translator's paths above are below its crate (`metal2vulkan/src/...`). Each
+    // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), and
+    // half-float conversion. The translator's paths above are below its crate (`metal2vulkan/src/...`). Each
     // path is a product file below the workspace's crates/ directory, this crate's parent: those
     // listed here and the binder's Rust sources under `metal2vulkan/src/bind/`, test modules aside
     // (`runtime_files`, so a file added there joins), all sorted as strings. The guard test in
@@ -164,7 +163,6 @@ fn main() {
         "metal2vulkan/src/lower/users.rs",
         "metal2vulkan/src/lower/fragment/stencil.rs",
         "metal2vulkan/src/lower/arith/exact_division.rs",
-        "metal2vulkan/src/lower/arith/extended_range/blend_color.rs",
         "metal2vulkan/src/lower/arith/pack.rs",
         "metal2vulkan/src/lower/arith/srgb.rs",
         "metal2vulkan/src/lower/tessellation/factors.rs",

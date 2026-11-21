@@ -3,8 +3,8 @@
 //! (the device's `Pow`, which the interpreter does not model) checked in the module and against
 //! Metal's tables.
 
-use super::blend::{extended_ranges, native, NativeBlend};
-use super::{decode, encode, encode_keeping, tile_value, SOURCE_RANGE, SRGB_SOURCE_RANGE};
+use super::blend::{native, NativeBlend};
+use super::{decode, encode, encode_keeping, tile_value};
 use crate::error::Error;
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::stage_io::extended_color::bfloat_output;
@@ -22,16 +22,6 @@ use crate::spirv::ir::{
     natural_layout, BinOp, ConvOp, ExecMode, ExecModel, IoDir, LayoutRule, MemAccess, StorageClass,
     Type, TypedModule,
 };
-
-/// The linear and `_sRGB` forms of `BGR10_XR`, `BGRA10_XR` and the two-plane format.
-pub(crate) const EVERY_FORM: [ExtendedRange; 6] = [
-    ExtendedRange::Bgr10 { srgb: false },
-    ExtendedRange::Bgr10 { srgb: true },
-    ExtendedRange::Bgra10 { srgb: false },
-    ExtendedRange::Bgra10 { srgb: true },
-    ExtendedRange::Planes { srgb: false },
-    ExtendedRange::Planes { srgb: true },
-];
 
 /// What a test kernel computes of each invocation's words.
 #[derive(Clone, Copy)]
@@ -178,8 +168,7 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
             let s1 = f.composite_construct(uvec4, &lanes[12..16])?;
             let s1 = f.convert(ConvOp::Bitcast, s1, vec4)?;
             let d = tile_value(&mut f, form, x)?;
-            let ranges = extended_ranges(form);
-            let v = native(&mut f, &b, ranges, (s, Some(s1), d), Some(c))?;
+            let v = native(&mut f, &b, (s, Some(s1), d), Some(c))?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
     };
@@ -574,8 +563,9 @@ fn every_code_reads_its_tile_value() {
             let want = tile_model(form, codes(c));
             assert_eq!(*g, want.map(f32::to_bits), "{form:?} code {c}");
         }
-        // Codes 0, 1022 and 1023: the source range's ends.
-        let (lo, hi) = SOURCE_RANGE;
+        // Codes 0, 1022 and 1023: the linear values of codes 0 and 1022, `-384 / 510` and
+        // `638 / 510`, rounded to `half`, nearest even.
+        let (lo, hi) = (-1542.0 / 2048.0, 1281.0 / 1024.0);
         assert_eq!(f32::from_bits(got[0][0]), lo, "{form:?}");
         assert_eq!(f32::from_bits(got[0][1]), hi, "{form:?}");
         assert_eq!(f32::from_bits(got[1][1]), hi, "{form:?}");
@@ -640,34 +630,17 @@ const OPERATIONS: [BlendOperation; 5] = [
 ];
 
 /// The device's blend (`blend::native`) of source `s`, second source `s1` and blend color `c`
-/// over tile value `d` into `form`, storing the channels `mask`: each of `s`, `s1` and `c` clamped
-/// to the form's range (color lanes to its source range, alpha to `[0, 1]`, a NaN to the low end;
-/// a padded form's not clamped), then each class's `S·Fs op D·Fd` in `f32`, in the equation's order, each factor, product and
-/// sum rounded once to `f32`, a factor of one its operand; `Min` and `Max` of the source and the
-/// destination; a lane the mask does not store `d`'s.
+/// over tile value `d` into a padded form, storing the channels `mask`: each class's `S·Fs op D·Fd`
+/// in `f32`, in the equation's order, each factor, product and sum rounded once to `f32`, a factor
+/// of one its operand; `Min` and `Max` of the source and the destination; a lane the mask does not
+/// store `d`'s.
 fn native_model(
-    form: ExtendedRange,
     eq: &BlendEquation,
     mask: ColorWriteMask,
     (s, s1, c): ([f32; 4], [f32; 4], [f32; 4]),
     d: [f32; 4],
 ) -> [f32; 4] {
     use BlendFactor as F;
-    let (lo, hi) = match form {
-        ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
-        _ => SOURCE_RANGE,
-    };
-    let clamp = |v: [f32; 4]| -> [f32; 4] {
-        std::array::from_fn(|k| {
-            let (lo, hi) = if k == 3 { (0.0, 1.0) } else { (lo, hi) };
-            match v[k] {
-                _ if form.padded() => v[k],
-                x if x.is_nan() => lo,
-                x => x.clamp(lo, hi),
-            }
-        })
-    };
-    let (s, s1, c) = (clamp(s), clamp(s1), clamp(c));
     let factor = |f: BlendFactor, alpha: bool, k: usize| -> Option<f32> {
         Some(match f {
             F::Zero => 0.0,
@@ -722,13 +695,13 @@ fn native_model(
     })
 }
 
-/// A blend into an extended-range attachment, the linear padded forms' among them, is the
-/// device's arithmetic (`blend::native`): over sources off the `half` grid, NaNs, infinities and
-/// values past the range, random texels, blend colors and second sources, every factor as each of
-/// the four factors and every operation for color and for alpha, under every class of write mask,
-/// each lane holds the `f32` model's bits ([`native_model`]): the clamp (none for a padded form),
-/// then `S·Fs op D·Fd` in the equation's order, nothing rounded to `half` between the steps. Metal's own forms (its lerps and common factors, its fused pairs and a `half` rounding
-/// after each step) miss these bits at most lanes.
+/// A blend into a linear padded attachment is the device's arithmetic (`blend::native`): over
+/// sources off the `half` grid, NaNs, infinities and values past the range, random texels, blend
+/// colors and second sources, every factor as each of the four factors and every operation for
+/// color and for alpha, under every class of write mask, each lane holds the `f32` model's bits
+/// ([`native_model`]): `S·Fs op D·Fd` in the equation's order, nothing clamped and nothing rounded
+/// to `half` between the steps. Metal's own forms (its lerps and common factors, its fused pairs
+/// and a `half` rounding after each step) miss these bits at most lanes.
 #[test]
 fn every_blend_is_the_devices_arithmetic() {
     let masks = [
@@ -741,7 +714,7 @@ fn every_blend_is_the_devices_arithmetic() {
     ];
     let mut rng = Rng(0x5EED_B1E4D);
     let mut checked = 0usize;
-    for (fi, form) in EVERY_FORM.into_iter().chain(PADDED).enumerate() {
+    for (fi, form) in PADDED.into_iter().enumerate() {
         for (i, &f) in FACTORS.iter().enumerate() {
             let k = i + fi;
             let eq = BlendEquation {
@@ -782,13 +755,7 @@ fn every_blend_is_the_devices_arithmetic() {
             for ((w, tile), got) in lanes.iter().zip(tiles).zip(got) {
                 let f = |a: &[u32]| -> [f32; 4] { std::array::from_fn(|k| f32::from_bits(a[k])) };
                 let d = f(&tile);
-                let want = native_model(
-                    form,
-                    &eq,
-                    mask,
-                    (f(&w[4..8]), f(&w[12..16]), f(&w[8..12])),
-                    d,
-                );
+                let want = native_model(&eq, mask, (f(&w[4..8]), f(&w[12..16]), f(&w[8..12])), d);
                 let same = (0..4).all(|k| {
                     want[k].to_bits() == got[k]
                         || (want[k].is_nan() && f32::from_bits(got[k]).is_nan())
@@ -804,10 +771,7 @@ fn every_blend_is_the_devices_arithmetic() {
             }
         }
     }
-    assert_eq!(
-        checked,
-        (EVERY_FORM.len() + PADDED.len()) * FACTORS.len() * 24
-    );
+    assert_eq!(checked, PADDED.len() * FACTORS.len() * 24);
 }
 
 /// The linear padded forms.

@@ -38,7 +38,11 @@
 //!
 //! **An extended-range attachment** (`metal::format::ExtendedRange`) holds Metal's raw texels in
 //! its raw unsigned format: its input attachment is of `uint` texels, and a read decodes the texel
-//! to Metal's tile value (`arith::extended_range::tile_value`), as the storage form's does. The
+//! to Metal's tile value (`arith::extended_range::tile_value`), as the storage form's does. A read
+//! of one of Apple's extended-range forms (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their
+//! `_sRGB` twins) is not implemented, on either device (`Feature::Format`, at the attachment):
+//! Metal's tile holds such an attachment as `half` through the pass, which the codes an earlier
+//! draw stored do not keep (`fetch::codes_round_the_tile`); a padded one's is built. The
 //! interface records the attachment (`StageIo::extended_range_colors`), so link holds a stage
 //! compiled for it to the pipeline's attachments. Where the pipeline blends such an attachment the
 //! function writes, the write blends over the same input attachment (`input_blend`), which a
@@ -175,6 +179,19 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
     // `half`s Metal's tile holds is not).
     if extended.is_some_and(|e| e.form.bfloat()) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
+    }
+    // A fetch of one of Apple's extended-range forms reads the codes an earlier draw of the pass
+    // stored, where Metal's tile holds that draw's `half` (`fetch::codes_round_the_tile`): not
+    // implemented. An integer read of it is Metal's pipeline error.
+    if extended.is_some_and(|e| super::fetch::codes_round_the_tile(e.form)) {
+        if !form.is_float() {
+            return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: color,
+                metal: MetalAnswer::NilWithError,
+            }));
+        }
+        let refused = Unsupported::not_implemented(Feature::Format);
+        return Err(refused.at_attachment(Attachment::Color(color)).into());
     }
     let input = ColorInput {
         param: b.param,
