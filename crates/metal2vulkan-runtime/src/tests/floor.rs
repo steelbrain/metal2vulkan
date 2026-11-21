@@ -369,6 +369,10 @@ fn the_translator_sees_only_what_device_creation_enables() {
         .features
         .contains(&VkFeature::ShaderZeroInitializeWorkgroupMemory));
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
+    // Enabled for the visibility results' occlusion queries, which no shader reads: the
+    // translator's profile, and so every key it makes, stays as it was without it.
+    assert_eq!(capabilities.features.core.occlusion_query_precise, vk::TRUE);
+    assert!(!enables.features.contains(&VkFeature::OcclusionQueryPrecise));
     for reported in [
         VkFeature::GeometryShader,
         VkFeature::RobustBufferAccess2,
@@ -454,7 +458,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 60] = [
+    let cases: [(Clear, Missing); 61] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),

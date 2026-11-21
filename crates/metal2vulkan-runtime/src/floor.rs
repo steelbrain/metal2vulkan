@@ -532,8 +532,8 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(core.vertex_pipeline_stores_and_atomics => VertexPipelineStoresAndAtomics),
     // A `Counting` visibility result is the count of samples that passed: a precise occlusion
     // query's, which `Boolean` takes too. Roadmap 2022 requires it of every device, and every
-    // venue's driver reports it.
-    feature!(core.occlusion_query_precise => OcclusionQueryPrecise),
+    // venue's driver reports it. No shader uses it, so the translator is not told of it.
+    feature!(core.occlusion_query_precise),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.
