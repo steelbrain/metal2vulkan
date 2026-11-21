@@ -33,7 +33,7 @@ use crate::candidate::engine::{
     RefusedOn, RunAttempt, RuntimeKernel,
 };
 use crate::case::Stage;
-use crate::check::admission::ExecutorError;
+use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::{ExecutedCensus, ExecutionClass, HostClass, Leg, ModuleCensus};
 use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
 use crate::gpu::wait::{with_submission_label, SubmissionBackend, SubmissionLabel};
@@ -324,11 +324,16 @@ fn environment(identity: &Identity, tools: &[ActiveTool]) -> serde_json::Value {
     })
 }
 
-/// The runtime's `error` as the executor's: the translator's refusal as the product's, every
-/// other error a failure ([`execute_runtime`]).
+/// The runtime's `error` as the executor's: the translator's refusal as the product's, a pixel
+/// format the runtime makes no image of on this device as the device's (`NotEnabled`, as the
+/// executor's own context records a format its query lacks), every other error a failure
+/// ([`execute_runtime`]).
 fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
     match error {
         rt::Error::Translation(error) => product_refusal(&error),
+        rt::Error::Unsupported(gap @ rt::Gap::TextureFormat { .. }) => {
+            ExecutorError::NotSupported(NotSupported::NotEnabled(vec![format!("{what}: {gap}")]))
+        }
         rt::Error::Unsupported(gap) => ExecutorError::Failed(format!(
             "{what}: the runtime refused a case its structure classifies as one it runs \
              ({gap:?})"
@@ -414,8 +419,7 @@ fn run(
             &buffers,
             &bound,
             case,
-            dispatch,
-            threads_per_group,
+            (dispatch, threads_per_group),
         )
     })?;
     // A texture output is read back as the oracle reads one; a run through the runtime binds no
@@ -630,8 +634,7 @@ fn dispatched(
     buffers: &BTreeMap<u32, Placed>,
     bound: &super::runtime_textures::Bound,
     case: &ComputeCase,
-    dispatch: rt::Dispatch,
-    threads_per_group: [u32; 3],
+    (dispatch, threads_per_group): (rt::Dispatch, [u32; 3]),
 ) -> Result<(), ExecutorError> {
     let fail = |what: &'static str| move |error: rt::Error| runtime_error(what, error);
     let queue = device.new_command_queue(1).map_err(fail("the queue"))?;
@@ -690,5 +693,33 @@ fn dispatched(
             "the command buffer ended {status:?}: {:?}",
             command_buffer.error()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rt, runtime_error};
+    use crate::check::admission::{ExecutorError, NotSupported};
+
+    /// A pixel format the runtime makes no image of on the device is the device's refusal, as the
+    /// executor's own context records a format its query lacks; another gap of the runtime fails
+    /// the row, as the case's structure classifies it as one the runtime runs.
+    #[test]
+    fn a_format_the_runtime_makes_no_image_of_is_the_devices_refusal() {
+        let format = rt::Error::Unsupported(rt::Gap::TextureFormat {
+            pixel_format: rt::PixelFormat::R8UnormSRGB,
+        });
+        assert!(matches!(
+            runtime_error("texture 1", format),
+            ExecutorError::NotSupported(NotSupported::NotEnabled(gaps))
+                if gaps.len() == 1 && gaps[0].starts_with("texture 1: ")
+        ));
+        let depth = rt::Error::Unsupported(rt::Gap::FloatDepthUpload {
+            pixel_format: rt::PixelFormat::Depth32Float,
+        });
+        assert!(matches!(
+            runtime_error("texture 0 level 0", depth),
+            ExecutorError::Failed(_)
+        ));
     }
 }

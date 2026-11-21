@@ -456,10 +456,15 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   `robustness-off` leg none, so both encodings of a buffer-slot access's bounds run (the
   device's robustness and the shader's check).
 - **Through the runtime.** On Linux, in the stated leg and without a profile restriction, a kernel
-  case of buffers (device buffer arrays included), threadgroup memory, function constants and
-  linked functions, dispatched by threads or threadgroups and observing a buffer, runs through
-  `metal2vulkan-runtime`'s public API instead, as a consumer runs it (`engine::runs_through_runtime`
-  decides it from the case's structure). Its device worker enables the validation layer through the
+  case of buffers (device buffer arrays included), bound textures and samplers, threadgroup
+  memory, function constants and linked functions, dispatched by threads or threadgroups and
+  observing a buffer, a bound texture or nothing, runs through `metal2vulkan-runtime`'s public API
+  instead, as a consumer runs it (`engine::runs_through_runtime` decides it from the case's
+  structure). Each texture is made as the Metal oracle makes it, Shared and written with
+  `replace_region`, at an index the run grants; a multisampled, sparse, texture-buffer or
+  cube-array texture, or a 32-bit float depth (which the runtime takes no upload of), keeps the
+  case on the executor's own context. A pixel format the runtime makes no image of on the device
+  records `not_enabled`, as the executor's own context records a format its query lacks. Its device worker enables the validation layer through the
   loader's and the layer's variables, and any message the layer logs fails the row. The pipeline
   state's make is held to 500 MiB of peak live allocations and 20 s. Its row records the state's
   precision notes and the runtime's fingerprint, and no SPIR-V, status, subgroup shape,

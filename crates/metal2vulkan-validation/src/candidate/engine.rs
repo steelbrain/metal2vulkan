@@ -49,7 +49,8 @@ use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{
     AccelerationStructureKind, ArgumentBufferSamplerResource, AuthoredCase,
     ImplicitImageblockCoverage, IntersectionFunctionTableEntry, IntersectionFunctionTableResource,
-    OutputSelection, RateMapLiteral, ResourceRole, SamplerResource, Stage, TextureType,
+    OutputSelection, RateMapLiteral, ResourceRole, SamplerResource, Stage, TextureFormat,
+    TextureType,
 };
 use crate::check::admission::{
     admit, AdmittedCase, ExecutionRequest, ExecutorError, NotSupported, VenueMismatch,
@@ -123,7 +124,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v187";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v188";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1172,7 +1173,7 @@ pub fn runtime_fingerprint() -> String {
 /// Whether `case`, mapped from `authored`, runs through the runtime (`metal2vulkan-runtime`'s
 /// public API, `platform::execute_runtime`) in place of the executor's own context: a kernel
 /// case of buffers (each device buffer array's elements among them), bound textures the runtime
-/// makes ([`runtime_texture`]) and bound samplers, threadgroup memory lengths, function
+/// makes (`runtime_texture`) and bound samplers, threadgroup memory lengths, function
 /// constants and linked functions, dispatched by `dispatchThreads` or `dispatchThreadgroups`,
 /// and observing a buffer, a bound texture or nothing. Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
@@ -1231,9 +1232,11 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
 }
 
 /// Whether the runtime makes `texture` as the Metal oracle makes it: one sample and no sparse
-/// mapping (multisampled and sparse textures stay on the executor's own context), and of a type
-/// the runtime builds, so neither a texture buffer (`Gap::TextureBuffer`) nor a cube array
-/// (`Gap::CubeArrayTexture`).
+/// mapping (multisampled and sparse textures stay on the executor's own context), of a type the
+/// runtime builds, so neither a texture buffer (`Gap::TextureBuffer`) nor a cube array
+/// (`Gap::CubeArrayTexture`), and not a 32-bit float depth, whose bytes the runtime takes no
+/// upload of (`Gap::FloatDepthUpload`): a guest fills one by drawing, which a kernel case does
+/// not, so it stays on the executor's own context too.
 fn runtime_texture(texture: &LiteralTexture) -> bool {
     texture.sample_count == 1
         && texture.sparse.is_none()
@@ -1241,6 +1244,7 @@ fn runtime_texture(texture: &LiteralTexture) -> bool {
             texture.texture_type,
             TextureType::Buffer | TextureType::CubeArray
         )
+        && texture.format != TextureFormat::Depth32Float
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
@@ -1349,7 +1353,7 @@ fn runtime_texture_usages(
             declared_texture_writable(interface, texture.binding),
         );
         if declared_texture_atomic(interface, texture.binding) {
-            usage = usage | TextureUsage::SHADER_ATOMIC;
+            usage |= TextureUsage::SHADER_ATOMIC;
         }
         usages.insert(texture.binding, usage);
     }
@@ -1371,7 +1375,7 @@ fn runtime_texture_usages(
 /// What a run through the runtime makes its kernel and binds from, beside its mapped case: the
 /// row's AIR, the modules it links, its buffers' bytes by Metal index (each bound buffer padded to
 /// its declared size, as the oracle makes it), the usage of each texture slot it binds
-/// ([`runtime_texture_usages`]), and the float reductions it executes
+/// (`runtime_texture_usages`), and the float reductions it executes
 /// (`check::interface::float_reductions`).
 pub struct RuntimeKernel<'a> {
     pub bitcode: &'a [u8],

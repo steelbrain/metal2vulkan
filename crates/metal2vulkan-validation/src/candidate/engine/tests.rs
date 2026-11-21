@@ -2573,7 +2573,8 @@ fn plain_kernel() -> ComputeCase {
 /// makes and bound samplers, dispatched by threads or threadgroups and observing a buffer, a bound
 /// texture or nothing; a case with anything else (a pipeline state in an argument buffer, an
 /// explicit imageblock, an indirect dispatch, a texture the runtime does not make: multisampled,
-/// sparse, a texture buffer or a cube array) stays on the executor's own context.
+/// sparse, a texture buffer or a cube array, or one it takes no upload of: a 32-bit float depth)
+/// stays on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
@@ -2634,6 +2635,11 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         }),
         ..texture(TextureType::D2, 1)
     };
+    let depth = LiteralTexture {
+        format: TextureFormat::Depth32Float,
+        bytes: vec![0; 64],
+        ..texture(TextureType::D2, 1)
+    };
     let others = [
         object,
         ComputeCase {
@@ -2648,6 +2654,7 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         textured(sparse),
         textured(texture(TextureType::Buffer, 1)),
         textured(texture(TextureType::CubeArray, 1)),
+        textured(depth),
     ];
     for other in &others {
         assert!(!runs_through_runtime(&authored, other), "{other:?}");
