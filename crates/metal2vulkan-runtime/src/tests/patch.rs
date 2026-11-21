@@ -690,11 +690,22 @@ BUFFER_META"#;
             assert!(
                 matches!(
                     &got,
-                    Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u)))
-                        if u.feature == Feature::Tessellation
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        functions,
+                    }) if u.feature == Feature::Tessellation
+                        && *functions == ["tess_triangle_points", "tess_fragment"]
                 ),
                 "{name}: a control-point index type: {:?}",
-                got.err()
+                got.as_ref().err()
+            );
+            // The error's text names the vertex and the fragment function, in that order.
+            let text = got.err().map(|error| error.to_string()).unwrap_or_default();
+            assert!(
+                text.starts_with(
+                    "the translator made no pipeline of tess_triangle_points, tess_fragment: "
+                ),
+                "{name}: {text}"
             );
             let patch_state = state(name, &device, &d);
             let plain_state = state(name, &device, &plain);

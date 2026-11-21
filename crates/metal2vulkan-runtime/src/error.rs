@@ -7,6 +7,7 @@ use crate::import::ImportHandle;
 use crate::memory::{BlockId, MemoryClass};
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, TextureType};
+use metal2vulkan::pipeline::StageSource;
 use std::{fmt, io};
 
 /// What a failing call returns.
@@ -49,15 +50,27 @@ pub enum Error {
     /// duplicate of the runtime's own fd of the surface's dma-buf, which the buffer's import
     /// takes, as where the process holds as many open fds as it may. Metal has no counterpart.
     Fd(io::Error),
-    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state): the
-    /// translator made no pipeline of the kernel: a typed refusal of what it does not translate,
-    /// a descriptor Metal refuses, or a translation past its 20-second budget.
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state) and
+    /// [`Device::new_render_pipeline_state`](crate::Device::new_render_pipeline_state): the
+    /// translator made no pipeline of the descriptor's functions: a typed refusal of what it does
+    /// not translate, a descriptor Metal refuses, or a translation past its 20-second budget.
+    /// Metal's counterpart is `newComputePipelineStateWithFunction:error:` or
+    /// `newRenderPipelineStateWithDescriptor:error:` failing, which Metal does only for a
+    /// descriptor it refuses, with an `NSError` whose text says why.
     /// [`Device::new_sampler_state`](crate::Device::new_sampler_state): the translator made no
-    /// device sampler of the descriptor. Metal's
-    /// counterpart is `newComputePipelineStateWithFunction:error:` failing, which Metal does only
-    /// for a descriptor it refuses. [`Device::new`](crate::Device::new) gives it too where the
+    /// device sampler of the descriptor. [`Device::new`](crate::Device::new) gives it too where the
     /// translator takes no description of the device, which the floor leaves no device to do.
-    Translation(metal2vulkan::error::Error),
+    Translation {
+        /// The translator's error.
+        error: metal2vulkan::error::Error,
+        /// The functions of the pipeline state made, each by its own name in its library
+        /// (`MTLFunction`'s `name`), in stage order (the vertex function before the fragment
+        /// function), which the error's text prints: a diagnostic for the program's log, as the
+        /// `NSError`'s text of Metal's failed creation is, that nothing decides by. A stage the
+        /// consumer compiled (`StageSource::Compiled`) has no name here; a sampler state, a
+        /// device and a dispatch's variant of a kernel name none.
+        functions: Vec<String>,
+    },
     /// A Metal feature the runtime does not build yet: a typed known gap.
     Unsupported(Gap),
     /// A call that needs one of the runtime's threads, after
@@ -1825,6 +1838,32 @@ pub enum Limit {
 }
 
 impl Error {
+    /// The translator's `error` ([`Error::Translation`]), naming no function, for `map_err`.
+    pub(crate) fn translation(error: metal2vulkan::error::Error) -> Error {
+        Error::Translation {
+            error,
+            functions: Vec::new(),
+        }
+    }
+
+    /// This error, where it is the translator's ([`Error::Translation`]), naming each function of
+    /// `stages` by its own name in its library; any other error as it is.
+    pub(crate) fn of_stages<'a>(self, stages: impl IntoIterator<Item = &'a StageSource>) -> Error {
+        match self {
+            Error::Translation { error, .. } => Error::Translation {
+                error,
+                functions: (stages.into_iter())
+                    .filter_map(|stage| match stage {
+                        StageSource::Function(function) => Some(function.function.info().name),
+                        StageSource::Compiled(_) => None,
+                    })
+                    .map(str::to_owned)
+                    .collect(),
+            },
+            other => other,
+        }
+    }
+
     /// The error of a failed Vulkan `call`, for `map_err`.
     pub(crate) fn vulkan(call: &'static str) -> impl FnOnce(vk::Result) -> Error {
         move |result| Error::Vulkan { call, result }
@@ -1867,7 +1906,14 @@ impl fmt::Display for Error {
             Error::Thread(error) => write!(f, "a runtime thread did not start: {error}"),
             Error::Fd(error) => write!(f, "no duplicate of a dma-buf's fd: {error}"),
             Error::Quiesced => f.write_str("the device is quiesced"),
-            Error::Translation(error) => write!(f, "the translator made no pipeline: {error}"),
+            Error::Translation { error, functions } if functions.is_empty() => {
+                write!(f, "the translator made no pipeline: {error}")
+            }
+            Error::Translation { error, functions } => write!(
+                f,
+                "the translator made no pipeline of {}: {error}",
+                functions.join(", ")
+            ),
             Error::Unsupported(gap) => write!(f, "{gap}"),
         }
     }
@@ -2474,7 +2520,7 @@ impl std::error::Error for Error {
             Error::BelowFloor(below) => Some(below),
             Error::Vulkan { result, .. } => Some(result),
             Error::Thread(error) | Error::Fd(error) => Some(error),
-            Error::Translation(error) => Some(error),
+            Error::Translation { error, .. } => Some(error),
             Error::NoDirectDriverLoading
             | Error::Refused(_)
             | Error::Limit(_)

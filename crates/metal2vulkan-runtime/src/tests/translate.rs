@@ -3650,4 +3650,34 @@ declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
             );
         });
     }
+
+    /// A refused state's error names its function by its own name in its library: a compute
+    /// state of the examples' vertex function `colored_vertex`, which Metal makes no compute state
+    /// of, is `Error::Translation` naming it, and its text prints the name.
+    #[test]
+    fn every_device_names_the_function_of_a_refused_compute_state() {
+        let Some(examples) = crate::tests::draw::on_device::examples() else {
+            return;
+        };
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(examples.function("colored_vertex").expect("the function")),
+        ));
+        each_device("refused compute names", |name, _, device| {
+            let got = device
+                .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()]));
+            match got {
+                Err(Error::Translation { error, functions }) => {
+                    assert_eq!(functions, ["colored_vertex"], "{name}: {error}");
+                    let text = Error::Translation { error, functions }.to_string();
+                    assert!(
+                        text.starts_with("the translator made no pipeline of colored_vertex: "),
+                        "{name}: {text}"
+                    );
+                    println!("{name}: {text}");
+                }
+                Err(other) => panic!("{name}: {other}"),
+                Ok(_) => panic!("{name}: a compute state of a vertex function was made"),
+            }
+        });
+    }
 }

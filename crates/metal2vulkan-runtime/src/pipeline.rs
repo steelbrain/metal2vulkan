@@ -321,7 +321,7 @@ fn constexpr_uses(
     for (_, sampler) in uses.iter().filter(|(place, _)| *place == at) {
         let desc = sampler
             .constexpr_sampler(profile)
-            .map_err(Error::Translation)?
+            .map_err(Error::translation)?
             .ok_or_else(gap)?;
         held[sampler_array(sampler)] = Some(canonical(desc));
     }
@@ -809,12 +809,23 @@ impl crate::Device {
     /// their indices. What `sampler_ids` answers as an error, the call answers; once it has
     /// answered, a failing call holds none of the indices.
     ///
-    /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
-    /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
-    /// compute encoder does not supply yet; [`Refusal::SamplerIds`] where `sampler_ids` answers
-    /// another count; [`Refusal::IndicesNotGranted`] for a constexpr sampler's index;
-    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
+    /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses,
+    /// naming the kernel; [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that
+    /// reads what the compute encoder does not supply yet; [`Refusal::SamplerIds`] where
+    /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
+    /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_compute_pipeline_state(
+        &self,
+        descriptor: &ComputePipelineDescriptor,
+        sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
+    ) -> Result<ComputePipelineState, Error> {
+        (self.compute_pipeline_state(descriptor, sampler_ids))
+            .map_err(|error| error.of_stages([&descriptor.kernel]))
+    }
+
+    /// [`new_compute_pipeline_state`](Self::new_compute_pipeline_state), its translator's error
+    /// naming no function.
+    fn compute_pipeline_state(
         &self,
         descriptor: &ComputePipelineDescriptor,
         sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
@@ -866,7 +877,7 @@ impl Compiled {
                         entries,
                     )
                 })
-                .map_err(Error::Translation)?;
+                .map_err(Error::translation)?;
                 let source = (
                     function,
                     plain.kernel_variant(KernelVariant::EmulatedSimdgroups),
@@ -893,7 +904,7 @@ impl Compiled {
                     let observes = translating(&core, || {
                         translator.kernel_observes_partition(function, &inputs, &budget, entries)
                     })
-                    .map_err(Error::Translation);
+                    .map_err(Error::translation);
                     core.note_entries();
                     if observes? {
                         cache::keep_observer(&core, &variant_key);
@@ -907,7 +918,7 @@ impl Compiled {
                                 cache::keep_refusal(&core, &variant_key);
                                 Found::Refused
                             }
-                            Err(error) => return Err(Error::Translation(error)),
+                            Err(error) => return Err(Error::translation(error)),
                         }
                     }
                 };
@@ -917,7 +928,7 @@ impl Compiled {
                     Found::Lowered(variant) if !variant.observes_threadgroup_partition() => {
                         let image_only = variant.is_image_only();
                         let imageblock = declares_imageblock(descriptor, &variant, &budget);
-                        let pipeline = compiled(variant).map_err(Error::Translation)?;
+                        let pipeline = compiled(variant).map_err(Error::translation)?;
                         let partial = (!grid_tiles(&pipeline)).then_some(None);
                         let answers = Answers::of(&pipeline, imageblock);
                         (pipeline, partial, image_only, Some(source), answers)
@@ -925,9 +936,9 @@ impl Compiled {
                     // The kernel observes its partition, or its variant is refused: its plain
                     // module, and the variant for the grids that need it.
                     variant => {
-                        let plain = lower(&plain).map_err(Error::Translation)?;
+                        let plain = lower(&plain).map_err(Error::translation)?;
                         let imageblock = declares_imageblock(descriptor, &plain, &budget);
-                        let plain = compiled(plain).map_err(Error::Translation)?;
+                        let plain = compiled(plain).map_err(Error::translation)?;
                         let answers = Answers::of(&plain, imageblock);
                         let partial = Some((function, inputs, variant));
                         (plain, Some(partial), false, Some(source), answers)
@@ -939,7 +950,7 @@ impl Compiled {
                 let pipeline = translating(&core, || {
                     translator.compile_compute_pipeline(descriptor, &budget)
                 })
-                .map_err(Error::Translation)?;
+                .map_err(Error::translation)?;
                 // Only a non-observer's partial variant runs its grid in tiles. It has no
                 // emulated variant: the kernel keeps the variant it was compiled under. The
                 // translator links a compiled kernel only for its own profile
@@ -1859,7 +1870,7 @@ impl Lowered {
         match self {
             Lowered::Made(kernel, _) => Ok(&**kernel),
             Lowered::Refused => Err(refused()),
-            Lowered::Translation(error) => Err(Error::Translation(error.clone())),
+            Lowered::Translation(error) => Err(Error::translation(error.clone())),
             &Lowered::Unsupplied(kind) => Err(gap(kind)),
             &Lowered::Failed(result) => Err(Error::Vulkan {
                 call: "vkCreateShaderModule",

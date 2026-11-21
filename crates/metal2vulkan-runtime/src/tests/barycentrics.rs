@@ -90,7 +90,10 @@ mod on_device {
                     crate::tests::no_constexpr_samplers,
                 ) {
                     Ok(state) => state,
-                    Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !on => {
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }) if !on => {
                         assert_eq!(u.feature, Feature::Barycentrics, "{name}: {u:?}");
                         println!(
                             "barycentrics: {name}: no fragmentShaderBarycentric; {fragment}'s \

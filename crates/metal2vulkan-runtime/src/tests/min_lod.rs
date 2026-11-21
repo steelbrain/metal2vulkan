@@ -58,7 +58,10 @@ mod on_device {
             let state =
                 match device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers) {
                     Ok(state) => state,
-                    Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !on => {
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }) if !on => {
                         assert_eq!(u.feature, Feature::MinLodClamp, "{name}: {u:?}");
                         println!("min_lod: {name}: no shaderResourceMinLod; the state is refused");
                         return;

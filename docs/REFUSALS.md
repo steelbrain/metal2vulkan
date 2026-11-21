@@ -359,7 +359,7 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 2: `crates/metal2vulkan-runtime/src/pipeline.rs (new_compute_pipeline_state)`, `crates/metal2vulkan-runtime/src/render.rs (refuse)` | `-` |
+| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 2: `crates/metal2vulkan-runtime/src/pipeline.rs (compute_pipeline_state)`, `crates/metal2vulkan-runtime/src/render.rs (refuse)` | `-` |
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet, `kind` naming what | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 1: `crates/metal2vulkan-runtime/src/pipeline.rs (gap)` | `-` |
 | `ImageblockLength` | An imageblock length Metal answers that no case measures | every device (a public call's own check of its arguments) | `ours`: the length is not measured against Metal's | 2: `crates/metal2vulkan-runtime/src/pipeline.rs (imageblock_memory_length_for_dimensions)`, `crates/metal2vulkan-runtime/src/render.rs (imageblock_sample_length)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-runtime/src/encoder.rs (decide)` | `-` |
@@ -644,7 +644,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::NoExport`: `crates/metal2vulkan-runtime/src/export.rs (handle, 2 sites)`; `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`; `crates/metal2vulkan-runtime/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-runtime/src/surface.rs (new_exported_surface)`
 - `rt:Limit::ExportType`: `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`; `crates/metal2vulkan-runtime/src/import.rs (surface_import)`; `crates/metal2vulkan-runtime/src/memory.rs (export)`; `crates/metal2vulkan-runtime/src/memory.rs (surface_view)`; `crates/metal2vulkan-runtime/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-runtime/src/surface.rs (new_exported_surface)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-runtime/src/texture.rs (plan)`
-- `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-runtime/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-runtime/src/render.rs (refuse)`
+- `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-runtime/src/pipeline.rs (compute_pipeline_state)`; `crates/metal2vulkan-runtime/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-runtime/src/pipeline.rs (gap)`
 - `rt:Gap::ImageblockLength`: `crates/metal2vulkan-runtime/src/pipeline.rs (imageblock_memory_length_for_dimensions)`; `crates/metal2vulkan-runtime/src/render.rs (imageblock_sample_length)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-runtime/src/encoder.rs (decide)`

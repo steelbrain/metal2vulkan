@@ -251,7 +251,10 @@ pub fn make_kernel(
 ) -> Result<rt::ComputePipelineState, rt::Error> {
     let function = Library::from_air(bitcode)
         .and_then(|library| library.function(entry))
-        .map_err(rt::Error::Translation)?;
+        .map_err(|error| rt::Error::Translation {
+            error,
+            functions: Vec::new(),
+        })?;
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
         FunctionDescriptor::new(function).with_specialized(true),
     ));
@@ -358,7 +361,7 @@ fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> ser
 /// ([`execute_runtime`]).
 pub(super) fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
     match error {
-        rt::Error::Translation(error) => product_refusal(&error),
+        rt::Error::Translation { error, .. } => product_refusal(&error),
         rt::Error::Unsupported(gap @ rt::Gap::TextureFormat { .. }) => {
             ExecutorError::NotSupported(NotSupported::NotEnabled(vec![format!("{what}: {gap}")]))
         }

@@ -215,7 +215,10 @@ mod on_device {
                 crate::tests::no_constexpr_samplers,
             );
             let refused = match differing {
-                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) => {
+                Err(Error::Translation {
+                    error: metal2vulkan::error::Error::Unsupported(u),
+                    ..
+                }) => {
                     assert_eq!(u.feature, Feature::LayeredRendering, "{name}: {u:?}");
                     u
                 }

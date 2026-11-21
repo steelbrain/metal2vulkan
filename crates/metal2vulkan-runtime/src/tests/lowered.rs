@@ -36,7 +36,7 @@ fn a_lowering_error_is_not_reported_as_the_variant_s_gap() {
     assert!(
         matches!(
             Lowered::Translation(internal.clone()).kernel(partial_simdgroups),
-            Err(Error::Translation(ref error)) if *error == internal
+            Err(Error::Translation { ref error, .. }) if *error == internal
         ),
         "a builder error: {}",
         reported(&Lowered::Translation(internal))

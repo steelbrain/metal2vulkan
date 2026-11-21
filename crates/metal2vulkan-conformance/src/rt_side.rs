@@ -160,7 +160,10 @@ impl RtDevice {
     /// refusal of the runtime's until a stream uses it, and the failure is the runtime's refusal.
     pub(crate) fn failure(&self, error: &rt::Error) -> Failure {
         let mut failure = Failure::of_rt(error);
-        if let rt::Error::Translation(metal2vulkan::error::Error::Unsupported(unsupported)) = error
+        if let rt::Error::Translation {
+            error: metal2vulkan::error::Error::Unsupported(unsupported),
+            ..
+        } = error
         {
             if offers_one(&self.offered, unsupported) {
                 failure.lacks = None;

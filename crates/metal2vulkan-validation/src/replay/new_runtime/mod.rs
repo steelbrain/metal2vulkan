@@ -141,7 +141,7 @@ impl Skips {
     ) -> bool {
         let gap = match error {
             rt::Error::Unsupported(gap) => format!("{gap:?}"),
-            rt::Error::Translation(refused) => translation_kind(refused),
+            rt::Error::Translation { error: refused, .. } => translation_kind(refused),
             _ => return false,
         };
         let kind = states.entry(gap);

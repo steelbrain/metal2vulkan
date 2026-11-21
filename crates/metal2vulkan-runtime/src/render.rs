@@ -362,13 +362,26 @@ impl crate::Device {
     /// Each constexpr sampler a function samples through takes the device sampler of each use it
     /// has at its index before the call returns, and every draw pushes the index.
     ///
-    /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
-    /// [`Gap::IndirectCommandBuffers`]; [`Gap::RenderPipeline`] for what the runtime does not
-    /// build, naming it; [`Refusal::PointSizeTopology`] for a vertex function that writes
-    /// `[[point_size]]` under the line or the triangle class; [`Refusal::SamplerIds`] where
-    /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
-    /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
+    /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses,
+    /// naming the vertex and the fragment function; [`Gap::IndirectCommandBuffers`];
+    /// [`Gap::RenderPipeline`] for what the runtime does not build, naming it;
+    /// [`Refusal::PointSizeTopology`] for a vertex function that writes `[[point_size]]` under
+    /// the line or the triangle class; [`Refusal::SamplerIds`] where `sampler_ids` answers another
+    /// count; [`Refusal::IndicesNotGranted`] for a constexpr sampler's index;
+    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_render_pipeline_state(
+        &self,
+        descriptor: &RenderPipelineDescriptor,
+        sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
+    ) -> Result<RenderPipelineState, Error> {
+        let stages = std::iter::once(&descriptor.vertex).chain(&descriptor.fragment);
+        (self.render_pipeline_state(descriptor, sampler_ids))
+            .map_err(|error| error.of_stages(stages))
+    }
+
+    /// [`new_render_pipeline_state`](Self::new_render_pipeline_state), its translator's error
+    /// naming no function.
+    fn render_pipeline_state(
         &self,
         descriptor: &RenderPipelineDescriptor,
         sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
@@ -396,7 +409,7 @@ impl crate::Device {
                                 entries,
                             )
                         })
-                        .map_err(Error::Translation)?;
+                        .map_err(Error::translation)?;
                         let lowered = lower_stages(core, descriptor, &keys, &budget, entries);
                         core.note_entries();
                         let (lowered, lowerings) = lowered?;
@@ -881,7 +894,7 @@ fn lower_stages(
         (&descriptor.vertex, &keys.vertex_inputs)
     {
         let function = lower(core, function, inputs, budget, entries);
-        let function = function.map_err(Error::Translation)?;
+        let function = function.map_err(Error::translation)?;
         lowerings.vertex = Some(*function.key().digest());
         lowered.vertex = StageSource::Compiled(function);
     }
@@ -891,7 +904,7 @@ fn lower_stages(
         (&descriptor.fragment, &keys.fragment_inputs)
     {
         let function = lower(core, function, inputs, budget, entries);
-        let function = function.map_err(Error::Translation)?;
+        let function = function.map_err(Error::translation)?;
         lowerings.fragment = Some(*function.key().digest());
         lowered.fragment = Some(StageSource::Compiled(function));
     }
@@ -942,7 +955,7 @@ impl RenderCompiled {
     ) -> Result<RenderCompiled, Error> {
         let translator = &core.translator;
         let pipeline = translating(core, || translator.compile_render_pipeline(lowered, budget))
-            .map_err(Error::Translation)?;
+            .map_err(Error::translation)?;
         // Metal makes no pipeline of a vertex function that writes `[[point_size]]` under the line
         // or the triangle class.
         let class = lowered.input_primitive_topology;

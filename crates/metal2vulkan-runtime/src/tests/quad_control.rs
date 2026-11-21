@@ -57,7 +57,10 @@ mod on_device {
             let state =
                 match device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers) {
                     Ok(state) => state,
-                    Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !on => {
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }) if !on => {
                         assert_eq!(u.feature, Feature::SubgroupOperations, "{name}: {u:?}");
                         println!("quad_control: {name}: no quad control; the state is refused");
                         return;

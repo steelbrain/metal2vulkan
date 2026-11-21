@@ -262,7 +262,7 @@ mod on_device {
                 },
             );
             assert!(
-                matches!(numbered, Err(Error::Translation(_))),
+                matches!(numbered, Err(Error::Translation { .. })),
                 "{name}: the NaN bias is the translator's refusal"
             );
             assert_eq!(

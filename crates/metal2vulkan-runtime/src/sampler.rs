@@ -368,7 +368,7 @@ impl Device {
         let desc = |compare, integer| {
             vk_sampler(descriptor, SamplerUse::new(compare, integer), profile)
                 .map(canonical)
-                .map_err(Error::Translation)
+                .map_err(Error::translation)
         };
         let compare = descriptor.compare_function != CompareFunction::Never;
         let uses = [

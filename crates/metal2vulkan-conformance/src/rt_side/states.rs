@@ -21,7 +21,10 @@ fn refuses_as_metal(error: &rt::Error) -> bool {
     matches!(
         error,
         rt::Error::Refused(_)
-            | rt::Error::Translation(metal2vulkan::error::Error::InvalidDescriptor(_))
+            | rt::Error::Translation {
+                error: metal2vulkan::error::Error::InvalidDescriptor(_),
+                ..
+            }
     )
 }
 

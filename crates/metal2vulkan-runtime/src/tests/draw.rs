@@ -2292,17 +2292,19 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             let divides = profile.fragment().vertex_attribute_divisor
                 && profile.limits().max_vertex_attrib_divisor >= 2;
             let nonzero = profile.limits().supports_non_zero_first_instance;
-            let state = match device
-                .new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers)
-            {
-                Ok(state) => state,
-                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !divides => {
-                    assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}");
-                    println!("{name}: no step rates; a step rate of 2 refused");
-                    return;
-                }
-                Err(other) => panic!("{name}: {other}"),
-            };
+            let state =
+                match device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers) {
+                    Ok(state) => state,
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }) if !divides => {
+                        assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}");
+                        println!("{name}: no step rates; a step rate of 2 refused");
+                        return;
+                    }
+                    Err(other) => panic!("{name}: {other}"),
+                };
             assert!(divides, "{name}: a step rate of 2 made a state");
             let from_zero = two_instances(name, &device, &state, 0)
                 .unwrap_or_else(|error| panic!("{name}: from base instance 0: {error}"));

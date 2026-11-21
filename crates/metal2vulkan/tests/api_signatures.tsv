@@ -9200,7 +9200,7 @@ variant	metal2vulkan-runtime::Error::NoSuchBlock	NoSuchBlock(BlockId)
 variant	metal2vulkan-runtime::Error::Quiesced	Quiesced
 variant	metal2vulkan-runtime::Error::Refused	Refused(Refusal)
 variant	metal2vulkan-runtime::Error::Thread	Thread(io::Error)
-variant	metal2vulkan-runtime::Error::Translation	Translation(metal2vulkan::error::Error)
+variant	metal2vulkan-runtime::Error::Translation	Translation { error: metal2vulkan::error::Error, functions: Vec<String> }
 variant	metal2vulkan-runtime::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-runtime::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-runtime::ExportHandle::DmaBuf	DmaBuf

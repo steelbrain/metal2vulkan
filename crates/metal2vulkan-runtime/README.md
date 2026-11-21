@@ -2183,7 +2183,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   budget per lowering, for what device creation enabled and under its identity domains: each
   buffer argument is the guest address of the bound buffer plus its offset, and each texture and
   sampler argument the bound object's resource ID, pushed; set 1 is the only descriptor set a
-  kernel reads. A refusal of the translator is `Error::Translation`.
+  kernel reads. A refusal of the translator is `Error::Translation`, whose `functions` names the
+  kernel by its own name in its library and whose text prints it, for the program's log as the
+  text of Metal's `NSError` is; nothing decides by it. A kernel the consumer compiled has no name
+  there.
 - rt builds no pipeline reflection and acts on no `MTLPipelineOption`; its consumer builds
   reflection from the library's AIR. The options it leaves to the consumer are
   `MTLPipelineOptionFailOnBinaryArchiveMiss`, `MTLPipelineOptionArgumentInfo`,
@@ -2693,7 +2696,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `newRenderPipelineStateWithDescriptor:error:` without reflection. The translator lowers the
   vertex and fragment functions on the calling thread, which waits for them, within its 20-second
   budget per lowering, for what device creation enabled and under its identity domains, as for a
-  compute state. A refusal of the translator is `Error::Translation`.
+  compute state. A refusal of the translator is `Error::Translation`, whose `functions` names the
+  vertex function and then the fragment function, as for a compute state.
 - rt builds no pipeline reflection and acts on no `MTLPipelineOption`; its consumer builds
   reflection from the library's AIR, as for a compute state.
 - `RenderPipelineState::texture_accesses(stage)` answers each texture slot the vertex

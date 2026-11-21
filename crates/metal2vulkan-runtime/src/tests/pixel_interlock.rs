@@ -51,7 +51,10 @@ mod on_device {
                 .new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers)
             {
                 Ok(state) => state,
-                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !on => {
+                Err(Error::Translation {
+                    error: metal2vulkan::error::Error::Unsupported(u),
+                    ..
+                }) if !on => {
                     assert_eq!(u.feature, Feature::RasterOrderGroups, "{name}: {u:?}");
                     println!("pixel_interlock: {name}: no pixel interlock; the state is refused");
                     return;

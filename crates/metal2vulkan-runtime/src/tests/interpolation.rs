@@ -168,9 +168,11 @@ keep:
                 match device
                     .new_render_pipeline_state(&with(function), crate::tests::no_constexpr_samplers)
                 {
-                    Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u)))
-                        if u.feature == Feature::DivergentInterpolation
-                            && u.needs == Needs::NotImplemented => {}
+                    Err(Error::Translation {
+                        error: metal2vulkan::error::Error::Unsupported(u),
+                        ..
+                    }) if u.feature == Feature::DivergentInterpolation
+                        && u.needs == Needs::NotImplemented => {}
                     Err(error) => panic!("{name}: {function}: {error}"),
                     Ok(_) => panic!("{name}: {function} was made"),
                 }

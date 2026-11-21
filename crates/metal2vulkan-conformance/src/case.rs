@@ -490,11 +490,24 @@ pub struct Failure {
 impl Failure {
     /// The failure a typed error of the runtime (`metal2vulkan-runtime`) is. A translator refusal
     /// that names a capability the device could enable is the venue's gap ([`device_gap_of`]).
+    /// The functions a refused pipeline state names are the case's own, a diagnostic: the failure
+    /// holds the error's text without them.
     pub fn of_rt(error: &metal2vulkan_runtime::Error) -> Self {
+        let text = match error {
+            metal2vulkan_runtime::Error::Translation { error, .. } => {
+                let unnamed = metal2vulkan_runtime::Error::Translation {
+                    error: error.clone(),
+                    functions: Vec::new(),
+                };
+                unnamed.to_string()
+            }
+            other => other.to_string(),
+        };
         let lacks = match error {
-            metal2vulkan_runtime::Error::Translation(metal2vulkan::error::Error::Unsupported(
-                unsupported,
-            )) => device_gap_of(unsupported),
+            metal2vulkan_runtime::Error::Translation {
+                error: metal2vulkan::error::Error::Unsupported(unsupported),
+                ..
+            } => device_gap_of(unsupported),
             // A threadgroup Metal runs and this device's limits for the kernel do not.
             metal2vulkan_runtime::Error::Limit(
                 metal2vulkan_runtime::Limit::ThreadgroupThreads { .. },
@@ -504,10 +517,10 @@ impl Failure {
         Self {
             error: Value::Variant {
                 name: error_variant(error),
-                payload: Box::new(Value::Lines(vec![error.to_string()])),
+                payload: Box::new(Value::Lines(vec![text.clone()])),
             },
             lacks,
-            refusal: Some(error.to_string()),
+            refusal: Some(text),
         }
     }
 

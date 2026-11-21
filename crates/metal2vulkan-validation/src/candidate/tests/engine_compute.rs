@@ -797,9 +797,10 @@ fn a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made() {
     let bitcode = llvm_assemble(&engine_dir().join("rlm_runtime_limits.ll")).unwrap();
     platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
         match platform::make_kernel(device, &bitcode, "rlm_member_texture_buffer") {
-            Err(metal2vulkan_runtime::Error::Translation(
-                metal2vulkan::error::Error::Unsupported(refused),
-            )) => assert!(
+            Err(metal2vulkan_runtime::Error::Translation {
+                error: metal2vulkan::error::Error::Unsupported(refused),
+                ..
+            }) => assert!(
                 matches!(
                     refused.feature,
                     Feature::IdentityDomains | Feature::ArgumentBufferTextures

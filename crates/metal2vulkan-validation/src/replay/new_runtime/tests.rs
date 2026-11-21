@@ -24,14 +24,20 @@ fn made(result: u64) -> Call {
 fn translator_refusals_are_counted_by_kind() {
     let tessellation = || {
         let feature = Feature::Lowering(LowerFamily::Tessellation);
-        rt::Error::Translation(Unsupported::not_implemented(feature).into())
+        rt::Error::Translation {
+            error: Unsupported::not_implemented(feature).into(),
+            functions: Vec::new(),
+        }
     };
     let answers = [
         (7, tessellation()),
         (8, tessellation()),
         (
             9,
-            rt::Error::Translation(Error::LimitExceeded(Limit::SpirvWords)),
+            rt::Error::Translation {
+                error: Error::LimitExceeded(Limit::SpirvWords),
+                functions: Vec::new(),
+            },
         ),
         (
             10,
@@ -75,7 +81,10 @@ fn creations_not_attempted_are_counted_by_kind_and_root() {
     skips.not_attempted(&function, Via::Receiver, 2);
     skips.not_attempted(&made(4), Via::Argument, 3);
     skips.not_attempted(&made(5), Via::Argument, 3);
-    let refused = rt::Error::Translation(Error::LimitExceeded(Limit::SpirvWords));
+    let refused = rt::Error::Translation {
+        error: Error::LimitExceeded(Limit::SpirvWords),
+        functions: Vec::new(),
+    };
     assert!(Skips::skipped_state(
         &mut skips.render_states,
         &made(6),
