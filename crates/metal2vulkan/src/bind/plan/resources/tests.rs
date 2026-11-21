@@ -14,6 +14,7 @@ fn slot_iface(texture_type: TextureType, sampled_type: SampledType) -> TextureSl
         depth_compare: false,
         access: TextureAccess::new(true, false, false),
         storage: false,
+        declared_format: false,
     }
 }
 
