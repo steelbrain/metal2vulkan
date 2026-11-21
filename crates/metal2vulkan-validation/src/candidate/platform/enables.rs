@@ -69,43 +69,6 @@ unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for Maintenance8Features {}
 // SAFETY: as above.
 unsafe impl vk::ExtendsDeviceCreateInfo for Maintenance8Features {}
 
-/// `VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT`, which `ash 0.38` predates, laid out as
-/// the registry defines it (`sType`, `pNext`, `VkBool32 deviceGeneratedCommands`,
-/// `dynamicGeneratedPipelineLayout`; extension number 573, so its structure type is
-/// `1000000000 + 572 * 1000`). The product's query reads the same structure
-/// (`ash_interop::query`).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct GeneratedCommandsFeatures {
-    s_type: vk::StructureType,
-    p_next: *mut std::ffi::c_void,
-    device_generated_commands: vk::Bool32,
-    dynamic_generated_pipeline_layout: vk::Bool32,
-}
-
-impl Default for GeneratedCommandsFeatures {
-    fn default() -> Self {
-        GeneratedCommandsFeatures {
-            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
-            p_next: std::ptr::null_mut(),
-            device_generated_commands: vk::FALSE,
-            dynamic_generated_pipeline_layout: vk::FALSE,
-        }
-    }
-}
-
-// SAFETY: the layout is the registry's `VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT`, which
-// begins with `sType` and `pNext` as every chained structure must, and this is its structure type.
-unsafe impl vk::TaggedStructure for GeneratedCommandsFeatures {
-    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_572_000);
-}
-
-// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` and `VkDeviceCreateInfo` in the
-// structure's `structextends`.
-unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for GeneratedCommandsFeatures {}
-// SAFETY: as above.
-unsafe impl vk::ExtendsDeviceCreateInfo for GeneratedCommandsFeatures {}
-
 /// `VkPhysicalDeviceShaderFmaFeaturesKHR`, which `ash 0.38` predates, laid out as the registry
 /// defines it (`sType`, `pNext`, `VkBool32 shaderFmaFloat16`, `shaderFmaFloat32`,
 /// `shaderFmaFloat64`; extension number 580, so its structure type is `1000000000 + 579 * 1000`).
@@ -283,14 +246,11 @@ pub(super) enum Structure {
     /// `VkPhysicalDeviceImageRobustnessFeatures` (`robustImageAccess`, core only from 1.3).
     ImageRobustness,
     PortabilitySubset,
-    /// `VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT`: the device replay's
-    /// generated-commands path, enabled only by [`enable_generated_commands`].
-    GeneratedCommands,
 }
 
 impl Structure {
     /// Every extension structure, in chain order.
-    const EXTENSIONS: [Structure; 45] = [
+    const EXTENSIONS: [Structure; 44] = [
         Structure::SubgroupSizeControl,
         Structure::Demote,
         Structure::Terminate,
@@ -335,7 +295,6 @@ impl Structure {
         Structure::Robustness2,
         Structure::ImageRobustness,
         Structure::PortabilitySubset,
-        Structure::GeneratedCommands,
     ];
 
     /// The device extensions any one of which exposes the structure at API 1.2 (empty for the
@@ -399,7 +358,6 @@ impl Structure {
             Structure::Robustness2 => &[c"VK_EXT_robustness2", c"VK_KHR_robustness2"],
             Structure::ImageRobustness => &[c"VK_EXT_image_robustness"],
             Structure::PortabilitySubset => &[c"VK_KHR_portability_subset"],
-            Structure::GeneratedCommands => &[c"VK_EXT_device_generated_commands"],
         }
     }
 
@@ -411,9 +369,6 @@ impl Structure {
     fn requires(self) -> &'static [&'static CStr] {
         match self {
             Structure::LocalRead | Structure::Maintenance5 => &[c"VK_KHR_dynamic_rendering"],
-            // Below 1.3, `VK_KHR_maintenance5` (or `VK_KHR_extended_flags`, which no device here
-            // lists), which itself requires `VK_KHR_dynamic_rendering`.
-            Structure::GeneratedCommands => &[c"VK_KHR_maintenance5", c"VK_KHR_dynamic_rendering"],
             Structure::AtomicFloat2 => &[c"VK_EXT_shader_atomic_float"],
             Structure::BorderColorSwizzle => &[c"VK_EXT_custom_border_color"],
             Structure::RayQuery => &[
@@ -643,7 +598,6 @@ pub(super) struct FeatureChain {
     /// defaults to all-false: enabling `VK_KHR_portability_subset` without chaining it asks for
     /// none of it.
     pub(super) portability_subset: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>,
-    pub(super) generated_commands: GeneratedCommandsFeatures,
 }
 
 /// Chains every structure of `$chain` whose [`Structure`] `$linked` holds onto `$info`, in
@@ -694,8 +648,7 @@ macro_rules! link_extensions {
             FeedbackLoop => feedback_loop,
             Robustness2 => robustness2,
             ImageRobustness => image_robustness,
-            PortabilitySubset => portability_subset,
-            GeneratedCommands => generated_commands
+            PortabilitySubset => portability_subset
         )
     };
     (@ $info:ident, $chain:ident, $linked:ident; $($variant:ident => $field:ident),*) => {
@@ -761,8 +714,7 @@ impl FeatureChain {
             feedback_loop,
             robustness2,
             image_robustness,
-            portability_subset,
-            generated_commands
+            portability_subset
         );
     }
 
@@ -1213,8 +1165,6 @@ members! {
     PortabilitySubset.portability_subset.image_view_format_swizzle =>
         Some(F::ImageViewFormatSwizzle);
     PortabilitySubset.portability_subset.point_polygons => Some(F::PointPolygons);
-    GeneratedCommands.generated_commands.device_generated_commands => None,
-        registry = "deviceGeneratedCommands";
 }
 
 /// The engine's vocabulary features [`engine_list`] never enables, each with why. None of
@@ -1395,7 +1345,6 @@ const EXTENSIONS: &[ExtensionName] = {
         e(c"VK_KHR_maintenance5", Some(X::KhrMaintenance5)),
         e(c"VK_KHR_dynamic_rendering", Some(X::KhrDynamicRendering)),
         e(c"VK_KHR_portability_subset", Some(X::KhrPortabilitySubset)),
-        e(c"VK_EXT_device_generated_commands", None),
         e(
             c"VK_KHR_format_feature_flags2",
             Some(X::KhrFormatFeatureFlags2),
@@ -1565,37 +1514,6 @@ pub(super) fn old_engine_list(supported: &FeatureChain, available: &Available) -
         enables.extensions.insert(stencil_export);
     }
     enables
-}
-
-/// Enable `VK_EXT_device_generated_commands` and its `deviceGeneratedCommands` on top of a new
-/// engine's `enables`, where the device supports the feature and the list already enables
-/// `VK_KHR_maintenance5` (the extension's requirement at API 1.2, and the source of the
-/// `VkPipelineCreateFlags2CreateInfo` its pipelines are created with), or, in a context at a
-/// version that has it as core (1.4), its `maintenance5`: the device replay then runs the
-/// generated-commands path. Whether it did.
-pub(super) fn enable_generated_commands(
-    enables: &mut Enables,
-    supported: &FeatureChain,
-    available: &Available,
-) -> bool {
-    let member = MEMBERS
-        .iter()
-        .find(|member| member.structure == Structure::GeneratedCommands)
-        .expect("deviceGeneratedCommands is listed");
-    let maintenance5 = enables.extensions.contains(c"VK_KHR_maintenance5")
-        || (Structure::Maintenance5.core_at(enables.version)
-            && MEMBERS
-                .iter()
-                .filter(|member| member.structure == Structure::Maintenance5)
-                .all(|member| enabled(enables, member)));
-    if !member.is_set(supported) || !maintenance5 {
-        return false;
-    }
-    if !enables.expose(Structure::GeneratedCommands, available) {
-        return false;
-    }
-    member.set(&mut enables.chain);
-    true
 }
 
 /// What the runtime probe's context enabled beyond the engine's list

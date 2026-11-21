@@ -190,7 +190,7 @@ fn a_member_the_vocabulary_does_not_name_carries_its_registry_name() {
             }
         }
     }
-    assert_eq!(unnamed, 11, "members the vocabulary does not name");
+    assert_eq!(unnamed, 10, "members the vocabulary does not name");
     // Every one of them is a name some committed capture states: a misspelled name would read as
     // a device that does not support the member, on every device.
     let captures: Vec<Capture> = committed_profiles()
@@ -231,14 +231,13 @@ fn no_context_enables_a_member_the_device_does_not_report() {
             ("restricted", restriction.read_at(version), version),
         ] {
             let (supported, available) = modelled(&stem, &description, version);
-            let mut enables = engine_list(
+            let enables = engine_list(
                 old_engine_list(&supported, &available),
                 &description,
                 &supported,
                 &available,
             )
             .unwrap_or_else(|error| panic!("{stem} {kind}: {error}"));
-            enable_generated_commands(&mut enables, &supported, &available);
             for member in MEMBERS {
                 if member.is_set(&enables.chain) {
                     assert!(
@@ -367,8 +366,7 @@ fn the_old_engine_list_is_unchanged() {
             F::SeparateStencilMaskRef,
             F::ImageViewFormatSwizzle,
             F::PointPolygons,
-            // `maintenance5` was always chained for the generated-commands path; the vocabulary
-            // names it.
+            // `maintenance5` is always chained (`old_engine_list`); the vocabulary names it.
             F::Maintenance5,
         ])
     );
@@ -1575,9 +1573,8 @@ fn chain_lines(enables: &Enables) -> Vec<String> {
     lines
 }
 
-/// Every committed profile's context, with the generated-commands extension where the profile
-/// lists it: at API 1.2 as a device context queries it, and at the profile's own version as a
-/// restricted context opens it. Each is named `<stem> <kind>` and given with its
+/// Every committed profile's context: at API 1.2 as a device context queries it, and at the
+/// profile's own version as a restricted context opens it. Each is named `<stem> <kind>` and given with its
 /// [`chain_lines`].
 fn opened_chains() -> Vec<(String, Vec<String>)> {
     use super::super::profiles::ProfileRestriction;
@@ -1595,14 +1592,13 @@ fn opened_chains() -> Vec<(String, Vec<String>)> {
         ];
         for (kind, description, version) in contexts {
             let (supported, available) = modelled(&stem, &description, version);
-            let mut enables = engine_list(
+            let enables = engine_list(
                 old_engine_list(&supported, &available),
                 &description,
                 &supported,
                 &available,
             )
             .unwrap_or_else(|error| panic!("{stem} {kind}: {error}"));
-            enable_generated_commands(&mut enables, &supported, &available);
             out.push((format!("{stem} {kind}"), chain_lines(&enables)));
         }
     }

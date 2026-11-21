@@ -110,7 +110,7 @@ pub mod variants;
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v208";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v209";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures,
@@ -2030,9 +2030,7 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
 }
 
 /// [`execute_case`] of a case [`prepare_case`] accepted: the device half in a device worker
-/// (`run_on_device`), the comparison and the row here. Without generated commands
-/// (`candidate::run_without_generated_commands`) the row is compared and returned but not stored:
-/// it measures another path, and the slot is the default's.
+/// (`run_on_device`), the comparison and the row here.
 pub fn execute_prepared(
     root: &Path,
     prepared: PreparedCase,
@@ -2089,7 +2087,6 @@ pub fn execute_prepared(
         input_sha256: checked.primary.input_sha256.clone(),
         wait_timeout_ms: u64::try_from(wait_timeout().as_millis()).unwrap_or(u64::MAX),
         restricted_to,
-        generated_commands: super::requested_generated_commands(),
         venue,
         source_index: crate::source::source_index(),
     };
@@ -2097,10 +2094,9 @@ pub fn execute_prepared(
     let run = match result {
         Ok(run) => run,
         // A typed refusal on an opened device is evidence too: stored in the slot the row would
-        // have taken, with that device's facts. Without generated commands nothing is stored, as
-        // for a row.
+        // have taken, with that device's facts.
         Err(ExecutorError::NotSupported(not_supported)) => {
-            if let Some(opened) = refused_on.filter(|_| input.generated_commands) {
+            if let Some(opened) = refused_on {
                 store.upsert_refusal(RefusalObservation {
                     case_id: case.case_id.clone(),
                     air_sha256: case.air_sha256.clone(),
@@ -2166,12 +2162,7 @@ pub fn execute_prepared(
     if !observation.dependency_matches(&dependencies) {
         return Err("constructed candidate observation failed its own dependency check".into());
     }
-    // A run without generated commands (`--without-generated-commands`) measures the device
-    // replay's other path on a device whose default run takes the generated-commands path:
-    // compared and returned, never stored over the default's evidence in the same slot.
-    if super::requested_generated_commands() {
-        store.upsert_candidate(observation.clone())?;
-    }
+    store.upsert_candidate(observation.clone())?;
     Ok(observation)
 }
 

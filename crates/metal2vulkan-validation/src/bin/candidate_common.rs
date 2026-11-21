@@ -55,7 +55,6 @@ fn run() -> Result<(), ExecutorError> {
     let mut environment_id = None;
     let mut device_type = None;
     let mut profiles_layer = None;
-    let mut without_generated_commands = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -76,7 +75,6 @@ fn run() -> Result<(), ExecutorError> {
                 device_type = Some(DeviceType::parse(&required(&mut args, "--device-type")?)?)
             }
             "--profiles-layer" => profiles_layer = Some(required(&mut args, "--profiles-layer")?),
-            "--without-generated-commands" => without_generated_commands = true,
             "--gpu-wait-timeout" => set_wait_timeout(parse_wait_timeout(&required(
                 &mut args,
                 "--gpu-wait-timeout",
@@ -85,8 +83,7 @@ fn run() -> Result<(), ExecutorError> {
                 println!(
                     "usage: corpus-vulkan [--corpus DIR] [--private-corpus DIR] --case-id HASH --metal-environment-id ID --environment-id ID --device-type cpu|gpu \\\n\
                      [--air-sha256 HASH] [--source-index FILE] \\\n\
-                     [--gpu-wait-timeout SECONDS] [--profiles-layer P] \\\n\
-                     [--without-generated-commands]\n\
+                     [--gpu-wait-timeout SECONDS] [--profiles-layer P]\n\
                      cpu matches only a CPU Vulkan implementation.\n\
                      --air-sha256 HASH, the case's AIR, reads the case from only the case shard HASH\n\
                      selects (refused if the case there is over another AIR); without it every case\n\
@@ -112,11 +109,6 @@ fn run() -> Result<(), ExecutorError> {
                      robustImageAccess2), so the product compiles the robust containment encodings,\n\
                      and a case is not_supported{{not_enabled}} (exit 4) on a device that cannot enable\n\
                      one it states.\n\
-                     It enables VK_EXT_device_generated_commands where the device supports it,\n\
-                     so an indirect command buffer's device replay is the extension's token stream.\n\
-                     --without-generated-commands leaves it disabled, so the\n\
-                     replay records one indirect dispatch per command and region (K14c's path); the run is\n\
-                     compared and printed but not stored: the slot holds the default's evidence.\n\
                      The executor compares only against the case's Metal observation in the\n\
                      --metal-environment-id environment recorded by the current oracle for the\n\
                      checked case; without one it reports needs_metal_qualification{{...}} (exit 6)\n\
@@ -140,9 +132,6 @@ fn run() -> Result<(), ExecutorError> {
     if let Some(profile) = &profiles_layer {
         metal2vulkan_validation::candidate::restrict_devices_to(profile)?;
     }
-    if without_generated_commands {
-        metal2vulkan_validation::candidate::run_without_generated_commands()?;
-    }
     let observation = engine::execute(
         &root,
         case,
@@ -157,16 +146,6 @@ fn run() -> Result<(), ExecutorError> {
     );
     if let Some(withheld) = observation.environment.get("withheld_validation_messages") {
         println!("withheld validation messages: {withheld}");
-    }
-    if without_generated_commands {
-        println!(
-            "not stored: --without-generated-commands slot={} command_replay={}",
-            observation.environment_id,
-            observation
-                .environment
-                .get("command_replay")
-                .unwrap_or(&serde_json::Value::Null)
-        );
     }
     if observation.status == metal2vulkan_validation::observation::CandidateStatus::Mismatch {
         return Err("candidate output does not match the exact Metal observation".into());

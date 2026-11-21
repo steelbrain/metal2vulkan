@@ -1,5 +1,4 @@
 use crate::gpu::DeviceType;
-use std::sync::OnceLock;
 
 /// The exit statuses of the candidate executor's processes (`corpus-vulkan`): one per [`ExecutorError`](crate::check::admission::ExecutorError) kind that is not a failure, so a caller that runs them as processes
 /// (`corpus-vulkan --batch`) reads the kind from the status. A failure exits 1, and so does a
@@ -71,40 +70,6 @@ pub fn probe_runtime(device_type: DeviceType) -> Result<serde_json::Value, Strin
 /// Reading it decides that there is none if none was set.
 pub(crate) fn requested_restriction() -> Option<String> {
     platform::requested_restriction()
-}
-
-/// Whether every engine context this process opens enables `VK_EXT_device_generated_commands`
-/// where its device supports it, so the device replay takes the generated-commands path: decided
-/// once, by [`run_without_generated_commands`] (or a device worker's
-/// [`decide_generated_commands`]) or by the first read without it (enabled).
-static GENERATED_COMMANDS: OnceLock<bool> = OnceLock::new();
-
-/// Open every engine context this process opens without `VK_EXT_device_generated_commands`
-/// (a command's `--without-generated-commands`), so the device replay takes K14c's path on a device
-/// that has the extension. A measurement of that path, never the default's evidence: the engine
-/// executor compares and returns its observation but does not store it. Call it once, before any
-/// device opens.
-pub fn run_without_generated_commands() -> Result<(), String> {
-    decide_generated_commands(false)
-}
-
-/// Decide this process's generated-commands setting ([`run_without_generated_commands`]); a
-/// device worker applies its parent's before it opens a device.
-pub(crate) fn decide_generated_commands(enabled: bool) -> Result<(), String> {
-    if *GENERATED_COMMANDS.get_or_init(|| enabled) == enabled {
-        Ok(())
-    } else {
-        Err("the generated-commands setting is already decided: pass \
-             --without-generated-commands once, before any device opens"
-            .into())
-    }
-}
-
-/// Whether this process's engine contexts enable `VK_EXT_device_generated_commands` where
-/// their device supports it ([`run_without_generated_commands`]); reading it decides that they do
-/// if nothing was set.
-pub fn requested_generated_commands() -> bool {
-    *GENERATED_COMMANDS.get_or_init(|| true)
 }
 
 /// Write every validation-layer message that fails a row to stderr as the layer reports it, for

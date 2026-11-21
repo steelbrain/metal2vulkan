@@ -17,7 +17,6 @@ fn input(device: DeviceType) -> DeviceInput {
         input_sha256: "11".repeat(32),
         wait_timeout_ms: 7_000,
         restricted_to: None,
-        generated_commands: true,
         venue: None,
         source_index: None,
     }
@@ -141,7 +140,6 @@ fn output(result: Result<DeviceRun, ExecutorError>) -> DeviceOutput {
     DeviceOutput {
         product_fingerprint: TRANSLATOR_FINGERPRINT.into(),
         validation_fingerprint: VALIDATION_FINGERPRINT.into(),
-        generated_commands: true,
         result,
         refused_on: None,
     }
@@ -336,19 +334,12 @@ fn the_input_and_every_typed_result_cross_the_boundary() {
         input(DeviceType::Cpu),
         restricted(DeviceType::Cpu, "gate-lavapipe"),
         restricted(DeviceType::Cpu, "runtime-floor"),
-        DeviceInput {
-            generated_commands: false,
-            ..restricted(DeviceType::Cpu, "gate-lavapipe")
-        },
     ] {
         let own = run_restricted_to(input.restricted_to.clone());
         let results = results.iter().cloned().chain([Ok(own)]);
         for result in results {
             let scratch = ScratchDir::new("device-worker-test").unwrap();
-            let report = DeviceOutput {
-                generated_commands: input.generated_commands,
-                ..output(result.clone())
-            };
+            let report = output(result.clone());
             let worker = reporting(&scratch, &report);
             let expected = match result {
                 // An unrestricted run is the restricted parent's refusal ([`reported`]).
@@ -545,40 +536,6 @@ fn a_crash_names_its_signal() {
     assert_eq!(crash(6).outcome(), "device_crash{SIGABRT}");
     assert_eq!(crash(4).outcome(), "device_crash{SIGILL}");
     assert_eq!(crash(99).outcome(), "device_crash{signal99}");
-}
-
-/// A worker that opened its devices on the other generated-commands path than its parent asked
-/// for ran the other device replay: its run, or its refusal, is not the parent's evidence, and a
-/// run without the extension would be stored only under the default.
-#[cfg(unix)]
-#[test]
-fn a_worker_run_on_another_generated_commands_path_is_refused() {
-    let refused: Result<DeviceRun, ExecutorError> =
-        Err(NotSupported::NotEnabled(vec!["deviceGeneratedCommands".into()]).into());
-    for asked in [true, false] {
-        let input = DeviceInput {
-            generated_commands: asked,
-            ..input(DeviceType::Cpu)
-        };
-        for result in [Ok(run()), refused.clone()] {
-            let scratch = ScratchDir::new("device-worker-test").unwrap();
-            let report = DeviceOutput {
-                generated_commands: !asked,
-                ..output(result)
-            };
-            let worker = reporting(&scratch, &report);
-            match ran(worker, &input, no_tripwire) {
-                Err(ExecutorError::Failed(error)) => {
-                    assert!(
-                        error.starts_with("the device worker opened its devices"),
-                        "{error}"
-                    );
-                    assert!(error.contains("not this tool's evidence"), "{error}");
-                }
-                other => panic!("{other:?}"),
-            }
-        }
-    }
 }
 
 /// A typed refusal after the device opened crosses the boundary with that device's facts; a device

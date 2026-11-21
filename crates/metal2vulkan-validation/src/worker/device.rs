@@ -21,16 +21,14 @@
 //!    half reads; the environment (the loader's and the layers' variables, `METAL2VULKAN_*`,
 //!    `HOME`) is inherited.
 //! 2. The child ([`serve_if_requested`]) sets the wait bound, reads private sources through the
-//!    parent's source index if it was handed one, restricts its contexts to P and
-//!    sets its generated-commands setting before it opens any device, turns on the
-//!    validation layer's echo (`candidate::echo_validation_messages`: each failing message goes
-//!    to stderr as the layer reports it, at most as many as a row keeps, so a crash still shows
-//!    them), admits and prepares the case again, requires the parent's input digest, runs it,
+//!    parent's source index if it was handed one, restricts its contexts to P before it opens
+//!    any device, turns on the validation layer's echo (`candidate::echo_validation_messages`:
+//!    each failing message goes to stderr as the layer reports it, at most as many as a row
+//!    keeps, so a crash still shows them), admits and prepares the case again, requires the parent's input digest, runs it,
 //!    and reports `Result<DeviceRun, ExecutorError>` with its build identity: its product
 //!    fingerprint ([`TRANSLATOR_FINGERPRINT`]) and its validation-crate fingerprint
 //!    ([`VALIDATION_FINGERPRINT`]), since it runs this crate's executor (binding, readback, the
-//!    comparison class, the census, the environment) as well as the product; and with whether its
-//!    contexts enabled `VK_EXT_device_generated_commands`.
+//!    comparison class, the census, the environment) as well as the product.
 //! 3. The parent waits without a deadline or a memory ceiling: a GPU child is never killed while
 //!    it may have work in flight. The run is therefore bounded only as far as the child bounds
 //!    itself: every device wait (`gpu::wait`) and its compile (its compile worker) are; a driver
@@ -38,11 +36,10 @@
 //!    held the tool before the device moved out. The parent then classifies the exit (`Ended`)
 //!    before it writes anything, so a GPU child's crash writes the tripwire first; only then does
 //!    it relay the child's stderr, ignoring a closed stream. A report is decoded and refused
-//!    unless the child's build identity and generated-commands setting are the parent's and its
-//!    census names the parent's restriction; the hang protocol's exit comes back to
-//!    `execute`, which leaves with the same status once the scratch files are gone, as the
-//!    in-process wait did; a signal is a [`DeviceCrash`]; any other exit is `Failed`, with the
-//!    stderr.
+//!    unless the child's build identity is the parent's and its census names the parent's
+//!    restriction; the hang protocol's exit comes back to `execute`, which leaves with the same
+//!    status once the scratch files are gone, as the in-process wait did; a signal is a
+//!    [`DeviceCrash`]; any other exit is `Failed`, with the stderr.
 
 use super::compile::CompileWorker;
 use super::{bounded, report, MonitoredChild, ProcessControl, Reported};
@@ -91,10 +88,6 @@ pub(crate) struct DeviceInput {
     /// worker restricts its own to it before it opens a device, and the census of its run must name
     /// it.
     pub(crate) restricted_to: Option<String>,
-    /// Whether the parent's contexts enable `VK_EXT_device_generated_commands` where their device
-    /// supports it (`--without-generated-commands` clears it): the worker opens its own the same
-    /// way, and its report must name it.
-    pub(crate) generated_commands: bool,
     /// The C3 venue the parent records the run under, if any: the worker holds the device it opens
     /// to the venue's profile before it runs anything, and its run or refusal must record that
     /// profile.
@@ -179,9 +172,6 @@ struct DeviceOutput {
     product_fingerprint: String,
     /// The worker's [`VALIDATION_FINGERPRINT`]: it may run another executor.
     validation_fingerprint: String,
-    /// Whether the worker's contexts enable `VK_EXT_device_generated_commands` where their device
-    /// supports it: a run on the other path than the parent's is not the parent's evidence.
-    generated_commands: bool,
     result: Result<DeviceRun, ExecutorError>,
     /// For a typed refusal after the device opened, that device ([`OpenedDevice`]).
     refused_on: Option<OpenedDevice>,
@@ -343,9 +333,8 @@ fn start(
 
 /// The outcome a worker that exited 0 reported in the last line of `stdout_path`, as every
 /// worker's report is ([`super::report`]: a library in the worker may write a line before it),
-/// refused unless the worker is this build and ran under `input`'s generated-commands setting and
-/// restriction. A device it names beside a refusal must have run under the same restriction, and
-/// only a typed refusal names one.
+/// refused unless the worker is this build and ran under `input`'s restriction. A device it names
+/// beside a refusal must have run under the same restriction, and only a typed refusal names one.
 fn reported(stdout_path: &Path, input: &DeviceInput) -> DeviceOutcome {
     let mut refused_on = None;
     let result = reported_run(stdout_path, input, &mut refused_on);
@@ -373,22 +362,6 @@ fn reported_run(
              {TRANSLATOR_FINGERPRINT} {VALIDATION_FINGERPRINT}; its run is not this tool's \
              evidence (rebuild and rerun)",
             result.product_fingerprint, result.validation_fingerprint
-        )
-        .into());
-    }
-    if result.generated_commands != input.generated_commands {
-        let path = |enabled: bool| {
-            if enabled {
-                "with VK_EXT_device_generated_commands where supported"
-            } else {
-                "without VK_EXT_device_generated_commands"
-            }
-        };
-        return Err(format!(
-            "the device worker opened its devices {}, and this tool asked for them {}; its run \
-             is not this tool's evidence",
-            path(result.generated_commands),
-            path(input.generated_commands)
         )
         .into());
     }
@@ -531,13 +504,11 @@ fn serve() -> Result<(), String> {
     if let Some(profile) = &input.restricted_to {
         crate::candidate::restrict_devices_to(profile)?;
     }
-    crate::candidate::decide_generated_commands(input.generated_commands)?;
     crate::candidate::echo_validation_messages();
     let DeviceOutcome { result, refused_on } = crate::candidate::engine::run_on_device(&input);
     report(&DeviceOutput {
         product_fingerprint: TRANSLATOR_FINGERPRINT.into(),
         validation_fingerprint: VALIDATION_FINGERPRINT.into(),
-        generated_commands: crate::candidate::requested_generated_commands(),
         result,
         refused_on,
     })

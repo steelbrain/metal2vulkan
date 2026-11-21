@@ -1691,11 +1691,6 @@ impl VulkanContext {
             &available,
         )
         .map_err(|error| format!("the engine's enable list: {error}"))?;
-        // The device replay's generated-commands path: an engine context enables
-        // `VK_EXT_device_generated_commands` where its device supports it, unless this process runs
-        // without it.
-        let generated_commands = crate::candidate::requested_generated_commands()
-            && enables::enable_generated_commands(&mut enables, &supported, &available);
         // The runtime probe's own context enables what it measures.
         let runtime_probe = (purpose == Purpose::RuntimeProbe)
             .then(|| enables::enable_runtime_probe(&mut enables, &available));
@@ -1779,11 +1774,9 @@ impl VulkanContext {
         let opened_description = description
             .and_then(|description| crate::acceptance::opened_description(description, &enabled))
             .map(|mut description| {
-                // The description records what the context enabled: the generated-commands
-                // facts only where it enabled the extension.
-                if !generated_commands {
-                    description.generated_commands = None;
-                }
+                // The description records what the context enabled: no context enables
+                // `VK_EXT_device_generated_commands`, so it states no generated-commands facts.
+                description.generated_commands = None;
                 description
             });
         if let Ok(description) = &opened_description {
