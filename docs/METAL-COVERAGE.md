@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 621 | 29 |
-| missing | 1090 | 34 |
+| implemented | 622 | 29 |
+| missing | 1089 | 34 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 265; by the translator's values: 356. Missing by size: S 182, M 205, L 327, XL 376.
+Implemented by the runtime: 266; by the translator's values: 356. Missing by size: S 181, M 205, L 327, XL 376.
 
 ## Missing, in build order
 
@@ -28,7 +28,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 73 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
+| device, state and resource queries | S | 72 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
 | plain-value constructors (`MTLOriginMake` and the rest) | S | 7 | `MTLOriginMake`, `MTLSizeMake`, `MTLRegionMake1D`, ... |
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
@@ -1447,7 +1447,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.supportsFamily:` | method | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLDevice.supportsTextureSampleCount:` | method | implemented | `Device::supports_texture_sample_count` (runtime) |
 | `MTLDevice.minimumLinearTextureAlignmentForPixelFormat:` | method | implemented | `Device::minimum_linear_texture_alignment` (runtime) |
-| `MTLDevice.minimumTextureBufferAlignmentForPixelFormat:` | method | missing | S: a texture buffer's offset alignment; a texture buffer is refused (`Gap::TextureBuffer`) |
+| `MTLDevice.minimumTextureBufferAlignmentForPixelFormat:` | method | implemented | `Device::minimum_texture_buffer_alignment` (runtime) |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:reflection:error:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:completionHandler:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` | method | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
@@ -2541,7 +2541,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLTextureDescriptor` | class | implemented | `TextureDescriptor` (runtime) |
 | `MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:` | class method | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLTextureDescriptor.textureCubeDescriptorWithPixelFormat:size:mipmapped:` | class method | missing | S: a query or call metal2vulkan-runtime does not answer |
-| `MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | class method | missing | S: a texture buffer's descriptor; a texture buffer is refused (`Gap::TextureBuffer`) |
+| `MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | class method | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLTextureDescriptor.textureType` | property | implemented | `TextureDescriptor.texture_type` (runtime) |
 | `MTLTextureDescriptor.pixelFormat` | property | implemented | `TextureDescriptor.pixel_format` (runtime) |
 | `MTLTextureDescriptor.width` | property | implemented | `TextureDescriptor.width` (runtime) |

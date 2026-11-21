@@ -196,6 +196,13 @@ impl BlitCommandEncoder {
         if !source.is_of(core) || !destination.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
+        // A texture buffer's texels are its buffer's bytes, which no image copy reaches.
+        if source.texels() || destination.texels() {
+            return Err(Error::Unsupported(Gap::TextureCopy {
+                source: source.descriptor().pixel_format,
+                destination: destination.descriptor().pixel_format,
+            }));
+        }
         let same = source.id() == destination.id();
         let sides = (Side::of(source), Side::of(destination));
         let Some(copy) = texture_copy(&sides.0, from, size, &sides.1, to, same)? else {
@@ -475,6 +482,12 @@ impl BlitCommandEncoder {
         };
         if !texture.is_of(&self.core) || !buffer.is_of(&self.core) {
             return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        // A texture buffer's texels are its buffer's bytes, which no image copy reaches.
+        if texture.texels() {
+            return Err(Error::Unsupported(Gap::TextureBytes {
+                pixel_format: texture.descriptor().pixel_format,
+            }));
         }
         // A Managed buffer's GPU side is its device copy, where it has one.
         let base = buffer.device_range().1;

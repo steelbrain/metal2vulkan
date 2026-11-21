@@ -32,6 +32,11 @@
 //!   the textures there, answers the width and `is_null_texture` by the index (0 for nil), and,
 //!   where the shader checks reads (no `robustImageAccess2`), takes a format's missing alpha out of
 //!   bounds from the word, as `tests/resource_words.tsv` gives it.
+//! - A kernel's texture buffers (`engine/ob1_texel_buffer`, `engine/texture_ops`' `texel_buffers`,
+//!   and an argument buffer's in `engine/rlm_runtime_limits`' `rlm_member_texture_buffer`) are the
+//!   elements of set 1's texel-buffer arrays at the indices their resource IDs hold, a read one
+//!   the uniform array's and a written one the storage array's, with no fact of the bound texture
+//!   buffer. Each passes L3.
 //! - A kernel's texture atomic (`ta`, generated: `atomic_fetch_add` on a `texture2d<uint,
 //!   access::read_write>`) declares its slot `R32ui`, a class whose variable is the storage-image
 //!   array's. It passes L3 and, on the CPU interpreter, adds to the texels of the element its
@@ -518,6 +523,47 @@ fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
     }
 }
 
+/// A kernel that reads one texture buffer and writes another (`ob1_texel_buffer`, of `uint`
+/// texels, and `texture_ops`' `texel_buffers`, of `float` ones), and one whose argument buffer
+/// holds one (`rlm_runtime_limits`' `rlm_member_texture_buffer`), take each from set 1's texel
+/// buffer arrays at the index its resource ID holds: a read one from the uniform array (binding 5)
+/// and a written one from the storage array (binding 6), with no fact of the bound texture buffer
+/// (no `TexelBufferRange`: the runtime's buffer view is the texture buffer, its width its texels).
+/// A slot's ID is its pushed field. Each passes L3 on each profile.
+#[test]
+fn a_texture_buffer_is_the_texel_buffer_element_its_resource_id_names() {
+    let kernels = [
+        ("ob1_texel_buffer", "ob1_texel_buffer", vec![5, 6]),
+        ("texture_ops", "texel_buffers", vec![5, 6]),
+        ("rlm_runtime_limits", "rlm_member_texture_buffer", vec![5]),
+    ];
+    for (fixture, entry, bindings) in kernels {
+        let Some(bc) = assemble(fixture) else {
+            return;
+        };
+        for stem in PROFILES {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            let (a, plan, _) =
+                compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
+            assert!(
+                !(plan.facts.iter()).any(|f| matches!(f, RuntimeFact::TexelBufferRange { .. })),
+                "{stem} {entry}: {:?}",
+                plan.facts
+            );
+            let linked =
+                link(&[&a], &LinkInputs::standalone(), &p).unwrap_or_else(|e| panic!("{e}"));
+            let mut used: Vec<u32> = (linked.table.bindings.values())
+                .filter(|(set, _)| *set == 1)
+                .map(|(_, binding)| *binding)
+                .collect();
+            used.sort();
+            used.dedup();
+            assert_eq!(used, bindings, "{stem} {entry}");
+        }
+    }
+}
+
 /// The words of `sample_up`'s constexpr sampler (`fixtures/public/harness/workloads.ll`).
 const SAMPLE_UP_WORDS: [u64; 2] = [34_901_797_601_020_489, 0];
 
@@ -748,6 +794,8 @@ fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
         (2, vk::DescriptorType::SAMPLER, 4_000),
         (3, vk::DescriptorType::SAMPLER, 4_000),
         (4, vk::DescriptorType::SAMPLER, 4_000),
+        (5, vk::DescriptorType::UNIFORM_TEXEL_BUFFER, 65_536),
+        (6, vk::DescriptorType::STORAGE_TEXEL_BUFFER, 65_536),
     ]
 }
 

@@ -171,9 +171,11 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
     }
 }
 
-/// Slots in each texture array, the sampled and the storage: the most textures alive at once,
-/// each at its index in both. Vulkan's least update-after-bind sampled and storage images, per
-/// stage and per set, is 500,000 on a device that supports `descriptorIndexing`.
+/// Slots in each texture array, the sampled and the storage, and in each texel-buffer array, the
+/// uniform and the storage: the most textures alive at once, each at its index in all four. A
+/// uniform texel buffer counts as a sampled image and a storage one as a storage image against the
+/// update-after-bind limits, whose least, per stage and per set, is 500,000 on a device that
+/// supports `descriptorIndexing`.
 pub(crate) const TEXTURES: u32 = 65_536;
 
 /// Slots in each sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
@@ -421,6 +423,14 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(core.shader_storage_image_array_dynamic_indexing => ShaderStorageImageArrayDynamicIndexing),
     feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing => ShaderSampledImageArrayNonUniformIndexing),
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing => ShaderStorageImageArrayNonUniformIndexing),
+    // One texel-buffer array per use of a texture buffer, read and written, indexed by its
+    // `gpuResourceID` as the texture arrays are. Every recorded device reports the six.
+    feature!(vulkan12.descriptor_binding_uniform_texel_buffer_update_after_bind => DescriptorBindingUniformTexelBufferUpdateAfterBind),
+    feature!(vulkan12.descriptor_binding_storage_texel_buffer_update_after_bind => DescriptorBindingStorageTexelBufferUpdateAfterBind),
+    feature!(vulkan12.shader_uniform_texel_buffer_array_dynamic_indexing => ShaderUniformTexelBufferArrayDynamicIndexing),
+    feature!(vulkan12.shader_storage_texel_buffer_array_dynamic_indexing => ShaderStorageTexelBufferArrayDynamicIndexing),
+    feature!(vulkan12.shader_uniform_texel_buffer_array_non_uniform_indexing => ShaderUniformTexelBufferArrayNonUniformIndexing),
+    feature!(vulkan12.shader_storage_texel_buffer_array_non_uniform_indexing => ShaderStorageTexelBufferArrayNonUniformIndexing),
     feature!(core.shader_storage_image_write_without_format => ShaderStorageImageWriteWithoutFormat),
     // A read-write texture of a format Vulkan lists among the storage image extended formats
     // (`RG16Float`, `RG11B10Float`, `R8Unorm` and the rest), declared with its format where a
@@ -1369,17 +1379,18 @@ pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
 
 /// Whether the device's descriptor limits hold the sampled-texture array's second elements
 /// (`arrays::sampled_images`) beside the floor's arrays: what the attachment reads take beyond
-/// [`limits`].
+/// [`limits`]. A uniform texel buffer counts as a sampled image, and a storage one as a storage
+/// image.
 fn second_elements_fit(device: &Queried) -> bool {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
-    let sampled = 2 * TEXTURES;
+    let sampled = 3 * TEXTURES;
     descriptors.max_per_stage_descriptor_update_after_bind_sampled_images >= sampled
         && descriptors.max_descriptor_set_update_after_bind_sampled_images >= sampled
         && descriptors.max_per_stage_update_after_bind_resources
-            >= sampled + TEXTURES + limits.max_color_attachments
+            >= sampled + 2 * TEXTURES + limits.max_color_attachments
         && descriptors.max_update_after_bind_descriptors_in_all_pools
-            >= sampled + TEXTURES + SAMPLER_ARRAYS * SAMPLERS
+            >= sampled + 2 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
@@ -1387,26 +1398,27 @@ fn second_elements_fit(device: &Queried) -> bool {
 pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 18] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
+    // A uniform texel buffer counts as a sampled image, and a storage one as a storage image.
     [
         (
             "maxPerStageDescriptorUpdateAfterBindSampledImages",
             descriptors.max_per_stage_descriptor_update_after_bind_sampled_images,
-            TEXTURES,
+            2 * TEXTURES,
         ),
         (
             "maxDescriptorSetUpdateAfterBindSampledImages",
             descriptors.max_descriptor_set_update_after_bind_sampled_images,
-            TEXTURES,
+            2 * TEXTURES,
         ),
         (
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
             descriptors.max_per_stage_descriptor_update_after_bind_storage_images,
-            TEXTURES,
+            2 * TEXTURES,
         ),
         (
             "maxDescriptorSetUpdateAfterBindStorageImages",
             descriptors.max_descriptor_set_update_after_bind_storage_images,
-            TEXTURES,
+            2 * TEXTURES,
         ),
         (
             "maxPerStageDescriptorUpdateAfterBindSamplers",
@@ -1427,12 +1439,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 18] {
         (
             "maxPerStageUpdateAfterBindResources",
             descriptors.max_per_stage_update_after_bind_resources,
-            2 * TEXTURES + limits.max_color_attachments,
+            4 * TEXTURES + limits.max_color_attachments,
         ),
         (
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
-            2 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS,
+            4 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS,
         ),
         (
             "maxPushConstantsSize",

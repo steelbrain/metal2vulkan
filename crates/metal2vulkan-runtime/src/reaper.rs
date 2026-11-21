@@ -84,6 +84,10 @@ pub(crate) enum Free {
     /// A released texture's index and owner word, its second element too where it says so
     /// (`Arrays::vacate_texture`).
     TextureIndex((u32, Owner), bool),
+    /// A released texture buffer's index and owner word (`Arrays::vacate_texels`).
+    TexelIndex((u32, Owner)),
+    /// A dropped texture buffer's buffer view; the textures gauge falls with it.
+    TexelView(vk::BufferView),
     /// A released sampler state's index and owner word (`Arrays::vacate_samplers`).
     SamplerIndex(u32, Owner),
 }
@@ -249,6 +253,14 @@ pub(crate) fn free(core: &Core, object: Free) {
         Free::TextureIndex(at, second) => unsafe {
             (core.arrays).vacate_texture(device, &core.counters, at, second)
         },
+        // SAFETY: as above.
+        Free::TexelIndex(at) => unsafe { (core.arrays).vacate_texels(device, &core.counters, at) },
+        Free::TexelView(view) => {
+            // SAFETY: no pending work uses it: every command buffer that used the texture buffer
+            // held it until it retired, and its elements of set 1 are null or another texture's.
+            unsafe { device.destroy_buffer_view(view, None) };
+            core.counters.fall(Gauge::Textures);
+        }
         // SAFETY: as above.
         Free::SamplerIndex(index, owner) => unsafe {
             (core.arrays).vacate_samplers(device, &core.counters, index, owner)

@@ -2,20 +2,21 @@
 //! at the index a `gpuResourceID` holds (`docs/RESOURCE-ID.md`), and the index grants the consumer
 //! chooses those indices from.
 //!
-//! One descriptor set of the translator's identity domains' five arrays, made at device creation
+//! One descriptor set of the translator's identity domains' seven arrays, made at device creation
 //! and never rewritten for layouts: binding 0 the sampled textures and binding 1 the storage
-//! textures (65,536 each, element `i` of both the texture at index `i`), and bindings 2, 3 and 4
-//! the samplers of each use, plain, depth comparison and integer texture (4,000 each). Every
-//! binding is partially bound and updated after bind, also while work that uses the set is
-//! pending, so writing one element needs no lock: each element has one owner, which writes it
-//! alone.
+//! textures (65,536 each, element `i` of both the texture at index `i`), bindings 2, 3 and 4 the
+//! samplers of each use, plain, depth comparison and integer texture (4,000 each), and bindings 5
+//! and 6 the texture buffers' uniform and storage texel buffers (65,536 each, element `i` of both
+//! the texture buffer at index `i`). Every binding is partially bound and updated after bind, also
+//! while work that uses the set is pending, so writing one element needs no lock: each element has
+//! one owner, which writes it alone.
 //!
 //! Every element no live object owns holds a defined value, so a nil, stale or forged index reads
 //! zeros or samples plainly on every device, where an element never written would be undefined
-//! behaviour. A texture element is a null descriptor (`nullDescriptor`): it reads zeros, answers
-//! 0 to its size and level queries and drops its writes. The Metal Shading Language leaves every
-//! member function of a null texture undefined (section 6.13.18), so these are the runtime's
-//! answers, not Metal's. A sampler
+//! behaviour. A texture or texel-buffer element is a null descriptor (`nullDescriptor`): it reads
+//! zeros, answers 0 to its size and level queries and drops its writes. The Metal Shading Language
+//! leaves every member function of a null texture undefined (section 6.13.18), so these are the
+//! runtime's answers, not Metal's. A sampler
 //! element is its array's default sampler, nearest and clamped to the edge; the comparison
 //! array's compares with `NEVER`, so a comparison through it answers 0, as Metal's default
 //! comparison (`MTLCompareFunctionNever`) does. Vulkan has no null sampler. The device writes
@@ -52,10 +53,14 @@ pub(crate) const STORAGE_BINDING: u32 = 1;
 /// The binding of the first sampler array; the plain, comparison and integer-texture arrays
 /// follow in that order.
 pub(crate) const FIRST_SAMPLER_BINDING: u32 = 2;
+/// The binding of the uniform texel-buffer array: the texture buffers shaders read.
+pub(crate) const UNIFORM_TEXELS_BINDING: u32 = 5;
+/// The binding of the storage texel-buffer array: the texture buffers shaders write.
+pub(crate) const STORAGE_TEXELS_BINDING: u32 = 6;
 
 /// Set 1's bindings, each its binding, descriptor type and count: the arrays a kernel's layout
 /// names under the identity domains, which every pipeline's layout takes from this set.
-pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
+pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 7] = [
     (SAMPLED_BINDING, vk::DescriptorType::SAMPLED_IMAGE, TEXTURES),
     (STORAGE_BINDING, vk::DescriptorType::STORAGE_IMAGE, TEXTURES),
     (FIRST_SAMPLER_BINDING, vk::DescriptorType::SAMPLER, SAMPLERS),
@@ -69,6 +74,16 @@ pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
         vk::DescriptorType::SAMPLER,
         SAMPLERS,
     ),
+    (
+        UNIFORM_TEXELS_BINDING,
+        vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+        TEXTURES,
+    ),
+    (
+        STORAGE_TEXELS_BINDING,
+        vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+        TEXTURES,
+    ),
 ];
 
 /// No Metal counterpart: the class of a texture or sampler index, which sets the range its grants
@@ -77,9 +92,11 @@ pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IndexClass {
     /// A texture of any usage shaders reach: 1 to 65,535, one index valid in both the
-    /// sampled-texture and the storage-texture array. A texture shaders write through a storage
-    /// view takes the element of both at its index; any other takes the sampled-texture array's
-    /// alone, and its storage element stays null.
+    /// sampled-texture and the storage-texture array, and in both texel-buffer arrays. A texture
+    /// shaders write through a storage view takes the element of both texture arrays at its
+    /// index; any other takes the sampled-texture array's alone, and its storage element stays
+    /// null. A texture buffer takes the texel-buffer arrays' elements instead: the uniform one
+    /// where shaders read it, the storage one where they write it.
     Texture,
     /// A sampler: 1 to 3,999 of each sampler array. A Metal sampler state takes one, and so does
     /// each constexpr sampler a pipeline state numbers.
@@ -325,9 +342,10 @@ impl Arrays {
     /// [`Arrays::vacate_texture`] writes it: it holds no image, so its layout need only be one
     /// every device takes for a sampled image, which the feedback layout is not: a device without
     /// `VK_EXT_attachment_feedback_loop_layout` refuses it
-    /// (`VUID-VkWriteDescriptorSet-descriptorType-04149`). The descriptor-slot gauge rises where no
-    /// object held the index. Its owner word, which [`Arrays::vacate_texture`] and
-    /// [`Arrays::place_shadow`] take.
+    /// (`VUID-VkWriteDescriptorSet-descriptorType-04149`). Where it displaced, it writes both
+    /// texel-buffer elements null too, which a texture buffer there may have held. The
+    /// descriptor-slot gauge rises where no object held the index. Its owner word, which
+    /// [`Arrays::vacate_texture`] and [`Arrays::place_shadow`] take.
     ///
     /// Err: [`Refusal::IndicesNotGranted`].
     ///
@@ -364,8 +382,106 @@ impl Arrays {
             }),
         };
         // SAFETY: the caller's contract; the texture owns the index, and the lock is held.
-        unsafe { self.write_texture(device, index, sampled, storage, second) };
+        unsafe {
+            self.write_texture(device, index, sampled, storage, second);
+            if displaced {
+                self.write_texels(device, index, [vk::BufferView::null(); 2]);
+            }
+        }
         Ok(owner)
+    }
+
+    /// Places a texture buffer at `index` ([`Grants::place`]) and writes its elements before
+    /// another object can be placed there: the uniform texel-buffer array's with `views[0]` and
+    /// the storage one's with `views[1]`, a null descriptor where a view is null. Where it
+    /// displaced, it writes the index's texture elements null too (the sampled, the storage, and
+    /// the second where the set holds them), which a texture there may have held. The
+    /// descriptor-slot gauge rises where no object held the index. Its owner word, which
+    /// [`Arrays::vacate_texels`] takes.
+    ///
+    /// Err: [`Refusal::IndicesNotGranted`].
+    ///
+    /// # Safety
+    ///
+    /// Each view is live and of the device whenever work uses it, and where it displaces, no work
+    /// in flight uses the index's elements (the consumer's duty: Vulkan does not define that
+    /// write).
+    pub(crate) unsafe fn place_texels(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+        views: [vk::BufferView; 2],
+    ) -> Result<Owner, Error> {
+        let mut grants = lock(&self.grants);
+        let Placed { owner, displaced } = grants.place(IndexClass::Texture, index)?;
+        if !displaced {
+            counters.rise(Gauge::DescriptorSlots);
+        }
+        // SAFETY: the caller's contract; the texture buffer owns the index, and the lock is held.
+        unsafe {
+            self.write_texels(device, index, views);
+            if displaced {
+                let null = vk::ImageView::null();
+                let second =
+                    (self.seconds).then_some((null, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL));
+                self.write_texture(device, index, None, Some(null), second);
+            }
+        }
+        Ok(owner)
+    }
+
+    /// The texture buffer of `owner` goes from `index`: where it still owns the index, the index
+    /// is free and its texel-buffer elements are null again, and the descriptor-slot gauge falls.
+    /// A displaced texture buffer's going touches nothing.
+    ///
+    /// # Safety
+    ///
+    /// No work in flight reads the texture buffer's elements.
+    pub(crate) unsafe fn vacate_texels(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        (index, owner): (u32, Owner),
+    ) {
+        let mut grants = lock(&self.grants);
+        if grants.vacate(IndexClass::Texture, index, owner) {
+            // SAFETY: the caller's contract; the lock is held, so no object is placed there
+            // before its elements are null.
+            unsafe { self.write_texels(device, index, [vk::BufferView::null(); 2]) };
+            counters.fall(Gauge::DescriptorSlots);
+        }
+    }
+
+    /// Writes a texture buffer's elements at `index`: the uniform texel-buffer array's with
+    /// `views[0]` and the storage one's with `views[1]`, a null descriptor where a view is null.
+    ///
+    /// # Safety
+    ///
+    /// The grants' lock is held by a placement or a vacating of the index, and each view is live
+    /// and of the device whenever work uses it.
+    unsafe fn write_texels(&self, device: &ash::Device, index: u32, views: [vk::BufferView; 2]) {
+        let (uniform, storage) = ([views[0]], [views[1]]);
+        let writes = [
+            texel_write(
+                self.set,
+                UNIFORM_TEXELS_BINDING,
+                vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+                &uniform,
+            )
+            .dst_array_element(index),
+            texel_write(
+                self.set,
+                STORAGE_TEXELS_BINDING,
+                vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+                &storage,
+            )
+            .dst_array_element(index),
+        ];
+        // SAFETY: the caller's contract; the bindings are update-after-bind and
+        // update-unused-while-pending, so elements of other owners may be written meanwhile, and
+        // a null buffer view is a null descriptor under `nullDescriptor`.
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
     /// Writes the second element of the texture of `owner` at `index` with `view`, its view of its
@@ -740,6 +856,14 @@ impl Made {
                 ty: vk::DescriptorType::SAMPLER,
                 descriptor_count: SAMPLER_ARRAYS * SAMPLERS,
             },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+                descriptor_count: TEXTURES,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+                descriptor_count: TEXTURES,
+            },
         ];
         let info = vk::DescriptorPoolCreateInfo::default()
             .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
@@ -815,10 +939,10 @@ impl Made {
 
 /// Runs `f` with set 1's layout, `counts` elements in each binding of [`BINDINGS`].
 pub(crate) fn with_arrays_layout<R>(
-    counts: [u32; 5],
+    counts: [u32; 7],
     f: impl FnOnce(&vk::DescriptorSetLayoutCreateInfo) -> R,
 ) -> R {
-    let bindings = std::array::from_fn::<_, 5, _>(|index| {
+    let bindings = std::array::from_fn::<_, 7, _>(|index| {
         let (binding, ty, _) = BINDINGS[index];
         vk::DescriptorSetLayoutBinding::default()
             .binding(binding)
@@ -828,7 +952,7 @@ pub(crate) fn with_arrays_layout<R>(
     });
     let flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
         | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-        | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING; 5];
+        | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING; 7];
     let mut binding_flags =
         vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
     let info = vk::DescriptorSetLayoutCreateInfo::default()
@@ -869,9 +993,9 @@ pub(crate) fn sampled_images(seconds: bool) -> u32 {
     }
 }
 
-/// Writes every element of `set` its default: a null descriptor in each texture array, the
-/// sampled-texture array's `sampled` elements, `plain` in the plain and integer-texture sampler
-/// arrays and `compare` in the comparison array.
+/// Writes every element of `set` its default: a null descriptor in each texture and texel-buffer
+/// array, the sampled-texture array's `sampled` elements, `plain` in the plain and
+/// integer-texture sampler arrays and `compare` in the comparison array.
 ///
 /// # Safety
 ///
@@ -896,6 +1020,7 @@ unsafe fn fill(
     let samplers =
         |sampler| vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLERS as usize];
     let (plains, compares) = (samplers(plain), samplers(compare));
+    let texels = vec![vk::BufferView::null(); TEXTURES as usize];
     let writes = [
         write(
             set,
@@ -927,10 +1052,36 @@ unsafe fn fill(
             vk::DescriptorType::SAMPLER,
             &plains,
         ),
+        texel_write(
+            set,
+            UNIFORM_TEXELS_BINDING,
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+            &texels,
+        ),
+        texel_write(
+            set,
+            STORAGE_TEXELS_BINDING,
+            vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+            &texels,
+        ),
     ];
-    // SAFETY: the caller's contract; a null image view is a null descriptor under
+    // SAFETY: the caller's contract; a null image or buffer view is a null descriptor under
     // `nullDescriptor`, and each sampler is the device's.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
+}
+
+/// The write of `views` into texel-buffer `binding` of `set`, from its first element.
+fn texel_write(
+    set: vk::DescriptorSet,
+    binding: u32,
+    ty: vk::DescriptorType,
+    views: &[vk::BufferView],
+) -> vk::WriteDescriptorSet<'_> {
+    vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(binding)
+        .descriptor_type(ty)
+        .texel_buffer_view(views)
 }
 
 /// The write of `infos` into `binding` of `set`, from its first element.

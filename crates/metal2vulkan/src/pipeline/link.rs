@@ -1068,10 +1068,11 @@ fn heap_set(
     }))
 }
 
-/// Each image array of the identity domains' set 1, the sampled-image array (binding 0) and the
-/// storage-image array (binding 1): one element per index a texture's resource ID may hold, the
-/// same index in both (`docs/RESOURCE-ID.md`). A power of two, so an argument buffer's texture
-/// index masked below it (`lower::access::handle`) is an element of both.
+/// Each texture array of the identity domains' set 1, the sampled-image array (binding 0), the
+/// storage-image array (binding 1), the uniform texel-buffer array (binding 5) and the storage
+/// texel-buffer array (binding 6): one element per index a texture's resource ID may hold, the
+/// same index in each (`docs/RESOURCE-ID.md`). A power of two, so an argument buffer's texture
+/// index masked below it (`lower::access::handle`) is an element of each.
 pub(crate) const IDENTITY_TEXTURES: u32 = 65_536;
 const _: () = assert!(IDENTITY_TEXTURES.is_power_of_two());
 
@@ -1082,13 +1083,15 @@ pub(crate) const IDENTITY_SAMPLERS: u32 = 4_000;
 
 /// Set 1 under the identity domains: the same layout for every pipeline, so the consumer binds one
 /// set for every command. Binding 0 is the sampled-image array and binding 1 the storage-image
-/// array, each element the texture whose resource ID holds its index; every heap class the
-/// pipeline's stages declare is a variable of its descriptor type's binding, as the variables of
-/// one set and binding may be (Vulkan's "DescriptorSet and Binding Assignment"). Bindings 2, 3 and
-/// 4 are the sampler arrays of the three uses, each element the device's sampler of that use made
-/// of the sampler whose resource ID holds its index: plain (2), with depth comparison (3), and for
-/// an integer texture (4), every filter nearest. Every stage sees every array, partially bound,
-/// updated after binding and while unused elements are pending: the floor's features.
+/// array, each element the texture whose resource ID holds its index; bindings 5 and 6 are the
+/// uniform and storage texel-buffer arrays, each element the texture buffer whose resource ID
+/// holds its index. Every heap class the pipeline's stages declare is a variable of its descriptor
+/// type's binding, as the variables of one set and binding may be (Vulkan's "DescriptorSet and
+/// Binding Assignment"). Bindings 2, 3 and 4 are the sampler arrays of the three uses, each element
+/// the device's sampler of that use made of the sampler whose resource ID holds its index: plain
+/// (2), with depth comparison (3), and for an integer texture (4), every filter nearest. Every
+/// stage sees every array, partially bound, updated after binding and while unused elements are
+/// pending: the floor's features.
 fn identity_set(
     heap: &BTreeMap<HandleClass, HeapDecl>,
     table: &mut LinkTable,
@@ -1097,6 +1100,8 @@ fn identity_set(
         let binding = match (h.ty, class) {
             (vk::DescriptorType::SAMPLED_IMAGE, _) => 0,
             (vk::DescriptorType::STORAGE_IMAGE, _) => 1,
+            (vk::DescriptorType::UNIFORM_TEXEL_BUFFER, _) => 5,
+            (vk::DescriptorType::STORAGE_TEXEL_BUFFER, _) => 6,
             (
                 vk::DescriptorType::SAMPLER,
                 HandleClass::Sampler {
@@ -1146,6 +1151,16 @@ fn identity_set(
             array(2, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
             array(3, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
             array(4, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
+            array(
+                5,
+                vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+                IDENTITY_TEXTURES,
+            ),
+            array(
+                6,
+                vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+                IDENTITY_TEXTURES,
+            ),
         ],
         flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
     })

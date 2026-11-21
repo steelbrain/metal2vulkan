@@ -649,7 +649,10 @@ fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {
         };
         let refused = made(rt::TextureType::TextureBuffer);
         assert!(
-            matches!(refused, Err(rt::Error::Unsupported(rt::Gap::TextureBuffer))),
+            matches!(
+                refused,
+                Err(rt::Error::Refused(rt::Refusal::TextureBufferNotOverBuffer))
+            ),
             "{refused:?}"
         );
         made(rt::TextureType::Type2D).unwrap();

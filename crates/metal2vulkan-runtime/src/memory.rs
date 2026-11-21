@@ -953,7 +953,12 @@ impl Pool {
     /// so it is vacated before the program's release returns. Releases keep their order.
     pub(crate) fn release(&self, core: &Core, object: Free) {
         let now = matches!(self.noted(), Wait::Progress(0));
-        if now && matches!(object, Free::TextureIndex(..) | Free::SamplerIndex(..)) {
+        if now
+            && matches!(
+                object,
+                Free::TextureIndex(..) | Free::TexelIndex(..) | Free::SamplerIndex(..)
+            )
+        {
             return crate::reaper::free(core, object);
         }
         let mut state = self.lock();
@@ -1686,7 +1691,7 @@ pub(crate) fn run(core: Arc<Core>) {
             // An index goes here, before the gauge falls, so every released index is vacated once
             // nothing waits; an object goes to the reaper.
             match object {
-                Free::TextureIndex(..) | Free::SamplerIndex(..) => {
+                Free::TextureIndex(..) | Free::TexelIndex(..) | Free::SamplerIndex(..) => {
                     crate::reaper::free(&core, object)
                 }
                 _ => core.reaper.give(Job::Free(object)),

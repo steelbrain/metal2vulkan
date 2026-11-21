@@ -1306,7 +1306,9 @@ fn declare_slot(
     if cube_as_array {
         facts.push(RuntimeFact::ImageViewShape { slot: s.slot });
     }
-    if shape.dim == ImageDim::Buffer {
+    // Under the identity domains the runtime makes no texture buffer past
+    // `maxTexelBufferElements`: the slot's element is its one view.
+    if shape.dim == ImageDim::Buffer && !crate::lower::access::identity(cx.profile) {
         facts.push(RuntimeFact::TexelBufferRange { slot: s.slot });
     }
     // A texture-buffer slot under its parts variant is an array of its parts, one texel buffer
@@ -1767,11 +1769,12 @@ impl SlotPlan {
 /// atomic's `R32ui` / `R32i` ([`atomic_format`]) or of a `ulong` texture's `Rg32ui`
 /// ([`ulong_format`]), each the format Metal requires of the bound texture there, whose storage
 /// element is of that format. A `ulong` slot is an `RG32` unsigned image whose two words the
-/// shader joins and splits, so its class is the unsigned integer one of its shape. `None` for a
-/// declaration the identity arrays hold no element of yet: a cube viewed as an array, level views,
-/// a texture buffer, its parts or rows, planes, an extended-range or RGBX form, a `ulong` slot a
-/// `ulong` atomic updates (an `R64ui` image), or a storage image with another format or a
-/// conversion.
+/// shader joins and splits, so its class is the unsigned integer one of its shape. A texture
+/// buffer's is a texel buffer's, uniform where the slot reads and storage where it writes, the
+/// element its resource ID holds in the texel-buffer arrays. `None` for a declaration the identity
+/// arrays hold no element of yet: a cube viewed as an array, level views, a texture buffer's parts
+/// or rows, planes, an extended-range or RGBX form, a `ulong` slot a `ulong` atomic updates (an
+/// `R64ui` image), or a storage image with another format or a conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let plain = !decl.cube_as_array
         && decl.level_views.is_none()
@@ -1787,6 +1790,7 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         Dim::D2 => SymDim::D2,
         Dim::D3 => SymDim::D3,
         Dim::Cube => SymDim::Cube,
+        Dim::Buffer => SymDim::Buffer,
         _ => return None,
     };
     let storage = decl.usage == ImageUsage::Storage;

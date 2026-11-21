@@ -86,7 +86,7 @@ pub enum StorageMode {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextureDescriptor {
-    /// `textureType`. `TextureBuffer` is refused, [`Gap::TextureBuffer`].
+    /// `textureType`. A `TextureBuffer` is made over a buffer alone ([`Buffer::new_texture`]).
     pub texture_type: TextureType,
     /// `pixelFormat`.
     pub pixel_format: PixelFormat,
@@ -210,7 +210,8 @@ pub struct Texture {
 pub(crate) struct TextureInner {
     core: Arc<Core>,
     descriptor: TextureDescriptor,
-    image: Arc<Image>,
+    /// What holds its texels: its image, or a texture buffer's view of its buffer's bytes.
+    body: Body,
     /// The format of its views: the image's, or a view's own.
     format: vk::Format,
     /// Its views' format reads as storage without a format ([`Plan`]'s `storage_reads`).
@@ -246,6 +247,24 @@ pub(crate) struct TextureInner {
     /// mapping and range, and the view once a draw read through it, which its second element
     /// names.
     shadow: Option<ShadowView>,
+}
+
+/// What holds a texture's texels ([`TextureInner`]'s `body`).
+enum Body {
+    /// An image: the texture's own, or a view's parent's.
+    Image(Arc<Image>),
+    /// A texture buffer's buffer view of its buffer's bytes ([`Buffer::new_texture`]).
+    Texels(Texels),
+}
+
+/// A texture buffer's one buffer view of its buffer's bytes, of the texel-buffer usages the
+/// buffer has, so it is the element of each texel-buffer array the texture takes at its index:
+/// the uniform one where shaders read it, the storage one where they write it. The reaper frees
+/// it once the texture is gone and its elements are null.
+struct Texels {
+    view: vk::BufferView,
+    /// Whether the uniform element and the storage element hold the view.
+    elements: [bool; 2],
 }
 
 /// A texture's view of its image's shadow (`TextureInner::shadow`).
@@ -881,15 +900,25 @@ impl Drop for TextureInner {
             // An upload holds the image past the texture: the pending one's bound counts it, and
             // the reaper, off the work lock this drop may run under, has the release looked at
             // where one not yet submitted holds it (`Work::release`).
-            if Arc::strong_count(&self.image) > 1 {
-                core.work.released(self.image.bytes);
-                let image = Arc::downgrade(&self.image);
-                core.reaper.give(Job::Released(image, self.image.bytes));
+            if let Body::Image(image) = &self.body {
+                if Arc::strong_count(image) > 1 {
+                    core.work.released(image.bytes);
+                    core.reaper
+                        .give(Job::Released(Arc::downgrade(image), image.bytes));
+                }
             }
         }
-        if let Some(at) = self.index {
-            let second = self.image.attachment_reads;
-            core.pool.release(core, Free::TextureIndex(at, second));
+        match (self.index, &self.body) {
+            (Some(at), Body::Image(image)) => {
+                let second = image.attachment_reads;
+                core.pool.release(core, Free::TextureIndex(at, second));
+            }
+            (Some(at), Body::Texels(_)) => core.pool.release(core, Free::TexelIndex(at)),
+            (None, _) => {}
+        }
+        // After its elements: the view goes once nothing reaches it through them.
+        if let Body::Texels(texels) = &self.body {
+            core.pool.release(core, Free::TexelView(texels.view));
         }
         // Its element is null, or another texture's: its view of the shadow goes before the
         // shadow, which its image holds.
@@ -948,7 +977,8 @@ impl Device {
     /// [`Refusal::TextureLevelCount`], [`Refusal::TextureSampleCount`],
     /// [`Refusal::TextureSwizzleWithWrites`]); [`Refusal::TextureIndex`];
     /// [`Refusal::IndicesNotGranted`] for an index not granted; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
-    /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`] and [`Gap::MemorylessTexture`];
+    /// [`Refusal::TextureBufferNotOverBuffer`] for a texture buffer's descriptor;
+    /// [`Gap::TextureFormat`] and [`Gap::MemorylessTexture`];
     /// [`Limit::MemoryAllocations`] where its memory would take the device past its count;
     /// [`Error::Vulkan`] where the image or its memory cannot be made; [`Error::Quiesced`].
     pub fn new_texture(
@@ -1326,7 +1356,7 @@ impl Device {
         let inner = TextureInner {
             core: Arc::clone(core),
             descriptor: d,
-            image,
+            body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
             views_usage: None,
@@ -1547,7 +1577,7 @@ impl Device {
         let inner = TextureInner {
             core: Arc::clone(core),
             descriptor: d,
-            image,
+            body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
             views_usage: None,
@@ -1575,12 +1605,12 @@ impl Device {
             inner: Arc::new(inner),
             device: self.clone(),
         };
-        core.work.home(core, &texture.inner.image)?;
+        core.work.home(core, texture.inner.imaged())?;
         // Over a Managed buffer's device copy, its buffer keeps what Metal's Managed events owe it
         // (`crate::over::ManagedOvers`), once the move to its home layout goes ahead of every
         // later commit, a capture's copy in among them.
         if let (Some(buffer), Some((_, copy))) = (texture.managed_over(), texture.copied_over()) {
-            let image = Arc::clone(&texture.inner.image);
+            let image = Arc::clone(texture.inner.imaged());
             (buffer.over_entries()).add(texture.inner.id, image, copy, copy.range);
         }
         Ok(texture)
@@ -2083,7 +2113,13 @@ fn checked(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
     if d.storage_mode == StorageMode::Memoryless {
         return Err(Error::Unsupported(Gap::MemorylessTexture));
     }
-    let usage = match d.usage.is_empty() {
+    Ok((shape, usage_taken(d)))
+}
+
+/// The usage a descriptor takes: its own, and every usage for Metal's unknown usage, as Metal
+/// takes it.
+fn usage_taken(d: &TextureDescriptor) -> TextureUsage {
+    match d.usage.is_empty() {
         true => {
             TextureUsage::SHADER_READ
                 | TextureUsage::SHADER_WRITE
@@ -2091,8 +2127,7 @@ fn checked(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
                 | TextureUsage::PIXEL_FORMAT_VIEW
         }
         false => d.usage,
-    };
-    Ok((shape, usage))
+    }
 }
 
 /// The checks a texture's own descriptor takes, Metal's: [`checked`]'s, and a swizzle only of
@@ -2133,10 +2168,10 @@ pub(crate) fn combined(
 /// Checks a descriptor's shape as Metal does.
 pub(crate) fn shape(d: &TextureDescriptor) -> Result<Shape, Error> {
     use TextureType as T;
-    let (image_type, flags) =
-        formats::image_type(d.texture_type).ok_or(Error::Unsupported(Gap::TextureBuffer))?;
-    let view_type =
-        formats::image_view_type(d.texture_type).ok_or(Error::Unsupported(Gap::TextureBuffer))?;
+    // A texture buffer has no image: its texels are a buffer's bytes ([`Buffer::new_texture`]).
+    let not_over = || Error::Refused(Refusal::TextureBufferNotOverBuffer);
+    let (image_type, flags) = formats::image_type(d.texture_type).ok_or_else(not_over)?;
+    let view_type = formats::image_view_type(d.texture_type).ok_or_else(not_over)?;
     let refused = |refusal| Err(Error::Refused(refusal));
     if d.width == 0 || d.height == 0 || d.depth == 0 {
         return refused(Refusal::TextureZeroExtent);
@@ -3292,7 +3327,8 @@ impl TextureInner {
     ) -> vk::ImageMemoryBarrier2<'static> {
         use vk::AccessFlags2 as Access;
         use vk::PipelineStageFlags2 as Stage;
-        self.barrier(placed, self.image.home, self.image.copy_layout(layout))
+        let image = self.imaged();
+        self.barrier(placed, image.home, image.copy_layout(layout))
             .src_stage_mask(Stage::ALL_COMMANDS)
             .src_access_mask(Access::MEMORY_WRITE)
             .dst_stage_mask(Stage::COPY)
@@ -3312,7 +3348,8 @@ impl TextureInner {
             }
             _ => Access::NONE,
         };
-        self.barrier(placed, self.image.copy_layout(layout), self.image.home)
+        let image = self.imaged();
+        self.barrier(placed, image.copy_layout(layout), image.home)
             .src_stage_mask(Stage::COPY)
             .src_access_mask(written)
             .dst_stage_mask(Stage::ALL_COMMANDS)
@@ -3326,14 +3363,15 @@ impl TextureInner {
         old: vk::ImageLayout,
         new: vk::ImageLayout,
     ) -> vk::ImageMemoryBarrier2<'static> {
+        let image = self.imaged();
         vk::ImageMemoryBarrier2::default()
             .old_layout(old)
             .new_layout(new)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.image.image)
+            .image(image.image)
             .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: self.image.aspects,
+                aspect_mask: image.aspects,
                 base_mip_level: placed.level,
                 level_count: 1,
                 base_array_layer: placed.layer,
@@ -3430,7 +3468,8 @@ impl TextureInner {
         };
         let away = [self.away(&copy.placed, layout, access)];
         let home = [self.back(&copy.placed, layout)];
-        let named = self.image.copy_layout(layout);
+        let image = self.imaged();
+        let named = image.copy_layout(layout);
         let host = [vk::MemoryBarrier2::default()
             .src_stage_mask(Stage::COPY)
             .src_access_mask(Access::TRANSFER_WRITE)
@@ -3448,16 +3487,12 @@ impl TextureInner {
                 &vk::DependencyInfo::default().image_memory_barriers(&away),
             );
             match to_image {
-                true => device.cmd_copy_buffer_to_image(
-                    command,
-                    buffer,
-                    self.image.image,
-                    named,
-                    &[region],
-                ),
+                true => {
+                    device.cmd_copy_buffer_to_image(command, buffer, image.image, named, &[region])
+                }
                 false => device.cmd_copy_image_to_buffer(
                     command,
-                    self.image.image,
+                    image.image,
                     named,
                     buffer,
                     copy_out::regions(&copy.unit, region).as_slice(),
@@ -3471,16 +3506,42 @@ impl TextureInner {
 }
 
 impl TextureInner {
+    /// Its image: its own, or a view's parent's; `None` for a texture buffer.
+    fn image(&self) -> Option<&Arc<Image>> {
+        match &self.body {
+            Body::Image(image) => Some(image),
+            Body::Texels(_) => None,
+        }
+    }
+
+    /// Its image, on a path a texture buffer never reaches: each call that would take one there
+    /// refuses it first (copies and blits, render pass attachments, views, drawables and the
+    /// copies over buffers, whose texture is never one), and a texture buffer takes no upload.
+    fn imaged(&self) -> &Arc<Image> {
+        self.image()
+            .expect("an image path reached by a texture buffer, which every such call refuses")
+    }
+
+    /// Whether it has a storage element: a storage view of its image, or a texture buffer's view
+    /// in the storage texel-buffer array.
+    fn stores(&self) -> bool {
+        match (&self.view, &self.body) {
+            (Some(view), _) => view.views.storage.is_some(),
+            (None, Body::Image(image)) => image.storage.is_some(),
+            (None, Body::Texels(texels)) => texels.elements[1],
+        }
+    }
+
     /// For the device tests: whether its image has a storage view, its home general.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn has_storage_view(&self) -> bool {
-        self.image.storage.is_some()
+        self.imaged().storage.is_some()
     }
 
     /// For the device tests: its image's usage.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn image_usage(&self) -> vk::ImageUsageFlags {
-        self.image.usage
+        self.imaged().usage
     }
 
     /// Where the texture starts in its image: a view's first level and array layer, else the
@@ -3505,15 +3566,16 @@ impl TextureInner {
         new: Option<vk::ImageLayout>,
     ) -> vk::ImageMemoryBarrier2<'static> {
         let [level, layer] = self.base();
-        let home = self.image.home;
+        let image = self.imaged();
+        let home = image.home;
         vk::ImageMemoryBarrier2::default()
             .old_layout(old.unwrap_or(home))
             .new_layout(new.unwrap_or(home))
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.image.image)
+            .image(image.image)
             .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: self.image.aspects,
+                aspect_mask: image.aspects,
                 base_mip_level: level + levels.start,
                 level_count: levels.end - levels.start,
                 base_array_layer: layer,
@@ -3628,6 +3690,10 @@ impl Texture {
         use TextureType as T;
         let inner = &self.inner;
         let p = &inner.descriptor;
+        let gap = |kind| Err(Error::Unsupported(Gap::TextureView { kind }));
+        if let Body::Texels(_) = inner.body {
+            return gap(TextureViewKind::TextureBuffer);
+        }
         let level_count = levels.end.saturating_sub(levels.start);
         let slice_count = slices.end.saturating_sub(slices.start);
         if level_count == 0
@@ -3642,7 +3708,6 @@ impl Texture {
                 slice_count,
             }));
         }
-        let gap = |kind| Err(Error::Unsupported(Gap::TextureView { kind }));
         let refused = || {
             Err(Error::Refused(Refusal::TextureViewFormat {
                 texture: p.pixel_format,
@@ -3686,7 +3751,7 @@ impl Texture {
             }
             (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
             (T::Cube | T::CubeArray, T::Type2D | T::Type2DArray | T::Cube | T::CubeArray) => {}
-            (T::Type2DArray, T::Cube | T::CubeArray) if inner.image.cube => {}
+            (T::Type2DArray, T::Cube | T::CubeArray) if inner.imaged().cube => {}
             (T::Type2DArray, T::Cube | T::CubeArray) => return gap(TextureViewKind::CubeOfArray),
             _ => return gap(TextureViewKind::TextureType),
         }
@@ -3708,7 +3773,7 @@ impl Texture {
         // makes of a texture's own descriptor alone.
         let (shape, usage) = checked(&d)?;
         let mut plan = form(&inner.core, &d, usage)?;
-        let image = &inner.image;
+        let image = inner.imaged();
         if own_format_only && plan.format != image.format {
             return refused();
         }
@@ -3740,7 +3805,7 @@ impl Texture {
             base_array_layer: base[1],
             layer_count: shape.layers,
         };
-        let image = inner.image.image;
+        let image = inner.imaged().image;
         let make = |(components, aspect, role): (_, _, vk::ImageUsageFlags)| {
             let (view_type, format) = (shape.view_type, plan.format);
             let usage = views_usage.map(|usage| usage & role);
@@ -3783,11 +3848,12 @@ impl Texture {
         // A failed view's image views go to the reaper as `views` drops, and so do they where the
         // view is refused its index.
         made?;
-        let shadow = ShadowView::of(&inner.image, &plan, index, shape.view_type, range);
+        let image = inner.imaged();
+        let shadow = ShadowView::of(image, &plan, index, shape.view_type, range);
         let index = match index {
             Some(index) => {
-                let element = (sampled.filter(|_| plan.read)).map(|view| (view, inner.image.home));
-                let looped = sampled.filter(|_| inner.image.looped());
+                let element = (sampled.filter(|_| plan.read)).map(|view| (view, image.home));
+                let looped = sampled.filter(|_| image.looped());
                 // SAFETY: the view's image views are live; the image is in its home layout
                 // whenever work uses it.
                 let owner = unsafe {
@@ -3825,7 +3891,7 @@ impl Texture {
                 swizzle: swizzle.unwrap_or(p.swizzle),
                 ..d
             },
-            image: Arc::clone(&inner.image),
+            body: Body::Image(Arc::clone(image)),
             format: plan.format,
             storage_reads: plan.storage_reads,
             views_usage,
@@ -3872,8 +3938,9 @@ impl Texture {
     /// last presented, and waited for the acquire's fence; its swapchain is not destroyed. These
     /// are Vulkan's rules on a swapchain's image, which the runtime cannot check.
     pub unsafe fn drawable_acquired(&self) -> Result<(), Error> {
-        let image = &self.inner.image;
-        let drawable = (image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
+        let drawable = (self.inner.image())
+            .and_then(|image| image.drawable.as_ref())
+            .ok_or(Error::Refused(Refusal::NotDrawable))?;
         let before = {
             let mut turn = lock(&drawable.turn);
             let before = *turn;
@@ -3890,7 +3957,7 @@ impl Texture {
             before
         };
         let core = &self.inner.core;
-        let homed = core.work.home(core, image);
+        let homed = core.work.home(core, self.inner.imaged());
         if homed.is_err() {
             *lock(&drawable.turn) = before;
         }
@@ -3998,7 +4065,7 @@ impl Texture {
         core.work.upload(
             core,
             Some(&stage),
-            [Held::Texture(Arc::clone(&inner.image))],
+            [Held::Texture(Arc::clone(inner.imaged()))],
             // SAFETY: recording under the work lock, the upload holding the image and the stage.
             |device, command| unsafe {
                 let region = copy.buffer_image_copy(stage.offset(), 0, 0);
@@ -4069,7 +4136,7 @@ impl Texture {
             core,
             None,
             [
-                Held::Texture(Arc::clone(&inner.image)),
+                Held::Texture(Arc::clone(inner.imaged())),
                 Held::Block(Arc::clone(bytes.held().0)),
             ],
             // SAFETY: recording under the work lock, the upload holding the image and the named
@@ -4168,7 +4235,7 @@ impl Texture {
         core.work.upload(
             core,
             Some(&stage),
-            [Held::Texture(Arc::clone(&inner.image))],
+            [Held::Texture(Arc::clone(inner.imaged()))],
             // SAFETY: as in `replace_region`.
             |device, command| unsafe {
                 let region = copy.buffer_image_copy(stage.offset(), 0, 0);
@@ -4221,9 +4288,16 @@ pub(crate) trait TextureObject {
         Arc::ptr_eq(&self.object().core, core)
     }
 
-    /// Its image.
+    /// Its image. A texture buffer has none: every call that reaches this refuses one first
+    /// ([`texels`](Self::texels)).
     fn image(&self) -> vk::Image {
-        self.object().image.image
+        self.object().imaged().image
+    }
+
+    /// Whether it is a texture buffer, whose texels are its buffer's bytes, read through a buffer
+    /// view: no copy, blit, pass or view of an image reaches it.
+    fn texels(&self) -> bool {
+        matches!(self.object().body, Body::Texels(_))
     }
 
     /// Whether it reaches `level` and one of the `layers` layers from `layer` of its image: a view
@@ -4240,15 +4314,16 @@ pub(crate) trait TextureObject {
     /// `attachment_reads`): its image in the feedback layout, or, on a device without the
     /// attachment feedback loop, its view of its image's shadow.
     fn attachment_reads(&self) -> bool {
-        let image = &self.object().image;
-        image.attachment_reads && (image.looped() || self.object().shadow.is_some())
+        (self.object().image()).is_some_and(|image| {
+            image.attachment_reads && (image.looped() || self.object().shadow.is_some())
+        })
     }
 
     /// Whether a draw reads an attachment of its own pass through it in the feedback layout
     /// ([`Image`]'s `looped`), where its image has the feedback usage; else through its view of
     /// the image's shadow.
     fn looped(&self) -> bool {
-        self.object().image.looped()
+        (self.object().image()).is_some_and(|image| image.looped())
     }
 
     /// Its resource id while a draw reads an attachment through it: its second element's, at its
@@ -4274,7 +4349,7 @@ pub(crate) trait TextureObject {
         let (Some(at), Some(index)) = (&self.object().shadow, self.object().index) else {
             return Ok(None);
         };
-        let Some(shadow) = self.object().image.shadow()? else {
+        let Some(shadow) = self.object().imaged().shadow()? else {
             return Ok(None);
         };
         let mut view = lock(&at.view);
@@ -4304,7 +4379,9 @@ pub(crate) trait TextureObject {
 
     /// The format its image's shadow is made in, the image's; `None` for an image of no shadow.
     fn shadow_format(&self) -> Option<vk::Format> {
-        (self.object().image.shadowing.as_ref()).map(|shadowing| shadowing.made.2.format)
+        (self.object().image())
+            .and_then(|image| image.shadowing.as_ref())
+            .map(|shadowing| shadowing.made.2.format)
     }
 
     /// What a draw reads of its image through it (`crate::shadow`): with `own_pixel`, the draw's
@@ -4343,7 +4420,7 @@ pub(crate) trait TextureObject {
             None => &self.object().descriptor,
         };
         vk::ImageSubresourceRange {
-            aspect_mask: self.object().image.aspects,
+            aspect_mask: self.object().imaged().aspects,
             base_mip_level: 0,
             level_count: root.mipmap_level_count,
             base_array_layer: 0,
@@ -4359,7 +4436,7 @@ pub(crate) trait TextureObject {
     /// The format its image is made in, which a blit of the image filters by: a view in another
     /// format's differs from [`format`](Self::format).
     fn image_format(&self) -> vk::Format {
-        self.object().image.format
+        self.object().imaged().format
     }
 
     /// A layout change of its levels `levels`, counted from its first, over each of its slices,
@@ -4415,7 +4492,7 @@ pub(crate) trait TextureObject {
     fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
         let renders =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-        if !self.object().image.usage.intersects(renders) {
+        if !(self.object().image()).is_some_and(|image| image.usage.intersects(renders)) {
             return Err(Error::Unsupported(Gap::RenderPass {
                 kind: RenderPassKind::ResolveUsage,
             }));
@@ -4453,7 +4530,8 @@ pub(crate) trait TextureObject {
         }
         let [first_level, first_layer] = TextureInner::base(self.object());
         let (level_in_image, layer) = (first_level + level, first_layer + slice);
-        let image = &self.object().image;
+        // The type's check above refused a texture buffer.
+        let image = self.object().imaged();
         // A view of another format than the image's renders where the format's features hold an
         // attachment.
         let renders =
@@ -4535,7 +4613,7 @@ pub(crate) trait TextureObject {
     /// ([`Image::copy_layout`]): general for a texture over a buffer in place, `layout` for any
     /// other.
     fn copy_layout(&self, layout: vk::ImageLayout) -> vk::ImageLayout {
-        self.object().image.copy_layout(layout)
+        self.object().imaged().copy_layout(layout)
     }
 
     /// The barrier that moves `placed` from home to the copy layout of the transfer `layout` for
@@ -4560,8 +4638,9 @@ pub(crate) trait TextureObject {
     ///
     /// Err: [`Refusal::NotDrawable`]; [`Refusal::DrawableNotAcquired`].
     fn present_turn(&self) -> Result<(), Error> {
-        let drawable =
-            (self.object().image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
+        let drawable = (self.object().image())
+            .and_then(|image| image.drawable.as_ref())
+            .ok_or(Error::Refused(Refusal::NotDrawable))?;
         let mut turn = lock(&drawable.turn);
         if *turn != Turn::Acquired {
             return Err(Error::Refused(Refusal::DrawableNotAcquired));
@@ -4573,7 +4652,7 @@ pub(crate) trait TextureObject {
     /// The command buffer that presents the drawable was dropped uncommitted: it is acquired
     /// again, for another present.
     fn unpresent(&self) {
-        if let Some(drawable) = &self.object().image.drawable {
+        if let Some(drawable) = (self.object().image()).and_then(|image| image.drawable.as_ref()) {
             *lock(&drawable.turn) = Turn::Acquired;
         }
     }
@@ -4581,7 +4660,7 @@ pub(crate) trait TextureObject {
     /// The command buffer that presents the drawable is committed: the image is the presentation
     /// engine's once that command buffer has run, in the present layout.
     fn presented(&self) {
-        if let Some(drawable) = &self.object().image.drawable {
+        if let Some(drawable) = (self.object().image()).and_then(|image| image.drawable.as_ref()) {
             *lock(&drawable.turn) = Turn::Engine;
         }
     }
@@ -4590,7 +4669,7 @@ pub(crate) trait TextureObject {
     /// writes. It delays nothing after it: the present's semaphore wait and its own visibility
     /// operations order the presentation engine's reads (Vulkan's note on `VkPresentInfoKHR`).
     fn present_barrier(&self) -> vk::ImageMemoryBarrier2<'static> {
-        let image = &self.object().image;
+        let image = self.object().imaged();
         vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
@@ -4642,11 +4721,7 @@ pub(crate) trait TextureObject {
         let d = &self.object().descriptor;
         let written = (d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE))
             && !multisampled(d.texture_type);
-        let storage = match &self.object().view {
-            Some(view) => view.views.storage,
-            None => self.object().image.storage,
-        };
-        (written && storage.is_none()).then_some(d.pixel_format)
+        (written && !self.object().stores()).then_some(d.pixel_format)
     }
 
     /// Where it has a storage element the device cannot read without a format, which shaders read
@@ -4655,11 +4730,7 @@ pub(crate) trait TextureObject {
     /// its make). Its pixel format, which [`Gap::StorageElement`] names.
     fn unread(&self) -> Option<PixelFormat> {
         let inner = self.object();
-        let storage = match &inner.view {
-            Some(view) => view.views.storage,
-            None => inner.image.storage,
-        };
-        (storage.is_some() && !inner.storage_reads).then_some(inner.descriptor.pixel_format)
+        (inner.stores() && !inner.storage_reads).then_some(inner.descriptor.pixel_format)
     }
 
     /// Whether it reads through a swizzle other than each channel's own.
@@ -4747,10 +4818,11 @@ pub(crate) trait TextureObject {
             + u64::from(d.height - 1) * place.bytes_per_row
             + u64::from(d.width) * u64::from(unit.bytes);
         let whole = named.buffer.span();
+        let image = inner.imaged();
         let copy = OverCopy {
-            image: inner.image.image,
-            home: inner.image.home,
-            aspects: inner.image.aspects,
+            image: image.image,
+            home: image.home,
+            aspects: image.aspects,
             buffer,
             region,
             unit,
@@ -4771,14 +4843,14 @@ pub(crate) trait TextureObject {
     /// For the device tests: the bytes its image's memory requirements name.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     fn image_size(&self) -> u64 {
-        self.object().image.bytes
+        self.object().imaged().bytes
     }
 
     /// For the device tests: the texture block its image is placed in and the offset there;
     /// `None` for an image of no place.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     fn place(&self) -> Option<(BlockId, u64)> {
-        match &self.object().image.backing {
+        match &self.object().imaged().backing {
             Backing::Placed(place) => Some((place.block(), place.offset)),
             _ => None,
         }
@@ -4854,12 +4926,38 @@ impl Buffer {
     /// buffer's device copy only at Metal's Managed events. Each copy counts in
     /// [`Metrics::over_copies`](crate::Metrics::over_copies).
     ///
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) is one Vulkan buffer view of the bytes
+    /// shaders reach, from `offset`, its width's texels long: nothing is copied or allocated, and
+    /// its texels are the buffer's bytes, which the host, a blit or a shader writing the buffer
+    /// writes and a shader reading the texture reads, as Metal's are. The view is the element of
+    /// each texel-buffer array of set 1 its uses take at its index: the uniform one where shaders
+    /// read it, the storage one where they write it and the device's storage texel buffers write
+    /// its format without a format. Its uses take the buffer's id in the encoders' hazard sets.
+    /// Its offset is a multiple of [`Device::minimum_texture_buffer_alignment`], and its
+    /// `bytesPerRow`, which no texel reads past its one row, is at least that row. Its storage
+    /// mode is the buffer's. A view of it ([`Texture::new_texture_view`]) is
+    /// [`Gap::TextureView`] of [`TextureViewKind::TextureBuffer`]; a blit's copy of it, and a
+    /// pass that renders into it, is a gap too, while [`Texture::replace_region`] and
+    /// [`Texture::get_bytes`] write and read its bytes in the buffer.
+    ///
     /// Err: as [`Device::new_texture`]; [`Refusal::BufferTextureLayout`] for rows that are not a
     /// whole number of texels apart or are closer than a row, an offset that is not a whole
     /// number of texels, or texels past the buffer; [`Gap::TextureOverBuffer`] for a texture
     /// other than 2D of one level, sample and slice, or of a format of other than one color texel
     /// an element, or whose first texel in the bytes shaders reach is not a whole number of
-    /// texels in.
+    /// texels in. Of a texture buffer: what Metal refuses of its descriptor
+    /// ([`Refusal::TextureZeroExtent`], [`Refusal::TextureExtentForType`] for a height or depth
+    /// other than 1, [`Refusal::TextureArrayLength`], [`Refusal::TextureSampleCount`],
+    /// [`Refusal::TextureLevelCount`], [`Refusal::TextureSwizzleWithWrites`]);
+    /// [`Refusal::TextureBufferAlignment`] for an offset off the device's alignment;
+    /// [`Refusal::BufferTextureLayout`] for a `bytesPerRow` below its row or texels past the
+    /// buffer; [`Refusal::TextureIndex`] and [`Refusal::IndicesNotGranted`] as
+    /// [`Device::new_texture`]; [`Limit::TextureSize`] for a width past the device's
+    /// `maxTexelBufferElements`; [`Gap::TextureFormat`] as
+    /// [`Device::minimum_texture_buffer_alignment`]; [`Gap::TextureBufferSwizzle`];
+    /// [`Gap::TextureOverBuffer`] where its first texel in the bytes shaders reach is off the
+    /// alignment, the buffer's own place there being off it; [`Error::Vulkan`] where the view
+    /// cannot be made.
     pub fn new_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -4902,8 +5000,283 @@ impl Buffer {
                 MemoryClass::Private => StorageMode::Private,
             },
         };
+        if d.texture_type == TextureType::TextureBuffer {
+            return self
+                .device()
+                .texel_texture(&d, reach, self, offset, bytes_per_row);
+        }
         let over = Source::Over(self, offset, bytes_per_row);
         self.device().texture(&d, reach, over)
+    }
+}
+
+/// What a texture buffer's offset and width take on the device: Vulkan 1.3's texel-buffer
+/// alignment properties and `maxTexelBufferElements`, read once at device creation.
+#[derive(Clone, Copy)]
+pub(crate) struct TexelLimits {
+    /// The uniform and then the storage texel buffer's offset alignment in bytes
+    /// (`uniformTexelBufferOffsetAlignmentBytes`, `storageTexelBufferOffsetAlignmentBytes`), each
+    /// with whether a texel's own size suffices where it is less
+    /// (`…TexelBufferOffsetSingleTexelAlignment`).
+    pub(crate) alignments: [(u64, bool); 2],
+    /// `maxTexelBufferElements`: the most texels a texture buffer holds.
+    pub(crate) max_elements: u32,
+}
+
+impl TexelLimits {
+    /// The alignment of a texture buffer's first texel in its `VkBuffer`, for a texel of `texel`
+    /// bytes: for each of the uniform and the storage texel buffer, its alignment in bytes, or
+    /// the texel's bytes where those are less and one texel suffices; the larger of the two, as
+    /// its one view is of a buffer of both usages (`VUID-VkBufferViewCreateInfo-buffer-02750`,
+    /// `-02751`). Vulkan takes a texel of a multiple of three bytes at its component's size; such a
+    /// texel, which no Metal texture-buffer format has, takes the alignment in bytes, a multiple
+    /// of that.
+    pub(crate) fn alignment(&self, texel: u64) -> u64 {
+        let effective = |(bytes, single): (u64, bool)| match single && texel.is_power_of_two() {
+            true => bytes.min(texel),
+            false => bytes,
+        };
+        effective(self.alignments[0]).max(effective(self.alignments[1]))
+    }
+}
+
+/// What a texture buffer of a pixel format holds ([`texel_form`]).
+struct TexelForm {
+    /// Its buffer view's format.
+    format: vk::Format,
+    /// A texel's bytes.
+    bytes: u32,
+    /// The translator's `TextureWord` of the format, with each channel's own swizzle.
+    word: u32,
+    /// The format's storage texel buffers are written through an image declared without a
+    /// format: a texture buffer shaders write has a storage element.
+    writes: bool,
+    /// The format's storage texel buffers are read through an image declared without a format
+    /// ([`TextureInner`]'s `storage_reads`).
+    reads: bool,
+}
+
+/// What a texture buffer of `pf` holds on the device of `core`: a format the device holds
+/// directly, of one color texel an element, whose buffer features hold both the uniform and the
+/// storage texel buffer, as its one view is of a buffer of both usages and its format takes both
+/// (`VUID-VkBufferViewCreateInfo-format-08778`, `-08779`).
+///
+/// Err: [`Gap::TextureFormat`] for any other.
+fn texel_form(core: &Core, pf: PixelFormat) -> Result<TexelForm, Error> {
+    let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
+    let word = TextureWord::of(pf, TextureSwizzleChannels::DEFAULT)
+        .ok_or_else(gap)?
+        .0;
+    let profile = core.translator.profile();
+    let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let mapping =
+        formats::vk_format(pf, &formats::texture_usages(pf, usage), profile).map_err(|_| gap())?;
+    let block = mapping.format.block().ok_or_else(gap)?;
+    let format: vk::Format = mapping.format.into();
+    let supports = |use_| profile.supports_format(format, use_);
+    let color = block.depth.is_none() && block.stencil.is_none();
+    if mapping.emulation != FormatEmulation::Direct
+        || !color
+        || formats::block_extent(pf).is_some()
+        || !supports(FormatUsage::UniformTexelBuffer)
+        || !supports(FormatUsage::StorageTexelBuffer)
+    {
+        return Err(gap());
+    }
+    Ok(TexelForm {
+        format,
+        bytes: block.size,
+        word,
+        writes: supports(FormatUsage::StorageTexelBufferWriteWithoutFormat),
+        reads: supports(FormatUsage::StorageTexelBufferReadWithoutFormat),
+    })
+}
+
+impl Device {
+    /// `minimumTextureBufferAlignmentForPixelFormat:`: what a texture buffer's offset in its
+    /// buffer is a multiple of ([`Buffer::new_texture`]), the device's texel-buffer offset
+    /// alignment for the format's texel: for each of the uniform and the storage texel buffer,
+    /// Vulkan 1.3's `…TexelBufferOffsetAlignmentBytes`, or the texel's bytes where those are
+    /// less and the device's `…TexelBufferOffsetSingleTexelAlignment` says one texel suffices; the
+    /// larger of the two. The answer differs by device, as Metal's does by GPU, and is never more
+    /// than 256, Vulkan's bound on both, so it divides the multiple of 256 every buffer the
+    /// consumer places by [`Device::heap_buffer_size_and_align`]'s rule starts at. No Vulkan call
+    /// is made. Metal documents the alignment for the offset and the row's bytes; the runtime
+    /// takes any `bytesPerRow` that covers the row, as a texture buffer's one row reads no other.
+    ///
+    /// Err: [`Gap::TextureFormat`] for a format the runtime makes no texture buffer of on the
+    /// device: one held through a conversion or a component mapping, compressed, of depth or
+    /// stencil, or whose buffer features lack the uniform or the storage texel buffer.
+    pub fn minimum_texture_buffer_alignment(
+        &self,
+        pixel_format: PixelFormat,
+    ) -> Result<u64, Error> {
+        let core = self.core();
+        let form = texel_form(core, pixel_format)?;
+        Ok(core.texels.alignment(u64::from(form.bytes)))
+    }
+
+    /// A texture buffer of `descriptor` over `buffer`'s bytes from `offset`, reached as `reach`
+    /// says, as [`Buffer::new_texture`] makes it: one buffer view of the bytes shaders reach.
+    fn texel_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        reach: Reach,
+        buffer: &Buffer,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
+        let d = *descriptor;
+        let core = self.core();
+        let refused = |refusal| Err(Error::Refused(refusal));
+        // Metal's texture buffer: a width of texels in one row, level, sample and slice.
+        if d.width == 0 || d.height == 0 || d.depth == 0 {
+            return refused(Refusal::TextureZeroExtent);
+        }
+        if d.height != 1 || d.depth != 1 {
+            return refused(Refusal::TextureExtentForType);
+        }
+        if d.array_length != 1 {
+            return refused(Refusal::TextureArrayLength {
+                array_length: d.array_length,
+            });
+        }
+        if d.sample_count != 1 {
+            return refused(Refusal::TextureSampleCount {
+                sample_count: d.sample_count,
+            });
+        }
+        if d.mipmap_level_count != 1 {
+            return refused(Refusal::TextureLevelCount {
+                levels: d.mipmap_level_count,
+                max: 1,
+            });
+        }
+        let usage = usage_taken(&d);
+        if d.swizzle != TextureSwizzleChannels::DEFAULT {
+            if usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET) {
+                return refused(Refusal::TextureSwizzleWithWrites);
+            }
+            // Metal applies it to the reads, which no buffer view maps and no resource ID carries.
+            return Err(Error::Unsupported(Gap::TextureBufferSwizzle {
+                pixel_format: d.pixel_format,
+            }));
+        }
+        let index = match reach {
+            Reach::Index(index) if reached(d.pixel_format, usage) != index.is_some() => {
+                return refused(Refusal::TextureIndex { index });
+            }
+            Reach::Index(index) => index,
+            Reach::Views => None,
+        };
+        let form = texel_form(core, d.pixel_format)?;
+        let alignment = core.texels.alignment(u64::from(form.bytes));
+        if !offset.is_multiple_of(alignment) {
+            return refused(Refusal::TextureBufferAlignment {
+                pixel_format: d.pixel_format,
+                offset,
+                alignment,
+            });
+        }
+        let row = u64::from(d.width) * u64::from(form.bytes);
+        let len = buffer.length();
+        if bytes_per_row < row || offset.checked_add(row).is_none_or(|end| end > len) {
+            return refused(Refusal::BufferTextureLayout {
+                offset,
+                bytes_per_row,
+                len,
+            });
+        }
+        let max = core.texels.max_elements;
+        if d.width > max {
+            return Err(Error::Limit(Limit::TextureSize {
+                extent: [d.width, 1, 1],
+                layers: 1,
+                max_extent: [max, 1, 1],
+                max_layers: 1,
+            }));
+        }
+        // The bytes shaders reach: a Managed buffer's device copy, where it has one.
+        let (of, base) = buffer.device_range();
+        if !(base + offset).is_multiple_of(alignment) {
+            return Err(Error::Unsupported(Gap::TextureOverBuffer {
+                pixel_format: d.pixel_format,
+            }));
+        }
+        let info = vk::BufferViewCreateInfo::default()
+            .buffer(of)
+            .format(form.format)
+            .offset(base + offset)
+            .range(row);
+        // SAFETY: the buffer is the device's, of both texel-buffer usages, whose format features
+        // the format holds (`texel_form`); the range lies in its bytes, at the alignment both
+        // usages take, its texels no more than `maxTexelBufferElements`.
+        let view = unsafe { core.device.create_buffer_view(&info, None) }
+            .map_err(Error::vulkan("vkCreateBufferView"))?;
+        core.counters.rise(Gauge::Textures);
+        // The uniform element where shaders read it, the storage one where they write it.
+        let elements = [
+            usage.contains(TextureUsage::SHADER_READ),
+            usage.contains(TextureUsage::SHADER_WRITE) && form.writes,
+        ];
+        let index = match index {
+            Some(index) => {
+                let views = elements.map(|held| match held {
+                    true => view,
+                    false => vk::BufferView::null(),
+                });
+                // SAFETY: the view lives until the reaper frees it, once the texture buffer's
+                // elements are null or another object's.
+                let placed = unsafe {
+                    (core.arrays).place_texels(&core.device, &core.counters, index, views)
+                };
+                match placed {
+                    Ok(owner) => Some((index, owner)),
+                    Err(error) => {
+                        // SAFETY: no element holds the view, and nothing else has it.
+                        unsafe { core.device.destroy_buffer_view(view, None) };
+                        core.counters.fall(Gauge::Textures);
+                        return Err(error);
+                    }
+                }
+            }
+            None => None,
+        };
+        let named = Named {
+            buffer: Arc::clone(buffer.object()),
+            places: vec![BytesPlace {
+                offset,
+                bytes_per_row,
+                bytes_per_image: 0,
+            }],
+            form: Form::InPlace,
+        };
+        let inner = TextureInner {
+            core: Arc::clone(core),
+            descriptor: d,
+            body: Body::Texels(Texels { view, elements }),
+            format: form.format,
+            storage_reads: form.reads,
+            views_usage: None,
+            unit: Some(CopyUnit {
+                aspect: vk::ImageAspectFlags::COLOR,
+                bytes: form.bytes,
+                block: [1, 1],
+            }),
+            index,
+            word: form.word,
+            id: core.ids.take(),
+            heap: None,
+            named: Some(named),
+            view: None,
+            emulation: FormatEmulation::Direct,
+            attachments: Mutex::new(Vec::new()),
+            shadow: None,
+        };
+        Ok(Texture {
+            inner: Arc::new(inner),
+            device: self.clone(),
+        })
     }
 }
 
@@ -5139,7 +5512,7 @@ impl Device {
         let inner = TextureInner {
             core: Arc::clone(core),
             descriptor: d,
-            image,
+            body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
             views_usage,
@@ -5163,7 +5536,7 @@ impl Device {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         crate::surface::steps::mark("plane texture");
         if !general {
-            core.work.home(core, &texture.inner.image)?;
+            core.work.home(core, texture.inner.imaged())?;
         }
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         crate::surface::steps::mark("plane home");
@@ -5174,6 +5547,6 @@ impl Device {
 impl Texture {
     /// The texture's image, for an upload to hold.
     pub(crate) fn held_image(&self) -> Arc<Image> {
-        Arc::clone(&self.inner.image)
+        Arc::clone(self.inner.imaged())
     }
 }

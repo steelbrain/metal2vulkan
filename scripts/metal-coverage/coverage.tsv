@@ -1111,7 +1111,7 @@ MTLDevice.h	MTLDevice	method	supportsFeatureSet:	yes	M			deprecated feature sets
 MTLDevice.h	MTLDevice	method	supportsFamily:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	method	supportsTextureSampleCount:		I	runtime	Device::supports_texture_sample_count			
 MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	Device::minimum_linear_texture_alignment			
-MTLDevice.h	MTLDevice	method	minimumTextureBufferAlignmentForPixelFormat:		M			a texture buffer's offset alignment; a texture buffer is refused (`Gap::TextureBuffer`)	S	queries
+MTLDevice.h	MTLDevice	method	minimumTextureBufferAlignmentForPixelFormat:		I	runtime	Device::minimum_texture_buffer_alignment			
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
@@ -2030,7 +2030,7 @@ MTLTexture.h	MTLSharedTextureHandle	property	label		M			labels of samplers, dept
 MTLTexture.h	MTLTextureDescriptor	class	MTLTextureDescriptor		I	runtime	TextureDescriptor			
 MTLTexture.h	MTLTextureDescriptor	class method	texture2DDescriptorWithPixelFormat:width:height:mipmapped:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLTexture.h	MTLTextureDescriptor	class method	textureCubeDescriptorWithPixelFormat:size:mipmapped:		M			a query or call metal2vulkan-runtime does not answer	S	queries
-MTLTexture.h	MTLTextureDescriptor	class method	textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:		M			a texture buffer's descriptor; a texture buffer is refused (`Gap::TextureBuffer`)	S	queries
+MTLTexture.h	MTLTextureDescriptor	class method	textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLTexture.h	MTLTextureDescriptor	property	textureType		I	runtime	TextureDescriptor.texture_type			
 MTLTexture.h	MTLTextureDescriptor	property	pixelFormat		I	runtime	TextureDescriptor.pixel_format			
 MTLTexture.h	MTLTextureDescriptor	property	width		I	runtime	TextureDescriptor.width			

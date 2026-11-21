@@ -33,7 +33,8 @@
 //! (`Sampled = 2`) whose format is the slot's `StorageImageChoice` (`LowerInputs`). A cube texture
 //! that is read or written, and every storage cube, is declared as the 2D array the binder views it
 //! as (layer = face + 6 · cube, `RuntimeFact::ImageViewShape`), because Vulkan fetches no cube by
-//! face. Texture buffers are texel buffers (`RuntimeFact::TexelBufferRange`).
+//! face. Texture buffers are texel buffers (`RuntimeFact::TexelBufferRange`; under the identity
+//! domains, elements of set 1's texel-buffer arrays).
 //!
 //! **Operations.** `read` is `OpImageFetch` on a sampled image and `OpImageRead` on a storage
 //! image; `write` is `OpImageWrite`; `get_*` are `OpImageQuery*`; `fence` is an image memory
@@ -2967,10 +2968,12 @@ fn select_read_as(
     // texel, where a device's block that holds no mapped tile reads the device's value. A texture
     // buffer's swizzle applies to its reads: Metal returns each channel from the source the bound
     // texture buffer's swizzle names, out of bounds too. A `ulong` read's swizzle is not measured;
-    // the binder refuses a swizzled texture buffer there.
+    // the binder refuses a swizzled texture buffer there. Under the identity domains the runtime
+    // makes no swizzled texture buffer, so the read takes none.
     let swizzle = matches!(image, ImageRef::Slot(_))
         && shape.dim == ImageDim::Buffer
-        && !matches!(texel.conv, TexelConv::U64Words { .. });
+        && !matches!(texel.conv, TexelConv::U64Words { .. })
+        && !crate::lower::access::identity(cx.profile);
     // A storage slot bound to a swizzled texture applies the swizzle under its variant, to the
     // converted texel, out of bounds too, as plain Metal reads it. A `ulong` texel's swizzle, and a
     // read of fewer lanes, are not measured. So does an extended-range sampled slot of the variant,

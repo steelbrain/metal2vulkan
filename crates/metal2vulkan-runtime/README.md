@@ -1090,11 +1090,15 @@ the Direct3D 11 texture's payload until it is freed.
 ## Set 1 and index grants
 
 Shaders reach textures and samplers by index (`docs/RESOURCE-ID.md`). Every pipeline takes set 1,
-one descriptor set the device makes at creation, of five arrays whose element `i` is the object
+one descriptor set the device makes at creation, of seven arrays whose element `i` is the object
 whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 65,536 storage
-textures (binding 1), and 4,000 samplers of each use, plain, depth comparison and integer texture
-(bindings 2, 3 and 4). A texture's index is the same element of both texture arrays: one with a
-storage view takes both, any other the sampled one alone, and its storage element stays null. Every binding is partially bound, updated after bind and
+textures (binding 1), 4,000 samplers of each use, plain, depth comparison and integer texture
+(bindings 2, 3 and 4), and 65,536 uniform and 65,536 storage texel buffers, the texture buffers
+(bindings 5 and 6). A texture's index is the same element of both texture arrays: one with a
+storage view takes both, any other the sampled one alone, and its storage element stays null. A
+texture buffer's index is the same element of both texel-buffer arrays: the uniform one where
+shaders read it, the storage one where they write it, the other null; its texture elements stay
+null, as a texture's texel-buffer elements do. Every binding is partially bound, updated after bind and
 updated while unused elements are pending, so an object's element is written once, as it is
 made, with no lock, and never rewritten for layouts.
 
@@ -1110,7 +1114,7 @@ made, with no lock, and never rewritten for layouts.
   so a bad ID there reads the element at `index & 0xFFFF`, never one outside the arrays. A slot's
   index is the runtime's own push, unmasked, and no argument buffer's ID reaches the feedback
   elements.
-- Every element no object owns is defined. A texture element is a null descriptor
+- Every element no object owns is defined. A texture or texel-buffer element is a null descriptor
   (`nullDescriptor`): it reads zeros, sizes 0 and drops writes, as Metal's nil texture does. A
   sampler element is its array's default sampler, nearest and clamped to the edge; the
   comparison array's compares with `NEVER`, so a comparison through it answers 0, as Metal's
@@ -1220,12 +1224,10 @@ made, with no lock, and never rewritten for layouts.
   sample counts it is `Limit::TextureSize` or `Limit::TextureSamples`.
 - Refused as Metal refuses each descriptor (`Refusal::TextureZeroExtent`,
   `TextureExtentForType`, `TextureCubeNotSquare`, `TextureArrayLength`, `TextureLevelCount`,
-  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`)
-  and Memoryless storage (`Gap::MemorylessTexture`) are not built. A texture buffer is refused at
-  both makes, `Device::new_texture` and `Buffer::new_texture`, and a pipeline whose function
-  declares a `texture_buffer` is refused at creation (`Unsupported{IdentityDomains}`): a consumer
-  that tells a guest texture buffers are supported (an alignment, a format's buffer usage) hands it
-  nil for each one it makes. A cube array texture's image
+  `TextureSampleCount`, `TextureSwizzleWithWrites`). Memoryless storage
+  (`Gap::MemorylessTexture`) is not built. A texture buffer's descriptor is
+  `Refusal::TextureBufferNotOverBuffer` at every make but `Buffer::new_texture`, which makes texture
+  buffers (below). A cube array texture's image
   is cube-compatible with six layers a cube, and its view is a cube array view (`imageCubeArray`,
   in the floor).
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
@@ -1302,6 +1304,31 @@ made, with no lock, and never rewritten for layouts.
   the buffer's bytes, with no submission; a dispatch's use of the texture is a use of the buffer in the
   hazard sets, and a write to it reaches the host as a write to a Shared buffer does. The texture
   holds the buffer.
+- A texture buffer (`MTLTextureTypeTextureBuffer`) is made over a buffer alone:
+  `Buffer::new_texture` of its descriptor is one `VkBufferView` of the bytes shaders reach from
+  `offset`, its width's texels long, with no image and no copy. Metal's
+  `newTextureWithDescriptor:` of a texture buffer's descriptor allocates the bytes itself; here it
+  is `Refusal::TextureBufferNotOverBuffer`, and the consumer places a buffer of the texels' bytes,
+  as it places every buffer, and makes the texture buffer over it. `offset` is a multiple of
+  `Device::minimum_texture_buffer_alignment(pixel_format)`, `minimumTextureBufferAlignmentForPixelFormat:`
+  (`Refusal::TextureBufferAlignment` otherwise): the device's texel-buffer offset alignment for
+  the format's texel, the larger of the uniform and the storage texel buffer's (Vulkan 1.3's
+  `…TexelBufferOffsetAlignmentBytes`, or the texel's bytes where the device's
+  `…TexelBufferOffsetSingleTexelAlignment` says one texel suffices), at most 256, so it divides
+  the multiple of 256 every buffer starts at. Metal documents the alignment for the row's bytes
+  too; a texture buffer's one row reads no other, so any `bytes_per_row` that covers the row is
+  taken (`Refusal::BufferTextureLayout` below it, or for texels past the buffer). The format is one
+  the device holds directly, of one colour texel an element, whose buffer features hold both the
+  uniform and the storage texel buffer (`Gap::TextureFormat` otherwise): the view is of a buffer
+  of both usages, so its format takes both. A width past `maxTexelBufferElements` is
+  `Limit::TextureSize`. Its view is the element of the uniform texel-buffer array at its index
+  where shaders read it, and of the storage one where they write it and the format's storage
+  texel buffers write without a format (else it has no storage element, as a texture has none:
+  `Gap::StorageElement` at the draw or dispatch that writes it at a slot). Its texels are the
+  buffer's bytes: the host, a blit or a shader writing the buffer writes them, `replace_region`
+  and `get_bytes` write and read them there, and its uses are uses of the buffer in the hazard
+  sets. Its storage mode is the buffer's. The view goes once the texture buffer is gone and its
+  elements are null.
 - Where the device's linear image does not take the texture (another pitch, an offset off the
   image's alignment, a format or usage the linear tiling lacks, a spilled block), the texture is
   an optimal image of its own, and the device copies the bytes shaders reach into it and back,
@@ -4048,6 +4075,12 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderStorageImageArrayDynamicIndexing` | `VkPhysicalDeviceFeatures` | indexing the read-write texture array by a `gpuResourceID` |
 | `shaderSampledImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
+| `descriptorBindingUniformTexelBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the read texture-buffer array |
+| `descriptorBindingStorageTexelBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the written texture-buffer array |
+| `shaderUniformTexelBufferArrayDynamicIndexing` | `VkPhysicalDeviceVulkan12Features` | indexing the read texture-buffer array by a `gpuResourceID` |
+| `shaderStorageTexelBufferArrayDynamicIndexing` | `VkPhysicalDeviceVulkan12Features` | indexing the written texture-buffer array by a `gpuResourceID` |
+| `shaderUniformTexelBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a texture buffer's `gpuResourceID` that differs between threads |
+| `shaderStorageTexelBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a texture buffer's `gpuResourceID` that differs between threads |
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
 | `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer access beside it stays off |
 | `samplerAnisotropy` | `VkPhysicalDeviceFeatures` | a sampler state's `maxAnisotropy`, which the device's own filter takes |
@@ -4193,9 +4226,11 @@ pipeline states). So `Device::extensions` names the extension only with its feat
 ### Limits
 
 The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 65,536
-storage textures and three arrays of 4,000 samplers, one per use (plain, depth comparison,
-integer texture). Vulkan requires at least 500,000 of each texture limit and of the two resource
-totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
+storage textures, 65,536 read and 65,536 written texture buffers, and three arrays of 4,000
+samplers, one per use (plain, depth comparison, integer texture). A read texture buffer (a uniform
+texel buffer) counts against the sampled-image limits and a written one (a storage texel buffer)
+against the storage-image limits. Vulkan requires at least 500,000 of each texture limit and of
+the two resource totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
 Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. `maxColorAttachments` holds
 Metal's eight color attachments on every device; Vulkan 1.3 requires 4 of it, and Vulkan 1.4 8.
 `maxFragmentOutputAttachments` holds a fragment function's output to each of them; Vulkan 1.3 and
@@ -4205,15 +4240,15 @@ A Boolean limit's minimum is 1,
 
 | Limit | Minimum | Used for |
 |---|---|---|
-| `maxPerStageDescriptorUpdateAfterBindSampledImages` | `65536` | the sampled-texture array |
-| `maxDescriptorSetUpdateAfterBindSampledImages` | `65536` | the sampled-texture array |
-| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `65536` | the storage-texture array |
-| `maxDescriptorSetUpdateAfterBindStorageImages` | `65536` | the storage-texture array |
+| `maxPerStageDescriptorUpdateAfterBindSampledImages` | `131072` | the sampled-texture and read texture-buffer arrays |
+| `maxDescriptorSetUpdateAfterBindSampledImages` | `131072` | the sampled-texture and read texture-buffer arrays |
+| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
+| `maxDescriptorSetUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
 | `maxPerStageDescriptorUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
 | `maxDescriptorSetUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
-| `maxPerStageUpdateAfterBindResources` | `131072` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
-| `maxUpdateAfterBindDescriptorsInAllPools` | `143072` | all five arrays |
+| `maxPerStageUpdateAfterBindResources` | `262144` | the four texture and texture-buffer arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
+| `maxUpdateAfterBindDescriptorsInAllPools` | `274144` | all seven arrays |
 | `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 24 buffer addresses below its tail, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, anything larger in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
@@ -4315,8 +4350,8 @@ blocks), and only that call makes a sparse buffer. Elsewhere the call refuses.
 
 A draw that reads, through a texture, an attachment its own pass renders (Metal's read of a
 render target) is built where the device's descriptor limits hold the sampled-texture array's
-second elements beside the floor's arrays: 131,072 sampled textures where the limits above name
-65,536 (`maxPerStageDescriptorUpdateAfterBindSampledImages`,
+second elements beside the floor's arrays: 65,536 sampled images more than the limits above name
+(`maxPerStageDescriptorUpdateAfterBindSampledImages`,
 `maxDescriptorSetUpdateAfterBindSampledImages`, `maxPerStageUpdateAfterBindResources` and
 `maxUpdateAfterBindDescriptorsInAllPools`); a device without them refuses such a draw
 (`Gap::Draw` of `DrawKind::AttachmentRead`), and is otherwise the same

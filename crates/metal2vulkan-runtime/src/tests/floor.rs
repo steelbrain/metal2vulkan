@@ -56,6 +56,24 @@ fn at_the_floor() -> Queried {
     features
         .vulkan12
         .shader_storage_image_array_non_uniform_indexing = vk::TRUE;
+    features
+        .vulkan12
+        .descriptor_binding_uniform_texel_buffer_update_after_bind = vk::TRUE;
+    features
+        .vulkan12
+        .descriptor_binding_storage_texel_buffer_update_after_bind = vk::TRUE;
+    features
+        .vulkan12
+        .shader_uniform_texel_buffer_array_dynamic_indexing = vk::TRUE;
+    features
+        .vulkan12
+        .shader_storage_texel_buffer_array_dynamic_indexing = vk::TRUE;
+    features
+        .vulkan12
+        .shader_uniform_texel_buffer_array_non_uniform_indexing = vk::TRUE;
+    features
+        .vulkan12
+        .shader_storage_texel_buffer_array_non_uniform_indexing = vk::TRUE;
     features.core.shader_storage_image_write_without_format = vk::TRUE;
     features.core.sampler_anisotropy = vk::TRUE;
     features.core.shader_storage_image_extended_formats = vk::TRUE;
@@ -119,14 +137,14 @@ fn at_the_floor() -> Queried {
             .timestamp_compute_and_graphics(true)
             .standard_sample_locations(true),
         vulkan12: vk::PhysicalDeviceVulkan12Properties::default()
-            .max_per_stage_descriptor_update_after_bind_sampled_images(65_536)
-            .max_descriptor_set_update_after_bind_sampled_images(65_536)
-            .max_per_stage_descriptor_update_after_bind_storage_images(65_536)
-            .max_descriptor_set_update_after_bind_storage_images(65_536)
+            .max_per_stage_descriptor_update_after_bind_sampled_images(2 * 65_536)
+            .max_descriptor_set_update_after_bind_sampled_images(2 * 65_536)
+            .max_per_stage_descriptor_update_after_bind_storage_images(2 * 65_536)
+            .max_descriptor_set_update_after_bind_storage_images(2 * 65_536)
             .max_per_stage_descriptor_update_after_bind_samplers(3 * 4000)
             .max_descriptor_set_update_after_bind_samplers(3 * 4000)
-            .max_per_stage_update_after_bind_resources(2 * 65_536 + 8)
-            .max_update_after_bind_descriptors_in_all_pools(2 * 65_536 + 3 * 4000),
+            .max_per_stage_update_after_bind_resources(4 * 65_536 + 8)
+            .max_update_after_bind_descriptors_in_all_pools(4 * 65_536 + 3 * 4000),
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -458,7 +476,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 61] = [
+    let cases: [(Clear, Missing); 67] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -508,6 +526,48 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.shader_storage_image_array_non_uniform_indexing = vk::FALSE,
             feature(V12, "shaderStorageImageArrayNonUniformIndexing"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .descriptor_binding_uniform_texel_buffer_update_after_bind = vk::FALSE
+            },
+            feature(V12, "descriptorBindingUniformTexelBufferUpdateAfterBind"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .descriptor_binding_storage_texel_buffer_update_after_bind = vk::FALSE
+            },
+            feature(V12, "descriptorBindingStorageTexelBufferUpdateAfterBind"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .shader_uniform_texel_buffer_array_dynamic_indexing = vk::FALSE
+            },
+            feature(V12, "shaderUniformTexelBufferArrayDynamicIndexing"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .shader_storage_texel_buffer_array_dynamic_indexing = vk::FALSE
+            },
+            feature(V12, "shaderStorageTexelBufferArrayDynamicIndexing"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .shader_uniform_texel_buffer_array_non_uniform_indexing = vk::FALSE
+            },
+            feature(V12, "shaderUniformTexelBufferArrayNonUniformIndexing"),
+        ),
+        (
+            |f| {
+                f.vulkan12
+                    .shader_storage_texel_buffer_array_non_uniform_indexing = vk::FALSE
+            },
+            feature(V12, "shaderStorageTexelBufferArrayNonUniformIndexing"),
         ),
         (
             |f| f.core.shader_storage_image_write_without_format = vk::FALSE,
@@ -729,34 +789,34 @@ fn each_low_limit_is_named() {
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_sampled_images = 65_535
+                    .max_per_stage_descriptor_update_after_bind_sampled_images = 2 * 65_536 - 1
             },
             "maxPerStageDescriptorUpdateAfterBindSampledImages",
-            65_536,
+            2 * 65_536,
         ),
         (
             |d| {
                 d.vulkan12
-                    .max_descriptor_set_update_after_bind_sampled_images = 65_535
+                    .max_descriptor_set_update_after_bind_sampled_images = 2 * 65_536 - 1
             },
             "maxDescriptorSetUpdateAfterBindSampledImages",
-            65_536,
+            2 * 65_536,
         ),
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_storage_images = 65_535
+                    .max_per_stage_descriptor_update_after_bind_storage_images = 2 * 65_536 - 1
             },
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
-            65_536,
+            2 * 65_536,
         ),
         (
             |d| {
                 d.vulkan12
-                    .max_descriptor_set_update_after_bind_storage_images = 65_535
+                    .max_descriptor_set_update_after_bind_storage_images = 2 * 65_536 - 1
             },
             "maxDescriptorSetUpdateAfterBindStorageImages",
-            65_536,
+            2 * 65_536,
         ),
         (
             |d| {
@@ -777,14 +837,14 @@ fn each_low_limit_is_named() {
             4000,
         ),
         (
-            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 2 * 65_536 + 7,
+            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 4 * 65_536 + 7,
             "maxPerStageUpdateAfterBindResources",
-            2 * 65_536 + 8,
+            4 * 65_536 + 8,
         ),
         (
-            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 2 * 65_536 + 11_999,
+            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 4 * 65_536 + 11_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
-            2 * 65_536 + 12_000,
+            4 * 65_536 + 12_000,
         ),
         (
             |d| d.limits.max_push_constants_size = 255,
@@ -1534,10 +1594,10 @@ fn the_fault_report_is_enabled_where_listed_and_reported() {
 fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhere() {
     let roomy = |device: &mut Queried| {
         let descriptors = &mut device.vulkan12;
-        descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 2 * 65_536;
-        descriptors.max_descriptor_set_update_after_bind_sampled_images = 2 * 65_536;
-        descriptors.max_per_stage_update_after_bind_resources = 3 * 65_536 + 8;
-        descriptors.max_update_after_bind_descriptors_in_all_pools = 3 * 65_536 + 3 * 4000;
+        descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 3 * 65_536;
+        descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * 65_536;
+        descriptors.max_per_stage_update_after_bind_resources = 5 * 65_536 + 8;
+        descriptors.max_update_after_bind_descriptors_in_all_pools = 5 * 65_536 + 3 * 4000;
     };
     let looped = |device: &mut Queried| {
         (device.extensions).extend(

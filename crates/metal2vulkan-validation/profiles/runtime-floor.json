@@ -1167,6 +1167,12 @@
           "descriptorBindingStorageImageUpdateAfterBind": true,
           "shaderSampledImageArrayNonUniformIndexing": true,
           "shaderStorageImageArrayNonUniformIndexing": true,
+          "descriptorBindingUniformTexelBufferUpdateAfterBind": true,
+          "descriptorBindingStorageTexelBufferUpdateAfterBind": true,
+          "shaderUniformTexelBufferArrayDynamicIndexing": true,
+          "shaderStorageTexelBufferArrayDynamicIndexing": true,
+          "shaderUniformTexelBufferArrayNonUniformIndexing": true,
+          "shaderStorageTexelBufferArrayNonUniformIndexing": true,
           "samplerMirrorClampToEdge": true,
           "shaderInt8": true,
           "storageBuffer8BitAccess": true,
@@ -1217,14 +1223,14 @@
           }
         },
         "VkPhysicalDeviceVulkan12Properties": {
-          "maxPerStageDescriptorUpdateAfterBindSampledImages": 65536,
-          "maxDescriptorSetUpdateAfterBindSampledImages": 65536,
-          "maxPerStageDescriptorUpdateAfterBindStorageImages": 65536,
-          "maxDescriptorSetUpdateAfterBindStorageImages": 65536,
+          "maxPerStageDescriptorUpdateAfterBindSampledImages": 131072,
+          "maxDescriptorSetUpdateAfterBindSampledImages": 131072,
+          "maxPerStageDescriptorUpdateAfterBindStorageImages": 131072,
+          "maxDescriptorSetUpdateAfterBindStorageImages": 131072,
           "maxPerStageDescriptorUpdateAfterBindSamplers": 12000,
           "maxDescriptorSetUpdateAfterBindSamplers": 12000,
-          "maxPerStageUpdateAfterBindResources": 131080,
-          "maxUpdateAfterBindDescriptorsInAllPools": 143072
+          "maxPerStageUpdateAfterBindResources": 262152,
+          "maxUpdateAfterBindDescriptorsInAllPools": 274144
         }
       }
     },

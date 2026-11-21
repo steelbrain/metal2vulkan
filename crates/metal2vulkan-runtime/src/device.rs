@@ -352,6 +352,8 @@ pub(crate) struct Core {
     pub(crate) constexprs: Mutex<HashMap<(u32, [u64; 2]), Constexpr>>,
     /// [`Device::minimum_linear_texture_alignment`]'s answers, one per pixel format asked.
     pub(crate) linear_alignments: Mutex<HashMap<metal2vulkan::metal::PixelFormat, u64>>,
+    /// What a texture buffer's offset and width take ([`Device::minimum_texture_buffer_alignment`]).
+    pub(crate) texels: crate::texture::TexelLimits,
     /// The live textures over a buffer in an image of their own (`crate::over`): while there are
     /// any, the commands track what they write.
     pub(crate) copied_overs: AtomicUsize,
@@ -715,6 +717,19 @@ impl Device {
         let max_block_len = vulkan11
             .max_memory_allocation_size
             .min(vulkan13.max_buffer_size);
+        let texels = crate::texture::TexelLimits {
+            alignments: [
+                (
+                    vulkan13.uniform_texel_buffer_offset_alignment_bytes,
+                    vulkan13.uniform_texel_buffer_offset_single_texel_alignment == vk::TRUE,
+                ),
+                (
+                    vulkan13.storage_texel_buffer_offset_alignment_bytes,
+                    vulkan13.storage_texel_buffer_offset_single_texel_alignment == vk::TRUE,
+                ),
+            ],
+            max_elements: limits.max_texel_buffer_elements,
+        };
         let limits = EncoderLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_shared_memory: limits.max_compute_shared_memory_size,
@@ -803,6 +818,7 @@ impl Device {
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
             constexprs: Mutex::new(HashMap::new()),
             linear_alignments: Mutex::new(HashMap::new()),
+            texels,
             copied_overs: AtomicUsize::new(0),
             limits,
             ring: Ring::new(),

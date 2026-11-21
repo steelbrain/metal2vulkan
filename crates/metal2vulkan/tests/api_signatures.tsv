@@ -6589,6 +6589,7 @@ method	metal2vulkan-runtime::Device::import_host_memory	pub unsafe fn import_hos
 method	metal2vulkan-runtime::Device::loss	pub fn loss(&self) -> Option<DeviceLoss>
 method	metal2vulkan-runtime::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
+method	metal2vulkan-runtime::Device::minimum_texture_buffer_alignment	pub fn minimum_texture_buffer_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zero_from: Option<u64>) -> Result<Buffer, Error>
 method	metal2vulkan-runtime::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
@@ -9276,7 +9277,7 @@ variant	metal2vulkan-runtime::Gap::StageSize	StageSize { weight: u64, cause: Sta
 variant	metal2vulkan-runtime::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::SurfaceUsage	SurfaceUsage { pixel_format: PixelFormat, missing: u32 }
 variant	metal2vulkan-runtime::Gap::SwizzledReadWrite	SwizzledReadWrite { slot: u32 }
-variant	metal2vulkan-runtime::Gap::TextureBuffer	TextureBuffer
+variant	metal2vulkan-runtime::Gap::TextureBufferSwizzle	TextureBufferSwizzle { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }
 variant	metal2vulkan-runtime::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
@@ -9495,6 +9496,8 @@ variant	metal2vulkan-runtime::Refusal::SurfacePlanes	SurfacePlanes { planes: usi
 variant	metal2vulkan-runtime::Refusal::TessellationFactorOffset	TessellationFactorOffset { offset: u64 }
 variant	metal2vulkan-runtime::Refusal::TextureArgumentIndex	TextureArgumentIndex { index: u32 }
 variant	metal2vulkan-runtime::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
+variant	metal2vulkan-runtime::Refusal::TextureBufferAlignment	TextureBufferAlignment { pixel_format: PixelFormat, offset: u64, alignment: u64 }
+variant	metal2vulkan-runtime::Refusal::TextureBufferNotOverBuffer	TextureBufferNotOverBuffer
 variant	metal2vulkan-runtime::Refusal::TextureBytesLayout	TextureBytesLayout { bytes_per_row: u64, bytes_per_image: u64, len: u64 }
 variant	metal2vulkan-runtime::Refusal::TextureBytesPrivate	TextureBytesPrivate
 variant	metal2vulkan-runtime::Refusal::TextureCopyMismatch	TextureCopyMismatch { source: PixelFormat, destination: PixelFormat }
@@ -9584,6 +9587,7 @@ variant	metal2vulkan-runtime::TextureViewKind::CubeOfArray	CubeOfArray
 variant	metal2vulkan-runtime::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-runtime::TextureViewKind::Slices	Slices
 variant	metal2vulkan-runtime::TextureViewKind::SurfacePixelFormat	SurfacePixelFormat
+variant	metal2vulkan-runtime::TextureViewKind::TextureBuffer	TextureBuffer
 variant	metal2vulkan-runtime::TextureViewKind::TextureType	TextureType
 variant	metal2vulkan-runtime::VariantStart::Ahead	Ahead
 variant	metal2vulkan-runtime::VariantStart::FirstUse	FirstUse

@@ -102,6 +102,7 @@ mod swizzle;
 mod take_split;
 mod texture;
 mod texture_accesses;
+mod texture_buffers;
 mod translate;
 mod translator_fields;
 mod upload;

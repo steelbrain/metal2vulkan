@@ -686,7 +686,9 @@ pub enum Refusal {
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) whose rows
     /// are not a whole number of texels apart or are closer than a row, whose offset is not a
-    /// whole number of texels, or whose texels run past the buffer.
+    /// whole number of texels, or whose texels run past the buffer; a texture buffer
+    /// (`MTLTextureTypeTextureBuffer`) whose `bytesPerRow` is less than its width's bytes, or
+    /// whose texels run past the buffer.
     ///
     /// Basis: ours (a linear image and a copy read rows whole texels apart from a texel's start,
     /// and texels past the buffer would lie in memory it does not hold).
@@ -698,6 +700,42 @@ pub enum Refusal {
         /// The buffer's length.
         len: u64,
     },
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) over a buffer
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)) whose offset is not a multiple of the
+    /// device's minimum texture-buffer alignment for its pixel format
+    /// ([`Device::minimum_texture_buffer_alignment`](crate::Device::minimum_texture_buffer_alignment)),
+    /// which may differ from what another device answers for the same format. Plain Metal takes
+    /// an offset off its own alignment, which Metal's validation stops (the conformance crate's
+    /// `buffer-textures-made`: offsets of 4, 8, 20 and 33 bytes of an `R32Uint` texture buffer,
+    /// on an Apple M3 Max); a Vulkan buffer view takes none off the device's.
+    ///
+    /// Basis: metal-documented (`MTLDevice.h`: `minimumTextureBufferAlignmentForPixelFormat:`
+    /// "Returns the minimum alignment required for offset and rowBytes when creating a texture
+    /// buffer from a buffer").
+    TextureBufferAlignment {
+        /// The texture buffer's pixel format.
+        pixel_format: PixelFormat,
+        /// Its offset in the buffer.
+        offset: u64,
+        /// The device's minimum texture-buffer alignment for the pixel format.
+        alignment: u64,
+    },
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) made other than over a buffer:
+    /// [`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_texture_for_views`](crate::Device::new_texture_for_views),
+    /// [`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views),
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align),
+    /// [`Device::new_managed_texture`](crate::Device::new_managed_texture) and
+    /// [`Device::new_drawable_texture`](crate::Device::new_drawable_texture) of a texture buffer's
+    /// descriptor. The consumer places a buffer of the texture buffer's bytes, as it places every
+    /// buffer, and makes it over that buffer with
+    /// [`Buffer::new_texture`](crate::Buffer::new_texture), where Metal's
+    /// `newTextureWithDescriptor:` of a texture buffer's descriptor allocates the bytes itself.
+    ///
+    /// Basis: ours (a texture buffer's texels are a buffer's bytes, read through a buffer view of
+    /// the buffer; the runtime places no buffer of its own).
+    TextureBufferNotOverBuffer,
     /// A heap texture whose image does not lie in its heap
     /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture),
     /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views)): past
@@ -1072,12 +1110,15 @@ pub enum Gap {
     ///
     /// Basis: ours (render passes are not built).
     MemorylessTexture,
-    /// A texture buffer (`MTLTextureTypeTextureBuffer`).
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) with a swizzle other than each channel's
+    /// own ([`Buffer::new_texture`](crate::Buffer::new_texture)), which Metal applies to its reads.
     ///
-    /// Basis: ours (no texel-buffer array; no replay stream or live session has used one; harvested
-    /// guest render functions declare one in an argument buffer, validation's
-    /// texture_buffer_member).
-    TextureBuffer,
+    /// Basis: ours (a texel buffer view has no component mapping, and a texture's resource ID
+    /// carries no swizzle to the shader; no recorded stream makes one).
+    TextureBufferSwizzle {
+        /// The texture buffer's pixel format.
+        pixel_format: PixelFormat,
+    },
     /// A texture of a pixel format the runtime makes no image of on this device for the
     /// descriptor's usage: the device's format query lacks the format or one of the usages, or
     /// the format's texels need a conversion in the shader that the translator's identity domains
@@ -1123,9 +1164,11 @@ pub enum Gap {
     /// texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth and
     /// stencil both but in a copy of a plane option
     /// ([`BlitOption`](crate::BlitOption)), or a multisample texture. Also a plane option of a
-    /// format without the aspect it names.
+    /// format without the aspect it names, and a blit copy between a buffer and a texture buffer,
+    /// whose texels are its own buffer's bytes.
     ///
-    /// Basis: ours (no copy between such an image and bytes is built).
+    /// Basis: ours (no copy between such an image and bytes is built, nor a texture buffer's
+    /// copy as a buffer copy; no recorded stream copies a texture buffer).
     TextureBytes {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
@@ -1148,7 +1191,8 @@ pub enum Gap {
     /// usages chose; a 1D texture with one of another type; or regions of two textures in place
     /// over one buffer whose rows meet shifted both ways, or not shifted, along each axis, so
     /// that no cut into slabs along one axis copies them as from the source before the copy (a
-    /// destination row across the end of its own source row and the start of the next is one).
+    /// destination row across the end of its own source row and the start of the next is one);
+    /// or a texture buffer, whose texels are its buffer's bytes and no image.
     ///
     /// Basis: ours (Vulkan 1.3 copies none of these with one command, nor these regions in slabs
     /// along one axis; each is built when a replay stream makes one).
@@ -1159,11 +1203,14 @@ pub enum Gap {
         destination: PixelFormat,
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
-    /// does not make: other than 2D of one level, sample and slice; of a format of other than
-    /// one color texel an element; or whose first texel in the bytes shaders reach is not a whole
-    /// number of texels in, which no copy addresses.
+    /// does not make: other than 2D of one level, sample and slice, or a texture buffer; of a
+    /// format of other than one color texel an element; whose first texel in the bytes shaders
+    /// reach is not a whole number of texels in, which no copy addresses; or a texture buffer whose
+    /// first texel there is not a multiple of the device's texel-buffer offset alignment for its
+    /// format, where the buffer's own place in its memory is not.
     ///
-    /// Basis: ours (the in-place linear image and the copy form take one 2D color image).
+    /// Basis: ours (the in-place linear image and the copy form take one 2D color image, and a
+    /// texture buffer's view the texel-buffer offset alignment of Vulkan 1.3).
     TextureOverBuffer {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
@@ -1750,6 +1797,9 @@ pub enum TextureViewKind {
     CubeOfArray,
     /// Some of the slices of a texture that is not a 1D or 2D array: a 2D multisample array's.
     Slices,
+    /// A view of a texture buffer: its texels are its buffer's bytes, read through a buffer view
+    /// that takes no other format, type or swizzle.
+    TextureBuffer,
 }
 
 /// A limit a call ran into, with what it was asked.
@@ -1823,9 +1873,11 @@ pub enum Limit {
         count: u32,
     },
     /// A texture whose extent or array layers are past what the device makes of its format,
-    /// type, usage and sample count. A cube's layers are six a cube.
+    /// type, usage and sample count. A cube's layers are six a cube. A texture buffer's width past
+    /// the device's texel buffer elements, its extent `[width, 1, 1]` in 1 layer.
     ///
-    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`).
+    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`, and
+    /// `maxTexelBufferElements`).
     TextureSize {
         /// The extent asked for.
         extent: [u32; 3],
@@ -2320,6 +2372,17 @@ impl fmt::Display for Refusal {
                 f,
                 "a texture at offset {offset}, rows {bytes_per_row} bytes apart, does not lie in whole texels inside a buffer of {len} bytes"
             ),
+            Refusal::TextureBufferAlignment {
+                pixel_format,
+                offset,
+                alignment,
+            } => write!(
+                f,
+                "a texture buffer of {pixel_format:?} at offset {offset} is off the device's texture-buffer alignment of {alignment} bytes"
+            ),
+            Refusal::TextureBufferNotOverBuffer => f.write_str(
+                "a texture buffer is made over a buffer the consumer places (Buffer::new_texture)",
+            ),
             Refusal::HeapTexturePlace {
                 offset,
                 size,
@@ -2478,7 +2541,10 @@ impl fmt::Display for Gap {
             Gap::LodClamps => f.write_str(
                 "a sampler state's bind-time LOD clamps that read otherwise than its own are not built",
             ),
-            Gap::TextureBuffer => f.write_str("texture buffers are not built"),
+            Gap::TextureBufferSwizzle { pixel_format } => write!(
+                f,
+                "a swizzled texture buffer of {pixel_format:?} is not built"
+            ),
             Gap::TextureFormat { pixel_format } => write!(
                 f,
                 "no texture of {pixel_format:?} is made on this device for the usage"
