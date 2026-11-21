@@ -16,6 +16,7 @@ mod plan_resources;
 mod profiles;
 mod render;
 mod runtime;
+mod runtime_depth;
 mod runtime_probe;
 mod runtime_render;
 mod runtime_textures;

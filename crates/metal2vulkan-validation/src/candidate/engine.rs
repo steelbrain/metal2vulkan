@@ -49,8 +49,7 @@ use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{
     AccelerationStructureKind, ArgumentBufferSamplerResource, AuthoredCase,
     ImplicitImageblockCoverage, IntersectionFunctionTableEntry, IntersectionFunctionTableResource,
-    OutputSelection, RateMapLiteral, ResourceRole, SamplerResource, Stage, TextureFormat,
-    TextureType,
+    OutputSelection, RateMapLiteral, ResourceRole, SamplerResource, Stage, TextureType,
 };
 use crate::check::admission::{
     admit, AdmittedCase, ExecutionRequest, ExecutorError, NotSupported, VenueMismatch,
@@ -124,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v190";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v191";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1214,9 +1213,9 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
 /// Whether the runtime makes `texture` as the Metal oracle makes it: one sample and no sparse
 /// mapping (multisampled and sparse textures stay on the executor's own context), of a type the
 /// runtime builds, so neither a texture buffer (`Gap::TextureBuffer`) nor a cube array
-/// (`Gap::CubeArrayTexture`), and not a 32-bit float depth, whose bytes the runtime takes no
-/// upload of (`Gap::FloatDepthUpload`): a guest fills one by drawing, which a kernel case does
-/// not, so it stays on the executor's own context too.
+/// (`Gap::CubeArrayTexture`). A 32-bit float depth, whose bytes the runtime takes no upload of
+/// (`Gap::FloatDepthUpload`), is filled by a draw, as a guest fills one
+/// (`platform::runtime_depth`).
 fn runtime_texture(texture: &LiteralTexture) -> bool {
     texture.sample_count == 1
         && texture.sparse.is_none()
@@ -1224,7 +1223,6 @@ fn runtime_texture(texture: &LiteralTexture) -> bool {
             texture.texture_type,
             TextureType::Buffer | TextureType::CubeArray
         )
-        && texture.format != TextureFormat::Depth32Float
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle

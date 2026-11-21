@@ -80,7 +80,7 @@ fn run(
         device.new_render_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
     let mut indices = Indices::new();
-    let stages = Stages::make(device, case, draw, &mut indices)?;
+    let stages = Stages::make(device, device_type, (case, draw), &mut indices)?;
     let vertex_buffers = case
         .vertex_buffers
         .iter()
@@ -259,8 +259,8 @@ impl Stages {
     /// holds them) and its textures and samplers, made at the run's next indices.
     fn make(
         device: &rt::Device,
-        case: &RenderCase,
-        draw: &RuntimeDraw<'_>,
+        device_type: DeviceType,
+        (case, draw): (&RenderCase, &RuntimeDraw<'_>),
         indices: &mut Indices,
     ) -> Result<Stages, ExecutorError> {
         let no_usages = BTreeMap::new();
@@ -293,7 +293,8 @@ impl Stages {
                 },
                 member_usages: &no_member_usages,
             };
-            let bound = runtime_textures::make(device, &wanted, indices, runtime_error)?;
+            let bound =
+                runtime_textures::make(device, device_type, &wanted, indices, runtime_error)?;
             stages.push((stage, placed, bound));
         }
         Ok(Stages { stages })

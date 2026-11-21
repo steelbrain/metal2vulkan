@@ -419,6 +419,7 @@ fn run(
         .collect::<Result<BTreeMap<FieldKey, Placed>, ExecutorError>>()?;
     let bound = runtime_textures::make(
         device,
+        device_type,
         &runtime_textures::Wanted::of_kernel(case, kernel),
         &mut runtime_textures::Indices::new(),
         runtime_error,

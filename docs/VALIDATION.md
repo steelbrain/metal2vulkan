@@ -464,8 +464,11 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   as the Metal oracle makes it, Shared and written with `replace_region`, at an index the run
   grants. An argument buffer holds each member's `gpuAddress` or `gpuResourceID` at its field, as
   a program writes them, and each member buffer and texture is used for reading and writing
-  (`use_resource`). A multisampled, sparse, texture-buffer or cube-array texture, or a 32-bit
-  float depth (which the runtime takes no upload of), keeps the case on the executor's own
+  (`use_resource`). A 32-bit float depth texture, which the runtime takes no upload of, is filled
+  by a draw of the owned `depth_fill` pair, one pass per level and slice, as a guest fills one; a
+  case that gives a depth image a depth outside `[0, 1]`, which a draw clamps, carries
+  `depth_outside_unit_range`, the runtime's limit on every device, and runs on Metal alone. A
+  multisampled, sparse, texture-buffer or cube-array texture keeps the case on the executor's own
   context. A pixel format the runtime makes no image of on the device records `not_enabled`, as
   the executor's own context records a format its query lacks. A vertex or fragment case of one
   sample draws through the runtime the same way (`engine::runs_render_through_runtime`): its own

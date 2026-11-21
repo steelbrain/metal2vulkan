@@ -1706,9 +1706,6 @@ impl<'a> Targets<'a> {
                     "color and depth/stencil targets of different extents",
                 ));
             }
-            if let Some(depths) = &authored.depth {
-                super::plan_resources::require_depth_range(context, format, depths)?;
-            }
             targets.depth_stencil = Some(match transfer {
                 AttachmentTransfer::Copy => create_depth_stencil(context, format, authored)?,
                 AttachmentTransfer::PerSample { samples } => {

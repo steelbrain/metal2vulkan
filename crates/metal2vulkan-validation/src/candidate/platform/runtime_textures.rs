@@ -7,17 +7,20 @@
 //! argument-buffer member (`RuntimeKernel::texture_usages`, `RuntimeKernel::member_usages`), at an
 //! index of the run's texture grant (the bound textures first, then the members), and every
 //! level's slices written from the case's bytes before the work (`replaceRegion:`, level 0
-//! first). Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
+//! first), but for a 32-bit float depth's, which the run renders (`runtime_depth`), with the
+//! texture made for rendering too. Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
 //! `argument_sampler_descriptor`), at an index of the run's sampler grant counted down from its
 //! top, so it never meets the constexpr samplers the pipeline numbers up from the bottom. A
 //! member's `gpuResourceID` is the word its owner holds at its field ([`Bound::words`]), as a
 //! program writes one into an argument buffer. A texture output is read back as the oracle reads
 //! it (`getBytes:`): the selected region of level 0, slice by slice.
 
+use super::runtime_depth;
 use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
-use crate::case::{ArgumentBufferSamplerResource, SamplerResource};
+use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat};
 use crate::check::admission::ExecutorError;
+use crate::gpu::DeviceType;
 use crate::literal::LiteralTexture;
 use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_runtime as rt;
@@ -136,12 +139,14 @@ pub(super) fn texture_indices(
 /// the runtime's errors as the run's.
 pub(super) fn make(
     device: &rt::Device,
+    device_type: DeviceType,
     wanted: &Wanted<'_>,
     indices: &mut Indices,
     error: impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Bound, ExecutorError> {
     let count = wanted.textures.len() + wanted.members.len();
     let (grant, mut at) = texture_indices(device, indices, count, &error)?;
+    let mut fills = Vec::new();
     let mut textures = BTreeMap::new();
     for ((&binding, texture), index) in wanted.textures.iter().zip(&mut at) {
         let usage = wanted
@@ -153,7 +158,7 @@ pub(super) fn make(
             })?;
         textures.insert(
             binding,
-            made_texture(device, texture, usage, index, &error)?,
+            made_texture(device, texture, usage, index, &error, &mut fills)?,
         );
     }
     let mut members = BTreeMap::new();
@@ -164,7 +169,11 @@ pub(super) fn make(
                 key.0, key.1
             ))
         })?;
-        members.insert(key, made_texture(device, texture, usage, index, &error)?);
+        let made = made_texture(device, texture, usage, index, &error, &mut fills)?;
+        members.insert(key, made);
+    }
+    if !fills.is_empty() {
+        runtime_depth::filled(device, device_type, &fills, &error)?;
     }
     let mut samplers = BTreeMap::new();
     for (&binding, sampler) in wanted.samplers {
@@ -190,13 +199,15 @@ pub(super) fn make(
     })
 }
 
-/// `texture` made with `usage` at `index`, every level's slices written from its bytes.
+/// `texture` made with `usage` at `index`, every level's slices written from its bytes; a 32-bit
+/// float depth's are pushed to `fills` instead, which the run renders (`runtime_depth`).
 fn made_texture(
     device: &rt::Device,
     texture: &LiteralTexture,
     usage: rt::TextureUsage,
     index: u32,
     error: &impl Fn(&str, rt::Error) -> ExecutorError,
+    fills: &mut Vec<runtime_depth::Fill>,
 ) -> Result<rt::Texture, ExecutorError> {
     let what = format!("texture {}", texture.binding);
     let layout = texture.layout().map_err(ExecutorError::Failed)?;
@@ -210,7 +221,12 @@ fn made_texture(
     descriptor.array_length = layout.metal_array_length(texture.texture_type);
     descriptor.sample_count = layout.sample_count;
     descriptor.mipmap_level_count = texture.mip_levels;
-    descriptor.usage = usage;
+    // A 32-bit float depth is filled by a draw, which renders into the texture (`runtime_depth`).
+    let depth = texture.format == TextureFormat::Depth32Float;
+    descriptor.usage = match depth {
+        true => usage | rt::TextureUsage::RENDER_TARGET,
+        false => usage,
+    };
     descriptor.storage_mode = rt::StorageMode::Shared;
     let made = device
         .new_texture(&descriptor, Some(index))
@@ -236,13 +252,24 @@ fn made_texture(
             .take(span.slice_count as usize)
             .enumerate()
         {
+            let slice = span.base_slice + slice as u32;
+            if depth {
+                fills.push(runtime_depth::Fill {
+                    texture: made.clone(),
+                    level,
+                    slice,
+                    width: span.size[0],
+                    depths: chunk.to_vec(),
+                });
+                continue;
+            }
             made.replace_region(
                 rt::Region {
                     origin: [0, 0, 0],
                     size: span.size,
                 },
                 level,
-                span.base_slice + slice as u32,
+                slice,
                 chunk.into(),
                 rows.row as u64,
                 rows.image as u64,

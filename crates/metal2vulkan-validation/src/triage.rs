@@ -1952,9 +1952,8 @@ entry:
             ),
             (
                 "src/executor_contract/depth_range.rs",
-                "the executors' depth-range rule over a case's depth bytes and the device's \
-                 VK_EXT_depth_range_unrestricted; classification reads no depth and opens no \
-                 device",
+                "the case checker's depth-range rule over a case's depth bytes; classification \
+                 reads no depth",
             ),
             (
                 "src/executor_contract/render_target_array.rs",
