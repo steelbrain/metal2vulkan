@@ -78,6 +78,7 @@ mod staging;
 mod stamps;
 mod state_answers;
 mod storage_element;
+mod subgroup_sizes;
 mod submit_infos;
 mod surface;
 mod swizzle;

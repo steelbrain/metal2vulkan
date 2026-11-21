@@ -226,14 +226,58 @@ pub(crate) struct RenderCompiled {
 }
 
 /// One stage's shader module and what a `VkPipeline` of it takes.
-struct Module {
-    module: vk::ShaderModule,
-    entry: CString,
-    stage: vk::ShaderStageFlags,
-    flags: vk::PipelineShaderStageCreateFlags,
+pub(crate) struct Module {
+    pub(crate) module: vk::ShaderModule,
+    pub(crate) entry: CString,
+    pub(crate) stage: vk::ShaderStageFlags,
+    pub(crate) flags: vk::PipelineShaderStageCreateFlags,
+    /// The subgroup size the translator pins for the stage (`StageModule::required_subgroup_size`:
+    /// Metal's 32, on a device that lists the stage in `requiredSubgroupSizeStages`), which its
+    /// SIMD-group operations are lowered for; `None` where it pins none.
+    pub(crate) subgroup_size: Option<u32>,
     /// Its specialization constants' entries and their 4-byte values, fixed with the content.
-    constants: Vec<vk::SpecializationMapEntry>,
-    values: Vec<u8>,
+    pub(crate) constants: Vec<vk::SpecializationMapEntry>,
+    pub(crate) values: Vec<u8>,
+}
+
+/// Each of `stages`' required subgroup size as Vulkan chains it
+/// (`VkPipelineShaderStageRequiredSubgroupSizeCreateInfo`), where the translator pins one.
+pub(crate) fn subgroup_sizes(
+    stages: &[Module],
+) -> Vec<Option<vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'static>>> {
+    (stages.iter())
+        .map(|stage| {
+            (stage.subgroup_size).map(|size| {
+                vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
+                    .required_subgroup_size(size)
+            })
+        })
+        .collect()
+}
+
+/// The create info of each of `stages`, with its specialization of `specializations`, and its
+/// required subgroup size of `subgroups` ([`subgroup_sizes`]) chained where it has one.
+pub(crate) fn stage_infos<'a>(
+    stages: &'a [Module],
+    specializations: &'a [vk::SpecializationInfo<'a>],
+    subgroups: &'a mut [Option<vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'static>>],
+) -> Vec<vk::PipelineShaderStageCreateInfo<'a>> {
+    (stages.iter())
+        .zip(specializations)
+        .zip(subgroups.iter_mut())
+        .map(|((stage, specialization), subgroup)| {
+            let info = vk::PipelineShaderStageCreateInfo::default()
+                .flags(stage.flags)
+                .stage(stage.stage)
+                .module(stage.module)
+                .name(&stage.entry)
+                .specialization_info(specialization);
+            match subgroup {
+                Some(subgroup) => info.push_next(subgroup),
+                None => info,
+            }
+        })
+        .collect()
 }
 
 /// The fixed-function state of a content's `VkPipeline`s, as Vulkan takes it: the descriptor's
@@ -934,6 +978,7 @@ impl RenderCompiled {
                 entry,
                 stage: kind,
                 flags,
+                subgroup_size: stage.required_subgroup_size,
                 constants,
                 values,
             });
@@ -1068,17 +1113,10 @@ impl RenderCompiled {
                     .data(&stage.values)
             })
             .collect();
-        let stages: Vec<vk::PipelineShaderStageCreateInfo<'_>> = (self.stages.iter())
-            .zip(&specializations)
-            .map(|(stage, specialization)| {
-                vk::PipelineShaderStageCreateInfo::default()
-                    .flags(stage.flags)
-                    .stage(stage.stage)
-                    .module(stage.module)
-                    .name(&stage.entry)
-                    .specialization_info(specialization)
-            })
-            .collect();
+        // A stage at the subgroup size the translator pins, as a kernel's is: one it pins none for
+        // runs at the device's own size.
+        let mut subgroups = subgroup_sizes(&self.stages);
+        let stages = stage_infos(&self.stages, &specializations, &mut subgroups);
         let mut divided = vk::PipelineVertexInputDivisorStateCreateInfoKHR::default()
             .vertex_binding_divisors(&fixed.divisors);
         let mut vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
