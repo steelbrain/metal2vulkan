@@ -1633,13 +1633,17 @@ pub enum PrecisionNote {
     /// device's `OpQuantizeToF16` alone, on every device without `shaderFloat16`. An integer's
     /// `half` is not this rounding: it rounds by integer arithmetic, exactly, around NVIDIA's
     /// 615.71.09 keeping an integer conversion unrounded under the quantize. Vulkan leaves the
-    /// quantize's rounding mode to the device, and the SPIR-V specification lets it answer a zero
-    /// for a magnitude too small for a normal `half`. The recorded bound, against Metal's `half(float)`: a finite result within one unit in the last
+    /// quantize's rounding mode to the device, and the SPIR-V specification lets it answer either
+    /// zero for a magnitude too small for a normal `half`, a zero's own included. The recorded bound, against Metal's `half(float)`: a finite result within one unit in the last
     /// place of the `half`; a value from 65504 up to 65520 may be infinity where Metal's is 65504
     /// (NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity); a value below the smallest normal
     /// `half` (`2^-14`) may round to a zero, of either sign, where Metal answers the half denormal,
     /// or `2^-14` from just below it (the quantize tests the value it rounds; NIR's
-    /// `fquantize2f16` flushes every one, SwiftShader's too); a NaN's encoding is the device's.
+    /// `fquantize2f16` flushes every one, SwiftShader's too); where the rounding's input is a
+    /// zero or too small for a normal `half`, the result may be either zero, so a negative zero
+    /// may come out positive (RADV's on Polaris does), which a program sees in a reciprocal's or
+    /// `atan2`'s sign and in the bits written to a `half` target or buffer; a NaN's encoding is
+    /// the device's.
     /// Validation derives no tolerance from it.
     NativeHalfQuantize,
     /// Native device maths: a `float` or `half` operation's NaN result is the device's, its sign

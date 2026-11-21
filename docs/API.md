@@ -2434,7 +2434,13 @@ bound.
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's
   `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize measured or not: a
   value below the smallest normal `half` may round to a zero where Metal answers the half denormal
-  (or `2^-14`, from just below it). An integer's `half` rounds exactly instead.
+  (or `2^-14`, from just below it). Where the rounding's input is a zero or too small for a normal
+  `half`, the result may be either zero, so a negative zero may come out positive, as the SPIR-V
+  specification lets the quantize answer: a program sees it in a reciprocal's or `atan2`'s sign
+  and in the bits written to a `half` target or buffer. The form not taken, copying the input's
+  sign bit into the result by integer operations, would keep Metal's sign at about 4 instructions
+  per `half` rounding on every device without `shaderFloat16`. An integer's `half` rounds exactly
+  instead.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN, on every device: a `float`
