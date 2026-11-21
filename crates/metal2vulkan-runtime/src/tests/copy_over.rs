@@ -696,9 +696,10 @@ entry:
     /// render encoder's `use_resource` takes the texture's copies as a bound one does. Declared
     /// read after a fill of the buffer, it is copied in at the encoder's next draw, which does not
     /// bind it, and not again at the draw after; a draw before the declaration copies nothing.
-    /// Declared written, the texel a draw's fragment function writes through its resource ID (an
-    /// argument buffer's `texture2d<float, write>`) is in the buffer for the host once the
-    /// command buffer completes, over the bytes a fill in the command buffer left.
+    /// Declared written after a fill, it is copied in at the draw and back after it, counted, and
+    /// the texel the draw's fragment function writes through its resource ID (an argument
+    /// buffer's `texture2d<float, write>`) is in the buffer for the host once the command buffer
+    /// completes, over the bytes the fill left.
     #[test]
     fn every_device_copies_a_texture_over_a_buffer_a_draw_declares() {
         let Some(library) = draw::examples() else {
@@ -777,9 +778,17 @@ entry:
             ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
             ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
             ok(encoder.set_fragment_buffer(Some(&argument), 0, 0));
+            let before = copies(&device);
             ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: in at the draw that declares it written, after the fill"
+            );
             encoder.end_encoding();
             draw::run(name, &command_buffer);
+            let back = copies(&device) - before - 1;
+            assert!(back >= 1, "{name}: no copy back after the declared write");
             let bytes = held(&buffer);
             let mut want = vec![0x11; ROW as usize];
             want[..4].copy_from_slice(&[255, 0, 255, 255]);
@@ -788,7 +797,10 @@ entry:
                 want[..],
                 "{name}: the written texel over the filled row, in the buffer"
             );
-            println!("{name}: a declared texture copied in at its draw and back after its write");
+            println!(
+                "{name}: a declared texture copied in once at its draws, and in once and back \
+                 {back} time(s) around its declared write"
+            );
             drop((texture, buffer, argument, positions, colors, buffers));
             drop((color, plain, writing, queue));
             (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
