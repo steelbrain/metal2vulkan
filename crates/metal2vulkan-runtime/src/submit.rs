@@ -1788,7 +1788,10 @@ impl WorkState {
         group.finished.push((cb, pending, None));
         group.partial = false;
         group.count += 1;
-        match signals || fifo.goes(stop, busy) {
+        // A command buffer held for room behind it joins it or, not taken, sends it first: with
+        // room the two would have been staged together.
+        let held_behind = (fifo.entries.front()).is_some_and(|entry| entry.held.is_some());
+        match signals || (fifo.goes(stop, busy) && !held_behind) {
             true => Step::Goes(index),
             false => Step::Staged,
         }
