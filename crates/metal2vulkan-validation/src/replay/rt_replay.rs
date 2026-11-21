@@ -447,6 +447,66 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     assert_eq!(report.first_skip, None);
 }
 
+/// A play's report carries the runtime's stage sums among its executed counters, and its stage
+/// histograms as each frame ended and at the play's end: two frames of one fill each count one
+/// command buffer more in each histogram by each frame's end.
+#[test]
+fn a_play_reports_the_runtime_s_command_buffer_stages() {
+    let dir = ScratchDir::new("rt-replay-stages").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let made = [Value::Uint(4), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &made, &[])?;
+        let range = uints(&[("location", 0), ("length", 4)]);
+        for (cb, value) in [(10, 7), (20, 9)] {
+            w.call("commandBuffer", 2, cb, &[], &[])?;
+            w.call("blitCommandEncoder", cb, cb + 1, &[], &[])?;
+            let fill = [Value::Object(3), range.clone(), Value::Uint(value)];
+            w.call("fillBuffer:range:value:", cb + 1, 0, &fill, &[])?;
+            w.call("endEncoding", cb + 1, 0, &[], &[])?;
+            w.call("commit", cb, 0, &[], &[])?;
+            w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        }
+        Ok(())
+    });
+    let (report, lines) = play("stages", &path);
+    let executed = &report.total.executed;
+    let sums = [
+        "commit_to_scheduled_nanos",
+        "scheduled_to_gpu_start_nanos",
+        "gpu_run_nanos",
+        "gpu_end_to_handler_nanos",
+        "held_starts",
+        "held_start_gap_nanos",
+        "runtime_command_buffers",
+        "runtime_command_buffer_gpu_nanos",
+        "untimed_command_buffers",
+    ];
+    for key in sums {
+        assert!(executed.contains_key(key), "{key}: {executed:?}");
+    }
+    let counted = |at: &str| -> Vec<u64> {
+        let prefix = format!("stages {at} ");
+        let line = lines.iter().find(|line| line.starts_with(&prefix));
+        let line = line.unwrap_or_else(|| panic!("no stages {at} line: {lines:?}"));
+        let histograms = line[prefix.len()..].split(' ').map(|named| {
+            let (_, counts) = named.split_once('=').expect("a histogram");
+            let counts: Vec<u64> = counts.split(',').map(|c| c.parse().unwrap()).collect();
+            assert_eq!(counts.len(), 23, "{line}");
+            counts.iter().sum::<u64>()
+        });
+        histograms.collect()
+    };
+    // Frame 0's line, then the play's end, which frame 1 ended.
+    let (first, end) = (counted("0"), counted("end"));
+    assert_eq!(first.len(), 4, "{lines:?}");
+    for (at, (first, end)) in first.iter().zip(&end).enumerate() {
+        assert!(*first >= 1, "{at}: {lines:?}");
+        assert!(*end > *first, "{at}: {lines:?}");
+    }
+}
+
 /// A draw of points after the triangle (call 19) plays, nothing skipped, the target still green.
 #[test]
 fn a_draw_of_points_plays_on_the_new_runtime() {

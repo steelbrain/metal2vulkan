@@ -524,6 +524,11 @@ pub struct Times {
     pub upload: u64,
     /// Reading the runtime's counters (`Backend::counters`).
     pub count: u64,
+    /// The command buffers the frame waited for that completed with no GPU interval
+    /// (`Backend::gpu_interval`) or one of no length, which `gpu_busy` cannot hold, and the part
+    /// of `wait` spent waiting for them.
+    pub untimed_waits: u64,
+    pub untimed_wait: u64,
     /// The union of the GPU intervals of the command buffers the frame waited for
     /// (`Backend::gpu_interval`); 0 where the backend gives none.
     pub gpu_busy: u64,
@@ -722,7 +727,8 @@ impl Report {
             lines.push(format!(
                 "end {at} wall_nanos={} unix_nanos={}{resident} times stream={} write={} read={} wait={} \
                  resource={} resource_max={} pipeline={} pipeline_max={} other={} upload={} \
-                 count={} player={} gpu_busy={} gpu_longest={} gpu_longest_cb={} live{live}",
+                 count={} player={} untimed_waits={} untimed_wait={} gpu_busy={} gpu_longest={} \
+                 gpu_longest_cb={} live{live}",
                 end.wall_nanos,
                 end.unix_nanos,
                 t.stream,
@@ -737,6 +743,8 @@ impl Report {
                 t.upload,
                 t.count,
                 t.player(end.wall_nanos),
+                t.untimed_waits,
+                t.untimed_wait,
                 t.gpu_busy,
                 t.gpu_longest,
                 t.gpu_longest_cb,
@@ -829,6 +837,14 @@ impl Report {
                 relaid.heaps, relaid.moved, relaid.grown
             ));
         }
+        let times = self.ends.iter().map(|end| end.times);
+        let (untimed, untimed_wait, wait) = times.fold((0, 0, 0), |(n, u, w), t| {
+            (n + t.untimed_waits, u + t.untimed_wait, w + t.wait)
+        });
+        lines.push(format!(
+            "untimed waits {untimed}: command buffers waited for with no GPU interval, \
+             {untimed_wait} ns of the frames' {wait} ns of waits"
+        ));
         lines.push(self.texture_writes.line());
         lines.push(self.managed_reads.line());
         lines.push(format!("total{}", counted(&self.total)));
@@ -2188,14 +2204,20 @@ impl<'b, B: Backend> Player<'b, B> {
         for id in &ready {
             let began = std::time::Instant::now();
             self.backend.wait(*id)?;
-            self.times.wait += since(began);
-            if let Some(interval) = self.backend.gpu_interval(*id) {
+            let waited = since(began);
+            self.times.wait += waited;
+            let interval = self.backend.gpu_interval(*id);
+            if let Some(interval) = interval {
                 let nanos = interval.1.saturating_sub(interval.0);
                 if nanos > self.times.gpu_longest {
                     self.times.gpu_longest = nanos;
                     self.times.gpu_longest_cb = *id;
                 }
                 self.intervals.push(interval);
+            }
+            if interval.is_none_or(|(start, end)| end <= start) {
+                self.times.untimed_waits += 1;
+                self.times.untimed_wait += waited;
             }
             let pending = self.pending.remove(id).expect("a pending command buffer");
             for (event, value) in pending.signals {

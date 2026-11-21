@@ -378,6 +378,38 @@ struct Function {
 /// A kernel apart from its specializations: the library object it came from and its name.
 type Kernel = (u64, Arc<str>);
 
+/// The runtime's four histograms of its command buffers' stages, in [`STAGES`]'s order, each in
+/// its 23 buckets of powers of two (`rt::Metrics::commit_to_scheduled`).
+type Stages = [[u64; 23]; 4];
+
+/// The stage histograms' names, as `rt::Metrics` names them.
+const STAGES: [&str; 4] = [
+    "commit_to_scheduled",
+    "scheduled_to_gpu_start",
+    "gpu_run",
+    "gpu_end_to_handler",
+];
+
+/// The stage histograms of `metrics`.
+fn stages(m: &rt::Metrics) -> Stages {
+    [
+        m.commit_to_scheduled,
+        m.scheduled_to_gpu_start,
+        m.gpu_run,
+        m.gpu_end_to_handler,
+    ]
+}
+
+/// A `stages AT NAME=C0,...,C22 ...` line of the report: each stage histogram's counts, bucket
+/// by bucket.
+fn stages_line(at: &str, stages: &Stages) -> String {
+    let named = STAGES.iter().zip(stages).map(|(name, counts)| {
+        let counts: Vec<String> = counts.iter().map(u64::to_string).collect();
+        format!(" {name}={}", counts.join(","))
+    });
+    format!("stages {at}{}", named.collect::<String>())
+}
+
 /// A compute pipeline state's making: its wall time, and whether its kernel was new to the play
 /// (no state of another specialization of it made before).
 struct Creation {
@@ -528,6 +560,9 @@ pub struct NewRuntime {
     kernels: HashSet<Kernel>,
     /// Where each pipeline state's making went: the translator's, the driver's and the rest.
     makes: makes::Makes,
+    /// The runtime's stage histograms as each frame ended, read as the next frame's first call
+    /// is located (`Backend::locate`): the report's `stages` lines.
+    frame_stages: Vec<Stages>,
     /// The device's `minImportedHostPointerAlignment`, where it imports host memory: the
     /// alignment of the host pages a no-copy buffer's memory is imported from (`imports`).
     host_alignment: Option<u64>,
@@ -927,6 +962,7 @@ impl NewRuntime {
             creations: Vec::new(),
             kernels: HashSet::new(),
             makes: makes::Makes::default(),
+            frame_stages: Vec::new(),
         })
     }
 
@@ -2935,6 +2971,24 @@ impl Backend for NewRuntime {
             ("held_release_bytes", metrics.held_release_bytes),
             ("held_release_starts", metrics.held_release_starts),
             ("stamps_not_available", metrics.stamps_not_available),
+            ("untimed_command_buffers", metrics.untimed_command_buffers),
+            (
+                "commit_to_scheduled_nanos",
+                metrics.commit_to_scheduled_nanos,
+            ),
+            (
+                "scheduled_to_gpu_start_nanos",
+                metrics.scheduled_to_gpu_start_nanos,
+            ),
+            ("gpu_run_nanos", metrics.gpu_run_nanos),
+            ("gpu_end_to_handler_nanos", metrics.gpu_end_to_handler_nanos),
+            ("held_starts", metrics.held_starts),
+            ("held_start_gap_nanos", metrics.held_start_gap_nanos),
+            ("runtime_command_buffers", metrics.runtime_command_buffers),
+            (
+                "runtime_command_buffer_gpu_nanos",
+                metrics.runtime_command_buffer_gpu_nanos,
+            ),
             ("waits_behind_counter", metrics.waits_behind_counter),
             ("external_acquires", metrics.external_acquires),
             ("external_releases", metrics.external_releases),
@@ -3033,8 +3087,12 @@ impl Backend for NewRuntime {
         });
         let mut lines: Vec<String> = lines.collect();
         // A maximum since the device was made: it does not sum, so it is not a frame's counter.
-        let longest = self.device.counters().metrics().commit_lock_wait_max_nanos;
+        let metrics = self.device.counters().metrics();
+        let longest = metrics.commit_lock_wait_max_nanos;
         lines.push(format!("commit lock wait longest {longest} ns"));
+        let ended = self.frame_stages.iter().enumerate();
+        lines.extend(ended.map(|(frame, stages)| stages_line(&frame.to_string(), stages)));
+        lines.push(stages_line("end", &stages(&metrics)));
         lines.extend(self.makes.lines());
         if let Some(copies) = self.managed {
             let from = match self.identity {
@@ -3131,6 +3189,11 @@ impl Backend for NewRuntime {
 
     fn locate(&mut self, frame: u64, call: u64) {
         self.at = (frame, call);
+        // A frame's first call: the frames before it have ended.
+        while (self.frame_stages.len() as u64) < frame {
+            let metrics = self.device.counters().metrics();
+            self.frame_stages.push(stages(&metrics));
+        }
     }
 
     fn announced_bytes_recorded(&mut self) {

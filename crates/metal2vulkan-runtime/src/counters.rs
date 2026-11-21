@@ -506,8 +506,9 @@ struct Atomics {
     submit_calls_over_100_ms: AtomicU64,
     queue_lock_wait_nanos: AtomicU64,
     queue_lock_wait_max_nanos: AtomicU64,
-    /// Each [`Stage`]'s histogram, at its index.
+    /// Each [`Stage`]'s histogram, at its index, and its spans summed.
     stages: [[AtomicU64; STAGE_BUCKETS]; 4],
+    stage_nanos: [AtomicU64; 4],
     event_holds: [AtomicU64; STAGE_BUCKETS],
     held_starts: AtomicU64,
     held_start_gap_nanos: AtomicU64,
@@ -867,10 +868,11 @@ impl Counters {
         a.queue_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
-    /// A command buffer's span of `nanos` nanoseconds at `stage`, in its histogram
-    /// ([`Metrics::commit_to_scheduled`] and the three after it).
+    /// A command buffer's span of `nanos` nanoseconds at `stage`, in its histogram and its sum
+    /// ([`Metrics::commit_to_scheduled`] and the three after it, and their `_nanos` sums).
     pub(crate) fn stage(&self, stage: Stage, nanos: u64) {
         self.atomics.stages[stage as usize][stage_bucket(nanos)].fetch_add(1, Relaxed);
+        self.atomics.stage_nanos[stage as usize].fetch_add(nanos, Relaxed);
     }
 
     /// A segment the submit thread held `nanos` nanoseconds for an event's value
@@ -1371,6 +1373,7 @@ impl Counters {
             (a.over_by_cause[cause as usize].each_ref()).map(|n| n.load(Relaxed))
         };
         let stage = |stage: Stage| (a.stages[stage as usize].each_ref()).map(|n| n.load(Relaxed));
+        let stage_nanos = |stage: Stage| a.stage_nanos[stage as usize].load(Relaxed);
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -1382,9 +1385,13 @@ impl Counters {
             queue_lock_wait_nanos: a.queue_lock_wait_nanos.load(Relaxed),
             queue_lock_wait_max_nanos: a.queue_lock_wait_max_nanos.load(Relaxed),
             commit_to_scheduled: stage(Stage::CommitToScheduled),
+            commit_to_scheduled_nanos: stage_nanos(Stage::CommitToScheduled),
             scheduled_to_gpu_start: stage(Stage::ScheduledToGpuStart),
+            scheduled_to_gpu_start_nanos: stage_nanos(Stage::ScheduledToGpuStart),
             gpu_run: stage(Stage::GpuRun),
+            gpu_run_nanos: stage_nanos(Stage::GpuRun),
             gpu_end_to_handler: stage(Stage::GpuEndToHandler),
+            gpu_end_to_handler_nanos: stage_nanos(Stage::GpuEndToHandler),
             event_holds: (a.event_holds.each_ref()).map(|n| n.load(Relaxed)),
             held_starts: a.held_starts.load(Relaxed),
             held_start_gap_nanos: a.held_start_gap_nanos.load(Relaxed),
@@ -1650,6 +1657,9 @@ pub struct Metrics {
     /// that presents a drawable, that call's return. Counted as each is scheduled; one that ends
     /// unscheduled counts none.
     pub commit_to_scheduled: [u64; STAGE_BUCKETS],
+    /// The spans [`commit_to_scheduled`](Self::commit_to_scheduled) counts, summed, in
+    /// nanoseconds.
+    pub commit_to_scheduled_nanos: u64,
     /// Command buffers that completed with GPU times by the span from their
     /// [`kernel_end_time`](crate::CommandBuffer::kernel_end_time) to their
     /// [`gpu_start_time`](crate::CommandBuffer::gpu_start_time), in the buckets of
@@ -1658,12 +1668,17 @@ pub struct Metrics {
     /// completion thread as each retires, before its handlers run; one that ends with an error,
     /// or completes without GPU times, counts none here or in the two below.
     pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS],
+    /// The spans [`scheduled_to_gpu_start`](Self::scheduled_to_gpu_start) counts, summed, in
+    /// nanoseconds.
+    pub scheduled_to_gpu_start_nanos: u64,
     /// The same command buffers by their GPU run: the span from their
     /// [`gpu_start_time`](crate::CommandBuffer::gpu_start_time) to their
     /// [`gpu_end_time`](crate::CommandBuffer::gpu_end_time), their two timestamps' own span, in
     /// the buckets of [`commit_to_scheduled`](Self::commit_to_scheduled); 0 for one with nothing
     /// for the GPU.
     pub gpu_run: [u64; STAGE_BUCKETS],
+    /// The spans [`gpu_run`](Self::gpu_run) counts, summed, in nanoseconds.
+    pub gpu_run_nanos: u64,
     /// The same command buffers by the span from their
     /// [`gpu_end_time`](crate::CommandBuffer::gpu_end_time) to the host time their handlers
     /// begin, whether they have any or not, in the buckets of
@@ -1671,6 +1686,9 @@ pub struct Metrics {
     /// round's command buffers in order, so the span holds the earlier ones' retirements and
     /// handlers in the round.
     pub gpu_end_to_handler: [u64; STAGE_BUCKETS],
+    /// The spans [`gpu_end_to_handler`](Self::gpu_end_to_handler) counts, summed, in
+    /// nanoseconds.
+    pub gpu_end_to_handler_nanos: u64,
     /// Segments the submit thread held for an event's value that neither the host had set nor a
     /// signal submitted to the driver promised: a value the host sets later, or one a command
     /// buffer not yet submitted signals. A wait whose signal is submitted is not held: it goes to

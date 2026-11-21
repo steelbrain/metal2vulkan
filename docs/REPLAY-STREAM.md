@@ -921,7 +921,10 @@ make or release a buffer, texture, heap or block and `resource_max` the longest 
 longest of them, `other` every other call the runtime ran, `upload` the host's copies from the
 guest's RAM, which a backend stages and copies (the recording's plumbing, the player's share),
 `count` reading the runtime's
-counters, and `player` what of the wall time is left, the player's own work; then `gpu_busy`, the
+counters, and `player` what of the wall time is left, the player's own work; then
+`untimed_waits` and `untimed_wait`, the command buffers the frame waited for that completed with
+no GPU interval or one of no length (the runtime's start 0, or its end not past its start), which
+`gpu_busy` cannot hold, and the nanoseconds of `wait` spent on them; then `gpu_busy`, the
 union of the GPU intervals of the command buffers the frame waited for, where the runtime gives
 them, which runs beside the rest, then `gpu_longest` and `gpu_longest_cb`, the longest of those
 intervals, one command buffer's, and that command buffer's stream id (the first of equal ones; 0
@@ -963,7 +966,8 @@ not compared, and the textures' own checks carry the bytes. `unsnapshotted N` wh
 `m2v.privateBytes` records name dispatches (`N` of them, each played as it is),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
-offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
+offsets it moved in them and the bytes it added to their sizes), `untimed waits N: ...` (the
+frames' `untimed_waits` and `untimed_wait` summed, beside their `wait`), `texture_writes ...` (the
 CPU's writes into Managed textures, above), `managed reads on two copies: ...` (the reads of
 Managed bytes no announcement took to the GPU copy, above), `total COUNTS` (its `calls` the
 calls played: where
@@ -973,6 +977,15 @@ making's wall time, and whether no state of another specialization of the kernel
 function by name, was made before), its `commit lock wait longest N ns` (the runtime's
 `commit_lock_wait_max_nanos`: the longest wait of a commit for the runtime's work lock in the play;
 the executed counter `commit_lock_wait_nanos` gives the waits by frame, summed), its
+`stages F commit_to_scheduled=C0,...,C22 scheduled_to_gpu_start=... gpu_run=...
+gpu_end_to_handler=...` for each frame `F` a later call followed and `stages end ...` at the play's
+end (the runtime's four histograms of its command buffers' stages, `Metrics::commit_to_scheduled`
+and the three after it, bucket by bucket, as they stood then, since the device was made: a span's
+histogram is the difference of two lines; the executed counters `commit_to_scheduled_nanos` and
+the three like it sum each stage's spans, `held_starts` and `held_start_gap_nanos` count the
+groups a queue held behind three submissions in flight and the GPU's time behind them, and
+`runtime_command_buffers` and `runtime_command_buffer_gpu_nanos` the runtime's own uploads and
+copy-ins and their GPU time, outside every Metal command buffer's GPU interval), its
 `pipeline makes N states: C new (MADE), SPLIT; H held, SPLIT; B beside a pre-pass call, whose work
 their figures count` and, for each of the ten slowest makings, slowest first, `pipeline make
 slowest K #ID KINDS new|held (MADE): SPLIT` (where each render and compute pipeline state's making

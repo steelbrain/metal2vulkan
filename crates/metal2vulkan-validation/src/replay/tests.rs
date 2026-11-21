@@ -2132,6 +2132,45 @@ fn a_frame_end_names_its_longest_command_buffer() {
     );
 }
 
+/// A frame's end counts the command buffers it waited for that completed with no GPU interval,
+/// or one of no length (#4), and the wait spent on them, which its GPU busy time leaves out; the
+/// report sums them.
+#[test]
+fn a_frame_end_counts_its_waits_for_untimed_command_buffers() {
+    let mut kept = Kept {
+        gpu: HashMap::from([(3, (100, 300)), (4, (500, 500))]),
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        for command_buffer in [3, 4, 5] {
+            w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+            w.call("commit", command_buffer, 0, &[], &[])?;
+        }
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("commandBuffer", 2, 6, &[], &[])?;
+        w.call("commit", 6, 0, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        Ok(())
+    });
+    ended.unwrap();
+    let untimed: Vec<_> = (report.ends.iter())
+        .map(|end| (end.times.untimed_waits, end.times.gpu_busy))
+        .collect();
+    assert_eq!(untimed, [(2, 200), (1, 0)]);
+    for end in &report.ends {
+        assert!(end.times.untimed_wait <= end.times.wait, "{end:?}");
+    }
+    let lines = report.lines();
+    let line = lines.iter().find(|line| line.starts_with("end 0 "));
+    let line = line.expect("an end line");
+    assert!(line.contains(" untimed_waits=2 untimed_wait="), "{line}");
+    let total = lines.iter().find(|line| line.starts_with("untimed waits "));
+    let total = total.expect("the untimed waits line");
+    assert!(total.starts_with("untimed waits 3: "), "{total}");
+}
+
 /// A dispatch an `m2v.privateBytes` record names plays as the program made it, and the report
 /// counts it.
 #[test]

@@ -1954,8 +1954,10 @@ pub(crate) mod on_device {
         });
     }
 
-    /// Each command buffer that completes lands one count in each of the four stage histograms:
-    /// three committed in turn, each finished before the next, add three to each histogram.
+    /// Each command buffer that completes lands one count in each of the four stage histograms,
+    /// and its span in each stage's sum: three committed in turn, each finished before the next,
+    /// add three to each histogram, and to the sums the spans their own times give (from its
+    /// commit, its kernel start, to its handlers' start, which lies before it is seen finished).
     #[test]
     fn every_device_counts_each_command_buffer_once_in_every_stage_histogram() {
         each_device("command_stage_histograms", |name, _, device| {
@@ -1973,17 +1975,44 @@ pub(crate) mod on_device {
                 ]
                 .map(|histogram| histogram.iter().sum::<u64>())
             };
-            let before = sums(counters.metrics());
+            let nanos = |m: crate::Metrics| {
+                [
+                    m.commit_to_scheduled_nanos,
+                    m.scheduled_to_gpu_start_nanos,
+                    m.gpu_run_nanos,
+                    m.gpu_end_to_handler_nanos,
+                ]
+            };
+            let before = counters.metrics();
+            let mut spans = [0; 3];
+            let mut handled_by = 0;
             for word in 1..=3 {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 fill(&command_buffer, &buffer, word);
                 command_buffer.commit().expect("a commit");
                 finished(name, &command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}");
+                let c = &command_buffer;
+                let (start, end) = (c.gpu_start_time(), c.gpu_end_time());
+                spans[0] += c.kernel_end_time() - c.kernel_start_time();
+                spans[1] += start.saturating_sub(c.kernel_end_time());
+                spans[2] += end - start;
+                handled_by += host_time() - end;
             }
-            let after = sums(counters.metrics());
-            let added: Vec<u64> = after.iter().zip(before).map(|(a, b)| a - b).collect();
+            let after = counters.metrics();
+            let added: Vec<u64> = (sums(after).iter().zip(sums(before)))
+                .map(|(a, b)| a - b)
+                .collect();
             assert_eq!(added, [3; 4], "{name}: each histogram's counts added");
+            let added: Vec<u64> = (nanos(after).iter().zip(nanos(before)))
+                .map(|(a, b)| a - b)
+                .collect();
+            assert_eq!(added[..3], spans, "{name}: the stages' sums added");
+            assert!(
+                added[3] <= handled_by,
+                "{name}: GPU end to handlers {} past its bound {handled_by}",
+                added[3]
+            );
             drop((buffer, arena, queue, device));
         });
     }
