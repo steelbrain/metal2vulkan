@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 806 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7346 |
+| ledger rows (a case whose gap is recorded) | 7354 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2049,8 +2049,8 @@ A facts call answers many getters at once, and a side answers or refuses each of
 | `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `FunctionFacts` | 9 | 2 | `options`: `options`, 22 (22), 22; `device_is_the_cases`: `device`, 24 (24), 24 |
 | `LibraryFacts` | 4 | 1 | `device_is_the_cases`: `device`, 9 (9), 9 |
-| `ComputeStateFacts` | 6 | 3 | `label`: `label`, 5 (5), 5; `device_is_the_cases`: `device`, 5 (5), 5; `imageblock_memory_length`: `imageblock_memory_length`, 0 (0), 0 |
-| `RenderStateFacts` | 8 | 5 | `label`: `label`, 5 (5), 5; `device_is_the_cases`: `device`, 5 (5), 5; `max_total_threads_per_threadgroup`: `max_total_threads_per_threadgroup`, 4 (4), 4; `threadgroup_size_matches_tile_size`: `threadgroup_size_matches_tile_size`, 4 (4), 4; `required_threads_per_tile_threadgroup`: `required_threads_per_tile_threadgroup`, 4 (4), 4 |
+| `ComputeStateFacts` | 6 | 3 | `label`: `label`, 7 (7), 7; `device_is_the_cases`: `device`, 7 (7), 7; `imageblock_memory_length`: `imageblock_memory_length`, 0 (0), 0 |
+| `RenderStateFacts` | 8 | 5 | `label`: `label`, 7 (7), 7; `device_is_the_cases`: `device`, 7 (7), 7; `max_total_threads_per_threadgroup`: `max_total_threads_per_threadgroup`, 6 (6), 6; `threadgroup_size_matches_tile_size`: `threadgroup_size_matches_tile_size`, 6 (6), 6; `required_threads_per_tile_threadgroup`: `required_threads_per_tile_threadgroup`, 6 (6), 6 |
 | `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `EventRise` | 7 | 1 | `label`: `label`, 1 (1), 1 |
 
@@ -4859,8 +4859,16 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pipeline-facts-render-depth-stencil` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
 | `pipeline-facts-render-depth-stencil` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
 | `pipeline-facts-render-depth-stencil` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
-| `pipeline-facts-render-two-attachments` | Gap::IndirectCommandBuffers: the case's state asks for supportIndirectCommandBuffers, and rt makes no state for indirect command buffers, so the case stops at i… |
-| `pipeline-facts-render-multisampled` | Gap::IndirectCommandBuffers: the case's state asks for supportIndirectCommandBuffers, and rt makes no state for indirect command buffers, so the case stops at i… |
+| `pipeline-facts-render-two-attachments` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
+| `pipeline-facts-render-two-attachments` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
+| `pipeline-facts-render-two-attachments` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
+| `pipeline-facts-render-two-attachments` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
+| `pipeline-facts-render-two-attachments` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
+| `pipeline-facts-render-multisampled` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
+| `pipeline-facts-render-multisampled` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
+| `pipeline-facts-render-multisampled` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
+| `pipeline-facts-render-multisampled` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
+| `pipeline-facts-render-multisampled` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
 | `pipeline-facts-render-multisampled-direct` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
 | `pipeline-facts-render-multisampled-direct` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
 | `pipeline-facts-render-multisampled-direct` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
@@ -7352,11 +7360,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `indirect-compute-commands-residency-usage` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
 | `indirect-compute-commands-stage-in-stride` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
 | `indirect-mesh-commands-object-threadgroup-lengths` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no mesh pipeline, mesh draw or vertex amplificat… |
-| `indirect-render-commands-drawn` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
-| `indirect-render-commands-executed` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
-| `indirect-render-commands-inherited-state` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
+| `indirect-render-commands-drawn` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect command buffer). The rt side of the … |
+| `indirect-render-commands-executed` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect command buffer). The rt side of the … |
+| `indirect-render-commands-inherited-state` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect command buffer). The rt side of the … |
 | `indirect-render-commands-patch-draws` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
-| `indirect-render-commands-under-the-pass-state` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
+| `indirect-render-commands-under-the-pass-state` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect command buffer). The rt side of the … |
 | `indirect-render-commands-vertex-stride` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
 | `library-from-data` | refused: the consumer's own (MTLBinaryArchive, binaryArchives). The consumer keeps its binary archives in its own bundle: the device's archive holds only each a… |
 | `mesh-commands-own-state` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no mesh pipeline, mesh draw or vertex amplificat… |
