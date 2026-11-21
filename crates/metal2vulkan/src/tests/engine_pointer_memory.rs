@@ -2190,17 +2190,16 @@ fn a_wide_pointers_bits_through_a_cell_are_its_guest_address() {
                 assert_eq!(status[StatusWord::ResidentMisses.index() as usize], 0);
             }
         }
-        for stem in ["runtime-floor without bufferDeviceAddress"] {
-            let p = profile_without("runtime-floor", true, &[VkFeature::BufferDeviceAddress]);
-            match typed_module_with(&bc, &name, &p, &LowerInputs::new()) {
-                Err(crate::error::Error::Unsupported(u)) => assert_eq!(
-                    u.feature,
-                    crate::error::Feature::DereferenceLoadedPointer,
-                    "{shape} {stem}: {u:?}"
-                ),
-                Err(e) => panic!("{shape} {stem}: {e}"),
-                Ok(_) => panic!("{shape} {stem}: a loaded pointer on Profile F"),
-            }
+        let stem = "runtime-floor without bufferDeviceAddress";
+        let p = profile_without("runtime-floor", true, &[VkFeature::BufferDeviceAddress]);
+        match typed_module_with(&bc, &name, &p, &LowerInputs::new()) {
+            Err(crate::error::Error::Unsupported(u)) => assert_eq!(
+                u.feature,
+                crate::error::Feature::DereferenceLoadedPointer,
+                "{shape} {stem}: {u:?}"
+            ),
+            Err(e) => panic!("{shape} {stem}: {e}"),
+            Ok(_) => panic!("{shape} {stem}: a loaded pointer on Profile F"),
         }
     }
 }

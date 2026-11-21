@@ -851,21 +851,20 @@ fn profile_f_refuses_a_pointer_made_from_an_integer() {
     let Some(bc) = assemble("from_int", &kernel("from_int", 2, body, "")) else {
         return;
     };
-    for stem in [PROFILE_F] {
-        let p = profile(stem);
-        let e = compile(&bc, "from_int", &p).expect_err("refused");
-        let Error::Unsupported(u) = e else {
-            panic!("{stem}: {e:?}");
-        };
-        assert_eq!(
-            (u.feature, u.needs),
-            (
-                Feature::DereferenceLoadedPointer,
-                Needs::AnyOf(vec![p.addressed_needs()])
-            ),
-            "{stem}"
-        );
-    }
+    let stem = PROFILE_F;
+    let p = profile(stem);
+    let e = compile(&bc, "from_int", &p).expect_err("refused");
+    let Error::Unsupported(u) = e else {
+        panic!("{stem}: {e:?}");
+    };
+    assert_eq!(
+        (u.feature, u.needs),
+        (
+            Feature::DereferenceLoadedPointer,
+            Needs::AnyOf(vec![p.addressed_needs()])
+        ),
+        "{stem}"
+    );
 }
 
 /// The null root is a device or constant pointer's. A threadgroup or private pointer merged with

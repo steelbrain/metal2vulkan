@@ -69,17 +69,16 @@ fn nvidia_declares_the_shadow_and_a_device_without_the_interlock_names_both_ways
             Capability::Feature(VkFeature::FragmentStoresAndAtomics),
         ]
     );
-    for stem in ["runtime-floor"] {
-        let a = alternatives(device_form(&profile(stem, &[]), false).expect_err(stem));
-        assert_eq!(a.len(), 2, "{stem}");
-        assert_eq!(a[0], ext, "{stem}");
-        assert!(
-            a[1].contains(&Capability::Feature(
-                VkFeature::FragmentShaderPixelInterlock
-            )),
-            "{stem}: {a:?}"
-        );
-    }
+    let stem = "runtime-floor";
+    let a = alternatives(device_form(&profile(stem, &[]), false).expect_err(stem));
+    assert_eq!(a.len(), 2, "{stem}");
+    assert_eq!(a[0], ext, "{stem}");
+    assert!(
+        a[1].contains(&Capability::Feature(
+            VkFeature::FragmentShaderPixelInterlock
+        )),
+        "{stem}: {a:?}"
+    );
 }
 
 /// The word's fields sit where `PushField::ShadowStencilState` states, each masked to its width.

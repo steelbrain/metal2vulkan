@@ -1001,13 +1001,13 @@ fn texture_atomic_max_is_an_image_atomic() {
                     Feature::Format,
                     crate::error::Capability::Format { format, usage },
                 );
-                match compile(&bc, "k", &p) {
+                match compile(&bc, "k", p) {
                     Err(Error::Unsupported(u)) => assert_eq!(u.needs, want.needs, "{what}"),
                     other => panic!("{what}: {:?}", other.map(|_| ())),
                 }
                 continue;
             }
-            let a = ok(compile(&bc, "k", &p), &p, &what);
+            let a = ok(compile(&bc, "k", p), p, &what);
             let guarded = !p.fields().images.robust_image_access;
             if guarded {
                 guarded_n += 1;
