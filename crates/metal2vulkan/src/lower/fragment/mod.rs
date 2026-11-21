@@ -264,7 +264,7 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     if cx.stage == Stage::Fragment && counts_active_lanes(cx) {
         cx.precision.insert(PrecisionNote::QuadsSplitByClipping);
     }
-    let looped = coverage::finish(cx)?;
+    coverage::finish(cx)?;
     let interlock = if rog::declared(cx) {
         Some(rog::mode(cx)?)
     } else {

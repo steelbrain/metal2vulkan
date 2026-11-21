@@ -982,20 +982,6 @@ impl Blend {
             .flatten()
             .any(|a| nodes(a).into_iter().any(reads_constant))
     }
-
-    /// Whether the blend reads the second source (the function's index-1 output).
-    pub fn reads_second(&self) -> bool {
-        let second = |n: Node| {
-            matches!(
-                n,
-                Node::Atom(Atom::S1 | Atom::S1a) | Node::OneMinus(Atom::S1 | Atom::S1a)
-            )
-        };
-        [&self.color, &self.alpha]
-            .into_iter()
-            .flatten()
-            .any(|a| nodes(a).into_iter().any(second))
-    }
 }
 
 /// Whether `n` reads the blend color.

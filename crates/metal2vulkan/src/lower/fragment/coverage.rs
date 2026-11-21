@@ -238,9 +238,9 @@ fn most_samples(limits: &crate::device::Limits) -> u32 {
 /// derivative, implicit-LOD sample, quad or simdgroup operation, or barrier, refuses the loop. A
 /// looping function is refused here; any other records in its interface how link treats it
 /// (`StageIo::coverage_loop`).
-pub(super) fn finish(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
+pub(super) fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let Some(plan) = cx.families.fragment.coverage else {
-        return Ok(false);
+        return Ok(());
     };
     let late = if !cx.families.fragment.discards.is_empty() {
         Some(CoverageLoopRefusal::Discard)
@@ -262,7 +262,7 @@ pub(super) fn finish(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
         (false, None) => CoverageLoop::Unlooped,
         (false, Some(r)) => CoverageLoop::Refused(r),
     };
-    Ok(plan.looped)
+    Ok(())
 }
 
 /// Declare the `Private u32` the loop hands each pass its sample index in.
