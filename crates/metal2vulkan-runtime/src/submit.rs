@@ -23,7 +23,8 @@
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
 //! semaphore, which the completion thread follows in commit order. A command buffer that takes no
-//! submission of its own (one with nothing for the GPU, or one ended with an error) and finds a
+//! submission of its own (one with nothing for the GPU that no copy-in waits for, or one ended
+//! with an error) and finds a
 //! group held joins it, and the group goes at once: what it retires behind is then submitted, so
 //! its completion waits on nothing that only a later completion or wait would send.
 //!
@@ -660,9 +661,9 @@ impl Work {
 
     /// `didModifyRange:` of a Managed buffer with a device copy: the consumer's bytes
     /// `start..end` of `buffer` changed. The range is only named, merged with the buffer's others
-    /// where they overlap or touch, holding the buffer weakly; the next commit of a command buffer
-    /// with commands copies it in ([`capture`](Self::capture)) where the buffer still lives. It
-    /// allocates nothing.
+    /// where they overlap or touch, holding the buffer weakly; the next commit, of a command
+    /// buffer with commands or none, copies it in ([`capture`](Self::capture)) where the buffer
+    /// still lives. It allocates nothing.
     ///
     /// Err: [`Error::Quiesced`].
     pub(crate) fn modify(
@@ -679,8 +680,8 @@ impl Work {
         Ok(())
     }
 
-    /// At a commit of a command buffer with commands, on the committing thread, under the work
-    /// lock `state`, which it keeps: takes every Managed buffer's range named since the last
+    /// At every commit, with commands or none, on the committing thread, under the work lock
+    /// `state`, which it keeps: takes every Managed buffer's range named since the last
     /// capture (`crate::capture`) into one copy-in, GPU copies from the consumers' blocks into the
     /// device copies, recorded into a command buffer of its own ([`capture::copy_in`]); none
     /// where every buffer named is gone. It waits at the committing command buffer's number, the
@@ -1512,8 +1513,9 @@ impl WorkState {
             return Step::Idle;
         };
         // A command buffer with nothing for the GPU takes no submission: it is scheduled now, and
-        // completes with its queue's work before it.
-        if pending.gpu.is_empty() {
+        // completes with its queue's work before it. One that a copy-in waits for goes on below,
+        // as one with commands does, so the copy-in is its submission and it completes after it.
+        if pending.gpu.is_empty() && !self.changes.captured.waits_for(pending.seq) {
             if let Some(Entry {
                 cb,
                 pending: Some(mut pending),

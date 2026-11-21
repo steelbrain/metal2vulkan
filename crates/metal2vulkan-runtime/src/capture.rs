@@ -1,7 +1,7 @@
 //! A Managed buffer's changed ranges, copied in at the commit: where a Managed buffer has a device
 //! copy (a device whose Vulkan device type is neither integrated nor CPU), `didModifyRange:` only
-//! names a range ([`Changes::add`]), and the next commit on any queue of a command buffer with
-//! commands takes every range named since the last such commit, once each
+//! names a range ([`Changes::add`]), and the next commit on any queue, of a command buffer with
+//! commands or none, takes every range named since the last commit, once each
 //! ([`Work::capture`](crate::submit::Work::capture)). Its copy-in ([`copy_in`]) is a command
 //! buffer of its own, [`CopyIn`]: GPU copies of each range from the consumer's block into the
 //! device copy, after the copies back owed to the textures over the ranges in images of their own
@@ -9,10 +9,12 @@
 //! [`Captured`] at the capturing commit's number, a point in the commit order, and the first
 //! command buffer submitted whose commit number is at or after it takes it ([`taker`]): it goes in
 //! that command buffer's submission, as a part of its own ahead of its commands and outside its
-//! waits. A command buffer committed before the capture leaves it pending, so it never goes ahead
-//! of older work of the queue that may write the range. The submission keeps each consumer's
-//! block and device copy until it retires. A copy-in records no barrier before its copies: the one
-//! that ends every earlier segment, upload, fill and copy-in on the queue puts every earlier
+//! waits. A command buffer with nothing for the GPU that it waits for ([`Captured::waits_for`])
+//! takes a submission for it alone, and completes once the copies have run. A command buffer
+//! committed before the capture leaves it pending, so it never goes ahead of older work of the
+//! queue that may write the range. The submission keeps each consumer's block and device copy
+//! until it retires. A copy-in records no barrier before its copies: the one that ends every
+//! earlier segment, upload, fill and copy-in on the queue puts every earlier
 //! command first, as it does for a segment (`record::end`), and the submission that carries it
 //! makes the host's writes before it visible to the copies (Vulkan's host write ordering
 //! guarantee).
@@ -162,6 +164,12 @@ impl<C> Captured<C> {
             }
         }
         taken
+    }
+
+    /// Whether a copy-in waits for the command buffer numbered `number`: the oldest, captured at
+    /// or before its commit, goes in that command buffer's submission ([`taker`]).
+    pub(crate) fn waits_for(&self, number: u64) -> bool {
+        (self.0.front()).is_some_and(|&(captured, _)| taker(captured, &[number]).is_some())
     }
 }
 

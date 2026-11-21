@@ -102,6 +102,13 @@ fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_ca
         "the first at or after it"
     );
     assert!(captured.take(&[12]).is_empty(), "each goes once");
+    // A command buffer with nothing for the GPU takes a submission only where one waits for it.
+    assert!(!captured.waits_for(12), "none waits");
+    captured.push(13, "thirteen");
+    assert!(!captured.waits_for(12), "not for an older one");
+    assert!(captured.waits_for(13), "for its capturer");
+    assert!(captured.waits_for(15), "for a later one, its capturer held");
+    assert_eq!(captured.take(&[13]), [(0, "thirteen")]);
     // Two pending go ahead of the same command buffer, in their order.
     captured.push(13, "thirteen");
     captured.push(14, "fourteen");

@@ -2759,13 +2759,18 @@ named states the rule in full.
 - **The runtime's Managed copies read the consumer's bytes when the GPU reaches them**
   (`metal2vulkan-runtime`'s `Buffer::did_modify_range` and `Texture::upload_region`). A Managed
   buffer with a device copy (on a device that is neither integrated nor a CPU) takes its named
-  ranges into that copy at the next commit of a command buffer with commands, on any queue, by
-  device copies ahead of that command buffer's commands; a Managed texture's uploaded region is one
+  ranges into that copy at the next commit of a command buffer, with commands or none, on any
+  queue, by device copies ahead of that command buffer's commands; a Managed texture's uploaded region is one
   device copy from its named bytes into its image, ahead of every command buffer committed after the
   call on every queue. The copy reads the bytes as they are when the GPU runs it, so a write the
   consumer makes after the commit and before then may be seen. Metal leaves it undefined: an Apple
   M3 and an Intel UHD 630 take the bytes when the GPU reads them, an AMD Radeon Pro 5300M at the
-  commit.
+  commit. That 5300M takes a named range at the first commit whose encoder binds its buffer (a
+  dispatch of a zero grid included) and none at a commit that binds nothing; the runtime takes it
+  at the next commit of any command buffer: the same commit where that one binds the buffer, an
+  earlier one where it binds nothing, and never a later one. Only a write made after that earlier
+  commit without naming it again can tell them apart, and Metal leaves its bytes undefined for
+  the GPU.
 
 **Function constants**
 

@@ -499,14 +499,18 @@ impl Buffer {
 
     /// `didModifyRange:`: the consumer changed `length` bytes from `start` of the buffer's bytes.
     /// Of a Managed buffer with a device copy, the range is named, and the next commit of a command
-    /// buffer with commands, on any queue, takes every range named since, once each, merged where
-    /// they overlap or touch: GPU copies from the consumer's block into the device copy, and into
-    /// the images of its textures over the range in images of their own, go ahead of that command
-    /// buffer's commands in its submission. So a command buffer committed after this call reads
-    /// the bytes the consumer wrote before its commit, as Metal owes. The copy reads the
-    /// consumer's bytes as it runs, so a write made after the commit may reach it, where Metal
-    /// leaves the range undefined for the GPU. Of any other buffer it does nothing, as the GPU
-    /// reads the consumer's bytes. It allocates nothing.
+    /// buffer, with commands or none, on any queue, takes every range named since, once each,
+    /// merged where they overlap or touch: GPU copies from the consumer's block into the device
+    /// copy, and into the images of its textures over the range in images of their own, go ahead
+    /// of that command buffer's commands in its submission. One with nothing for the GPU (no
+    /// commands, or only dispatches that record none) submits the copies alone and completes after
+    /// them. So a command buffer committed after this call reads the bytes the consumer wrote
+    /// before its commit, as Metal owes. Metal on a discrete Mac GPU (an AMD Radeon Pro 5300M)
+    /// takes a named range at the first commit whose encoder binds its buffer; this takes it at
+    /// the next commit of any command buffer, the same commit where that one binds the buffer, and
+    /// never a later one. The copy reads the consumer's bytes as it runs, so a write made after the
+    /// commit may reach it, where Metal leaves the range undefined for the GPU. Of any other
+    /// buffer it does nothing, as the GPU reads the consumer's bytes. It allocates nothing.
     ///
     /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
     /// [`Error::Quiesced`].

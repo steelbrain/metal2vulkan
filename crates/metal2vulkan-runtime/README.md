@@ -415,14 +415,18 @@ in its memory.
   named as `did_modify_range` names a range.
   `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
   the buffer), merged with the buffer's others where they overlap or touch, and submits and
-  allocates nothing. The next commit of a command buffer with commands, on any queue, takes every
-  range named since, once each: GPU copies from the consumer's block into the device copy,
-  recorded at the commit into a command buffer of their own. It goes in the submission of the
-  first command buffer committed at or after that commit that the device submits, whichever queue
-  and whichever waits held the committing one, as a part of its own ahead of that command
+  allocates nothing. The next commit of a command buffer, with commands or none, on any queue,
+  takes every range named since, once each: GPU copies from the consumer's block into the device
+  copy, recorded at the commit into a command buffer of their own. It goes in the submission of
+  the first command buffer committed at or after that commit that the device submits, whichever
+  queue and whichever waits held the committing one, as a part of its own ahead of that command
   buffer's commands and outside its waits, after every earlier command on the device, which the
   barrier ending each earlier command buffer orders; the copies record one barrier, after them.
-  A command buffer committed before it never takes it. The copy runs when that submission
+  A command buffer with nothing for the GPU (no commands, or only dispatches that record none: a
+  kernel that writes no memory, or a grid with no thread) that reaches the submit thread while
+  the copies wait for it takes a submission of them alone, and completes once they have run, its
+  GPU start and end one time as for any command buffer with nothing for the GPU. A command buffer
+  committed before it never takes it. The copy runs when that submission
   reaches the GPU, so every command buffer committed after a range is named reads the bytes the
   consumer wrote before the naming, as Metal's `didModifyRange:` asks; a write made after the
   commit may reach it, and so may a command buffer committed before that runs after a later one,
@@ -1673,7 +1677,9 @@ made, with no lock, and never rewritten for layouts.
   segments hold no commands, no event wait and no event signal takes no submission: the submit
   thread schedules it as it reaches it, and it completes with its queue's command buffer before
   it, in flight, or at once where that one has completed. Where that one is in a group held, it
-  joins the group, which goes at once, so its completion waits only on submitted work.
+  joins the group, which goes at once, so its completion waits only on submitted work. One that
+  a Managed buffer's copy-in waits for as it reaches it ("Memory blocks and buffers" above) takes
+  the copy-in as its submission instead, and completes after it.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
   its submission goes to the driver (one that presents a drawable: after, before the completion
   thread learns of it; one that ends without a submission: once it ends, before it retires), with
@@ -1729,7 +1735,7 @@ made, with no lock, and never rewritten for layouts.
   two timestamps' own span, and later command buffers keep their order. Mesa's drivers read the
   two clocks in turn, in the order asked, the GPU's first, so a calibration's host time trails
   its GPU tick by the time between the reads, and each completion bounds it from above. A command
-  buffer that took no submission writes no
+  buffer with nothing for the GPU, whether it took no submission or a Managed copy-in's, writes no
   query: its `gpu_start_time` and `gpu_end_time` are one time, never 0: the latest `gpu_end_time`
   of its queue's command buffers before it, or its `kernel_end_time` where that is later, the shape Metal
   reports for a command buffer that does no work. A command buffer's GPU times so fall between

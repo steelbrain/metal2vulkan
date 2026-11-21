@@ -280,7 +280,8 @@ pub(crate) struct Gpu {
 
 impl Gpu {
     /// Nothing for the GPU: no segment holds commands, a wait or a signal. Such a command buffer
-    /// records no timestamps, takes no submission and captures nothing.
+    /// records no timestamps, and takes no submission unless a copy-in waits for it
+    /// (`crate::capture`): the copy-in is then its submission.
     pub(crate) fn is_empty(&self) -> bool {
         (self.segments.iter()).all(|segment| {
             segment.command.is_none()
@@ -626,11 +627,11 @@ impl CommandBuffer {
         if work.closed() {
             return Err(Error::Quiesced);
         }
-        // With commands, it captures the Managed buffers' ranges named since the last capture,
-        // at its number in the commit order (`crate::capture`); one with none leaves them for the
-        // next. A commit that fails after its capture leaves the copy-in at that number.
-        let empty = self.state().open()?.nothing_for_gpu();
-        let mut work = match empty || work.lost() {
+        // With commands or none, it captures the Managed buffers' ranges named since the last
+        // capture, at its number in the commit order (`crate::capture`). A commit that fails
+        // after its capture leaves the copy-in at that number.
+        self.state().open()?;
+        let mut work = match work.lost() {
             true => work,
             false => core.work.capture(&core, work)?,
         };
