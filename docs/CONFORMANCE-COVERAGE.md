@@ -38,7 +38,7 @@ Its limits, measured rather than asserted:
 | share of the reachable exercised | 88% |
 | of those exercised, no case reaching it loosens anything | 325 |
 | of those exercised, a case reaching it loosens some site | 220 |
-| case modules | 180 |
+| case modules | 181 |
 | committed recordings | 1322 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
@@ -500,7 +500,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 
 | | |
 |---|---|
-| case modules | 180 |
+| case modules | 181 |
 | committed recordings | 1322 |
 | recorded runs behind a case, median | 3 |
 | recorded runs, least and most | 1 and 30 |
@@ -703,6 +703,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `vertex_fetch_reach` | 1 | 1 | every field | 105 |
 | `vertex_formats` | 4 | 4 | every field | 104 |
 | `vertex_step_rate` | 1 | 1 | every field | 104 |
+| `viewport_cuts` | 0 | 0 | every field | 0 |
 | `visibility` | 16 | 16 | 1 tolerance(s): `AcceptedDifference` | 130 |
 | `visible_tables` | 18 | 18 | every field | 38 |
 | `wide_int_attributes` | 2 | 2 | every field | 104 |

@@ -208,6 +208,7 @@ pub mod vertex_constant_step;
 pub mod vertex_fetch_reach;
 pub mod vertex_formats;
 pub mod vertex_step_rate;
+pub mod viewport_cuts;
 pub mod visibility;
 pub mod visible_tables;
 pub mod wide_int_attributes;
@@ -632,6 +633,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(nan_integer_conversions::NanIntegerConversions));
     cases.push(Box::new(function_constants_half3::FunctionConstantsHalf3));
     cases.push(Box::new(bicubic_texel_classes::BicubicTexelClasses));
+    cases.extend(viewport_cuts::all());
     cases
 }
 
