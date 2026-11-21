@@ -17,6 +17,7 @@ mod profiles;
 mod render;
 mod runtime;
 mod runtime_probe;
+mod runtime_render;
 mod runtime_textures;
 mod sparse_images;
 pub use acceptance::create_acceptance_pipeline;
@@ -31,6 +32,7 @@ pub use runtime::execute_runtime;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 pub use runtime::{make_kernel, on_runtime_device};
 pub use runtime_probe::probe_runtime;
+pub use runtime_render::execute_runtime_render;
 
 /// Whether the profiles layer can present committed profile `stem` ([`profiles::presentable`]).
 pub fn check_presentable(stem: &str) -> Result<(), String> {

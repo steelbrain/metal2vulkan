@@ -467,7 +467,17 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   (`use_resource`). A multisampled, sparse, texture-buffer or cube-array texture, or a 32-bit
   float depth (which the runtime takes no upload of), keeps the case on the executor's own
   context. A pixel format the runtime makes no image of on the device records `not_enabled`, as
-  the executor's own context records a format its query lacks. Its device worker enables the
+  the executor's own context records a format its query lacks. A vertex or fragment case of one
+  sample draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
+  stage's buffers, bound textures and samplers, function constants and linked functions, its
+  generated companion, its vertex buffers at static strides, its color targets (Shared 2D
+  textures, loaded and stored by the pass), the oracle's depth-stencil state, cull mode and
+  winding, and one direct or indexed draw of primitives, observing a buffer, a texture, a color
+  target or nothing. A rasterization-disabled vertex case renders into the oracle's 1x1 `R8Unorm`
+  attachment. A depth/stencil attachment, more samples, layered rendering, a dynamic vertex
+  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map or a
+  fragment pass with no color target (the runtime makes no pass without an attachment) keeps the
+  case on the executor's own context. Its device worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
   Its row records the state's precision notes and the runtime's fingerprint, and no SPIR-V,

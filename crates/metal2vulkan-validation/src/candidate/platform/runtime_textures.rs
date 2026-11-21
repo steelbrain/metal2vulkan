@@ -16,8 +16,10 @@
 
 use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
+use crate::case::{ArgumentBufferSamplerResource, SamplerResource};
 use crate::check::admission::ExecutorError;
 use crate::literal::LiteralTexture;
+use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 
@@ -47,17 +49,71 @@ impl Bound {
     }
 }
 
-/// Make `case`'s bound and argument-buffer textures and samplers on `device`, with the usages
-/// `kernel` declares, as the module documentation says. The run already holds its grant of the
-/// whole sampler range; `error` maps the runtime's errors as the run's.
+/// What one function of a run binds of textures and samplers, bound and in argument buffers,
+/// with the usage it declares of each texture.
+pub(super) struct Wanted<'a> {
+    pub(super) textures: &'a BTreeMap<u32, LiteralTexture>,
+    pub(super) samplers: &'a BTreeMap<u32, SamplerResource>,
+    pub(super) members: &'a BTreeMap<FieldKey, LiteralTexture>,
+    pub(super) member_samplers: &'a BTreeMap<FieldKey, ArgumentBufferSamplerResource>,
+    pub(super) texture_usages: &'a BTreeMap<u32, TextureUsage>,
+    pub(super) member_usages: &'a BTreeMap<FieldKey, TextureUsage>,
+}
+
+impl<'a> Wanted<'a> {
+    /// A kernel case's, with the usages `kernel` declares.
+    pub(super) fn of_kernel(case: &'a ComputeCase, kernel: &'a RuntimeKernel<'a>) -> Wanted<'a> {
+        Wanted {
+            textures: &case.textures,
+            samplers: &case.samplers,
+            members: &case.argument_buffer_textures,
+            member_samplers: &case.argument_buffer_samplers,
+            texture_usages: kernel.texture_usages,
+            member_usages: kernel.member_usages,
+        }
+    }
+}
+
+/// The indices a run's next textures and samplers take: textures up from the bottom of the
+/// texture class, samplers down from the top of the sampler class.
+pub(super) struct Indices {
+    texture: u32,
+    sampler: u32,
+}
+
+impl Indices {
+    /// A run's first.
+    pub(super) fn new() -> Indices {
+        Indices {
+            texture: rt::IndexClass::Texture.range().start,
+            sampler: rt::IndexClass::Sampler.range().end,
+        }
+    }
+
+    fn sampler(&mut self) -> Result<u32, ExecutorError> {
+        match self.sampler.checked_sub(1) {
+            Some(index) if index >= rt::IndexClass::Sampler.range().start => {
+                self.sampler = index;
+                Ok(index)
+            }
+            _ => Err(ExecutorError::Failed(
+                "the case binds more samplers than the sampler class holds".into(),
+            )),
+        }
+    }
+}
+
+/// Make `wanted`'s textures and samplers on `device` at the next of `indices`, as the module
+/// documentation says. The run already holds its grant of the whole sampler range; `error` maps
+/// the runtime's errors as the run's.
 pub(super) fn make(
     device: &rt::Device,
-    case: &ComputeCase,
-    kernel: &RuntimeKernel<'_>,
+    wanted: &Wanted<'_>,
+    indices: &mut Indices,
     error: impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Bound, ExecutorError> {
-    let first = rt::IndexClass::Texture.range().start;
-    let count = case.textures.len() + case.argument_buffer_textures.len();
+    let first = indices.texture;
+    let count = wanted.textures.len() + wanted.members.len();
     let grant = match u32::try_from(count) {
         Ok(0) => None,
         Ok(count) => Some(
@@ -71,10 +127,10 @@ pub(super) fn make(
             ))
         }
     };
-    let mut indices = first..;
+    let mut at = first..;
     let mut textures = BTreeMap::new();
-    for ((&binding, texture), index) in case.textures.iter().zip(&mut indices) {
-        let usage = kernel
+    for ((&binding, texture), index) in wanted.textures.iter().zip(&mut at) {
+        let usage = wanted
             .texture_usages
             .get(&binding)
             .copied()
@@ -87,8 +143,8 @@ pub(super) fn make(
         );
     }
     let mut members = BTreeMap::new();
-    for ((&key, texture), index) in case.argument_buffer_textures.iter().zip(&mut indices) {
-        let usage = kernel.member_usages.get(&key).copied().ok_or_else(|| {
+    for ((&key, texture), index) in wanted.members.iter().zip(&mut at) {
+        let usage = wanted.member_usages.get(&key).copied().ok_or_else(|| {
             ExecutorError::Failed(format!(
                 "argument-buffer texture {}+{} has no declared usage",
                 key.0, key.1
@@ -96,18 +152,19 @@ pub(super) fn make(
         })?;
         members.insert(key, made_texture(device, texture, usage, index, &error)?);
     }
-    let mut indices = rt::IndexClass::Sampler.range().rev();
+    indices.texture = at.start;
     let mut samplers = BTreeMap::new();
-    for ((&binding, sampler), index) in case.samplers.iter().zip(&mut indices) {
+    for (&binding, sampler) in wanted.samplers {
         let state = device
-            .new_sampler_state(&resources::sampler_descriptor(sampler), index)
+            .new_sampler_state(&resources::sampler_descriptor(sampler), indices.sampler()?)
             .map_err(|e| error(&format!("sampler {binding}"), e))?;
         samplers.insert(binding, state);
     }
     let mut member_samplers = BTreeMap::new();
-    for ((&key, sampler), index) in case.argument_buffer_samplers.iter().zip(&mut indices) {
+    for (&key, sampler) in wanted.member_samplers {
+        let descriptor = resources::argument_sampler_descriptor(sampler);
         let state = device
-            .new_sampler_state(&resources::argument_sampler_descriptor(sampler), index)
+            .new_sampler_state(&descriptor, indices.sampler()?)
             .map_err(|e| error(&format!("argument-buffer sampler {}+{}", key.0, key.1), e))?;
         member_samplers.insert(key, state);
     }

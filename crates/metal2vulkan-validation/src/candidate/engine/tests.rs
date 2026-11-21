@@ -2705,3 +2705,131 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         assert!(!runs_through_runtime(&authored, other), "{other:?}");
     }
 }
+
+/// The runtime draws a vertex or fragment case of one sample, its own stage's buffers, textures
+/// and samplers, static vertex strides, color targets, and one direct or indexed draw of
+/// primitives, observing a buffer, a texture, a color target or nothing; and a
+/// rasterization-disabled vertex case, which renders into the oracle's sink. A case with anything
+/// else (a depth/stencil attachment, more samples, layered rendering, a dynamic vertex stride, an
+/// argument-buffer member, an explicit imageblock, a depth observation, or a fragment pass with no
+/// color target, which the runtime makes no pass of) stays on the executor's own context.
+#[test]
+fn a_plain_draw_and_only_one_runs_through_the_runtime() {
+    use super::graphics::tests::two_stage_case;
+    use super::graphics::{ColorTarget, RenderCase, RenderOutput, VertexBuffer};
+    use crate::case::{AttributeFormat, TextureFormat};
+    use crate::literal::LiteralDepthStencil;
+    let authored = kernel_case();
+    let target = ColorTarget {
+        format: TextureFormat::Rgba8Unorm,
+        dimensions: [2, 2],
+        samples: 1,
+        bytes: vec![0; 16],
+    };
+    let plain = two_stage_case(
+        "v",
+        "f",
+        Vec::new(),
+        BTreeMap::from([(0, target.clone())]),
+        3,
+    );
+    assert!(runs_render_through_runtime(&authored, &plain));
+    let indexed = RenderCase {
+        draw: DrawCall::Indexed {
+            index_type: metal2vulkan::vk::IndexType::UINT16,
+            index_buffer: metal2vulkan::bind::IndexBufferRef::new(graphics::INDEX_BUFFER_TOKEN, 6),
+            index_count: 3,
+            index_offset: 0,
+            instance_count: 1,
+            base_vertex: 0,
+            base_instance: 0,
+        },
+        index_buffer: Some(vec![0; 6]),
+        output: RenderOutput::None,
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(&authored, &indexed));
+    let unrasterized = RenderCase {
+        fragment: None,
+        color_targets: BTreeMap::new(),
+        output: RenderOutput::Buffer {
+            stage: ShaderStage::Vertex,
+            binding: 0,
+            offset: 0,
+            length: 4,
+        },
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(&authored, &unrasterized));
+    let dynamic = VertexBuffer {
+        location: 0,
+        buffer_index: 30,
+        format: AttributeFormat::Float2,
+        stride: 8,
+        dynamic: true,
+        step: metal2vulkan::metal::VertexStepFunction::PerVertex,
+        bytes: vec![0; 24],
+    };
+    let mut member = plain.clone();
+    if let Some(fragment) = &mut member.fragment {
+        fragment
+            .resources
+            .argument_buffer_buffers
+            .insert((0, 0), vec![0; 16]);
+    }
+    let others = [
+        RenderCase {
+            depth_stencil: Some(LiteralDepthStencil {
+                dimensions: [2, 2],
+                samples: 1,
+                depth: Some(vec![0; 16]),
+                stencil: None,
+            }),
+            ..plain.clone()
+        },
+        RenderCase {
+            raster_sample_count: Some(4),
+            color_targets: BTreeMap::from([(
+                0,
+                ColorTarget {
+                    samples: 4,
+                    bytes: vec![0; 64],
+                    ..target.clone()
+                },
+            )]),
+            ..plain.clone()
+        },
+        RenderCase {
+            render_target_array_length: 1,
+            ..plain.clone()
+        },
+        RenderCase {
+            vertex_buffers: vec![dynamic],
+            ..plain.clone()
+        },
+        member,
+        RenderCase {
+            imageblock: Some(super::imageblock::Cells {
+                dimensions: [2, 2],
+                cell_bytes: 4,
+                bytes: vec![0; 16],
+            }),
+            ..plain.clone()
+        },
+        RenderCase {
+            output: RenderOutput::Depth {
+                origin: [0, 0],
+                dimensions: [1, 1],
+            },
+            ..plain.clone()
+        },
+        RenderCase {
+            color_targets: BTreeMap::new(),
+            output: RenderOutput::None,
+            ..plain.clone()
+        },
+    ];
+    for other in &others {
+        assert!(!runs_render_through_runtime(&authored, other), "{other:?}");
+    }
+}

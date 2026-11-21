@@ -84,8 +84,8 @@ use crate::worker::WorkerFailure;
 use base64::Engine as _;
 use metal2vulkan::bind::{
     BindShape, BindState, BoundAccelerationStructure, BoundBuffer, BufferRanges, Dispatch,
-    ExecutionStatus, FunctionTableWords, ImageblockSize, MetalInstance, ReplayVariant, StageTable,
-    StatusReport,
+    DrawCall, ExecutionStatus, FunctionTableWords, ImageblockSize, MetalInstance, ReplayVariant,
+    StageTable, StatusReport,
 };
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
@@ -124,7 +124,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v189";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v190";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1259,9 +1259,9 @@ fn runtime_texture(texture: &LiteralTexture) -> bool {
 fn runtime_buffers(
     authored: &AuthoredCase,
     reflection: &crate::air::reflect::ShaderInterface,
-    case: &ComputeCase,
+    buffers: &BTreeMap<u32, Vec<u8>>,
 ) -> BTreeMap<u32, Vec<u8>> {
-    case.buffers
+    buffers
         .iter()
         .map(|(&index, bytes)| {
             let bound = authored
@@ -1319,7 +1319,7 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
         Ok(reductions) => reductions,
         Err(error) => return RunAttempt::of(Err(error)),
     };
-    let buffers = runtime_buffers(&primary.case, &primary.reflection, compute);
+    let buffers = runtime_buffers(&primary.case, &primary.reflection, &compute.buffers);
     let texture_usages = runtime_texture_usages(&primary.case, &primary.interface);
     let member_usages = runtime_member_usages(&primary.case, &primary.interface);
     super::platform::execute_runtime(
@@ -1413,6 +1413,137 @@ pub struct RuntimeKernel<'a> {
     pub buffers: &'a BTreeMap<u32, Vec<u8>>,
     pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
     pub member_usages: &'a BTreeMap<argument_buffers::FieldKey, metal2vulkan::metal::TextureUsage>,
+    pub reductions: &'a std::collections::BTreeSet<&'static str>,
+}
+
+/// Whether `case`, mapped from `authored`, draws through the runtime
+/// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
+/// fragment case of one sample, its own stage's buffers, bound textures the runtime makes
+/// (`runtime_texture`) and bound samplers, function constants and linked functions, its vertex
+/// buffers at static strides, its color targets (a fragment case renders into at least one: the
+/// runtime makes no pass without an attachment, `Gap::RenderPass`), the encoder's depth-stencil
+/// state, cull mode and winding, and one direct or indexed draw of primitives, observing a buffer,
+/// a texture, a color target or nothing. Decided by the case's structure alone: every field the
+/// mapping fills is named here, so a new one is decided when it is added.
+pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::RenderCase) -> bool {
+    let graphics::RenderCase {
+        vertex,
+        fragment,
+        vertex_buffers,
+        color_targets,
+        depth_stencil,
+        depth_stencil_state: _,
+        render_target_array_length,
+        assembly,
+        draw,
+        index_buffer: _,
+        out_of_bounds,
+        cull_mode: _,
+        imageblock,
+        output,
+        companion: _,
+        rate_map_pass,
+        raster_sample_count,
+    } = case;
+    let bound = |function: &graphics::RenderFunction| {
+        let graphics::StageResources {
+            buffers: _,
+            argument_buffer_buffers,
+            argument_buffer_textures,
+            argument_buffer_samplers,
+            objects,
+            command_buffers,
+            textures,
+            samplers: _,
+            function_tables,
+        } = &function.resources;
+        argument_buffer_buffers.is_empty()
+            && argument_buffer_textures.is_empty()
+            && argument_buffer_samplers.is_empty()
+            && objects.is_empty()
+            && command_buffers.is_empty()
+            && textures.values().all(runtime_texture)
+            && function_tables.is_empty()
+    };
+    bound(vertex)
+        && fragment.as_ref().is_none_or(bound)
+        && (fragment.is_none() || !color_targets.is_empty())
+        && vertex_buffers.iter().all(|buffer| !buffer.dynamic)
+        && color_targets.values().all(|target| target.samples == 1)
+        && depth_stencil.is_none()
+        && *render_target_array_length == 0
+        && matches!(assembly, graphics::Assembly::Primitives(_))
+        && matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. })
+        && out_of_bounds.is_empty()
+        && imageblock.is_none()
+        && matches!(
+            output,
+            graphics::RenderOutput::None
+                | graphics::RenderOutput::Buffer { .. }
+                | graphics::RenderOutput::Texture { .. }
+                | graphics::RenderOutput::RenderTarget { .. }
+        )
+        && rate_map_pass.is_none()
+        && raster_sample_count.is_none()
+        && authored.intersection_function_tables.is_empty()
+}
+
+/// A draw through the runtime ([`runs_render_through_runtime`]) of `prepared`'s render case
+/// `render`: the row's AIR, its generated companion's, each module its own function links, its
+/// own stage's buffers as the oracle makes them ([`runtime_buffers`]), and the float reductions
+/// it executes ([`runtime_reductions`]), drawn by `platform::execute_runtime_render`.
+fn run_render_on_runtime(prepared: &PreparedCase, render: &graphics::RenderCase) -> RunAttempt {
+    let primary = &prepared.checked.primary;
+    let own = match RowSource::of_row(&primary.source).bitcode() {
+        Ok(own) => own,
+        Err(error) => return RunAttempt::of(Err(ExecutorError::Failed(error.to_string()))),
+    };
+    let companion = match render.companion.as_ref().map(Companion::opaque_bitcode) {
+        Some(Err(error)) => return RunAttempt::of(Err(ExecutorError::Failed(error))),
+        Some(Ok(bitcode)) => Some(bitcode),
+        None => None,
+    };
+    let reductions = match runtime_reductions(&primary.interface, &prepared.linked) {
+        Ok(reductions) => reductions,
+        Err(error) => return RunAttempt::of(Err(error)),
+    };
+    let function = match (render.companion_stage(), &render.fragment) {
+        (Some(ShaderStage::Vertex), Some(fragment)) => fragment,
+        _ => &render.vertex,
+    };
+    let buffers = runtime_buffers(
+        &primary.case,
+        &primary.reflection,
+        &function.resources.buffers,
+    );
+    let texture_usages = runtime_texture_usages(&primary.case, &primary.interface);
+    super::platform::execute_runtime_render(
+        prepared.device,
+        &primary.case.case_id,
+        render,
+        RuntimeDraw {
+            bitcode: &own,
+            companion: companion.as_deref(),
+            linked: &prepared.linked,
+            buffers: &buffers,
+            texture_usages: &texture_usages,
+            reductions: &reductions,
+        },
+    )
+}
+
+/// What a draw through the runtime makes its pipeline state and binds from, beside its mapped
+/// case: the row's AIR, its generated companion's (`None` for a rasterization-disabled vertex
+/// case), the modules its own function links, its own stage's buffers' bytes by Metal index (each
+/// bound buffer padded to its declared size, as the oracle makes it), the usage of each texture
+/// slot its own stage binds (`runtime_texture_usages`), and the float reductions it executes
+/// (`check::interface::float_reductions`).
+pub struct RuntimeDraw<'a> {
+    pub bitcode: &'a [u8],
+    pub companion: Option<&'a [u8]>,
+    pub linked: &'a [LinkedModule],
+    pub buffers: &'a BTreeMap<u32, Vec<u8>>,
+    pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 
@@ -2277,7 +2408,7 @@ pub struct ReplayTemplate {
 pub enum ChildCommand {
     Dispatch(Dispatch),
     Draw {
-        draw: metal2vulkan::bind::DrawCall,
+        draw: DrawCall,
         primitive: crate::case::Primitive,
     },
     ReplayVariant {
@@ -3098,6 +3229,15 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
             && super::requested_leg() == Leg::Stated
         {
             return run_on_runtime(prepared, compute);
+        }
+    }
+    if let Mapped::Render(render) = &prepared.mapped {
+        if backend == Backend::Vulkan
+            && runs_render_through_runtime(case, render)
+            && super::requested_restriction().is_none()
+            && super::requested_leg() == Leg::Stated
+        {
+            return run_render_on_runtime(prepared, render);
         }
     }
     let artifact = RefCell::new(artifact::CaseArtifact::default());

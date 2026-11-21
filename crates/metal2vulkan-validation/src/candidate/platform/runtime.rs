@@ -32,6 +32,7 @@
 //! `PrecisionNote::ReductionOrder` per operation, as the translator's census of the same
 //! operations does.
 
+use super::runtime_textures;
 use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
 use crate::candidate::engine::argument_buffers::{self, FieldKey};
 use crate::candidate::engine::{
@@ -79,15 +80,32 @@ pub fn execute_runtime(
     case: &ComputeCase,
     kernel: RuntimeKernel<'_>,
 ) -> RunAttempt {
-    // One log per process, at one path, so the layer writes this run's messages there whether it
-    // reads its variables at each instance or once; a log of an earlier run is gone first.
+    under_validation(|| {
+        attempt_on(device_type, EXECUTOR, |device, identity, environment| {
+            run(
+                device,
+                device_type,
+                case_id,
+                case,
+                &kernel,
+                identity,
+                environment,
+            )
+        })
+    })
+}
+
+/// The attempt `on` makes, under the validation layer: one log per process, at one path, so the
+/// layer writes this run's messages there whether it reads its variables at each instance or
+/// once, a log of an earlier run gone first. Any message the layer logged fails the attempt.
+pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) -> RunAttempt {
     let log = std::env::temp_dir().join(format!(
         "metal2vulkan-validation-runtime-{}.log",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&log);
     validate_process(&log);
-    let attempt = match on_device(device_type, case_id, case, &kernel) {
+    let attempt = match on() {
         Ok(attempt) => attempt,
         Err(error) => RunAttempt::of(Err(ExecutorError::Failed(error))),
     };
@@ -128,24 +146,16 @@ fn validate_process(log: &Path) {
     std::env::set_var("VK_KHRONOS_VALIDATION_LOG_FILENAME", log);
 }
 
-/// The run on the device of `device_type`, every object of it gone before this returns, and the
-/// runtime's device torn down. `Err` where no device of the kind opens under the layer.
-fn on_device(
+/// The attempt of `run` on the device of `device_type` for `executor`, every object of it gone
+/// before this returns, and the runtime's device torn down; a refusal names the device it opened.
+/// `Err` where no device of the kind opens under the layer.
+pub(super) fn attempt_on(
     device_type: DeviceType,
-    case_id: &str,
-    case: &ComputeCase,
-    kernel: &RuntimeKernel<'_>,
+    executor: &'static str,
+    run: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> Result<ComputeRun, ExecutorError>,
 ) -> Result<RunAttempt, String> {
-    opened(device_type, |device, identity, environment| {
-        let result = run(
-            device,
-            device_type,
-            case_id,
-            case,
-            kernel,
-            identity,
-            environment,
-        );
+    opened(device_type, executor, |device, identity, environment| {
+        let result = run(device, identity, environment);
         let refused_on = matches!(result, Err(ExecutorError::NotSupported(_))).then(|| RefusedOn {
             environment: environment.clone(),
             translator_fingerprint: runtime_fingerprint(),
@@ -155,11 +165,12 @@ fn on_device(
     })
 }
 
-/// `body` on the runtime's device of `device_type`, with the identity and environment a row
-/// records of it, every object of it gone before this returns, and the device torn down. `Err`
-/// where no device of the kind opens under the layer.
+/// `body` on the runtime's device of `device_type`, with the identity and environment a row of
+/// `executor` records of it, every object of it gone before this returns, and the device torn
+/// down. `Err` where no device of the kind opens under the layer.
 fn opened<T>(
     device_type: DeviceType,
+    executor: &'static str,
     body: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> T,
 ) -> Result<T, String> {
     if device_type == DeviceType::Gpu {
@@ -179,7 +190,7 @@ fn opened<T>(
                 identity.device
             ));
         }
-        let environment = environment(&identity, &tools);
+        let environment = environment(&identity, &tools, executor);
         let device = metal2vulkan_runtime::Device::new(&physical, rt::DeviceOptions::default())
             .map_err(|error| format!("the runtime's device on {}: {error}", identity.device))?;
         body(&device, &identity, &environment)
@@ -207,7 +218,7 @@ pub fn on_runtime_device<T>(
     ));
     let _ = std::fs::remove_file(&log);
     validate_process(&log);
-    let value = opened(device_type, |device, _, _| body(device));
+    let value = opened(device_type, EXECUTOR, |device, _, _| body(device));
     let messages = std::fs::read_to_string(&log);
     let _ = std::fs::remove_file(&log);
     match messages {
@@ -239,7 +250,7 @@ pub fn make_kernel(
 }
 
 /// What a row records of the device that ran it.
-struct Identity {
+pub(super) struct Identity {
     device: String,
     device_id: u32,
     vendor_id: u32,
@@ -306,10 +317,10 @@ fn select(
     ))
 }
 
-/// The environment of a row on the device `identity` names, with the tools active on it: its
-/// identity as the executor's own context records it, the executor, the validation it ran under,
-/// no profiles-layer restriction, and the stated leg.
-fn environment(identity: &Identity, tools: &[ActiveTool]) -> serde_json::Value {
+/// The environment of a row of `executor` on the device `identity` names, with the tools active
+/// on it: its identity as the executor's own context records it, the executor, the validation it
+/// ran under, no profiles-layer restriction, and the stated leg.
+fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> serde_json::Value {
     serde_json::json!({
         "device": identity.device,
         "device_id": identity.device_id,
@@ -322,7 +333,7 @@ fn environment(identity: &Identity, tools: &[ActiveTool]) -> serde_json::Value {
         "architecture": std::env::consts::ARCH,
         "os": std::env::consts::OS,
         "tools": tools,
-        "executor": EXECUTOR,
+        "executor": executor,
         "layers": RECORDED_LAYERS,
         "synchronization_validation": true,
         "profiles_layer": null,
@@ -334,7 +345,7 @@ fn environment(identity: &Identity, tools: &[ActiveTool]) -> serde_json::Value {
 /// format the runtime makes no image of on this device as the device's (`NotEnabled`, as the
 /// executor's own context records a format its query lacks), every other error a failure
 /// ([`execute_runtime`]).
-fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
+pub(super) fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
     match error {
         rt::Error::Translation(error) => product_refusal(&error),
         rt::Error::Unsupported(gap @ rt::Gap::TextureFormat { .. }) => {
@@ -359,18 +370,7 @@ fn run(
     identity: &Identity,
     environment: &serde_json::Value,
 ) -> Result<ComputeRun, ExecutorError> {
-    // Each constexpr sampler the kernel numbers takes an index of the device's sampler range from
-    // its bottom, one per state words, as Metal gives equal samplers one ID; a read's or a
-    // write's takes nothing at its index. Each bound sampler takes one from its top
-    // (`runtime_textures`).
-    let range = rt::IndexClass::Sampler.range();
-    let _grant = device
-        .grant_indices(
-            rt::IndexClass::Sampler,
-            range.start,
-            range.end - range.start,
-        )
-        .map_err(|error| runtime_error("grant the sampler indices", error))?;
+    let _grant = sampler_grant(device)?;
     let descriptor = descriptor(case, kernel)?;
     let (threads_per_group, dispatch) = match case.dispatch {
         Dispatch::Threads {
@@ -393,7 +393,9 @@ fn run(
         .map(|(&index, &length)| (index, length))
         .collect();
     let before = device.counters().metrics().pipeline_creation_nanos;
-    let state = make(device, &descriptor)?;
+    let state = made_within(|numbered| {
+        device.new_compute_pipeline_state(&descriptor, |samplers| numbered(samplers))
+    })?;
     // Every pipeline the dispatch runs, made before anything is submitted.
     state.prepare_dispatch(dispatch, threads_per_group, &lengths);
     let created = device
@@ -415,7 +417,12 @@ fn run(
             Ok(((owner, field), Placed::new(device, &what, bytes)?))
         })
         .collect::<Result<BTreeMap<FieldKey, Placed>, ExecutorError>>()?;
-    let bound = super::runtime_textures::make(device, case, kernel, runtime_error)?;
+    let bound = runtime_textures::make(
+        device,
+        &runtime_textures::Wanted::of_kernel(case, kernel),
+        &mut runtime_textures::Indices::new(),
+        runtime_error,
+    )?;
     let mut words = bound.words();
     words.extend(
         members
@@ -463,7 +470,7 @@ fn run(
                     "output texture {binding} is not bound"
                 )));
             };
-            super::runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
+            runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
         }
         ComputeOutput::ArgumentBufferTexture {
             owner,
@@ -480,7 +487,7 @@ fn run(
                     "output argument-buffer texture {owner}+{field_offset} is not made"
                 )));
             };
-            super::runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
+            runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
         }
         output => {
             let finals = buffers
@@ -502,6 +509,32 @@ fn run(
             .map_err(ExecutorError::Failed)?
         }
     };
+    Ok(ran(
+        identity,
+        environment,
+        output,
+        ModuleCensus {
+            stage: Stage::Kernel,
+            subgroup: None,
+            strategies: kernel
+                .reductions
+                .iter()
+                .map(|&name| name.to_owned())
+                .collect(),
+            precision: state.precision_notes().into_iter().collect(),
+            containment: None,
+        },
+    ))
+}
+
+/// The row of a run on the device `identity` names that read `output`, with `module`'s census:
+/// what the runtime answers (the module documentation), in the stated leg with no restriction.
+pub(super) fn ran(
+    identity: &Identity,
+    environment: &serde_json::Value,
+    output: Vec<u8>,
+    module: ModuleCensus,
+) -> ComputeRun {
     let census = ExecutedCensus {
         out_of_bounds: None,
         rate_map_pass: None,
@@ -514,20 +547,10 @@ fn run(
         product: TRANSLATOR_FINGERPRINT.into(),
         restricted_to: None,
         leg: Some(Leg::Stated),
-        modules: vec![ModuleCensus {
-            stage: Stage::Kernel,
-            subgroup: None,
-            strategies: kernel
-                .reductions
-                .iter()
-                .map(|&name| name.to_owned())
-                .collect(),
-            precision: state.precision_notes().into_iter().collect(),
-            containment: None,
-        }],
+        modules: vec![module],
         artifact: None,
     };
-    Ok(ComputeRun {
+    ComputeRun {
         output,
         spv_sha256: None,
         translator_fingerprint: runtime_fingerprint(),
@@ -535,7 +558,22 @@ fn run(
         status: None,
         comparison: census.comparison_class(),
         census,
-    })
+    }
+}
+
+/// The run's grant of the device's whole sampler range. Each constexpr sampler a pipeline
+/// numbers takes an index of it from its bottom, one per state words, as Metal gives equal
+/// samplers one ID; a read's or a write's takes nothing at its index ([`made_within`]). Each
+/// sampler the run makes takes one from its top (`runtime_textures`).
+pub(super) fn sampler_grant(device: &rt::Device) -> Result<rt::IndexGrant, ExecutorError> {
+    let range = rt::IndexClass::Sampler.range();
+    device
+        .grant_indices(
+            rt::IndexClass::Sampler,
+            range.start,
+            range.end - range.start,
+        )
+        .map_err(|error| runtime_error("grant the sampler indices", error))
 }
 
 /// The case's `MTLComputePipelineDescriptor` as the Metal oracle makes it
@@ -570,13 +608,16 @@ fn descriptor(
     )))
 }
 
-/// `descriptor`'s state on `device`, made within the per-attempt ceilings: its peak live
-/// allocations within 500 MiB (an allocation past it ends the process), its wall time within
-/// 20 s.
-fn make(
-    device: &rt::Device,
-    descriptor: &ComputePipelineDescriptor,
-) -> Result<rt::ComputePipelineState, ExecutorError> {
+/// The pipeline state `make` makes, within the per-attempt ceilings: its peak live allocations
+/// within 500 MiB (an allocation past it ends the process), its wall time within 20 s. `make`
+/// numbers the state's samplers with the function it is given: each constexpr sampler at an index
+/// of the run's grant from its bottom ([`sampler_grant`]), one per state words, and a read's or a
+/// write's at nothing.
+pub(super) fn made_within<T>(
+    make: impl FnOnce(
+        &mut dyn FnMut(&[NumberedSampler]) -> Result<Vec<u32>, rt::Error>,
+    ) -> Result<T, rt::Error>,
+) -> Result<T, ExecutorError> {
     if !crate::worker::alloc::installed() {
         return Err(ExecutorError::Failed(
             "the counting allocator is not installed: the pipeline's make cannot be held to its \
@@ -588,7 +629,7 @@ fn make(
     let first = rt::IndexClass::Sampler.range().start;
     // A numbered sampler of a kind this run does not know fails it, once the make returns.
     let mut unknown = None;
-    let numbered = |samplers: &[NumberedSampler]| {
+    let mut numbered = |samplers: &[NumberedSampler]| {
         let ids = samplers.iter().map(|sampler| match sampler {
             NumberedSampler::Constexpr(words) => {
                 let next = first + constexprs.len() as u32;
@@ -603,9 +644,8 @@ fn make(
         Ok::<Vec<u32>, rt::Error>(ids.collect())
     };
     let started = Instant::now();
-    let (made, peak) = crate::worker::alloc::bounded(crate::worker::MEMORY_LIMIT_BYTES, || {
-        device.new_compute_pipeline_state(descriptor, numbered)
-    });
+    let (made, peak) =
+        crate::worker::alloc::bounded(crate::worker::MEMORY_LIMIT_BYTES, || make(&mut numbered));
     let took = started.elapsed();
     if took > crate::worker::DEADLINE {
         return Err(ExecutorError::Failed(format!(
@@ -627,14 +667,18 @@ fn make(
 }
 
 /// A buffer of the run: a Shared block of its own, and the buffer over it holding the bytes.
-struct Placed {
-    buffer: rt::Buffer,
+pub(super) struct Placed {
+    pub(super) buffer: rt::Buffer,
     _block: rt::Block,
 }
 
 impl Placed {
     /// A Shared buffer holding `bytes`, `what` the case names it.
-    fn new(device: &rt::Device, what: &str, bytes: &[u8]) -> Result<Placed, ExecutorError> {
+    pub(super) fn new(
+        device: &rt::Device,
+        what: &str,
+        bytes: &[u8],
+    ) -> Result<Placed, ExecutorError> {
         let length = bytes.len() as u64;
         let block = device
             .take_block(rt::MemoryClass::Shared, length)
@@ -658,7 +702,7 @@ impl Placed {
     }
 
     /// Its bytes now.
-    fn bytes(&self) -> Vec<u8> {
+    pub(super) fn bytes(&self) -> Vec<u8> {
         let length = self.buffer.length() as usize;
         match self.buffer.contents() {
             // SAFETY: as in `new`; the work that named it has retired.
@@ -680,70 +724,93 @@ fn dispatched(
     (buffers, members, bound): (
         &BTreeMap<u32, Placed>,
         &BTreeMap<FieldKey, Placed>,
-        &super::runtime_textures::Bound,
+        &runtime_textures::Bound,
     ),
     case: &ComputeCase,
     (dispatch, threads_per_group): (rt::Dispatch, [u32; 3]),
 ) -> Result<(), ExecutorError> {
     let fail = |what: &'static str| move |error: rt::Error| runtime_error(what, error);
+    submitted(
+        device,
+        device_type,
+        "a dispatch through the runtime",
+        |command_buffer| {
+            let mut encoder = command_buffer
+                .compute_command_encoder(rt::DispatchType::Serial)
+                .map_err(fail("the compute encoder"))?;
+            encoder
+                .set_compute_pipeline_state(state)
+                .map_err(fail("the pipeline state"))?;
+            for (&index, placed) in buffers {
+                encoder
+                    .set_buffer(Some(&placed.buffer), 0, index)
+                    .map_err(fail("a buffer"))?;
+            }
+            for (&index, texture) in &bound.textures {
+                encoder
+                    .set_texture(Some(texture), index)
+                    .map_err(fail("a texture"))?;
+            }
+            for (&index, sampler) in &bound.samplers {
+                encoder
+                    .set_sampler_state(Some(sampler), index)
+                    .map_err(fail("a sampler"))?;
+            }
+            let used = members
+                .values()
+                .map(|placed| rt::Resource::Buffer(&placed.buffer))
+                .chain(bound.members.values().map(rt::Resource::Texture));
+            for resource in used {
+                encoder
+                    .use_resource(resource, rt::ResourceUsage::READ | rt::ResourceUsage::WRITE)
+                    .map_err(fail("an argument-buffer member's use"))?;
+            }
+            for (&index, &length) in &case.threadgroup_lengths {
+                encoder
+                    .set_threadgroup_memory_length(length, index)
+                    .map_err(fail("a threadgroup memory length"))?;
+            }
+            match dispatch {
+                rt::Dispatch::Threads(threads) => {
+                    encoder.dispatch_threads(threads, threads_per_group)
+                }
+                rt::Dispatch::Threadgroups(groups) => {
+                    encoder.dispatch_threadgroups(groups, threads_per_group)
+                }
+                rt::Dispatch::Indirect => {
+                    return Err(ExecutorError::Failed(
+                        "a run through the runtime dispatches by threads or threadgroups".into(),
+                    ))
+                }
+            }
+            .map_err(fail("the dispatch"))?;
+            encoder.end_encoding();
+            Ok(())
+        },
+    )
+}
+
+/// One command buffer of `device`'s, recorded by `record`, committed, and waited for until it has
+/// retired under the hang protocol (`what` names the work); a command buffer that did not
+/// complete fails the run.
+pub(super) fn submitted(
+    device: &rt::Device,
+    device_type: DeviceType,
+    what: &str,
+    record: impl FnOnce(&rt::CommandBuffer) -> Result<(), ExecutorError>,
+) -> Result<(), ExecutorError> {
+    let fail = |what: &'static str| move |error: rt::Error| runtime_error(what, error);
     let queue = device.new_command_queue(1).map_err(fail("the queue"))?;
     let command_buffer = queue.command_buffer().map_err(fail("the command buffer"))?;
     let retired = Retired::watch(&command_buffer).map_err(fail("the completed handler"))?;
-    let mut encoder = command_buffer
-        .compute_command_encoder(rt::DispatchType::Serial)
-        .map_err(fail("the compute encoder"))?;
-    encoder
-        .set_compute_pipeline_state(state)
-        .map_err(fail("the pipeline state"))?;
-    for (&index, placed) in buffers {
-        encoder
-            .set_buffer(Some(&placed.buffer), 0, index)
-            .map_err(fail("a buffer"))?;
-    }
-    for (&index, texture) in &bound.textures {
-        encoder
-            .set_texture(Some(texture), index)
-            .map_err(fail("a texture"))?;
-    }
-    for (&index, sampler) in &bound.samplers {
-        encoder
-            .set_sampler_state(Some(sampler), index)
-            .map_err(fail("a sampler"))?;
-    }
-    let used = members
-        .values()
-        .map(|placed| rt::Resource::Buffer(&placed.buffer))
-        .chain(bound.members.values().map(rt::Resource::Texture));
-    for resource in used {
-        encoder
-            .use_resource(resource, rt::ResourceUsage::READ | rt::ResourceUsage::WRITE)
-            .map_err(fail("an argument-buffer member's use"))?;
-    }
-    for (&index, &length) in &case.threadgroup_lengths {
-        encoder
-            .set_threadgroup_memory_length(length, index)
-            .map_err(fail("a threadgroup memory length"))?;
-    }
-    match dispatch {
-        rt::Dispatch::Threads(threads) => encoder.dispatch_threads(threads, threads_per_group),
-        rt::Dispatch::Threadgroups(groups) => {
-            encoder.dispatch_threadgroups(groups, threads_per_group)
-        }
-        rt::Dispatch::Indirect => {
-            return Err(ExecutorError::Failed(
-                "a run through the runtime dispatches by threads or threadgroups".into(),
-            ))
-        }
-    }
-    .map_err(fail("the dispatch"))?;
-    encoder.end_encoding();
+    record(&command_buffer)?;
     command_buffer.commit().map_err(fail("the commit"))?;
     wait_until_retired(
         &queue,
         &command_buffer,
         &retired,
         SubmissionBackend::vulkan(device_type),
-        "a dispatch through the runtime",
+        what,
     );
     match command_buffer.status() {
         rt::CommandBufferStatus::Completed => Ok(()),

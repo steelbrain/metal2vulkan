@@ -44,6 +44,43 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
     .result
 }
 
+/// [`run`] through the runtime (`platform::execute_runtime_render`): the case's own function's
+/// AIR and its companion's as the engine hands them over, its own stage's buffers as the case
+/// holds them, each texture made with its role's usage, and no float reduction.
+#[cfg(target_os = "linux")]
+fn run_on_runtime(
+    case: &RenderCase,
+    own: &[u8],
+    companion: Option<&[u8]>,
+) -> Result<ComputeRun, ExecutorError> {
+    let function = match (case.companion_stage(), &case.fragment) {
+        (Some(metal2vulkan::pipeline::Stage::Vertex), Some(fragment)) => fragment,
+        _ => &case.vertex,
+    };
+    platform::execute_runtime_render(
+        crate::gpu::TEST_DEVICE,
+        "engine-render-test",
+        case,
+        crate::candidate::engine::RuntimeDraw {
+            bitcode: own,
+            companion,
+            linked: &[],
+            buffers: &function.resources.buffers,
+            texture_usages: &function
+                .resources
+                .textures
+                .iter()
+                .map(|(&slot, texture)| {
+                    let usage = crate::check::interface::texture_shader_usage(texture.role, None);
+                    (slot, usage)
+                })
+                .collect(),
+            reductions: &std::collections::BTreeSet::new(),
+        },
+    )
+    .result
+}
+
 fn public(name: &str) -> Vec<u8> {
     llvm_assemble(&fixtures_dir().join(name)).expect("llvm-as on the device lane")
 }
@@ -233,6 +270,16 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
         run.status,
         Some(metal2vulkan::bind::StatusReport::default())
     );
+    #[cfg(target_os = "linux")]
+    {
+        assert!(crate::candidate::engine::runs_render_through_runtime(
+            &authored, &case
+        ));
+        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+        assert_eq!(through.output, floats(&expected));
+        assert_eq!(through.status, None);
+        assert_eq!(through.spv_sha256, None);
+    }
 }
 
 /// A fragment case with a depth/stencil attachment: `fragment_depth_stencil` writes depth 0.5 under
@@ -349,6 +396,17 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
         )
         .unwrap();
         assert_eq!(run.output, expected, "{observation:?}");
+        #[cfg(target_os = "linux")]
+        {
+            assert!(crate::candidate::engine::runs_render_through_runtime(
+                &authored, &case
+            ));
+            let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
+            assert_eq!(
+                through.output, expected,
+                "{observation:?} through the runtime"
+            );
+        }
     }
 }
 
@@ -625,6 +683,14 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     )
     .unwrap();
     assert_eq!(run.output, (2u32 + 3 + 4).to_le_bytes());
+    #[cfg(target_os = "linux")]
+    {
+        assert!(crate::candidate::engine::runs_render_through_runtime(
+            &authored, &case
+        ));
+        let through = run_on_runtime(&case, &vertex, None).unwrap();
+        assert_eq!(through.output, (2u32 + 3 + 4).to_le_bytes());
+    }
 }
 
 /// The narrow-attribute case with layouts of `MTLBufferLayoutStrideDynamic`, its buffers bound
