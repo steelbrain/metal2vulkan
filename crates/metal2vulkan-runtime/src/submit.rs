@@ -1699,12 +1699,19 @@ impl WorkState {
         }
         // A command buffer joins the group held only while the group's expected GPU runs, summed,
         // stay within the bound: the group goes first where its own run is not known or would take
-        // the sum past it. Without room, the command buffer waits instead (`next_ready`).
+        // the sum past it. Without room, the command buffer waits instead (`next_ready`). One
+        // that takes a copy-in over a Managed buffer a texture over which a command buffer of the
+        // group wrote leads its own group, so the write is submitted, and owes its copy back,
+        // before the copy-in goes (`crate::capture`).
         let run = fifo.queue.expected_run();
         let retired = fifo.queue.retired();
         let leads = pending.next == 0;
         if let (true, Some(group)) = (leads, &fifo.group) {
-            if !group.takes(run, retired) {
+            let after = group.leads.last().copied().unwrap_or(0);
+            if !group.takes(run, retired)
+                || (!group.wrote.is_empty()
+                    && (self.changes.captured).names_written(after, pending.seq, &group.wrote))
+            {
                 return Step::Goes(index);
             }
         }
@@ -1845,8 +1852,14 @@ impl WorkState {
             }
         }
         // The copy-ins captured at or before the number of a command buffer that goes first in
-        // it, each ahead of the first such one (`crate::capture`).
-        batch.take(self.changes.captured.take(&batch.leads));
+        // it, each ahead of the first such one, and the copies back owed to the textures over
+        // their ranges by writes submitted before, which its upload makes first
+        // (`crate::capture`).
+        let taken = self.changes.captured.take(&batch.leads);
+        for (_, copy_in) in &taken {
+            copy_in.backs(&mut batch.backs);
+        }
+        batch.take(taken);
         self.progress += 1;
         let value = self.progress;
         fifo.in_flight.push_back((value, batch.run));

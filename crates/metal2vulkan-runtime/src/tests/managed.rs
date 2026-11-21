@@ -1619,9 +1619,11 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 let reader = queue.command_buffer().expect("a command buffer");
                 read_over(&reader, &texture, &r_read);
-                reader.commit().expect("a commit");
+                // Read before R's commit, which takes the capture first: W's group may go as R
+                // is staged after it (`crate::capture`).
                 unsent = counters.metrics().submissions == sent;
                 in_flight = device.core().work.in_flight(writer.queue());
+                reader.commit().expect("a commit");
                 within(name, || reader.status() == CommandBufferStatus::Scheduled);
                 kept.extend([writer, reader]);
             });
@@ -1667,5 +1669,101 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_keeps_a_managed_texture_over_s_write_held_for_room_outside_a_later_capture() {
         over_write_before_a_capture("managed over written held before a capture", true);
+    }
+
+    /// A write of a texture over a Managed buffer in an image of its own ([`over_texture`]) by A3,
+    /// in A's group held, and a capture of the texture's last row taken by B1, committed after on
+    /// another queue and run ahead of A3 ([`two_queues`]): B1 takes the copy-in, which runs before
+    /// the write and copies nothing back for it (`crate::capture`). B1 reads the buffer's bytes
+    /// outside the named row and, with two copies, the new bytes in it; A4, committed before the
+    /// capture and run after A3, reads A3's bytes outside the named row; and a blit that reads the
+    /// buffer once all completed, taking the copy back A3 owes, reads A3's bytes there too.
+    #[test]
+    fn every_device_keeps_a_managed_texture_over_s_write_held_behind_a_passing_capture() {
+        let test = "managed over written behind a passing capture";
+        each_device(test, |name, _, device| {
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (managed, bytes, texture, form) = over_texture(name, &device, cpu.id, true);
+            let len = over_rows(&bytes).len();
+            let mut arena = Arena::new(&device);
+            let (pattern, a_read, b_read, later) = (
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+            );
+            write(&pattern, 0, &vec![0x3C; len]);
+            let encode =
+                |number: u32, command_buffer: &CommandBuffer, after: bool| match (number, after) {
+                    (3, false) => write_over(command_buffer, &texture, &pattern),
+                    (4, false) => read_over(command_buffer, &texture, &a_read),
+                    (6, false) => read_over(command_buffer, &texture, &b_read),
+                    _ => {}
+                };
+            let at = 3 * OVER_PITCH;
+            let mut held = None;
+            let log = two_queues(name, &device, (true, 2), encode, |_, a_work| {
+                held = Some(device.core().work.in_flight(a_work[0].queue()));
+                write(&managed, at, &[0xC5; OVER_ROW as usize]);
+                (managed.did_modify_range(at, OVER_ROW))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            });
+            let queue = device.new_command_queue(1).expect("a queue");
+            let reader = queue.command_buffer().expect("a command buffer");
+            let mut blit = reader.blit_command_encoder().expect("an encoder");
+            let whole = later.length();
+            (blit.copy_from_buffer_to_buffer(&managed, 0, &later, 0, whole)).expect("a copy");
+            blit.end_encoding();
+            reader.commit().expect("a commit");
+            finished(name, &reader);
+            let (rows, named) = (over_rows(&bytes), 3 * OVER_ROW as usize);
+            let (a_bytes, b_bytes) = (read(&a_read, len), read(&b_read, len));
+            let held_bytes = read(&later, whole as usize);
+            let (b_outside, b_inside, a_outside) = (
+                b_bytes[..named] == rows[..named],
+                b_bytes[named..].iter().all(|&byte| byte == 0xC5),
+                a_bytes[..named].iter().all(|&byte| byte == 0x3C),
+            );
+            let kept = (0..3).all(|row| {
+                let at = (row * OVER_PITCH) as usize;
+                held_bytes[at..at + OVER_ROW as usize]
+                    .iter()
+                    .all(|&byte| byte == 0x3C)
+            });
+            println!(
+                "{test}: {name}: {form}; A's submissions in flight and group held as B1 commits \
+                 {held:?}; log {log:?}; B1 read the buffer's bytes outside the named row \
+                 {b_outside} (its first texels {:?}, the bytes' {:?}), the new bytes in it \
+                 {b_inside}; A4 read A3's bytes outside it {a_outside}; the buffer read after \
+                 holds A3's bytes outside it {kept}",
+                &b_bytes[..8],
+                &rows[..8]
+            );
+            assert_eq!(
+                held,
+                Some((2, true)),
+                "{name}: A's group held as B1 commits"
+            );
+            assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: B1 ran ahead of A3 to A5");
+            assert!(
+                b_outside,
+                "{name}: B1 reads the buffer's bytes outside the named row"
+            );
+            if !device.has_unified_memory() {
+                assert!(b_inside, "{name}: B1 reads the new bytes in the named row");
+            }
+            assert!(
+                a_outside,
+                "{name}: A4 reads A3's bytes outside the named row"
+            );
+            assert!(
+                kept,
+                "{name}: the buffer holds A3's bytes outside the named row"
+            );
+            drop((texture, managed, pattern, a_read, b_read, later, arena));
+            drop((reader, queue));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
     }
 }

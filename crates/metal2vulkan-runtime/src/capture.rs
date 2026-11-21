@@ -4,20 +4,29 @@
 //! commands or none, takes every range named since the last commit, once each
 //! ([`Work::capture`](crate::submit::Work::capture)). Its copy-in ([`copy_in`]) is a command
 //! buffer of its own, [`CopyIn`]: GPU copies of each range from the consumer's block into the
-//! device copy, after the copies back owed to the textures over the ranges in images of their own
-//! and before the copies in those textures take (`crate::over::ManagedOvers`). It waits in
-//! [`Captured`] at the capturing commit's number, a point in the commit order, and the first
-//! command buffer submitted whose commit number is at or after it takes it ([`taker`]): it goes in
-//! that command buffer's submission, as a part of its own ahead of its commands and outside its
-//! waits. A command buffer with nothing for the GPU that it waits for ([`Captured::waits_for`])
-//! takes a submission for it alone, and completes once the copies have run. A command buffer
-//! committed before the capture leaves it pending, so it never goes ahead of older work of the
-//! queue that may write the range. The submission keeps each consumer's block and device copy
-//! until it retires. A copy-in records no barrier before its copies: the one that ends every
-//! earlier segment, upload, fill and copy-in on the queue puts every earlier
-//! command first, as it does for a segment (`record::end`), and the submission that carries it
-//! makes the host's writes before it visible to the copies (Vulkan's host write ordering
-//! guarantee).
+//! device copy, then the copies in the textures over the ranges in images of their own take
+//! (`crate::over::ManagedOvers`). It waits in [`Captured`] at the capturing commit's number, a
+//! point in the commit order, and the first command buffer submitted whose commit number is at or
+//! after it takes it ([`taker`]): it goes in that command buffer's submission, as a part of its own
+//! ahead of its commands and outside its waits. A command buffer with nothing for the GPU that it
+//! waits for ([`Captured::waits_for`]) takes a submission for it alone, and completes once the
+//! copies have run. A command buffer committed before the capture leaves it pending, so it never
+//! goes ahead of older work of the queue that may write the range. The submission keeps each
+//! consumer's block and device copy until it retires. A copy-in records no barrier before its
+//! copies: the one that ends every earlier segment, upload, fill and copy-in on the queue puts
+//! every earlier command first, as it does for a segment (`record::end`), and the submission that
+//! carries it makes the host's writes before it visible to the copies (Vulkan's host write
+//! ordering guarantee).
+//!
+//! A write of such a texture that runs before the copy-in keeps its texels outside the ranges, as
+//! Metal's device copy keeps a GPU write outside a `didModifyRange:`'s range: the copies back it
+//! owes go ahead of the copy-in's copies, so the consumer's bytes land over them. Which writes run
+//! before it is known only as the submission that takes it goes, so that submission's leading
+//! upload takes them, those of writes already submitted ([`CopyIn::backs`]), and a command buffer
+//! that takes a copy-in over a Managed buffer a texture over which an earlier command buffer of its
+//! group wrote leads its own group, the write submitted first ([`Captured::names_written`]). A
+//! write of another queue not yet submitted runs after the copy-in, which copies nothing back for
+//! it: its copy in follows the copy-in, and its copy back is owed to the readers after it.
 //!
 //! So every command buffer committed after a range is named reads the bytes the consumer wrote
 //! there before the commit, on any queue and wherever the capturing command buffer waits, which is
@@ -43,7 +52,7 @@ use crate::error::Error;
 use crate::memory::Block;
 use crate::over::{self, Back, ManagedOvers};
 use crate::record::{self, Reach, Recorder};
-use crate::texture::{Image, OverCopy};
+use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
 use crate::times;
 use ash::vk;
 use std::collections::{HashMap, VecDeque};
@@ -173,6 +182,30 @@ impl<C> Captured<C> {
     }
 }
 
+impl Captured {
+    /// Whether the command buffer numbered `number`, leading in a group whose last command buffer
+    /// to lead is numbered `after` (0 for none), takes a copy-in ([`taker`]) of a range of a
+    /// Managed buffer that one of `wrote`, the textures the group's command buffers wrote, lies
+    /// over: it then leads its own group, so the write is submitted, and owes its copy back, before
+    /// the copy-in goes ([`CopyIn::backs`]).
+    pub(crate) fn names_written(
+        &self,
+        after: u64,
+        number: u64,
+        wrote: &[Arc<TextureInner>],
+    ) -> bool {
+        (self.0.iter())
+            .filter(|&&(captured, _)| after < captured && captured <= number)
+            .flat_map(|(_, copy_in)| &copy_in.modified)
+            .any(|modified| {
+                (wrote.iter()).any(|texture| {
+                    (texture.managed_over())
+                        .is_some_and(|buffer| Weak::as_ptr(&modified.buffer) == Arc::as_ptr(buffer))
+                })
+            })
+    }
+}
+
 /// Which command buffer of a submission takes a copy-in captured by the commit numbered `captured`,
 /// of those that go first in it numbered `leads`, in the order they go: the first numbered at or
 /// after the capture. None where each was committed before it: the copy-in stays for a later one.
@@ -202,6 +235,16 @@ pub(crate) struct CopyIn {
 }
 
 impl CopyIn {
+    /// The copies back owed to the textures over its ranges in images of their own by writes
+    /// submitted before it goes, taken into `backs`, as the submission that takes it goes: the
+    /// upload that leads that submission makes them, ahead of its copies
+    /// (`crate::over::ManagedOvers::backs_before`).
+    pub(crate) fn backs(&self, backs: &mut Vec<Back>) {
+        for modified in self.modified.iter().filter(|modified| modified.overs.any()) {
+            modified.overs.backs_before(&modified.ranges, backs);
+        }
+    }
+
     /// Gives its recorder back and drops what it holds, and its pair of timestamp queries, read
     /// where its submission completed (`end`, [`times::retire_own`]): once what took it retired,
     /// or ended at a loss, or where it never went. Answers its two timestamps where it completed
@@ -222,12 +265,13 @@ impl CopyIn {
 }
 
 /// The copy-in of `named`, the ranges the capture at the commit numbered `number` takes: a command
-/// buffer of its own, recorded and ended, with the copies back owed to the textures over the
-/// ranges in images of their own first, then one `vkCmdCopyBuffer` for each buffer from the
-/// consumer's block into its device copy, then the copies in those textures take, or a barrier
-/// that makes the copies visible to every later command. It begins with no barrier of its own:
-/// the one ending each earlier command buffer on the queue puts every earlier command first
-/// (`record::end`). Its timestamps are its first command and its last ([`times::begin_own`]).
+/// buffer of its own, recorded and ended, with one `vkCmdCopyBuffer` for each buffer from the
+/// consumer's block into its device copy, then the copies in the textures over the ranges in
+/// images of their own take, or a barrier that makes the copies visible to every later command.
+/// It begins with no barrier of its own: the one ending each earlier command buffer on the queue,
+/// the upload that leads its submission among them, with the copies back owed ahead of it
+/// ([`CopyIn::backs`]), puts every earlier command first (`record::end`). Its timestamps are its
+/// first command and its last ([`times::begin_own`]).
 ///
 /// Err: [`Error::Vulkan`] where a command pool or buffer cannot be made or ended.
 pub(crate) fn copy_in(core: &Core, named: &[Modified], number: u64) -> Result<CopyIn, Error> {
@@ -241,18 +285,13 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified], number: u64) -> Result<Co
         }
     };
     let stamps = times::begin_own(core, command);
-    let backs = backs(named);
     let into = copies_in(named, number);
-    let back_copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
     let into_copies: Vec<OverCopy> = into.iter().map(|(copy, _)| *copy).collect();
     // SAFETY: the command buffer is recording, and only this thread has it; the consumers'
     // blocks' and the device copies' buffers have transfer usage, each region lies in them, and
     // what takes the copy-in keeps each block and device copy until it retires; each image is in
     // its home layout between commands, and the copy-in holds it.
     unsafe {
-        if !back_copies.is_empty() {
-            over::record_side(device, command, &back_copies, false, &core.counters);
-        }
         for modified in named {
             let (from, base) = modified.cpu.memory.range(modified.offset);
             let (to, _) = modified.copy.range(0);
@@ -283,25 +322,13 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified], number: u64) -> Result<Co
             result,
         });
     }
-    let mut images: Vec<Arc<Image>> = backs.into_iter().map(|(_, _, image)| image).collect();
-    images.extend(into.into_iter().map(|(_, image)| image));
     Ok(CopyIn {
         recorder,
         command,
         modified: named.to_vec(),
-        images,
+        images: into.into_iter().map(|(_, image)| image).collect(),
         stamps,
     })
-}
-
-/// The copies back owed to the textures over `named`'s ranges in images of their own, taken: they
-/// go ahead of a capture's copies, so the consumer's bytes land over them.
-fn backs(named: &[Modified]) -> Vec<Back> {
-    let mut backs = Vec::new();
-    for modified in named.iter().filter(|modified| modified.overs.any()) {
-        modified.overs.backs_before(&modified.ranges, &mut backs);
-    }
-    backs
 }
 
 /// The copies in the textures over `named`'s ranges in images of their own take, after the

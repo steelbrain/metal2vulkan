@@ -575,7 +575,9 @@ impl Entry {
 ///   into another texture over a range that meets its, a synchronize, a capture of a range over
 ///   it), not after each write. A reader recorded after the write takes it in its own commands; the
 ///   upload that leads a submission takes it only once the write's segment was submitted, as the
-///   upload runs before the submission's commands. A texture released while its copy back is owed
+///   upload runs before the submission's commands. A capture's is taken by the upload that leads
+///   the submission that takes its copy-in, a write in the same group held going first in a
+///   submission of its own (`crate::capture`). A texture released while its copy back is owed
 ///   leaves its image with the buffer until a reader takes it or the buffer is released, which
 ///   drops it uncopied.
 #[derive(Default)]
@@ -692,10 +694,11 @@ impl ManagedOvers {
         self.count.store(entries.len(), Relaxed);
     }
 
-    /// A capture is to copy `ranges` of the consumer's bytes into the device copy
-    /// (`crate::capture`): the copies back owed by submitted writes of textures whose ranges meet
-    /// one of `ranges`, or meet a live texture's that does, taken into `backs`, to go ahead of the
-    /// capture's copies, so the consumer's bytes land over them.
+    /// A submission takes the copy-in of a capture of `ranges` of the consumer's bytes into the
+    /// device copy (`crate::capture`): the copies back owed by writes submitted before it of
+    /// textures whose ranges meet one of `ranges`, or meet a live texture's that does, taken into
+    /// `backs`, for the upload that leads the submission to make ahead of the copy-in's copies, so
+    /// the consumer's bytes land over them.
     pub(crate) fn backs_before(&self, ranges: &[(u64, u64)], backs: &mut Vec<Back>) {
         let mut entries = lock(&self.entries);
         if !entries.iter().any(|entry| entry.back) {
