@@ -147,7 +147,6 @@ fn record(slot: &str) -> RefusalObservation {
         air_sha256: "11".repeat(32),
         input_sha256: "22".repeat(32),
         translator_fingerprint: "33".repeat(32),
-        backend: Backend::Vulkan,
         environment_id: slot.into(),
         environment: serde_json::json!({"robustness": {"enabled": [], "unmet": []}}),
         executor_abi: "vulkan-engine-v1".into(),

@@ -587,7 +587,6 @@ fn candidate_row(
         translator_fingerprint: TRANSLATOR.into(),
         candidate_output_sha256: crate::hash::sha256_bytes(output),
         output_b64: b64(output),
-        backend: crate::observation::Backend::Vulkan,
         environment_id: "vk-env".into(),
         environment: serde_json::json!({}),
         executor_abi: "executor-v1".into(),

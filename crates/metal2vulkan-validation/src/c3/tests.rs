@@ -12,7 +12,7 @@ use crate::case::{
 };
 use crate::cutover::SignOff;
 use crate::hash::{hex_encode, sha256_bytes};
-use crate::observation::{Backend, MetalStatus};
+use crate::observation::MetalStatus;
 use crate::observation_contract::ComparisonClass;
 use metal2vulkan::pipeline::PrecisionNote;
 use reference::ReferenceEnvironment;
@@ -238,7 +238,6 @@ fn row(
         translator_fingerprint: String::new(),
         candidate_output_sha256: sha256_bytes(output),
         output_b64: b64(output),
-        backend: Backend::Vulkan,
         environment_id,
         environment: serde_json::json!({}),
         executor_abi: String::new(),
@@ -2666,7 +2665,6 @@ fn refusal_of(
         air_sha256: case.air_sha256.clone(),
         input_sha256: case.computed_input_sha256().unwrap(),
         translator_fingerprint: engine_fingerprint_of(&PROFILE),
-        backend: Backend::Vulkan,
         environment_id: engine_slot(environment, None),
         environment: recorded_environment(environment),
         executor_abi: ENGINE_EXECUTOR_ABI.into(),

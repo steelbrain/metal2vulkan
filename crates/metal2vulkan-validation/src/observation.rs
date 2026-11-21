@@ -195,7 +195,6 @@ pub struct CandidateObservation {
     pub translator_fingerprint: String,
     pub candidate_output_sha256: String,
     pub output_b64: String,
-    pub backend: Backend,
     pub environment_id: String,
     pub environment: serde_json::Value,
     pub executor_abi: String,
@@ -213,14 +212,6 @@ pub struct CandidateObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<CaseTiming>,
     pub status: CandidateStatus,
-}
-
-/// The backend a stored candidate row or refusal names: always `vulkan`, the rows' literal
-/// field, which no reader decides anything by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Backend {
-    Vulkan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -788,7 +779,6 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: metal.output_b64.clone(),
-            backend: Backend::Vulkan,
             environment_id: "vk-env".into(),
             environment: serde_json::json!({"driver": "test"}),
             executor_abi: "executor-v1".into(),
@@ -875,7 +865,6 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: "AQAAAA==".into(),
-            backend: Backend::Vulkan,
             environment_id: "vk-env".into(),
             environment: serde_json::json!({}),
             executor_abi: "executor-v1".into(),
@@ -909,7 +898,6 @@ mod tests {
                 translator_fingerprint: "55".repeat(32),
                 candidate_output_sha256: output_sha256.clone(),
                 output_b64: "AQAAAA==".into(),
-                backend: Backend::Vulkan,
                 environment_id: "vk-env".into(),
                 environment,
                 executor_abi: "executor-v1".into(),
@@ -990,7 +978,6 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: empty_sha256,
             output_b64: String::new(),
-            backend: Backend::Vulkan,
             environment_id: "vk-env".into(),
             environment: serde_json::json!({}),
             executor_abi: "executor-v1".into(),
@@ -1075,7 +1062,6 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: sha256_bytes(output),
             output_b64: b64(output),
-            backend: Backend::Vulkan,
             environment_id: "vk-env".into(),
             environment: serde_json::json!({}),
             executor_abi: "executor-v1".into(),
@@ -1090,7 +1076,6 @@ mod tests {
             metal: &metal,
             spv_sha256: Some(&spv_sha256),
             translator_fingerprint: &translator_fingerprint,
-            backend: Backend::Vulkan,
             environment_id: "vk-env",
             executor_abi: "executor-v1",
         };
@@ -1236,7 +1221,6 @@ mod tests {
             translator_fingerprint: "55".repeat(32),
             candidate_output_sha256: output_sha256.clone(),
             output_b64: "AQAAAA==".into(),
-            backend: Backend::Vulkan,
             environment_id: "vk-env".into(),
             environment: serde_json::json!({"driver": "test"}),
             executor_abi: "executor-v1".into(),
@@ -1251,7 +1235,6 @@ mod tests {
             metal: &golden,
             spv_sha256: Some(&"33".repeat(32)),
             translator_fingerprint: &"55".repeat(32),
-            backend: Backend::Vulkan,
             environment_id: "vk-env",
             executor_abi: "executor-v1",
         };

@@ -2381,7 +2381,7 @@ mod tests {
         ResourceRole, Stage,
     };
     use crate::observation::{
-        Backend, CandidateObservation, CandidateStatus, MetalObservation, MetalStatus,
+        CandidateObservation, CandidateStatus, MetalObservation, MetalStatus,
     };
     use crate::observation_contract::ComparisonClass;
     use crate::source::public_sources;
@@ -2481,7 +2481,6 @@ mod tests {
             translator_fingerprint: engine_fingerprint_of(&[7; 32]),
             candidate_output_sha256: output_sha256,
             output_b64: output_b64.into(),
-            backend: Backend::Vulkan,
             environment_id: engine_environment_id("toy-env"),
             environment: serde_json::json!({
                 "profile_fingerprint": crate::hash::hex_encode([7; 32]),
@@ -3192,7 +3191,6 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: row.translator_fingerprint.clone(),
-            backend: Backend::Vulkan,
             environment_id: row.environment_id.clone(),
             environment: row.environment.clone(),
             executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3376,7 +3374,6 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: candidate.translator_fingerprint.clone(),
-            backend: Backend::Vulkan,
             environment_id: candidate.environment_id.clone(),
             environment,
             executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3558,7 +3555,6 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: "66".repeat(32),
-            backend: Backend::Vulkan,
             environment_id: stated_slot.clone(),
             environment: this_build.environment.clone(),
             executor_abi: ENGINE_EXECUTOR_ABI.into(),

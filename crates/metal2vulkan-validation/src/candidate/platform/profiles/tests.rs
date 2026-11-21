@@ -510,7 +510,6 @@ fn every_kept_member_is_a_bounded_capability_member() {
 fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
     use crate::candidate::engine::{engine_fingerprint_of, engine_slot, ENGINE_EXECUTOR_ABI};
     use crate::check::admission::{ExecutorError, NotSupported};
-    use crate::observation::Backend;
     use crate::refusal::{Refusal, RefusalClass, RefusalObservation};
 
     let restriction: &'static ProfileRestriction = Box::leak(Box::new(
@@ -588,7 +587,6 @@ fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
         air_sha256: "b".repeat(64),
         input_sha256: "c".repeat(64),
         translator_fingerprint: opened.translator_fingerprint.clone(),
-        backend: Backend::Vulkan,
         environment_id: engine_slot("nvidia-rtx5080-laptop", Some("nvidia-pascal-linux")),
         environment: opened.environment.clone(),
         executor_abi: ENGINE_EXECUTOR_ABI.into(),

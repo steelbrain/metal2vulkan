@@ -1196,7 +1196,7 @@ mod tests {
     use crate::case::{
         BufferResource, Comparison, Dispatch, ExecutionSafety, OutputSelection, ResourceRole, Stage,
     };
-    use crate::observation::{Backend, CandidateStatus, MetalStatus};
+    use crate::observation::{CandidateStatus, MetalStatus};
     use crate::observation_contract::ComparisonClass;
     use crate::ScratchDir;
     use std::collections::BTreeMap;
@@ -1411,7 +1411,6 @@ mod tests {
             translator_fingerprint: "44".repeat(32),
             candidate_output_sha256: output_sha256,
             output_b64: "KgAAAA==".into(),
-            backend: Backend::Vulkan,
             environment_id: environment_id.into(),
             environment: serde_json::json!({}),
             executor_abi: "v1".into(),
@@ -1712,7 +1711,6 @@ mod tests {
         // and the refusal's removal by a row in its slot: the legacy rows never change.
         store
             .upsert_refusal(RefusalObservation {
-                backend: Backend::Vulkan,
                 ..refusal(&case, "env@engine")
             })
             .unwrap();
@@ -2014,7 +2012,6 @@ mod tests {
             air_sha256: case.air_sha256.clone(),
             input_sha256: case.computed_input_sha256().unwrap(),
             translator_fingerprint: "55".repeat(32),
-            backend: Backend::Vulkan,
             environment_id: slot.into(),
             environment: serde_json::json!({"robustness": {"enabled": [], "unmet": []}}),
             executor_abi: "v1".into(),

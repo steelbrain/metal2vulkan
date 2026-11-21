@@ -17,7 +17,7 @@
 use crate::c1::reviewed::GapClass;
 use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::check::admission::NotSupported;
-use crate::observation::{validate_hash, Backend, CaseTiming};
+use crate::observation::{validate_hash, CaseTiming};
 use serde::{Deserialize, Serialize};
 
 /// What a refusal says is missing.
@@ -151,7 +151,6 @@ pub struct RefusalObservation {
     /// The engine's fingerprint of the opened device's profile under this product, as a row
     /// carries it.
     pub translator_fingerprint: String,
-    pub backend: Backend,
     /// The engine slot (`ENV@engine`, `ENV@engine@P` restricted to profile `P`).
     pub environment_id: String,
     /// The opened device's facts, as a row records them: the device and driver, the layers, the

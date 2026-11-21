@@ -6,7 +6,7 @@ use crate::case::{
 };
 use crate::check::admission::NotSupported;
 use crate::hash::sha256_bytes;
-use crate::observation::{Backend, MetalStatus, ReferenceGap};
+use crate::observation::{MetalStatus, ReferenceGap};
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::Refusal;
 
@@ -123,7 +123,6 @@ fn row(
         translator_fingerprint: "44".repeat(32),
         candidate_output_sha256: sha256_bytes(output),
         output_b64: b64(output),
-        backend: Backend::Vulkan,
         environment_id: environment_id.into(),
         environment: serde_json::json!({}),
         executor_abi: "v1".into(),
@@ -145,7 +144,6 @@ fn refusal(case: &AuthoredCase, environment_id: &str) -> RefusalObservation {
         air_sha256: case.air_sha256.clone(),
         input_sha256: case.computed_input_sha256().unwrap(),
         translator_fingerprint: "44".repeat(32),
-        backend: Backend::Vulkan,
         environment_id: environment_id.into(),
         environment: serde_json::json!({"executor": "engine-compute"}),
         executor_abi: "v1".into(),

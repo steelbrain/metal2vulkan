@@ -68,8 +68,8 @@ use crate::library_module::ResolvedLinkedFunctions;
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralTexture};
 use crate::metal::ORACLE_ABI;
 use crate::observation::{
-    Backend, CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming,
-    MetalObservation, RUNTIME_CRATE_FINGERPRINT, TRANSLATOR_FINGERPRINT,
+    CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming, MetalObservation,
+    RUNTIME_CRATE_FINGERPRINT, TRANSLATOR_FINGERPRINT,
 };
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::{Refusal, RefusalObservation};
@@ -3533,7 +3533,6 @@ pub fn execute_prepared(
                     air_sha256: case.air_sha256.clone(),
                     input_sha256: input.input_sha256.clone(),
                     translator_fingerprint: opened.translator_fingerprint,
-                    backend: Backend::Vulkan,
                     environment_id: engine_slot(environment_id, input.restricted_to.as_deref()),
                     environment: opened.environment,
                     executor_abi: ENGINE_EXECUTOR_ABI.into(),
@@ -3572,7 +3571,6 @@ pub fn execute_prepared(
         translator_fingerprint: run.translator_fingerprint.clone(),
         candidate_output_sha256,
         output_b64: base64::engine::general_purpose::STANDARD.encode(&run.output),
-        backend: Backend::Vulkan,
         environment_id: slot.clone(),
         environment: run.environment,
         executor_abi: ENGINE_EXECUTOR_ABI.into(),
