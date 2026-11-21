@@ -43,10 +43,12 @@
 //!
 //! What differs between regions in any other way keeps them in line. Candidate sets come from the
 //! spine's keys: windows of [`WINDOW`] items whose keys hash alike seed a pair of regions, extended
-//! both ways while the keys agree, and the set is the occurrences of a window that share the
-//! extent with the largest saving; a set whose comparison fails at an operand or a result is
-//! compared again without the item that holds it. Work is linear in the function per search,
-//! bounded in functions, occurrences, extension steps and comparisons, and metered on the
+//! both ways while the keys agree against the window's first [`MAX_OCCURRENCES`] repeats, and
+//! the set is every occurrence of the window in the function that shares the extent with the
+//! largest saving (ranges of keys compared by prefix hashes), so a region repeated a thousand
+//! times is one routine from one search; a set whose comparison fails at an operand or a result
+//! is compared again without the item that holds it. Work is linear in the function per search,
+//! bounded in functions, extents, extension steps and comparisons, and metered on the
 //! per-attempt [`Meter`].
 
 #[cfg(test)]
@@ -76,7 +78,7 @@ pub const MIN_REGION: u64 = 500;
 pub const MAX_ROUTINES: u32 = 64;
 /// The items a seed window holds.
 const WINDOW: usize = 16;
-/// The most occurrences of a seed compared with its first.
+/// The repeats of a seed window whose extents beside its first are tried.
 const MAX_OCCURRENCES: usize = 64;
 /// The exact comparisons per search.
 const MAX_VERIFIES: usize = 32;
@@ -257,6 +259,25 @@ fn find_in(
     // first item listed under it in order.
     const B: u64 = 0x0000_0100_0000_01B3;
     let pow = (1..WINDOW).fold(1u64, |p, _| p.wrapping_mul(B));
+    // The same polynomial over every prefix of the keys, and the powers of `B`: the hash of any
+    // range of items in constant time.
+    charge::<u64>(meter, ledger, 2 * (n + 1))?;
+    let mut ph = Vec::with_capacity(n + 1);
+    let mut pp = Vec::with_capacity(n + 1);
+    let (mut hp, mut bp) = (0u64, 1u64);
+    ph.push(hp);
+    pp.push(bp);
+    for it in &sp.items {
+        hp = hp.wrapping_mul(B).wrapping_add(it.key);
+        bp = bp.wrapping_mul(B);
+        ph.push(hp);
+        pp.push(bp);
+    }
+    let range = |a: usize, len: usize| {
+        let end = ph.get(a + len).copied().unwrap_or(0);
+        let start = ph.get(a).copied().unwrap_or(0);
+        end.wrapping_sub(start.wrapping_mul(pp.get(len).copied().unwrap_or(0)))
+    };
     let mut h = 0u64;
     for i in 0..WINDOW {
         h = h.wrapping_mul(B).wrapping_add(key(i).unwrap_or(0));
@@ -292,9 +313,9 @@ fn find_in(
         if covered.get(p0).copied().unwrap_or(true) {
             continue;
         }
-        // Each later occurrence's extent beside the first's: its first item, and how far the keys
-        // agree to the left of the window and from its start.
-        let mut ext: Vec<(usize, usize, usize)> = Vec::new();
+        // Each of the first later occurrences' extent beside the first's: how far the keys agree
+        // to the left of the window and from its start.
+        let mut ext: Vec<(usize, usize)> = Vec::new();
         for &pj in g.iter().skip(1).take(MAX_OCCURRENCES) {
             let pj = pj as usize;
             if pj < p0 + WINDOW || !(0..WINDOW).all(|d| same(p0 + d, pj + d)) {
@@ -310,21 +331,29 @@ fn find_in(
                 r += 1;
                 steps -= 1;
             }
-            ext.push((pj, l, r));
+            ext.push((l, r));
         }
-        meter.tick(u32::try_from(ext.len().saturating_mul(ext.len())).unwrap_or(u32::MAX))?;
+        meter.tick(u32::try_from(ext.len()).unwrap_or(u32::MAX))?;
         let mut best: Option<Cand> = None;
-        for &(_, l, r) in &ext {
+        for &(l, r) in &ext {
             let len = l + r;
             let weight = span(p0 - l, len);
             if weight < min_region {
                 continue;
             }
-            // The occurrences that hold the extent, none overlapping the one before.
+            // Every occurrence of the window in the function that holds the extent, none
+            // overlapping the one before.
+            meter.tick(u32::try_from(g.len()).unwrap_or(u32::MAX))?;
+            let h0 = range(p0 - l, len);
             let mut starts = vec![p0 - l];
-            for &(pk, lk, rk) in &ext {
-                let s = pk - l;
-                if lk >= l && rk >= r && starts.last().is_some_and(|q| s >= q + len) {
+            for &pk in g.iter().skip(1) {
+                let Some(s) = (pk as usize).checked_sub(l) else {
+                    continue;
+                };
+                if starts.last().is_some_and(|q| s >= q + len)
+                    && s + len <= n
+                    && range(s, len) == h0
+                {
                     starts.push(s);
                 }
             }
@@ -472,8 +501,11 @@ struct Cx<'s> {
     /// By layout position: the positions of the blocks that branch to it or name it as their
     /// merge or continue target.
     preds: Vec<Vec<u32>>,
-    /// The function's loops: the layout positions of the header and the merge.
-    loops: Vec<(usize, usize)>,
+    /// By layout position: whether a loop of the function holds it (after the loop's header
+    /// and before its merge).
+    in_loop: Vec<bool>,
+    /// Every loop's continue block.
+    conts: HashSet<BlockId>,
     /// By header: its loop's index in the module's table.
     header_of: HashMap<BlockId, usize>,
     at_use: HashSet<BlockId>,
@@ -532,19 +564,39 @@ fn context<'s>(
             }
         }
     }
-    let mut loops = Vec::new();
+    charge::<(i32, bool)>(meter, ledger, nl + 1)?;
+    charge::<BlockId>(meter, ledger, m.loops.len())?;
+    let mut depth = vec![0i32; nl + 1];
+    let mut conts = HashSet::default();
     let mut header_of = HashMap::default();
     for (i, l) in m.loops.iter().enumerate() {
+        conts.insert(l.cont);
         let (Some(h), Some(mg)) = (sp.pos(l.header), sp.pos(l.merge)) else {
             continue;
         };
-        loops.push((h, mg));
+        if h + 1 < mg {
+            if let Some(d) = depth.get_mut(h + 1) {
+                *d += 1;
+            }
+            if let Some(d) = depth.get_mut(mg) {
+                *d -= 1;
+            }
+        }
         header_of.insert(l.header, i);
         if let Some(var) = l.exit_sel.and_then(|v| m.vars.get(v.index())) {
             bump(&mut uses, var.value);
         }
     }
-    charge::<(usize, usize, BlockId)>(meter, ledger, loops.len())?;
+    let mut open = 0i32;
+    let in_loop = depth
+        .iter()
+        .take(nl)
+        .map(|d| {
+            open += d;
+            open > 0
+        })
+        .collect();
+    charge::<(BlockId, usize)>(meter, ledger, header_of.len())?;
     charge::<BlockId>(meter, ledger, m.switches_at_use.len())?;
     let at_use = m.switches_at_use.iter().copied().collect();
     Ok(Cx {
@@ -552,7 +604,8 @@ fn context<'s>(
         sp,
         uses,
         preds,
-        loops,
+        in_loop,
+        conts,
         header_of,
         at_use,
     })
@@ -1053,7 +1106,7 @@ fn verify(
                 }
             }
         }
-        if nb > 1 && m.loops.iter().any(|l| l.cont == bd.last) {
+        if nb > 1 && cx.conts.contains(&bd.last) {
             return Ok(Err(None));
         }
     }
@@ -1122,7 +1175,7 @@ fn verify(
     // runs: the blocks of its own sequence.
     let in_loop: Vec<bool> = occ
         .iter()
-        .map(|bd| cx.loops.iter().any(|&(h, mg)| h < bd.ps && bd.ps < mg))
+        .map(|bd| cx.in_loop.get(bd.ps).copied().unwrap_or(false))
         .collect();
     let mut always: Vec<Vec<bool>> = Vec::with_capacity(occ.len());
     for (bd, &s) in occ.iter().zip(&c.starts) {
@@ -1531,6 +1584,7 @@ fn apply(m: &mut TypedModule, plan: &Plan) -> Result<(), Error> {
     let mut rename: HashMap<Value, Value> = HashMap::default();
     let mut gone: HashSet<BlockId> = HashSet::default();
     let mut body: Vec<BlockId> = Vec::new();
+    let mut cut: HashSet<BlockId> = HashSet::default();
     for t in order {
         let o = plan.occ.get(t).ok_or_else(|| invariant("region"))?;
         let (call, outs) = call_nodes(m, o, f, ret, &results)?;
@@ -1564,7 +1618,7 @@ fn apply(m: &mut TypedModule, plan: &Plan) -> Result<(), Error> {
                 body.extend(o.blocks.iter().skip(1).copied());
             } else {
                 removed(m, taken.iter().filter_map(|n| n.result));
-                m.switches_at_use.retain(|h| *h != o.first);
+                cut.insert(o.first);
                 gone.extend(o.blocks.iter().skip(1).copied());
             }
             let rest = block_mut(m, o.last)?.insts.split_off(o.idx);
@@ -1582,6 +1636,7 @@ fn apply(m: &mut TypedModule, plan: &Plan) -> Result<(), Error> {
         bs.insts.extend(call);
         bs.insts.extend(rest);
     }
+    m.switches_at_use.retain(|h| !cut.contains(h));
     let moved: HashSet<BlockId> = body.iter().copied().collect();
     m.functions
         .get_mut(f.index())

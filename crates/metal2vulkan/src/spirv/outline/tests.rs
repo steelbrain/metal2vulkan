@@ -1,6 +1,7 @@
 //! A set of regions written as a kept routine computes what the regions computed, a region that
 //! differs stays in line, and a variable whose value carries from one run of its region to the next
-//! is passed to the routine, not made its own.
+//! is passed to the routine, not made its own. A region repeated more often than a search tries
+//! extents against is still one routine.
 
 use super::*;
 use crate::budget::Budget;
@@ -380,6 +381,24 @@ fn a_region_that_differs_stays_in_line_beside_the_calls_of_the_equal_ones() {
     }
     let mut two = kernel(&[BinOp::IMul, BinOp::ISub], false);
     assert_eq!(outline(&mut two, 1, &mut meter()).expect("outline"), 0);
+}
+
+/// Eighty equal regions, more repeats than a window's extents are tried against, are one routine
+/// called eighty times, made by one search: a search that took only the repeats it tried would
+/// leave the rest for another search and another routine of the same code, and a function of
+/// many repeats would be searched once per few dozen of them.
+#[test]
+fn a_region_repeated_past_the_repeats_tried_is_one_routine_called_at_every_repeat() {
+    let fourths = [BinOp::IMul; 80];
+    let orig = kernel(&fourths, false);
+    let mut m = orig.clone();
+    assert_eq!(outline(&mut m, 1, &mut meter()).expect("outline"), 1);
+    assert_eq!(routines(&m), [(FuncId::new(1), 80)]);
+    assert_valid(m.clone(), &moltenvk());
+    for (seed, seed2) in [(1u32, 2u32), (20, 0)] {
+        let want = expected(&fourths, false, seed, seed2);
+        same_words(&orig, &m, &[seed, 0, seed2], &want);
+    }
 }
 
 /// Region `j` of the looped kernel: `a = acc`, `t = a * 5` through a variable it stores first,
