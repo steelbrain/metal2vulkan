@@ -98,8 +98,8 @@ use metal2vulkan::metal::{
 };
 
 use super::tessellation_sweeps::{
-    air_inputs, domain_pipeline, grid_record, load, medium_layout, quad_factors, raw_quad_factors,
-    read_medium_marks, shaders_of, tessellation_notices, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX,
+    air_inputs, domain_pipeline, grid_record, load, medium_layout, partition_notices, quad_factors,
+    raw_quad_factors, read_medium_marks, shaders_of, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX,
     QUAD_FACTOR_BYTES, REGION_BYTES,
 };
 
@@ -463,7 +463,7 @@ impl Case for PartitionFactors {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        tessellation_notices()
+        partition_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -547,7 +547,7 @@ impl Case for PartitionDegenerates {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        tessellation_notices()
+        partition_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -629,7 +629,7 @@ impl Case for PartitionInsides {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        tessellation_notices()
+        partition_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -724,7 +724,7 @@ impl Case for PartitionScales {
     fn allowances(&self) -> Vec<Allowance> {
         // Every pipeline here enables the factor scale, so every run announces the notice the
         // scale is read under. Nothing observed is loosened.
-        let mut all = tessellation_notices();
+        let mut all = partition_notices();
         all.push(crate::replay::notice_allowance(
             Degradation::TessellationFactorScale.code(),
         ));
@@ -824,7 +824,7 @@ impl Case for PartitionSteps {
     fn allowances(&self) -> Vec<Allowance> {
         // Half the pipelines here state a per-instance factor step, which is what provokes the
         // notice the instance addressing is read under.
-        let mut all = tessellation_notices();
+        let mut all = partition_notices();
         all.push(crate::replay::notice_allowance(
             Degradation::TessellationFactorInstance.code(),
         ));

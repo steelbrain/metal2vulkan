@@ -349,6 +349,18 @@ pub(super) fn tessellation_notices() -> Vec<Allowance> {
     .collect()
 }
 
+/// The notice declarations of a case that crosses the four partition modes: [`tessellation_notices`]
+/// and `tessellation-fractional-spacing`, which each pipeline of a fractional partition drawn
+/// through the device's tessellator announces, as `tessellation-rendered-patches` declares it.
+/// Declarations of the notices site alone: every mark compares exactly.
+pub(super) fn partition_notices() -> Vec<Allowance> {
+    let mut all = tessellation_notices();
+    all.push(crate::replay::notice_allowance(
+        Degradation::TessellationFractionalSpacing.code(),
+    ));
+    all
+}
+
 // ---- The partition-mode and factor sweeps over a domain ---------------------------------------
 
 /// Every `MTLTessellationPartitionMode`, in the SDK table's own declaration order.
@@ -464,8 +476,9 @@ impl Case for PartitionModes {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Nothing observed is loosened: a mark is a word that is 0 or 1 and a cell is a cell.
-        // These are the notice declarations the module docs explain.
-        tessellation_notices()
+        // These are the notice declarations the module docs explain, with the fractional
+        // spacing's, since the sweep draws the two fractional modes.
+        partition_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

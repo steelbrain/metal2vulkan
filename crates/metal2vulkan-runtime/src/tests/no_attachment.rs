@@ -5,7 +5,8 @@
 //! bit into its pixel's word of a 2 by 2 area and counts itself in word 4, and
 //! `rt6_mark_coverage` ORs its `[[sample_mask]]` there instead.
 //!
-//! - At 1, 2 and 4 samples, a pass of 2 by 2 pixels runs `rt6_mark_sample` once per sample of
+//! - At 1 and 4 samples, the counts Vulkan requires of `framebufferNoAttachmentsSampleCounts`
+//!   (lavapipe reports no other), a pass of 2 by 2 pixels runs `rt6_mark_sample` once per sample of
 //!   each pixel, as reading the sample index asks (Vulkan's sample shading): every pixel's word
 //!   holds every sample and the count is 4 times the samples, Metal's answer. `rt6_mark_coverage`
 //!   runs as the device runs it: every pixel's word holds every sample, and it ran at least once
@@ -63,7 +64,7 @@ mod on_device {
             let queue = device.new_command_queue(4).expect("a queue");
             let mut buffers = Buffers::new(&device);
             let mut runs = Vec::new();
-            for samples in [1, 2, 4] {
+            for samples in [1, 4] {
                 let every = (1u32 << samples) - 1;
                 for fragment in ["rt6_mark_sample", "rt6_mark_coverage"] {
                     let state = state(name, &device, &descriptor(fragment, samples));
