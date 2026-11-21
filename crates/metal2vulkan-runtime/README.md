@@ -3901,7 +3901,10 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   again: one more dispatch, one barrier, and the attachments stored and loaded. With the probe's
   form of the split, Apple's rendering sample's frame (11 such executions) took 1,003.4 us of GPU
   time against 931.8 without it on an RTX 2080, and 617.0 against 588.5 on a Radeon RX 7900 XTX
-  (job 63481, medians of 9). While a visibility result's query counts the draws (after a draw
+  (job 63481, medians of 9). On an RTX 3090 (NVIDIA's 620.70.06) a split costs about 11 us of GPU
+  time: that frame took 1,106.9 us against 978.9 with each part's count written as the command
+  buffer records and no split, and 1,041.7 against 925.0 at one part an execution (job 64194,
+  medians of 9 turns, below). While a visibility result's query counts the draws (after a draw
   under a `Boolean` or `Counting` mode) the rendering cannot end, so such an execution is refused,
   `Gap::Draw` of `DrawKind::VisibilityResultInterrupt`, counted in
   `Metrics::visibility_interrupts_refused`; one before the mode's first draw runs.
@@ -3930,7 +3933,21 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   1,648.8 in 91, 1,175.6 in 46, 907.2 in 16 and 870.5 in 11 (one part an execution), against
   391.4 drawn directly (job 63460, an RTX 2080 on NVIDIA's 620.70.06, medians of 9). On the XTX a
   part costs about 2.4 us. The frame's parts at the bound took 931.8 us on the 2080 and 588.5 on
-  the XTX (job 63481).
+  the XTX (job 63481). A part runs its execution whatever its count: on an RTX 3090 a part with
+  count 0 (wholly past its range's last command) costs about 10 us. There the frame's 11
+  executions take 17 parts at the bound, 6 of them with count 0, and took 1,106.9 us against
+  1,041.7 at one part an execution, and 978.9 against 925.0 with no split (job 64194, below).
+- On NVIDIA's driver, `vkCmdExecuteGeneratedCommandsEXT` costs GPU time beyond the draws it runs.
+  On an RTX 3090 (620.70.06), the frame above (11 executions over ranges a buffer holds, buffers
+  of 8,162, 785 and 289 commands, 2,132 commands in range) took 925.0 us of GPU time at one part
+  an execution with each part's count written as the command buffer records and no split,
+  against 386.0 us for the same 2,132 draws direct: 539.0 us more, inside the executes. In the
+  runtime's form the frame took 1,106.9 us; of its 720.9 us over direct, the driver's executes
+  take 539.0, the 11 splits about 117 to 128 and the 6 parts with count 0 about 54 to 65. With
+  each part preprocessed apart from its execute (`vkCmdPreprocessGeneratedCommandsEXT`), the
+  preprocesses took 263.9 us and the executes 592.9. Job 64194: the arms alternating over 9
+  rounds, every turn at P0 with the SM at 1,950 MHz and the memory at 9,751 MHz, medians of 9
+  turns of at least 300 ms each.
 - A command's buffer slots reach its functions through the push bytes alone, so each slot a
   command binds needs its word in the state's 256 push bytes, which the vertex and fragment
   functions and all their other fields share. The translator places the vertex function's fields
