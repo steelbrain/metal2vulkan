@@ -219,8 +219,8 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   through its runtime sampler slots and its constexpr samplers and reads them through those (MSL
   4.1's `read(sampler, coord)`, its border texel from bits 0-11 of the ID's word). Any other
   function is refused as `Unsupported{IdentityDomains}`, whose symbol names the first such form
-  the function holds: one that samples through an argument buffer's sampler or an array of
-  samplers or samples an argument buffer's texture, emulates a sampler's anisotropy, samples a 1D
+  the function holds: one that samples through an argument buffer's sampler or samples an
+  argument buffer's texture, emulates a sampler's anisotropy, samples a 1D
   texture or at pixel coordinates through a bicubic filter, uses a texture buffer, a slot's levels
   or swizzle, a two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture
   through another numeric type or as raw texels, or uses any other state of a texture or sampler
@@ -1115,8 +1115,9 @@ for dependency in &pipeline.dependencies {
   array's constexpr samplers by its slot. The module takes this form where the candidates' handles
   are consecutive, each candidate's sampling is the same but for its sampler, and the device indexes
   a sampler array by a value that may differ between invocations
-  (`shaderSampledImageArrayNonUniformIndexing`, which heap textures already need); otherwise it
-  switches over the candidates, one sampling per candidate.
+  (`shaderSampledImageArrayNonUniformIndexing`, which heap textures already need); otherwise, and
+  always under the identity domains (whose stages bind no set-0 sampler), it switches over the
+  candidates, one sampling per candidate, each through the constexpr sampler the consumer pushes.
 - Each binding's `variables` is the most variables one stage's entry point uses at it (those its
   `OpEntryPoint` lists): a function that reaches a buffer through several types uses a variable of
   each type at the buffer's binding. A set-0 uniform or storage buffer binding may be created as its dynamic type
