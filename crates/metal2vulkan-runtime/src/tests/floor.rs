@@ -2076,6 +2076,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut line_rasterization,
             mut generated_commands,
             mut maintenance5,
+            mut maintenance8,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -2126,6 +2127,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             features = features
                 .push_next(&mut generated_commands)
                 .push_next(&mut maintenance5);
+        }
+        if enabled(crate::floor::MAINTENANCE8) {
+            features = features.push_next(&mut maintenance8);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions
