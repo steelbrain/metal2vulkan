@@ -234,20 +234,10 @@ fn image_write(kind: ResourceKind) -> TypedModule {
     fragment(b, main)
 }
 
-/// The shader-side stencil's shadow is the product's, so its writes do not make the function run
-/// per sample; a write of another storage image (the function's texture) does.
-#[test]
-fn the_shadow_stencils_writes_are_not_the_functions() {
-    let shadow = ResourceKind::Synthetic(SyntheticBinding::ShadowStencil);
-    assert!(!writes_memory(&image_write(shadow)).expect("shadow"));
-    let imageblock = ResourceKind::Synthetic(SyntheticBinding::Imageblock);
-    assert!(writes_memory(&image_write(imageblock)).expect("another image"));
-}
-
-/// A color's interlocked storage form is the product's, carrying Metal's color attachment write,
+/// A tile function's color attachment is the product's, carrying Metal's color attachment write,
 /// so its writes are not the function's; a texture's write is.
 #[test]
-fn a_colors_storage_form_writes_are_not_the_functions() {
+fn a_tile_attachments_writes_are_not_the_functions() {
     let color = ResourceKind::TileAttachment(2);
     assert!(!writes_memory(&image_write(color)).expect("color"));
     assert!(writes_memory(&image_write(ResourceKind::Texture)).expect("a texture"));

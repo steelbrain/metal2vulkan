@@ -86,8 +86,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::UniformViewRange { .. } => Mechanism::Variant,
         // Instantiation compares the bound Metal addresses.
         RuntimeFact::UniformViewAliasing { .. } => Mechanism::PlanTimeCheck,
-        // The pass's imageblock storage image, bound to every draw of the pass.
-        RuntimeFact::FragmentImageblock { .. } => Mechanism::RenderPassContract,
         // The render area is specialized; the planner refuses a layered pass.
         RuntimeFact::TileFunction => Mechanism::Specialization,
         // Compiled in under the function's key; the tile pipeline checks its descriptor.
@@ -117,12 +115,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         } => Mechanism::PlanTimeCheck,
         // The binder writes the bound structure's instance count per dispatch or draw.
         RuntimeFact::AccelerationStructureInstanceCount { .. } => Mechanism::PushConstant,
-        // The consumer binds the attachment as a storage image outside the subpass's color
-        // attachments (`GraphicsState::storage_attachments`).
-        RuntimeFact::InterlockedFramebufferFetch { .. } => Mechanism::RenderPassContract,
-        // The consumer keeps the stencil's shadow and binds it, with the encoder's stencil state
-        // as push data (`GraphicsState::shadow_stencil`).
-        RuntimeFact::ShadowStencil { .. } => Mechanism::RenderPassContract,
         // The vote word is fixed in the module; the planner counts it against the limit.
         RuntimeFact::PredicationVote => Mechanism::PlanTimeCheck,
         // The binder pushes the bound format's class, which selects its conversion.
@@ -209,13 +201,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
             BufferAccess::Addressed => Mechanism::Variant,
             BufferAccess::Floor => Mechanism::PlanTimeCheck,
         },
-        // A separate compile that declares early tests, which a draw whose tests drop fragments
-        // but write and count nothing asks for; the planner refuses a draw whose tests may write
-        // or count.
-        RuntimeFact::TestedStorageWrites { .. } => Mechanism::Variant,
-        // The tests a draw that moves the function's color into the interlocked storage form
-        // selects: that variant's.
-        RuntimeFact::MovableStorageWrites { .. } => Mechanism::Variant,
         // The binder's regions carry the tile as Metal's threadgroup; the tile pipeline checks its
         // descriptor's flag.
         RuntimeFact::TileThreadgroup { .. } => Mechanism::RegionSelected,

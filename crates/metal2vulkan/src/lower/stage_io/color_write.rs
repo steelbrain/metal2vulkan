@@ -31,11 +31,7 @@
 //!   (`stage_io::returns_no_nan`) stores none, and records no note for one.
 //!
 //! An attachment no lane of which rounds is not listed as rounded: it keeps its Vulkan blend of
-//! one and zero, through which the facts were measured too. A write in the storage form records
-//! the device's conversion: the facts are of the device's conversion of an output variable. A
-//! storage write the shader blends into a 16-bit float attachment stores the NaN of the device's
-//! arithmetic, which the storage image's store converts, noted `PrecisionNote::DeviceNanEncoding`
-//! (Metal stores every NaN of the blend as `0x7e00`). An attachment a lane of
+//! one and zero, through which the facts were measured too. An attachment a lane of
 //! which rounds is listed as rounded (`rounded_colors`), and takes no Vulkan blend of one and zero.
 
 use crate::lower::arith::color_write;
@@ -51,8 +47,7 @@ use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 
 /// Plan the write of a fragment function's output of form `f` to color attachment `color`
-/// (dual-source index 0), through an output variable or in the storage form (see the module
-/// docs). `nan_free`: every value the function returns there is a constant none of whose lanes is
+/// (dual-source index 0), through an output variable (see the module docs). `nan_free`: every value the function returns there is a constant none of whose lanes is
 /// a NaN, which stores no NaN.
 pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
     if cx.stage != Stage::Fragment {
@@ -66,27 +61,13 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
         .interface
         .color_writes
         .insert(color, rules);
-    // A storage write the shader blends into a 16-bit float attachment stores the blend's result:
-    // a `half` output's `half` in every channel, which the device converts exactly, and a `float`
-    // output's `float`, which the storage image's store rounds to `half` as the device rounds it
-    // (`PrecisionNote::DeviceColorConversion`). No
-    // conversion of an output variable's bears on it, and its NaN is the device's arithmetic's,
-    // which the storage image's store converts (`PrecisionNote::DeviceNanEncoding`).
-    // One the shader blends into an 8-bit unorm attachment stores the blend's result, which the
-    // storage image's store converts (`fetch::unorm8_blended`, which notes it).
-    let shader_blended = crate::lower::fragment::blends_in_storage(cx, color);
-    let sixteen_blended = crate::lower::fragment::blends_sixteen_in_storage(cx, color);
     let mut lanes = [None; 4];
     let mut device = false;
     let mut blended = false;
     let mut nans = false;
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
-        nans |= !shader_blended && !nan_free && color_writes::half_float(rule) && !nan_kept(f);
-        if sixteen_blended && f.float_fmt() == Some(FloatFmt::F32) {
-            device = true;
-            continue;
-        }
+        nans |= !nan_free && color_writes::half_float(rule) && !nan_kept(f);
         match (rule, f.float_fmt()) {
             (_, None | Some(FloatFmt::F64 | FloatFmt::BFloat)) => {}
             // A `half` is a half already, whichever way the channel rounds.
@@ -103,8 +84,8 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
             ) => {}
             // The pipeline's rounding mode, which the function applies.
             (rule @ ChannelWrite::FloatNearestEven { .. }, Some(_)) => *slot = Some(rule),
-            (ChannelWrite::BlendedNearestEven { .. }, _) => blended |= !shader_blended,
-            (_, Some(_)) => device |= !shader_blended,
+            (ChannelWrite::BlendedNearestEven { .. }, _) => blended = true,
+            (_, Some(_)) => device = true,
         }
     }
     if device {
@@ -113,7 +94,6 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
     if blended {
         cx.precision.insert(PrecisionNote::BlendedWriteRounding);
     }
-    nans |= sixteen_blended;
     if nans {
         cx.precision.insert(PrecisionNote::DeviceNanEncoding);
     }

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::bind::{self, PlanesCopy};
 use crate::device::{Device, DevicePolicy};
-use crate::error::{Error, Feature};
+use crate::error::Error;
 use crate::spirv::testing::{all_ones_divisions, committed_descriptions};
 
 /// A module function at one parameter: what it is called, and its words on a device.
@@ -32,10 +32,6 @@ fn modules() -> Vec<Build> {
             out.push((name, build));
         };
     for copy in PlanesCopy::ALL {
-        push(
-            format!("planes_split_module({copy:?})"),
-            Box::new(move |d| Ok(bind::planes_split_module(d, copy)?.spirv)),
-        );
         for samples in [2, 4, 8] {
             push(
                 format!("interleave_split_module({copy:?}, {samples})"),
@@ -52,10 +48,6 @@ fn modules() -> Vec<Build> {
             Box::new(move |d| Ok(bind::mesh_arguments_module(d, form)?.spirv)),
         );
     }
-    push(
-        "stencil_split_module".into(),
-        Box::new(|d| Ok(bind::stencil_split_module(d, Feature::Format)?.spirv)),
-    );
     out
 }
 

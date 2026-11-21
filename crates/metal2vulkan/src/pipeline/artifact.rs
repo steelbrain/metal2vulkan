@@ -11,7 +11,7 @@ use crate::cache::{Hash256, PipelineKey, SpecializationKey};
 use crate::device::requirements::Requirements;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::graphics::GraphicsState;
-use crate::pipeline::interface::{LevelReads, PipelineInterface, SampledLevels, SnapshotRefusal};
+use crate::pipeline::interface::{LevelReads, PipelineInterface, SampledLevels};
 use crate::pipeline::layout::PipelineLayout;
 use crate::pipeline::sym::SpecKey;
 use crate::pipeline::vertex::VertexInputState;
@@ -95,12 +95,7 @@ fn stage_footprint(stage: &StageModule) -> u64 {
         + vector_bytes::<PrecisionNote>(stage.precision_notes.capacity())
         + vector_bytes::<SpecializedNote>(stage.specialized_notes.capacity())
         + clauses
-        + vector_bytes::<u32>(
-            stage.rounded_colors.capacity()
-                + stage.own_pixel_textures.capacity()
-                + stage.snapshot_textures.capacity(),
-        )
-        + vector_bytes::<(u32, SnapshotRefusal)>(stage.snapshot_refusals.capacity())
+        + vector_bytes::<u32>(stage.rounded_colors.capacity() + stage.own_pixel_textures.capacity())
         + vector_bytes::<LevelReads>(stage.level_reads.capacity())
         + (stage.level_reads.iter())
             .map(|reads| vector_bytes::<SampledLevels>(reads.sampled.capacity()))
@@ -189,14 +184,6 @@ pub struct StageModule {
     /// rectangle bounding its scissors, a pixel wider each way for its helper invocations, on a
     /// framebuffer below `2^24` pixels a side. Empty for every other stage.
     pub own_pixel_textures: Vec<u32>,
-    /// The texture slots of `own_pixel_textures` a draw can read through a snapshot an earlier
-    /// draw of the same primitives took (`StageInterface::snapshot_textures`), sorted. Empty for
-    /// every other stage.
-    pub snapshot_textures: Vec<u32>,
-    /// Why each slot of `own_pixel_textures` that `snapshot_textures` leaves out is left out
-    /// (`StageInterface::snapshot_refusals`): every [`SnapshotRefusal`] that holds for it, sorted
-    /// by slot and then by refusal. Empty for every other stage.
-    pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>,
     /// The levels of its bound view each texture slot's reads reach, one entry a slot, sorted by
     /// slot (`StageInterface::level_reads`). Empty for a kernel and a stage the link makes.
     pub level_reads: Vec<LevelReads>,
@@ -807,10 +794,7 @@ pub enum PrecisionNote {
     /// (`pipeline::link::vertex`): Metal widens its NaN to `0x7fc00000`, and the device's
     /// widening need not. A pulled attribute's decode records it in the module (a vertex
     /// function's, a kernel's `[[stage_in]]` attribute's, a post-tessellation function's). Also
-    /// recorded by a
-    /// 16-bit float attachment's blend the function computes in the storage form: a NaN of the
-    /// blend is the device's arithmetic's, which the storage image's store converts, where Metal
-    /// stores every NaN of the blend as `0x7e00`. Also recorded by a `float` read of a heap's texture buffer on a device without
+    /// recorded by a `float` read of a heap's texture buffer on a device without
     /// Metal's sampler: Metal hands back a half-float texel's NaN as `0x7fc00000`, and the handle
     /// carries no class to convert it by. The runtime announces it too for a GPU blit through an
     /// `RG11B10Float` texture Metal keeps losslessly compressed: Metal's compression makes a NaN
@@ -1021,9 +1005,7 @@ pub enum PrecisionNote {
     /// Metal's integer store rounds such a channel to nearest even, the device's store as it rounds
     /// a `float` write (toward zero on every measured driver: within one unit in the last place of
     /// the channel's value, a finite value past 65504 stored as 65504 where Metal's `half` is the
-    /// infinity). So does a fragment function's `float` output blended in the shader into a 16-bit
-    /// float attachment it renders through a storage image (the pixel interlock's fetch), whose
-    /// `half` the store rounds.
+    /// infinity).
     ///
     /// Also: a blend into a packed 16-bit unorm attachment (`B5G6R5Unorm`, `A1BGR5Unorm`,
     /// `ABGR4Unorm`, `BGR5A1Unorm`) reads what the device's attachment holds, its channels' codes,
@@ -1038,10 +1020,10 @@ pub enum PrecisionNote {
     /// than Metal (3,527 of 94,732,288 channels measured a code apart, none further). `RGBA8Unorm`
     /// and `RGB10A2Unorm` hold their codes there, as the device does.
     ///
-    /// Also: a blend the function computes in the storage form into an 8-bit unorm attachment
-    /// (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`), whose result the storage image's store
-    /// converts to its code, where Metal rounds the exact product with 255 (a NaN 0); the store may
-    /// take the other code near a tie.
+    /// Also: a blend the function computes over the input attachment of an attachment held with
+    /// its channels rotated (`ARGB8Unorm`), whose result the device's color write converts to its
+    /// code, where Metal rounds the exact product with 255 (a NaN 0); the write may take the other
+    /// code near a tie.
     ///
     /// Also: a render pipeline's private logic operation the fragment function computes on a
     /// device without Vulkan's `logicOp` (`LoweringInputs::logic_operation`), into an 8- or 16-bit
@@ -1135,8 +1117,8 @@ pub enum PrecisionNote {
     /// even, and the device's blend converts it by its own rounding (MoltenVK's toward zero), so
     /// a blended value off the half grid may store the neighbouring half; under a constant factor
     /// Metal's result is neither rule's on 2,376 of 580,508 `RGBA16Float` channels near the half
-    /// denormals. The exact path, the blend in the function under the pixel
-    /// interlock, is not built.
+    /// denormals. The exact path, the blend in the function over an ordered input attachment, is
+    /// not built.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, deferred in C3 until an exact path exists.
@@ -1219,8 +1201,8 @@ pub enum PrecisionNote {
     /// of a module without fast math keeps a zero factor's product, the destination's by zero
     /// there: a NaN of an infinite or NaN texel, and `+0` of a `-0` output over a texel of `+0` or
     /// above (plain Metal on the M3 Max under macOS 27.0.1, `half4` and `float4`
-    /// outputs). Where the function does not compute that blend in the storage form, the pipeline
-    /// blends the output by the device's blend, whose answer for those texels is the device's own,
+    /// outputs). The pipeline blends the output by the device's blend, whose answer for those
+    /// texels is the device's own,
     /// where a `float` output would otherwise store as written.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
@@ -1358,9 +1340,8 @@ pub enum PrecisionNote {
     /// A fragment function of a module compiled with fast math (`air.compile.fast_math_enable`)
     /// returns a `half` color output to an attachment the pipeline has that stores some channel
     /// (its write mask names one of its format's channels; `StageIo::half_fast_colors`, which the
-    /// pipeline's stage reads, or the interlocked storage form's write), where
-    /// [`PrecisionNote::HalfOutputPrecision`]'s conditions hold; or computes the blend of a 16-bit
-    /// float attachment it fetches where Metal's compiler may regroup it (below). Metal's compiler
+    /// pipeline's stage reads), where [`PrecisionNote::HalfOutputPrecision`]'s conditions hold.
+    /// Metal's compiler
     /// folds the attachment's blend and conversion into the function and, under fast math, fuses
     /// and regroups them per pipeline: it reads the output's `float` or its `half`, rounds each
     /// factor and product to `half` or keeps it, and takes a lerp or a common factor, by the
@@ -1382,22 +1363,6 @@ pub enum PrecisionNote {
     /// the sweep; the device's `float` blend modelled on the same draws, three units). A consumer
     /// may relay it as a known difference. The output reaches every device widened to `float`.
     ///
-    /// A fragment function that fetches a blended `R16Float`, `RG16Float` or `RGBA16Float`
-    /// attachment in the interlocked storage form computes the blend itself, no Vulkan blend
-    /// applying to a storage write (`lower::fragment::fetch`): in the arithmetic of its `half` or
-    /// `float` output of one to four lanes, as Metal's compiler appends it (plain Metal on the M3
-    /// Max under macOS 27.0.1: every channel of 677 and 1,350 blend states into each format, half
-    /// and float outputs, safe and fast math). Under fast math it records this note where the blend
-    /// is not Metal's exactly: where Metal's compiler may fold the output's own arithmetic into the
-    /// blend (a lane computed by a fast-math operation, a constant, or the fetched color: a
-    /// returned product fused into the blend's one minus the source alpha), or the blend's fast
-    /// form is a sum, a lerp, a common factor or a product rounded beside a fused one (but a blend
-    /// constant's difference), which the sweeps fit in most states but not all. It then stores
-    /// within 2 units in the last place of a `half` of Metal's at the operands' magnitude, 16 at
-    /// the stored value's under cancellation (below one at the function's own largest term). Where
-    /// every lane of the output is opaque to the blend and its form fits every state, the blend is
-    /// Metal's and the function records nothing.
-    ///
     /// The pipeline's stage also records it for an attachment of `StageIo::half_fast_colors` that
     /// stores some channel **without** blending (`color_writes::stores_output`, which is the test
     /// it makes), and that is deliberate rather than the blend's name read loosely: under fast math
@@ -1405,8 +1370,8 @@ pub enum PrecisionNote {
     /// conversion round once, where this rounds the output to `half` first, so a channel whose format
     /// converts the `float` and its `half` to different codes may store a value apart from Metal's.
     /// It is the cause [`PrecisionNote::HalfOutputPrecision`] records for a module naming no math
-    /// mode, under a name that reads as a blend's alone. Measured in the interlocked storage form,
-    /// whose write stores the output's `half`: into `BGRA8Unorm`, one code apart from Metal's in
+    /// mode, under a name that reads as a blend's alone. Measured through a write that stores the
+    /// output's `half`: into `BGRA8Unorm`, one code apart from Metal's in
     /// 2.2 to 2.5% of pixels for an output computed through one division or one `fwidth`, and in
     /// 2.1 to 4.5% for a coverage computed through both, where the same arithmetic with a `float`
     /// output stores Metal's codes (MoltenVK 1.4.2 on an Apple M3 Max, macOS 27.0.1). The 12
@@ -1768,9 +1733,8 @@ pub enum PrecisionNote {
     /// the device's. The same conversions serve, noted alike: an implicit imageblock access of a
     /// normalized attachment (a `half` one's load rounding the unpacked `float` once more, where
     /// Metal rounds `c / D` once), a fragment function's read and write of an 8-bit sRGB attachment
-    /// in the interlocked storage form or through its word view, and a snapshot read's decode of a
-    /// normalized code (`c` times the `f32` nearest `1 / D`, where Metal reads `c / D` correctly
-    /// rounded). So does every conversion of an extended-range, padded 10-bit or bfloat texel
+    /// through its word view. So does every conversion of an extended-range, padded 10-bit or
+    /// bfloat texel
     /// (`lower::arith::extended_range`; `ArithPlan::converts` records it), on every device, no
     /// Vulkan format holding them: a read `float(c - 384)` (a padded code's `float(c)`) times the
     /// `f32` nearest `1 / 510` (`1 / 1023`), a write `RoundEven` of the clamped value's `f32`
@@ -1870,33 +1834,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     DeviceAlphaCoverage,
-    /// A fragment function reads a color attachment the pipeline blends, in the interlocked
-    /// storage form (`lower::fragment::fetch`, on a device that orders framebuffer fetch only
-    /// through the pixel interlock), of a format whose blend arithmetic of Metal's the translation
-    /// does not build: a format held directly whose channels read as floats, but a 16-bit float
-    /// one, an sRGB one and an extended-range one (a 32-bit float, 16-bit normalized, 8-bit signed
-    /// normalized, 10-bit, packed float or `A8Unorm` format, among others), an 8-bit unorm one
-    /// written by an output of fewer than four lanes, and a 16-bit float or 8-bit unorm one under a
-    /// blend of the second source or beside a second (index 1) output. No Vulkan blend applies to
-    /// a storage write, so the shader computes the pipeline's blend itself: in `float`, each
-    /// factor, product and sum
-    /// rounded to nearest even, a factor of zero keeping its product, the source and the blend
-    /// color clamped first to a normalized format's range (`[0, 1]`, `[-1, 1]`; a NaN to its low
-    /// end) as Vulkan's blend clamps them, an output's missing lane zero, the result stored through
-    /// the device's conversion. Metal's blend arithmetic for these formats is not measured, so the
-    /// recorded bound is not known; a blend in `float` of a 32-bit float format agrees with one
-    /// that fuses a product within that product's rounding, and one of a format of fewer bits than
-    /// a `float` within the format's own rounding of the result where Metal's arithmetic is at
-    /// least as fine. A factor of the second source reads the function's second output, clamped as
-    /// the source. An 8-bit sRGB attachment (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`,
-    /// `BGRA8Unorm_sRGB`) under a blend of the second source, a one- or two-channel one under a
-    /// lerp, each in a module compiled with fast math, and one written by an output of fewer than
-    /// four lanes, record it too: there the shader computes Metal's 8-bit unorm blend's rounded
-    /// forms over the decoded texel, in the output's type (a missing lane zero), and stores the
-    /// result by Metal's sRGB encode (`extended_range::Blend::srgb8`), which is Metal's without
-    /// fast math at four lanes; under fast math Metal regroups the blend, unmeasured.
-    /// Validation derives no tolerance from it.
-    UnmeasuredFetchBlend,
     /// A fragment function reads an `interpolant` through `interpolate_at_offset(offset)`, which
     /// Metal evaluates at the offset as given from the pixel's upper-left corner, at any distance
     /// and on no grid (the Apple M3 Max, macOS 27.0.1: an offset of 0.999 read at 0.999, one of
@@ -1931,8 +1868,8 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     ExtrapolatedInterpolation,
-    /// A fragment function reads a color attachment (framebuffer fetch) on a device with neither
-    /// rasterization-order color attachment access nor `fragmentShaderPixelInterlock`. It reads
+    /// A fragment function reads a color attachment (framebuffer fetch) on a device without
+    /// rasterization-order color attachment access. It reads
     /// the attachment as an input attachment, and the consumer records a barrier of the subpass's
     /// dependency on itself, by region, from the color writes of the draws before to the input
     /// attachment reads of a draw that fetches (and from those reads to the color writes of the

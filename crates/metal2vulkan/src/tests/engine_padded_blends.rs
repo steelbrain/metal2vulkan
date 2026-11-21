@@ -3,18 +3,16 @@
 //! `probes/padded_and_bfloat_blends.m` of the conformance crate), and which no device blends: the
 //! attachment holds the raw words in an unsigned integer format.
 //!
-//! The function computes the blend over an ordered read of the attachment (`lower::fragment::fetch`,
-//! `lower::fragment::input_blend`); a blend into one of Apple's extended-range forms, which Metal's
-//! tile holds as `half`, is refused (`blended_pipelines`). On every committed profile
-//! that orders fetch through the pixel interlock alone, `rt6_samples`' `half4` and `float4` fills
-//! compile with color 0 in the storage form under premultiplied source-over and one plus one, the
-//! fact naming the blend, and pass L3; so do `xrb_dual`'s second-source blends, whose index-1
-//! output the blend reads, and a write mask of some of the channels. On every one that orders it
-//! through rasterization-order input attachments the whole pipeline is made with color 0's blend
-//! computed over its input attachment (`RuntimeFact::ExtendedRangeInputBlend`), the attachment a
-//! color attachment of the raw format with no Vulkan blend. On one that orders it in neither form
-//! the pipeline is refused naming the two orderings. Before the blend was built every one of these
-//! was refused `NotImplemented(Format)`. No GPU is used.
+//! The function computes the blend over an ordered read of the attachment
+//! (`lower::fragment::input_blend`); a blend into one of Apple's extended-range forms, which
+//! Metal's tile holds as `half`, is refused (`blended_pipelines`). On every committed profile that
+//! orders fetch through rasterization-order input attachments, `rt6_samples`' `half4` and `float4`
+//! fills under premultiplied source-over and one plus one, `xrb_dual`'s second-source blends,
+//! whose index-1 output the blend reads, and a write mask of some of the channels make the whole
+//! pipeline with color 0's blend computed over its input attachment
+//! (`RuntimeFact::ExtendedRangeInputBlend`), the attachment a color attachment of the raw format
+//! with no Vulkan blend. On one that does not order it the pipeline is refused naming the ordering.
+//! No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -23,7 +21,7 @@ use std::path::Path;
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::error::{DescriptorError, Error, MetalAnswer, Needs};
-use crate::library::{FunctionArtifact, Library};
+use crate::library::Library;
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
@@ -32,9 +30,7 @@ use crate::pipeline::descriptor::{
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::RenderLinkInputs;
 use crate::pipeline::lower_inputs::{BlendEquation, FramebufferFetchInputs, LoweringInputs};
-use crate::pipeline::testing::{
-    compile_with, engine_dir, fragment_inputs, link_and_validate, AssembleError,
-};
+use crate::pipeline::testing::{compile_with, engine_dir, fragment_inputs, AssembleError};
 use crate::spirv::testing::committed_profiles;
 use crate::vk;
 
@@ -128,27 +124,8 @@ fn state(
     let mut r = RenderLinkInputs::new();
     r.color_attachments[0] = Some(attachment(pf, eq, mask));
     let mut inputs = fragment_inputs(&r, p);
-    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-        [0],
-        &r.color_attachments,
-        false,
-        false,
-        1,
-    ));
+    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0], &r.color_attachments));
     inputs
-}
-
-/// Color 0's storage form in `a`: whether it writes, and its blend.
-fn fetched(a: &FunctionArtifact) -> Option<(bool, Option<BlendEquation>)> {
-    a.facts.iter().find_map(|f| match f {
-        RuntimeFact::InterlockedFramebufferFetch {
-            color: 0,
-            writes,
-            blend,
-            ..
-        } => Some((*writes, *blend)),
-        _ => None,
-    })
 }
 
 /// The device of committed profile `stem`.
@@ -161,8 +138,7 @@ fn device(stem: &str) -> Device {
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
-/// Whether `e` is a refusal the device's lack of a capability makes, whatever the blend (a
-/// raw format without the storage access the form needs).
+/// Whether `e` is a refusal the device's lack of a capability makes, whatever the blend.
 fn device_gap(e: &Error) -> bool {
     matches!(e, Error::Unsupported(u) if u.needs != Needs::NotImplemented)
 }
@@ -228,7 +204,7 @@ fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
     let rgb = ColorWriteMask::RED
         .union(ColorWriteMask::GREEN)
         .union(ColorWriteMask::BLUE);
-    let (mut interlocked, mut inputs, mut unordered) = (0, 0, 0);
+    let (mut inputs, mut unordered) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for pf in PADDED {
@@ -237,29 +213,7 @@ fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
                     for mask in [ColorWriteMask::ALL, ColorWriteMask::RED, rgb] {
                         let what = format!("{stem} {pf:?} {fragment} {eq:?} {mask:?}");
                         let made = pipeline(&dev, (bc, vertex, fragment), attachment(pf, eq, mask));
-                        if crate::lower::fragment::interlock_orders(&p) {
-                            let a = match compile_with(bc, fragment, &p, &state(&p, pf, eq, mask)) {
-                                Ok(a) => a,
-                                Err(e) if device_gap(&e) => {
-                                    eprintln!("{what}: {e}");
-                                    continue;
-                                }
-                                Err(e) => panic!("{what}: {e}"),
-                            };
-                            assert_eq!(
-                                fetched(&a),
-                                Some((true, Some(eq))),
-                                "{what}: {:?}",
-                                a.facts
-                            );
-                            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                            let made = made.unwrap_or_else(|e| panic!("{what}: the pipeline: {e}"));
-                            assert!(
-                                !made.graphics.storage_attachments.is_empty(),
-                                "{what}: no storage attachment"
-                            );
-                            interlocked += 1;
-                        } else if crate::lower::fragment::inputs_order(&p) {
+                        if crate::lower::fragment::inputs_order(&p) {
                             let a = made.unwrap_or_else(|e| panic!("{what}: {e}"));
                             let blends = input_blends(&a);
                             assert_eq!(blends.len(), 1, "{what}: {blends:?}");
@@ -283,9 +237,8 @@ fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
             }
         }
     }
-    assert!(interlocked > 0, "no profile blends in the storage form");
     assert!(inputs > 0, "no profile blends over the input attachment");
-    assert!(unordered > 0, "no profile orders fetch in neither form");
+    assert!(unordered > 0, "no profile leaves fetch unordered");
 }
 
 /// A blend into a bfloat attachment (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) is Metal's
@@ -344,18 +297,16 @@ fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
 /// (`extended_range::tile_value`), as Metal's fetch does: each loaded code's value rounded to
 /// `half`, a `float4` input's too (the M3 Max under macOS 27.0.1, `probes/padded_fetch.m` of the
 /// conformance crate). `pfx_fetch`'s `float4` and `half4` reads of color 0 (mask none), stored into
-/// an `RGBA32Float` color 1, make the whole pipeline on every committed profile that orders fetch:
-/// through the pixel interlock with color 0 a storage attachment of the raw format the function
-/// does not write, or through rasterization-order input attachments with color 0 an attachment of
-/// the raw format read as an unsigned input attachment. On one that orders it in neither form it
-/// takes that input attachment too, ordered between draws alone, its fragment stage noting
-/// `UnorderedFetchWithinDraw`. Before the read was built each was refused
-/// `NotImplemented(FramebufferFetch)`. The negative control: a fetch of a bfloat attachment, whose
-/// read Metal answers unmeasured, stays `NotImplemented(Format)` on every profile.
+/// an `RGBA32Float` color 1, make the whole pipeline on every committed profile, color 0 an
+/// attachment of the raw format read as an unsigned input attachment: ordered where the profile
+/// orders fetch through rasterization-order input attachments, elsewhere ordered between draws
+/// alone, its fragment stage noting `UnorderedFetchWithinDraw`. The negative control: a fetch of a
+/// bfloat attachment, whose read Metal answers unmeasured, stays `NotImplemented(Format)` on every
+/// profile.
 #[test]
 fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
     use crate::error::Feature;
-    use crate::lower::fragment::{inputs_order, interlock_orders};
+    use crate::lower::fragment::inputs_order;
     use crate::metal::format::ExtendedRange;
     let Some(bc) = assembled("pfx_fetch") else {
         return;
@@ -378,52 +329,32 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
         d.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float));
         dev.compile_render_pipeline(&d, &Budget::standard())
     };
-    let (mut interlocked, mut inputs, mut unordered, mut bfloat) = (0, 0, 0, 0);
+    let (mut inputs, mut unordered, mut bfloat) = (0, 0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for fragment in ["pfx_fetch_read", "pfx_fetch_read_half"] {
             for pf in PADDED {
                 let what = format!("{stem} {pf:?} {fragment}");
                 let raw = ExtendedRange::of(pf).expect("padded").raw_format();
-                let made = made(&dev, fragment, pf);
-                if interlock_orders(&p) {
-                    let a = match made {
-                        Ok(a) => a,
-                        Err(e) if device_gap(&e) => {
-                            eprintln!("{what}: {e}");
-                            continue;
-                        }
-                        Err(e) => panic!("{what}: {e}"),
-                    };
-                    let uses: Vec<(u32, vk::Format, bool)> = a
-                        .graphics
-                        .storage_attachments
-                        .iter()
-                        .map(|s| (s.color_index, s.format, s.writes))
-                        .collect();
-                    assert_eq!(uses, [(0, raw, false)], "{what}");
-                    interlocked += 1;
-                } else {
-                    // Rasterization-order input attachments, or with neither ordered form input
-                    // attachments ordered between draws alone, noted.
-                    let a = made.unwrap_or_else(|e| panic!("{what}: {e}"));
-                    let state0 = a.graphics.color_attachments[0].expect("color 0");
-                    assert_eq!(state0.format, raw, "{what}");
-                    let read: Vec<u32> = a
-                        .graphics
-                        .input_attachments
-                        .iter()
-                        .map(|i| i.color_index)
-                        .collect();
-                    assert_eq!(read, [0], "{what}");
-                    let noted = (a.stages.iter()).any(|s| {
-                        (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
-                    });
-                    assert_eq!(noted, !inputs_order(&p), "{what}");
-                    match inputs_order(&p) {
-                        true => inputs += 1,
-                        false => unordered += 1,
-                    }
+                // Rasterization-order input attachments, or input attachments ordered between
+                // draws alone, noted.
+                let a = made(&dev, fragment, pf).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let state0 = a.graphics.color_attachments[0].expect("color 0");
+                assert_eq!(state0.format, raw, "{what}");
+                let read: Vec<u32> = a
+                    .graphics
+                    .input_attachments
+                    .iter()
+                    .map(|i| i.color_index)
+                    .collect();
+                assert_eq!(read, [0], "{what}");
+                let noted = (a.stages.iter()).any(|s| {
+                    (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
+                });
+                assert_eq!(noted, !inputs_order(&p), "{what}");
+                match inputs_order(&p) {
+                    true => inputs += 1,
+                    false => unordered += 1,
                 }
             }
             for pf in BFLOAT {
@@ -440,89 +371,7 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
             }
         }
     }
-    assert!(interlocked > 0, "no profile reads in the storage form");
     assert!(inputs > 0, "no profile reads through the input attachment");
-    assert!(unordered > 0, "no profile orders fetch in neither form");
+    assert!(unordered > 0, "no profile leaves fetch unordered");
     assert!(bfloat > 0, "no bfloat fetch was refused");
-}
-
-/// An unblended bfloat attachment (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) the draw moves into
-/// the interlocked storage form (named in `LoweringInputs::framebuffer_fetch`, as a render pass
-/// instance names a color it keeps out of its subpass for other draws) is written there as the
-/// fixed-function path writes it: Metal's bfloat code of the output's `half`
-/// (`extended_color::bfloat_output`), and under a mask of some channels the texel's kept channels
-/// as the attachment held them (the raw lanes of the texel the write read, as the fixed-function
-/// write mask keeps them). On every committed profile that orders fetch through the pixel
-/// interlock alone, `rt6_samples`' `float4` and `half4` fills compile with color 0 a written
-/// storage attachment under every mask and pass L3, the `float4` fill recording the pipeline's
-/// `textureWriteRoundingMode` its write rounds by. The same functions without the naming take no
-/// storage form (the control). Before, a write of some channels failed inside the lowering, and
-/// a write of every one stored a kernel write's code, which drops the low bits.
-#[test]
-fn an_unblended_bfloat_attachment_is_written_in_the_storage_form() {
-    use crate::lower::fragment::interlock_orders;
-    let Some(fills) = assembled("rt6_samples") else {
-        return;
-    };
-    let masks = [
-        ColorWriteMask::ALL,
-        ColorWriteMask::RED,
-        ColorWriteMask::GREEN.union(ColorWriteMask::ALPHA),
-        ColorWriteMask::NONE,
-    ];
-    let inputs = |p: &DeviceProfile, pf: PixelFormat, mask: ColorWriteMask, named: bool| {
-        let mut r = RenderLinkInputs::new();
-        let mut c = ColorAttachmentDescriptor::new(pf);
-        c.write_mask = mask;
-        r.color_attachments[0] = Some(c);
-        let mut inputs = fragment_inputs(&r, p);
-        if named {
-            inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-                [0],
-                &r.color_attachments,
-                false,
-                false,
-                1,
-            ));
-        }
-        inputs
-    };
-    let mut checked = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        if !interlock_orders(&p) {
-            continue;
-        }
-        for pf in BFLOAT {
-            for fill in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
-                for mask in masks {
-                    let what = format!("{stem} {pf:?} {fill} {mask:?}");
-                    let a = match compile_with(&fills, fill, &p, &inputs(&p, pf, mask, true)) {
-                        Ok(a) => a,
-                        Err(e) if device_gap(&e) => {
-                            eprintln!("{what}: {e}");
-                            continue;
-                        }
-                        Err(e) => panic!("{what}: {e}"),
-                    };
-                    assert_eq!(fetched(&a), Some((true, None)), "{what}: {:?}", a.facts);
-                    // A `float` output rounds by the pipeline's mode, which link holds.
-                    if mask != ColorWriteMask::NONE {
-                        let rounds = (fill == "rt6_fill_rgba32float")
-                            .then_some(crate::metal::TextureWriteRoundingMode::TowardZero);
-                        assert_eq!(a.interface.io.texture_write_rounding, rounds, "{what}");
-                    }
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                    // The control: unnamed, the attachment is the fixed function's.
-                    let plain = compile_with(&fills, fill, &p, &inputs(&p, pf, mask, false))
-                        .unwrap_or_else(|e| panic!("{what}: unnamed: {e}"));
-                    assert_eq!(fetched(&plain), None, "{what}");
-                    checked += 1;
-                }
-            }
-        }
-    }
-    assert!(
-        checked > 0,
-        "no interlock profile wrote a bfloat attachment"
-    );
 }

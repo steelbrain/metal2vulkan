@@ -4,8 +4,6 @@
 //! their values, and `device::mechanism(fact, profile)` is a total function with one [`Mechanism`]
 //! per (fact, profile).
 
-use crate::air::container::Hash256;
-
 use crate::pipeline::sym::{ImageHandleClass, SlotRef, Stage};
 
 /// Translation-relevant state that Metal binds at pipeline or encode time.
@@ -124,24 +122,6 @@ pub enum RuntimeFact {
     /// buffer slot the pipeline writes may be bound overlapping its window: instantiation checks
     /// the Metal addresses (`BindError::UniformViewAliased`).
     UniformViewAliasing { slot: SlotRef },
-    /// The fragment function reads or writes the render pass's imageblock, whose cells take
-    /// `words` 32-bit words per pixel (`air.imageblock_data_size` rounded up to a word): the
-    /// consumer binds the pass's imageblock storage (`SyntheticBinding::Imageblock`), which
-    /// `GraphicsState::fragment_imageblock` describes. `writes`: the function writes the
-    /// imageblock, so the storage holds its write before the pipeline's coverage (alpha to
-    /// coverage) could drop the fragment (the depth and stencil tests run before its write: its
-    /// module declares early tests, or it states [`TestedStorageWrites`](Self::TestedStorageWrites));
-    /// `master`: the fingerprint of the master
-    /// layout its views view (`FragmentImageblock::master`); `data_size`: the cell's bytes
-    /// (`air.imageblock_data_size`); `alignment`: the alignment Metal states for its views
-    /// (`air.arg_type_align_size`, `FragmentImageblock::alignment`).
-    FragmentImageblock {
-        words: u32,
-        writes: bool,
-        master: Hash256,
-        data_size: u32,
-        alignment: u32,
-    },
     /// The kernel is a tile function (`Device::compile_tile_pipeline`): a dispatch covers the
     /// render pass's render area (`BindState::render_area`, `SpecKey::RenderAreaWidth` and
     /// `SpecKey::RenderAreaHeight`) in tiles of the imageblock size (`BindState::imageblock_size`),
@@ -228,52 +208,6 @@ pub enum RuntimeFact {
     /// one). A slot read only this way needs no acceleration-structure descriptor, so no ray
     /// tracing feature.
     AccelerationStructureInstanceCount { slot: SlotRef },
-    /// The function reads color attachment `color`, and writes it when `writes`, as a storage
-    /// image inside the ordered pixel interlock: framebuffer fetch on a device that orders it
-    /// only that way (no `rasterizationOrderColorAttachmentAccess`, with
-    /// `fragmentShaderPixelInterlock`), where its render pipeline's state
-    /// (`LoweringInputs::framebuffer_fetch`) lets the form be exact
-    /// (`GraphicsState::storage_attachments`). `format` is the attachment's Vulkan format, which
-    /// the module's storage image declaration serves. `early_tests`: the module declares early
-    /// fragment tests: Metal's function declares them, or its pipeline state has a depth or
-    /// stencil attachment and they keep its writes Metal's (it runs no discard, exports no depth,
-    /// stencil, or coverage, and writes no other memory), or its draws' tests write nothing
-    /// (`TestedStorageWrites`). Link checks the form against the pipeline it links into: one whose
-    /// state would not choose it, would view another format, or needs early tests the module does
-    /// not declare (a depth or stencil attachment where it was compiled without one, but for
-    /// `TestedStorageWrites`) is `NeedsInput(FramebufferFetch)`. `kept`: the format's channels each
-    /// write keeps from the texel it overwrites, those outside the descriptor's write mask, which
-    /// the write takes from the texel it reads first (all four where the mask covers none of the
-    /// format's channels, so it stores nothing; empty where it covers every one, or the function
-    /// does not write the attachment); a pipeline of another mask is `NeedsInput(FramebufferFetch)`
-    /// too. `blend`: the blend the function computes in the shader, from the texel it reads first,
-    /// for an extended-range attachment it writes under blending, which the function then need not
-    /// read, or a 16-bit float one (Metal's blend in the output's arithmetic); a pipeline of another
-    /// blend there is `NeedsInput(FramebufferFetch)` too. `rounded`: that blend is computed
-    /// without fast math, each product rounded before the sum
-    /// (`lower::arith::extended_range::blend::BlendMath::Rounded`), whose model holds blends the
-    /// fast one refuses; link checks the blend under that math.
-    InterlockedFramebufferFetch {
-        color: u32,
-        format: crate::vk::Format,
-        writes: bool,
-        early_tests: bool,
-        kept: crate::vk::ColorComponentFlags,
-        blend: Option<crate::pipeline::lower_inputs::BlendEquation>,
-        rounded: bool,
-    },
-    /// The function's `[[stencil]]` output is a shader-side stencil: on a device without
-    /// `VK_EXT_shader_stencil_export`, with the ordered pixel interlock, the function applies
-    /// Metal's stencil test and operations to a shadow of the stencil attachment inside the
-    /// interlock (`SyntheticBinding::ShadowStencil`, `PushField::ShadowStencilState`) and kills a
-    /// fragment that fails (`GraphicsState::shadow_stencil`). `formatless`: the module declares
-    /// the shadow without a format (`Unknown`), else as `R8ui`. `multisampled`: compiled for a
-    /// pipeline of more than one sample (`LoweringInputs::multisampled`), the shadow is a
-    /// multisampled image and the function tests each sample of its coverage.
-    ShadowStencil {
-        formatless: bool,
-        multisampled: bool,
-    },
     /// The kernel's predicated walk votes in a workgroup word of its own
     /// (`lower::simd::divergent::VOTE_BYTES`, 4 bytes beside its threadgroup arena): it runs a
     /// workgroup barrier that part of the workgroup skips in the source in every invocation, and
@@ -406,10 +340,9 @@ pub enum RuntimeFact {
     /// The tile function declares an explicit imageblock that stands alone (no implicit one
     /// beside it, and not aliased onto one), of `data_size` bytes (`air.imageblock_data_size`)
     /// whose layout aligns to `alignment` (`air.arg_type_align_size`). Its cells are the render
-    /// pass's imageblock storage (`SyntheticBinding::Imageblock`), which the pass's fragment
-    /// functions' imageblocks are in and the consumer keeps for the pass: a dispatch whose plan
-    /// writes `WriteSource::Imageblock` binds it, and the pass's draws and dispatches share it
-    /// by its bytes. With the color attachments it gives the tile pipeline state's
+    /// pass's imageblock storage (`SyntheticBinding::Imageblock`), which the consumer keeps for
+    /// the pass: a dispatch whose plan writes `WriteSource::Imageblock` binds it, and the pass's
+    /// dispatches share it by its bytes. With the color attachments it gives the tile pipeline state's
     /// `imageblockSampleLength` as a fragment function's explicit imageblock does (measured on an
     /// M4).
     TileImageblock { data_size: u32, alignment: u32 },
@@ -479,49 +412,6 @@ pub enum RuntimeFact {
     /// through its device address (`VariantKey::addressed_function_tables`). `addressed` states
     /// that this compile is that variant.
     FunctionTableRange { addressed: bool },
-    /// The fragment function stores some channels of a color attachment through the interlocked
-    /// storage form (`InterlockedFramebufferFetch`) in a pipeline with a depth or stencil
-    /// attachment, and discards, but declares no `[[early_fragment_tests]]`, exports no depth,
-    /// stencil, or coverage, and writes no other memory: Metal tests its fragments after it runs,
-    /// so whether its write stores is the draw's depth and stencil tests' to decide. Without
-    /// `early_tests` its module stores before Vulkan's tests, Metal's store wherever the draw's
-    /// tests drop no fragment; with it (`LoweringInputs::read_only_tests`) the module declares
-    /// early fragment tests, Metal's store wherever they write neither attachment and count no
-    /// visibility result. The plan of a draw whose tests drop fragments asks for the variant with
-    /// `early_tests` where they write and count nothing (`VariantKey::read_only_tests`), and
-    /// refuses any other (`BindShape::fragment_tests`).
-    ///
-    /// `early_variant`: whether that variant serves a draw whose tests drop fragments but write and
-    /// count nothing, which it does for a function that only its discard keeps from early tests. A
-    /// function that writes other memory, or returns depth, stencil, or a sample mask, beside a
-    /// depth or stencil attachment states the fact without it: Metal runs its memory writes for the
-    /// fragments its tests then drop, and tests what it returns, which early tests would not. Its
-    /// stores before the tests are Metal's only where the draw's tests drop no fragment, and the
-    /// plan refuses every other draw.
-    TestedStorageWrites {
-        early_tests: bool,
-        early_variant: bool,
-    },
-    /// On a device that orders framebuffer fetch only through the ordered pixel interlock, the
-    /// fragment function writes
-    /// a color through its first output and does not declare early fragment tests, and it
-    /// discards, writes other memory, or returns depth, stencil, or a sample mask. A draw may move
-    /// such a color into the interlocked storage form (`BindShape::interlocked_colors`), whose
-    /// variant then stores before the
-    /// depth and stencil tests and states [`TestedStorageWrites`](Self::TestedStorageWrites) with
-    /// this `early_variant`, where the write stores something. So the plan of a pipeline that
-    /// writes no color so selects the tests of such a draw from this as from that fact, and the
-    /// variant it names plans itself.
-    ///
-    /// The plan reads it only for a draw that moves a color the function writes as an ordinary
-    /// output under a write mask that names some of the attachment's components (and only where
-    /// the pipeline has a depth or stencil attachment, whose tests the variant then depends on). A
-    /// write whose mask names none of them stores nothing: no test bears on it, its variant states
-    /// no store before the tests, and the plan selects none for it, as for a draw that moves
-    /// nothing. A draw whose tests neither the early-tests variant nor the function's own tests
-    /// serve (tests the draw does not state) is refused, as any draw whose variant is refused: the
-    /// runtime keeps the color out of the storage form there (the pass splits, or the shadow ends).
-    MovableStorageWrites { early_variant: bool },
     /// The tile function reads a builtin whose answer depends on its pipeline's
     /// `threadgroupSizeMatchesTileSize` (its threads per threadgroup, simdgroups or quadgroups
     /// per threadgroup or their `dispatch_` forms, its position in the grid, the threads per
@@ -864,7 +754,6 @@ impl RuntimeFact {
             RuntimeFact::StageInStride { .. } => "StageInStride",
             RuntimeFact::UniformViewRange { .. } => "UniformViewRange",
             RuntimeFact::UniformViewAliasing { .. } => "UniformViewAliasing",
-            RuntimeFact::FragmentImageblock { .. } => "FragmentImageblock",
             RuntimeFact::TileFunction => "TileFunction",
             RuntimeFact::TileAttachmentFormat { .. } => "TileAttachmentFormat",
             RuntimeFact::StorageTextureNumericType { .. } => "StorageTextureNumericType",
@@ -876,8 +765,6 @@ impl RuntimeFact {
             RuntimeFact::AccelerationStructureInstanceCount { .. } => {
                 "AccelerationStructureInstanceCount"
             }
-            RuntimeFact::InterlockedFramebufferFetch { .. } => "InterlockedFramebufferFetch",
-            RuntimeFact::ShadowStencil { .. } => "ShadowStencil",
             RuntimeFact::PredicationVote => "PredicationVote",
             RuntimeFact::SrgbTexture { .. } => "SrgbTexture",
             RuntimeFact::UlongAtomicView { .. } => "UlongAtomicView",
@@ -905,8 +792,6 @@ impl RuntimeFact {
             RuntimeFact::RotatedWeights => "RotatedWeights",
             RuntimeFact::ConstantLanes { .. } => "ConstantLanes",
             RuntimeFact::FunctionTableRange { .. } => "FunctionTableRange",
-            RuntimeFact::TestedStorageWrites { .. } => "TestedStorageWrites",
-            RuntimeFact::MovableStorageWrites { .. } => "MovableStorageWrites",
             RuntimeFact::TileThreadgroup { .. } => "TileThreadgroup",
             RuntimeFact::ConstexprSampled { .. } => "ConstexprSampled",
             RuntimeFact::CubicSampler { .. } => "CubicSampler",

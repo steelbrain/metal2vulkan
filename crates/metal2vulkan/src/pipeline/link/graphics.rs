@@ -51,21 +51,18 @@
 //!   scissor, depth bias, blend constants, and the stencil reference and masks; with extended
 //!   dynamic state also cull mode, front face, topology, the depth/stencil test state, and the
 //!   vertex strides of `PerBind` layouts.
-//! - **Storage attachments**: an attachment the fragment stage reads in the interlocked storage
-//!   form (`ResourceKind::TileAttachment`) has no color attachment state: the subpass leaves it
-//!   out, and `link::fetch` states how the consumer binds it.
 //! - **Input attachments**: one per framebuffer-fetch binding of the fragment stage. Metal orders
 //!   each fetch after the earlier fragments of the draw that cover the pixel; Vulkan does only
 //!   under rasterization-order attachment access, so a pipeline with input attachments on a profile
 //!   with `rasterizationOrderColorAttachmentAccess` states `rasterization_order_attachment_access`
 //!   (and the compiled pipeline requires the feature). Without the feature a fragment stage reads
-//!   an input attachment only on a device without the pixel interlock either
-//!   (`lower::fragment::color`), whose consumer orders the draws by barriers alone. In a
+//!   an input attachment ordered between draws alone (`lower::fragment::color`), whose consumer
+//!   orders the draws by barriers. In a
 //!   multisampled pipeline
 //!   (`rasterSampleCount` above 1) Metal runs a function that reads a color attachment once per
 //!   covered sample, each invocation reading its own sample (measured), so the stage, compiled for
-//!   the pipeline (`LoweringInputs::multisampled`), reads a multisampled `SubpassData` image (or,
-//!   in the storage form, a multisampled storage image) at its `SampleId`, whose input runs it once
+//!   the pipeline (`LoweringInputs::multisampled`), reads a multisampled `SubpassData` image at
+//!   its `SampleId`, whose input runs it once
 //!   per covered sample: it is a per-sample function under the sample invocations below. A fetching
 //!   stage compiled for the other kind of pipeline (one sample against more, or the reverse)
 //!   declares an image of the wrong sample count: `NeedsInput(Multisampled)`. A color input the
@@ -357,16 +354,6 @@ pub fn graphics_state(
     };
     let written = colors(false);
     let declared = colors(true);
-    // An attachment the function reads in the interlocked storage form is no color attachment of
-    // the subpass (`link::fetch`).
-    let storage: BTreeSet<u32> = fs
-        .into_iter()
-        .flat_map(|f| &f.descriptors)
-        .filter_map(|d| match d.slot.kind {
-            ResourceKind::TileAttachment(color) => Some(color),
-            _ => None,
-        })
-        .collect();
     // A blend into a bfloat attachment is Metal's pipeline error, whatever the fragment function
     // writes there and whatever the mask: its pipeline validation asserts that the format is not
     // blendable (an Apple M3 Max under macOS 27.0.1, with and without the validation layer, with
@@ -387,7 +374,6 @@ pub fn graphics_state(
     for (index, a) in r.color_attachments.iter().take(used as usize).enumerate() {
         color_attachments.push(match a {
             None => None,
-            Some(_) if storage.contains(&(index as u32)) => None,
             Some(a) => {
                 let state = || -> Result<ColorAttachmentState, Error> {
                     // A word attachment renders through the view of its word, which the function
@@ -499,8 +485,8 @@ pub fn graphics_state(
                         }
                         // A mask of some of the codes one word holds, which a stage compiled for
                         // this pipeline merges where the device orders fetch (one that reaches here
-                        // was compiled for another): on a device that orders it in neither form,
-                        // the orderings the merge needs.
+                        // was compiled for another): on a device that does not, the ordering the
+                        // merge needs.
                         (Some(form), None) => {
                             extended_write_mask(form, descriptor_mask).map_err(|e| {
                                 let unordered = crate::lower::fragment::fetch::fetch_unordered(p);
@@ -526,9 +512,9 @@ pub fn graphics_state(
                         (false, false) => blend_factors(a, p)?,
                         (false, true) if alpha_red => alpha_in_red_blend(a, p)?,
                         // A blend no Vulkan state on the rotated image gives, which a stage
-                        // compiled for this pipeline computes itself, in the storage form (no
-                        // color attachment here) or over the input attachment (above): one that
-                        // does not was compiled for another pipeline. Unwritten, it writes nothing.
+                        // compiled for this pipeline computes itself over the input attachment
+                        // (above): one that does not was compiled for another pipeline. Unwritten,
+                        // it writes nothing.
                         (false, true) if color_writes::shader_rotated_blend(a, p) => {
                             match written_here {
                                 true => {
@@ -537,8 +523,7 @@ pub fn graphics_state(
                                 false => None,
                             }
                         }
-                        // Where the device orders fetch in neither form, the orderings that
-                        // blend needs.
+                        // Where the device does not order fetch, the ordering that blend needs.
                         (false, true) if color_writes::rotated_blend_in_shader(a, p) => {
                             return Err(
                                 crate::lower::fragment::fetch::unordered_extended_fetch().into()
@@ -659,12 +644,12 @@ pub fn graphics_state(
     }
     let textured = textured_fetches(r, fs)?;
     let rasterization_samples = samples(r.raster_sample_count)?;
-    // A fetched attachment is read (and, in the storage form, written) at the invocation's own
+    // A fetched attachment is read at the invocation's own
     // sample by a stage compiled for a multisampled pipeline, and at the pixel by one compiled
     // for one sample (see the module docs): a stage compiled for the other kind declares an image
     // of the wrong sample count.
     if let Some(fs) = fs {
-        let fetches = !input_attachments.is_empty() || !storage.is_empty() || textured;
+        let fetches = !input_attachments.is_empty() || textured;
         if fetches && fs.io.multisampled != (r.raster_sample_count > 1) {
             return Err(Error::NeedsInput(RuntimeInput::Multisampled));
         }
@@ -719,15 +704,6 @@ pub fn graphics_state(
             dynamic_states.push(D::VERTEX_INPUT_BINDING_STRIDE);
         }
     }
-    // A fragment stage that binds a snapshot reads through it, drawn twice with its color write
-    // masks as dynamic state (`GraphicsState::snapshot_reads`).
-    let snapshot_reads = fs
-        .into_iter()
-        .flat_map(|f| &f.descriptors)
-        .any(|d| matches!(d.slot.kind, ResourceKind::SnapshotTexels(_)));
-    if snapshot_reads {
-        dynamic_states.push(D::COLOR_WRITE_MASK_EXT);
-    }
     let state = GraphicsState {
         topology: match tessellation {
             Some(_) => vk::PrimitiveTopology::PATCH_LIST,
@@ -748,11 +724,6 @@ pub fn graphics_state(
         max_vertex_amplification_count,
         declares_layer,
         tessellation,
-        // The fragment stage's facts decide it (`link::imageblock`).
-        fragment_imageblock: None,
-        // The fragment stage's facts decide them (`link::fetch`).
-        storage_attachments: Vec::new(),
-        shadow_stencil: None,
         vertex_writes_memory: vs.writes_memory,
         // Stored as the builtin or (on a device with one viewport) nowhere: the raw varying is
         // written in both.
@@ -774,10 +745,9 @@ pub fn graphics_state(
         reads_barycentric_coord: fs.is_some_and(|fs| reads_barycentric_coord(&fs.io)),
         reads_primitive_id: fs.is_some_and(|fs| reads_primitive_id(&fs.io)),
         fragment_writes_memory: fs.is_some_and(|fs| fs.writes_memory),
-        // The storage form's writes join the outputs' once `link::fetch` decided them.
+        // The outputs' writes, once the color attachments are decided.
         color_outputs: 0,
         sample_mask: None,
-        snapshot_reads,
         // The pipeline's private logic operation, once compile decided it
         // (`private_state::logic_operation`).
         logic_op: None,
@@ -1072,12 +1042,11 @@ fn uniform_blend(
 /// (`BGR10_XR`'s word, `RGB10A2Unorm_sRGB`'s, the two-plane forms' color word) is
 /// `NotImplemented(Format)` here: no mask of the raw components keeps one code of a word and
 /// writes another. A stage that writes `BGR10_XR` or a two-plane form so merges the codes
-/// (`color_writes::merged_extended`): in the interlocked storage form, which leaves the attachment
-/// out of the subpass, where the device orders fetch through the pixel interlock, and over the
-/// input attachment, whose write the caller makes of every raw component, where it orders fetch
-/// through rasterization-order input attachments, so a stage that reaches here so was compiled
-/// for another pipeline (the caller answers `NeedsInput(FramebufferFetch)`); on a device that
-/// orders it in neither form, the caller names the orderings the merge needs. A bfloat form's channels
+/// (`color_writes::merged_extended`) over the input attachment, whose write the caller makes of
+/// every raw component, where the device orders fetch through rasterization-order input
+/// attachments, so a stage that reaches here so was compiled for another pipeline (the caller
+/// answers `NeedsInput(FramebufferFetch)`); on a device that does not order it so, the caller names
+/// the ordering the merge needs. A bfloat form's channels
 /// are its own (red; red and green; all four), each a raw component; a mask of some of them is
 /// unmeasured and refused as above.
 fn extended_write_mask(

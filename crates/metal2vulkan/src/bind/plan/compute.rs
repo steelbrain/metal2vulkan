@@ -84,7 +84,6 @@ use crate::lower::simd::divergent::VOTE_BYTES;
 use crate::lower::simd::workgroup::arena_bytes;
 use crate::pipeline::artifact::{ComputePipeline, RuntimeDependency, SpecConstant};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::graphics::StorageAttachmentView;
 use crate::pipeline::interface::{BufferForm, PushLoc, SlotInterface};
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, SpecKey, Stage, SyntheticBinding};
@@ -684,8 +683,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 BindingSource::TileAttachment(color_index) => WriteSource::TileAttachment {
                     color_index,
                     format: tile_view_format(p, color_index)?,
-                    view: StorageAttachmentView::Attachment,
-                    view_alias: None,
                 },
                 other => return Err(internal(format!("a compute binding {other:?}"))),
             };

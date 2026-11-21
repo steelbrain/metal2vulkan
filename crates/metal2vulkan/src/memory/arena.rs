@@ -509,7 +509,8 @@ pub fn declare_threadgroup(
 /// Declare a fragment function's threadgroup arena, its tile's memory (the module docs): the
 /// pass's tile memory buffer, a storage view of the fragment stage, each region at its
 /// `SpecKey::TgOffset`, and the size `SpecKey::TileThreadgroupLength`. A fragment has no
-/// imageblock region (its imageblock is the pass's storage, `lower::fragment::imageblock`).
+/// imageblock region: the product refuses a fragment function's imageblock
+/// (`Feature::Imageblocks`).
 fn declare_fragment(mb: &mut ModuleBuilder, shape: &TgShape, coord: usize) -> BResult<TgDecl> {
     let u32_ = u32_ty(mb)?;
     let slot = ResourceSlot {

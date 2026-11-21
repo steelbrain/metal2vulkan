@@ -313,8 +313,7 @@ pub enum VkFeature {
     /// `VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`, the image usage
     /// `VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT` and the pipeline flag
     /// `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`, under which a draw samples a
-    /// color attachment of its own subpass (a feedback loop). A render pipeline that reads a
-    /// texture its pass renders through a snapshot requires it.
+    /// color attachment of its own subpass (a feedback loop).
     AttachmentFeedbackLoopLayout,
     /// `VK_EXT_extended_dynamic_state3`'s `extendedDynamicState3ColorWriteMask`: the dynamic
     /// state `VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT`, set by `vkCmdSetColorWriteMaskEXT`.

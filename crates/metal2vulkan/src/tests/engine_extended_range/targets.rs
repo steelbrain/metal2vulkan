@@ -113,28 +113,16 @@ fn is_format_refusal(e: &Error) -> bool {
 
 /// [`fragment_inputs`] with the framebuffer-fetch state the pipeline compile gives a function
 /// that writes color 0 where it blends an extended-range attachment there, on a device that
-/// orders fetch only through the interlock (`compile::fetch_inputs`) or through rasterization-order
-/// input attachments.
+/// orders fetch through rasterization-order input attachments (`compile::fetch_inputs`).
 fn blended_inputs(r: &RenderLinkInputs, p: &crate::device::profile::DeviceProfile) -> LowerInputs {
     let mut inputs = fragment_inputs(r, p);
-    if blends_in_shader(p) {
+    if crate::lower::fragment::inputs_order(p) {
         inputs.framebuffer_fetch = Some(crate::pipeline::FramebufferFetchInputs::of(
             [0],
             &r.color_attachments,
-            false,
-            false,
-            1,
         ));
     }
     inputs
-}
-
-/// Whether `p` blends an extended-range attachment in the shader: in the storage form where it
-/// orders fetch only through the interlock, over the input attachment where it orders fetch
-/// through rasterization-order input attachments.
-fn blends_in_shader(p: &crate::device::profile::DeviceProfile) -> bool {
-    crate::lower::fragment::interlock_orders(p)
-        || p.fields().fragment.rasterization_order_color_access
 }
 
 /// The fixture's `float4` and `half4` fills compile for each format's attachment on every venue,
@@ -332,8 +320,7 @@ fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
                     }
                 }
             }
-            // Blended: Metal's pipeline error, in the lowering (by the storage form's plan where
-            // the device orders fetch only through the interlock) and at link, with no fragment
+            // Blended: Metal's pipeline error, in the lowering and at link, with no fragment
             // function too.
             let what = format!("{stem} {pf:?} blended");
             let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment {
@@ -487,13 +474,20 @@ fn unmodelled_extended_range_targets_are_refused() {
                     );
                 }
                 form => {
-                    // Merged by a stage compiled with the pipeline's fetch state, which this one
-                    // was not (`blended_pipelines`).
+                    // Merged by a stage compiled with the pipeline's fetch state where the device
+                    // orders fetch through rasterization-order input attachments, which this one
+                    // was not (`blended_pipelines`); elsewhere the ordering the merge needs.
                     let e = linked.expect_err(&what);
-                    assert!(
-                        matches!(e, Error::NeedsInput(RuntimeInput::FramebufferFetch)),
-                        "{what} red mask: {e}"
-                    );
+                    let unordered = crate::lower::fragment::fetch::unordered_extended_fetch();
+                    match (crate::lower::fragment::fetch::fetch_unordered(&p), e) {
+                        (true, Error::Unsupported(u)) => assert_eq!(
+                            (u.feature, u.needs),
+                            (unordered.feature, unordered.needs),
+                            "{what} red mask"
+                        ),
+                        (false, Error::NeedsInput(RuntimeInput::FramebufferFetch)) => {}
+                        (_, e) => panic!("{what} red mask: {e}"),
+                    }
                     // The two-plane forms' three color codes alone are the color word, the
                     // first raw component.
                     if let ExtendedRange::Planes { .. } = form {

@@ -17,15 +17,14 @@ use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::error::{Error, RuntimeInput};
+use crate::error::Error;
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::lower::select::Plan;
-use crate::metal::{DataType, PixelFormat};
+use crate::metal::DataType;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
-use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::lower_inputs::{FramebufferFetchInputs, LoweringInputs};
+use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
@@ -279,42 +278,13 @@ fn each_fragment_input_gated_on_is_declared() {
         barycentric.interface.io.builtins
     );
     link_and_validate(&barycentric, &p).expect("has_barycentric: L3");
-    // `moltenvk-m3` orders a fetch only through the pixel interlock: the color input reads its
-    // attachment in the interlocked storage form under its pipeline's state, which a standalone
-    // compile does not have.
-    match compile_with(&bc, entry, &[HAS_PRIOR], &p) {
-        Err(Error::NeedsInput(RuntimeInput::FramebufferFetch)) => {}
-        other => panic!("declared color input: {:?}", other.map(|_| ())),
-    }
-    let mut inputs = LoweringInputs::new();
-    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-        [0],
-        &[Some(ColorAttachmentDescriptor::new(
-            PixelFormat::RGBA8Unorm,
-        ))],
-        false,
-        false,
-        1,
-    ));
-    let prior = compile_bitcode(
-        &bc,
-        EntryRef::Name(entry),
-        &constants(&[HAS_PRIOR]),
-        &p,
-        &inputs,
-        &mut meter(),
-        SPIRV_WORDS,
-    )
-    .expect("has_prior");
+    // The color input reads its input attachment.
+    let prior = compile_with(&bc, entry, &[HAS_PRIOR], &p).expect("has_prior");
     assert!(
-        prior.facts.iter().any(|f| matches!(
-            f,
-            RuntimeFact::InterlockedFramebufferFetch {
-                color: 0,
-                writes: true,
-                ..
-            }
-        )),
+        prior
+            .facts
+            .iter()
+            .any(|f| matches!(f, RuntimeFact::FramebufferFetch { color: 0 })),
         "{:?}",
         prior.facts
     );

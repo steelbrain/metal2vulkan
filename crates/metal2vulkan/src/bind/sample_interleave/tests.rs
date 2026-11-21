@@ -21,7 +21,7 @@ fn needs(m: TypedModule) -> Requirements {
 /// `shaderStorageImageExtendedFormats`, the merge's fragment stage `sampleRateShading`.
 #[test]
 fn each_module_needs_what_its_docs_say() {
-    for copy in PlanesCopy::ALL.into_iter().filter(|c| c.moves_bits()) {
+    for copy in PlanesCopy::ALL {
         for samples in SAMPLES {
             let r = needs(split_typed_module(copy, samples).expect("split"));
             let extended = !matches!(copy, PlanesCopy::R32 | PlanesCopy::Rgba32);
@@ -99,7 +99,7 @@ fn the_modules_are_valid_where_the_device_has_what_they_need() {
     let mut built = 0;
     for (name, device) in committed_devices() {
         let profile = device.profile();
-        for copy in PlanesCopy::ALL.into_iter().filter(|c| c.moves_bits()) {
+        for copy in PlanesCopy::ALL {
             for samples in SAMPLES {
                 let fits = profile
                     .check(&needs(split_typed_module(copy, samples).expect("split")))
@@ -116,14 +116,6 @@ fn the_modules_are_valid_where_the_device_has_what_they_need() {
                 }
             }
         }
-        // The sample planes' copy of floats moves no bits: no interleave takes it.
-        assert_eq!(
-            interleave_split_module(&device, PlanesCopy::Alpha8, 4).err(),
-            Some(Error::Unsupported(Unsupported::not_implemented(
-                Feature::Format
-            ))),
-            "{name}"
-        );
         for samples in SAMPLES {
             let fits = profile
                 .check(&needs(

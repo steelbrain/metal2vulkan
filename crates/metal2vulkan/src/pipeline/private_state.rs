@@ -63,8 +63,8 @@
 //!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). An integer output past the
 //!   channel's range, which Metal saturates first, Vulkan's conversion leaves undefined
 //!   (lavapipe and an RTX 3090 saturate it, as Metal does). A device without it that
-//!   orders framebuffer fetch (the
-//!   pixel interlock, or rasterization-order input attachments) has the fragment function compute
+//!   orders framebuffer fetch through rasterization-order input attachments has the fragment
+//!   function compute
 //!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
 //!   `logic`; probe `logic_operation` on an Apple M3 Max, macOS 27.0.1: every operation into
 //!   `R8Unorm`, `A8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, `R16Unorm`, `RGBA16Unorm`, `RGB10A2Unorm`,
@@ -77,8 +77,8 @@
 //!   operate on their codes widened to 16 bits, the result narrowed back. It refuses formats
 //!   outside that rule (`RGB10A2Uint` and the packed 16-bit formats, whose operation Metal
 //!   computes otherwise), color 0 under alpha to coverage, and a function that writes the attachment
-//!   through a shadow stencil, an imageblock or a merged word ([`logic_operated`]). A device that
-//!   orders fetch in neither form refuses the operation naming the features. So is an operation
+//!   through a merged word ([`logic_operated`]). A device that does not order fetch refuses the
+//!   operation naming Vulkan's operation and rasterization-order access. So is an operation
 //!   other than copy and no-op refused where Vulkan's form is not Metal's: an sRGB attachment
 //!   (Vulkan applies none there), a float attachment that blends under Vulkan's operation (which
 //!   turns every blend off), a format whose operation Metal was not measured with
@@ -327,18 +327,15 @@ pub(crate) fn shader_sample_mask(
     applied_masks(d).filter(|m| !uniform(m) || observes_sample_mask(a))
 }
 
-/// [`GraphicsState::sample_mask`] for the pipeline `d`, its fragment function `fragment` and
-/// its graphics state `g`, or the refusal where neither Vulkan's mask nor the function's own
+/// [`GraphicsState::sample_mask`] for the pipeline `d` and its fragment function `fragment`, or
+/// the refusal where neither Vulkan's mask nor the function's own
 /// (`StageIo::sample_mask`) is Metal's. A function that could tell Vulkan's mask from Metal's,
 /// or of a pipeline whose masks differ between the places of a quad, applies the masks itself,
 /// and the pipeline has no Vulkan mask; one compiled without them, or for others, is compiled for
-/// the pipeline again (`NeedsInput(SampleMask)`). A pipeline whose fragment function writes an
-/// attachment itself (a storage attachment, a shadow stencil or an imageblock, none measured
-/// under the masks) is refused, naming the sample coverage where it is not 1.
+/// the pipeline again (`NeedsInput(SampleMask)`).
 pub(crate) fn sample_mask(
     d: &RenderPipelineDescriptor,
     fragment: Option<&FunctionArtifact>,
-    g: &GraphicsState,
 ) -> Result<Option<u32>, Error> {
     let applied = applied_masks(d);
     let own = fragment.and_then(|f| f.interface.io.sample_mask);
@@ -348,15 +345,6 @@ pub(crate) fn sample_mask(
     let Some(masks) = applied else {
         return Ok(None);
     };
-    let writes_itself = !g.storage_attachments.is_empty()
-        || g.shadow_stencil.is_some()
-        || g.fragment_imageblock.is_some();
-    if writes_itself {
-        return Err(refused(match d.private.sample_coverage == 1.0 {
-            true => PrivateRenderField::SampleMask,
-            false => PrivateRenderField::SampleCoverage,
-        }));
-    }
     match (own, fragment) {
         (Some(_), _) => Ok(None),
         (None, Some(f)) if observes_sample_mask(f) || !uniform(&masks) => {
@@ -488,14 +476,11 @@ pub(crate) fn logic_operation<'a>(
     let op = LOGIC_OPS[(d.private.logic_operation & 15) as usize];
     let blendless = matches!(op, vk::LogicOp::COPY | vk::LogicOp::NO_OP);
     let shader = !blendless && !p.fields().enabled.features.contains(&VkFeature::LogicOp);
-    if shader
-        && !(crate::lower::fragment::interlock_orders(p) || crate::lower::fragment::inputs_order(p))
-    {
+    if shader && !crate::lower::fragment::inputs_order(p) {
         return Err(Unsupported::needs_any_of(
             Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
             vec![
                 vec![Capability::Feature(VkFeature::LogicOp)],
-                vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
                 vec![Capability::Feature(
                     VkFeature::RasterizationOrderColorAttachmentAccess,
                 )],
@@ -549,16 +534,13 @@ pub(crate) fn logic_operation<'a>(
 
 /// `Ok` where the linked pipeline `g` draws its logic operation `draw` ([`logic_operation`]) as
 /// Metal's. Vulkan's operation applies to the color attachments of the subpass alone, so a
-/// pipeline whose fragment function writes an attachment itself (a storage attachment, a shadow
-/// stencil, an imageblock, or a word it merges with its input attachment's) is refused
+/// pipeline whose fragment function merges a word with its input attachment's is refused
 /// (`PrivateRenderField::LogicOperation`), Metal's answer there unmeasured. The operation the
 /// fragment function computes must be the one it compiled under (`StageIo::logic_operation`,
-/// else `NeedsInput(LogicOperation)`), and is refused beside a shadow stencil, an imageblock or a
-/// merged word, which it does not compute over.
+/// else `NeedsInput(LogicOperation)`).
 pub(crate) fn logic_operated(
     draw: Option<LogicDraw>,
     fragment: Option<&FunctionArtifact>,
-    g: &GraphicsState,
 ) -> Result<(), Error> {
     let compiled = fragment.and_then(|f| f.interface.io.logic_operation);
     let Some(draw) = draw else {
@@ -575,16 +557,12 @@ pub(crate) fn logic_operated(
             )
         })
     });
-    let beside = g.shadow_stencil.is_some() || g.fragment_imageblock.is_some() || merges;
     match draw {
-        LogicDraw::Vulkan(_) if beside || !g.storage_attachments.is_empty() => {
-            Err(refused(PrivateRenderField::LogicOperation))
-        }
+        LogicDraw::Vulkan(_) if merges => Err(refused(PrivateRenderField::LogicOperation)),
         LogicDraw::Vulkan(_) => match compiled {
             Some(_) => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),
             None => Ok(()),
         },
-        LogicDraw::Shader(_) if beside => Err(refused(PrivateRenderField::LogicOperation)),
         LogicDraw::Shader(op) => match compiled == Some(op) {
             true => Ok(()),
             false => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),

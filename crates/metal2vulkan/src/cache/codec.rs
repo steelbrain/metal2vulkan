@@ -40,16 +40,14 @@ use crate::pipeline::artifact::{
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, FragmentImageblock, GraphicsState,
-    ImageblockMechanism, InputAttachmentUse, LineBandState, ShadowStencilUse, StorageAttachmentUse,
-    StorageAttachmentView, TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, GraphicsState, InputAttachmentUse,
+    LineBandState, TessellationState,
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
     NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
-    SampledLevels, SamplerArray, SamplerSlot, SlotInterface, SnapshotRefusal, StageDescriptor,
-    StageInterface, StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument,
-    Window,
+    SampledLevels, SamplerArray, SamplerSlot, SlotInterface, StageDescriptor, StageInterface,
+    StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -849,7 +847,6 @@ codec_enum! {
     SyntheticBinding {
         ArgumentTable, ExecutionStatus, RootTable, HandleTable, ConstantBlob, TessellationFactors, Imageblock,
         SamplerTable,
-        ShadowStencil,
         FunctionTableDirectory,
         PatchIndices,
         ControlPointIndices,
@@ -860,7 +857,6 @@ codec_enum! {
         Buffer, Texture, Sampler, Heap(f0), Synthetic(f0), InputAttachment(f0),
         CombinedTextureSampler(f0), HeapSampler(f0), AccelerationStructure(f0), TileAttachment(f0),
         TileMap, SeparateTexture(f0), SeparateSampler(f0),
-        SnapshotTexels(f0),
         YCbCrPlanes(f0),
         SamplerArray { compare, integer },
     }
@@ -882,17 +878,15 @@ codec_enum! {
         SlotBindOffset(f0), SlotGuestBase(f0), VertexBufferStride(f0), StageInRegion,
         TessellationFactorOffset, TessellationFactorInstanceStride, TessellationFactorScale,
         TextureLevels(f0), InstanceCount(f0), CommandRecordsAddress, ReplayRegionAddress,
-        ShadowStencilState, IndexCapacity, ViewportCount, RenderTargetArrayLength,
+        IndexCapacity, ViewportCount, RenderTargetArrayLength,
         PatchIndexOffset, PatchIndexBound, ControlPointIndexOffset, StageInStride(f0),
         AmplificationId, AmplificationLayerOffset, AmplificationViewportOffset,
         DepthClampRange,
         CaptureLayout,
         CaptureIndexAddress,
-        StorageKeptChannels,
         TextureIntegerChannels(f0),
         BicubicTexels(f0),
         HalfBlendColor,
-        SnapshotPhase,
         VerticesPerPrimitive,
         MergedDrawAddress,
         AlphaTestReference,
@@ -1122,7 +1116,7 @@ codec_struct! {
         stage, slots, threadgroup, push, descriptors, spec, needs_pointer_translation,
         needs_handle_translation, io, tessellation, writes_memory, payload, reaches_command_buffers, command_writes, writes_textures,
         reads_unbound_resources, writes_unbound_resources, unbound_storage_textures,
-        numbered_samplers, own_pixel_textures, snapshot_textures, snapshot_refusals, level_reads,
+        numbered_samplers, own_pixel_textures, level_reads,
         private_bytes, sampler_arrays,
     }
     SamplerArray { slot, samplers }
@@ -1168,10 +1162,6 @@ codec_enum! {
     TypeDetail { Plain, Struct(f0), Array(f0), TextureReference(f0), Pointer(f0) }
     SlotInterface { Buffer(f0), Texture(f0), Sampler(f0) }
     NumberedSampler { Constexpr(f0), Read, Write }
-    SnapshotRefusal {
-        Branch, Derivative, Sample, GroupOperation, Store, Atomic, ImageWrite, UndefinedOperand,
-        WritesMemory, Interlock, Coherent, Other,
-    }
     PatchDomain { Triangle, Quad }
     Window { Bounded { start, len }, Whole }
     BufferForm { Descriptor(f0), Psb }
@@ -1230,7 +1220,6 @@ codec_enum! {
         RenderTargetArrayLength { layer_dropped }, StageInRegion,
         StageInStride { layout },
         UniformViewRange { slot, choice }, UniformViewAliasing { slot },
-        FragmentImageblock { words, writes, master, data_size, alignment },
         TileFunction, TileAttachmentFormat { color, format },
         StorageTextureNumericType { slot },
         OutOfBoundsAlpha { slot },
@@ -1239,8 +1228,6 @@ codec_enum! {
         StorageTextureLevelViews { slot },
         SparseTexture { slot, sparse_arm, tile_map },
         AccelerationStructureInstanceCount { slot },
-        InterlockedFramebufferFetch { color, format, writes, early_tests, kept, blend, rounded },
-        ShadowStencil { formatless, multisampled },
         PredicationVote, SrgbTexture { slot },
         UlongAtomicView { slot },
         ViewportCount,
@@ -1265,7 +1252,6 @@ codec_enum! {
         RotatedWeights,
         ConstantLanes { slot },
         FunctionTableRange { addressed },
-        TestedStorageWrites { early_tests, early_variant },
         TileThreadgroup { tile_sized },
         ConstexprSampled { slot, modes },
         CubicSampler { slot },
@@ -1281,7 +1267,6 @@ codec_enum! {
         HeapStorageReads { stage, class },
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
-        MovableStorageWrites { early_variant },
         ObjectThreadgroupArena { static_bytes, payload },
         MergedDraws,
         QuadPrimitiveIds,
@@ -1351,7 +1336,7 @@ codec_struct! {
     StageModule {
         stage, entry_point, spirv, specialization, required_subgroup_size, stage_flags,
         reconvergence, precision_notes, strategies, constant_blob, rounded_colors,
-        specialized_notes, own_pixel_textures, snapshot_textures, snapshot_refusals, level_reads,
+        specialized_notes, own_pixel_textures, level_reads,
         private_bytes, stats,
     }
     SpecializedNote { note, when }
@@ -1386,22 +1371,18 @@ codec_struct! {
         topology, color_attachments, depth_format, stencil_format, rasterization_samples,
         alpha_to_coverage, alpha_to_one, rasterizer_discard, dynamic_states, input_attachments,
         rasterization_order_attachment_access, max_vertex_amplification_count, declares_layer,
-        tessellation, fragment_imageblock, vertex_writes_memory, writes_viewport_index,
-        storage_attachments, shadow_stencil, writes_point_size, writes_depth,
+        tessellation, vertex_writes_memory, writes_viewport_index, writes_point_size, writes_depth,
         reads_barycentric_coord, reads_primitive_id, fragment_writes_memory, color_outputs,
-        sample_mask, snapshot_reads, logic_op, line_band,
+        sample_mask, logic_op, line_band,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
         control_point_index_type,
     }
     LineBandState { push_offset, primitive }
-    FragmentImageblock { mechanism, words, master, data_size, alignment }
     ColorAttachmentState { format, write_mask, blend }
     BlendState { src_color, dst_color, color_op, src_alpha, dst_alpha, alpha_op }
     InputAttachmentUse { color_index, input_attachment_index, format_class }
-    StorageAttachmentUse { color_index, format, writes, formatless, view, view_alias, kept }
-    ShadowStencilUse { format, formatless, samples }
 }
 
 codec_enum! {
@@ -1409,8 +1390,6 @@ codec_enum! {
     LinkedUseGap { EndlessLoop, StackMemory, GatedOffMeshBuiltin, UnmeasuredColorWrite }
     SlotWritability { Never, Maybe, Unknown(f0) }
     SlotWriteGap { UnresolvedIndex, UnmeasuredPayloadStage, MemberRole }
-    ImageblockMechanism { StorageImageInterlock }
-    StorageAttachmentView { Attachment, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
@@ -1467,7 +1446,6 @@ codec_enum! {
         UnmeasuredGroupSpeculation,
         DeviceSampleLevel,
         CoverageReadsRoundedAlpha,
-        UnmeasuredFetchBlend,
         DeviceVertexConversion,
         DeviceAlphaCoverage,
         DeviceInterpolationOffset,
@@ -1495,7 +1473,6 @@ codec_enum! {
         Synthetic { stage, binding }, Heap(f0), InputAttachment(f0), HeapSampler { stage, sampler },
         AccelerationStructure { slot, level }, TileAttachment(f0), TileMap(f0),
         SeparateTexture { texture, sampler }, SeparateSampler { stage, sampler },
-        SnapshotTexels(f0),
         YCbCrPlanes(f0),
         SamplerArray { stage, compare, integer },
         IdentityArray,

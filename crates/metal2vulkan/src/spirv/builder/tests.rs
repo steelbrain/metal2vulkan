@@ -867,57 +867,6 @@ fn only_storage_images_are_volatile_and_never_under_the_vulkan_model() {
     );
 }
 
-/// `coherent` decorates the one storage image it names `Coherent`, leaving the module's other
-/// shared resources plain, and refuses a sampled image.
-#[test]
-fn coherent_decorates_one_storage_image_alone() {
-    let texture = |index| ResourceSlot {
-        stage: Stage::Fragment,
-        kind: ResourceKind::Texture,
-        index,
-    };
-    let image = |t: &mut T, usage, format| {
-        let u = t.u32();
-        t.ty(Type::Image(ImageType {
-            sampled_type: u,
-            dim: Dim::D2,
-            depth: false,
-            arrayed: false,
-            multisampled: false,
-            usage,
-            format,
-        }))
-    };
-    let mut t = T::new();
-    let storage = image(
-        &mut t,
-        ImageUsage::Storage,
-        crate::spv::ImageFormat::Rgba32ui,
-    );
-    let sampled = image(
-        &mut t,
-        ImageUsage::Sampled,
-        crate::spv::ImageFormat::Unknown,
-    );
-    let one =
-        t.b.resource(texture(0), StorageClass::UniformConstant, storage)
-            .expect("image");
-    let other =
-        t.b.resource(texture(1), StorageClass::UniformConstant, storage)
-            .expect("other image");
-    let read =
-        t.b.resource(texture(2), StorageClass::UniformConstant, sampled)
-            .expect("sampled");
-    t.b.coherent(one).expect("a storage image");
-    assert_eq!(
-        t.b.coherent(read).err(),
-        Some(BuildError::Global(GlobalRule::CoherentTarget))
-    );
-    let m = finish_compute(t.b).expect("a GLSL450 module with one coherent image");
-    assert_eq!(m.coherent, BTreeSet::from([one]));
-    assert!(!m.coherent.contains(&other));
-}
-
 /// `coherent_resources` decorates every storage buffer and storage image resource of the module
 /// `Coherent` (a descriptor array of storage images included, those declared after it too), and no
 /// uniform buffer or sampled image; a module under the Vulkan memory model, which bans the

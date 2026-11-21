@@ -5,7 +5,7 @@
 
 use crate::bind::{
     ArgumentFunctionTable, ArgumentSampler, BindState, BoundBuffer, BoundSampler, BoundTexture,
-    BufferRanges, FragmentTests, ImageblockSize, ResourceClass, SamplerDescriptor, StageTable,
+    BufferRanges, ImageblockSize, ResourceClass, SamplerDescriptor, StageTable,
     TessellationFactorBuffer, TessellationFactors, TextureFacts, TileThreadgroupArgument,
     TileThreadgroupMemory, UsedResource, VertexAmplification,
 };
@@ -247,10 +247,6 @@ fn states() -> Vec<BindState> {
         }),
         with(|s| s.kept_imageblock_bytes = Some(8)),
         with(|s| s.depth_clamp_range = Some([0.0, 1.0])),
-        with(|s| {
-            s.interlocked_colors.insert(1);
-        }),
-        with(|s| s.fragment_tests = FragmentTests::Pass),
         with(|s| s.quad_primitive_ids = true),
         with(|s| s.private_list = true),
     ]

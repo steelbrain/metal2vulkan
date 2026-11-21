@@ -27,12 +27,10 @@
 //! output alone does not interlock the function, so a function whose groups hold nothing else
 //! compiles on every device, the ones without an interlock included.
 //!
-//! **Color inputs without an ordered fetch form**. On a device with neither rasterization-order
-//! color attachment access nor the pixel interlock's storage form (`fetch::fetch_unordered`), a
-//! color input reads its input attachment ordered between draws alone, by the consumer's barriers
-//! (under the identity domains, the attachment's pushed texture, on every device without
-//! rasterization-order access: there the interlock chooses no fetch form,
-//! `fetch::interlock_forms`). A group on such an input, or on a color output of an attachment the
+//! **Color inputs without an ordered fetch**. On a device without rasterization-order color
+//! attachment access (`fetch::fetch_unordered`), a color input reads its input attachment ordered
+//! between draws alone, by the consumer's barriers (under the identity domains, the attachment's
+//! pushed texture). A group on such an input, or on a color output of an attachment the
 //! function reads, asks for the order of that read, which is the read's own there: it does not
 //! interlock the function, since the interlock cannot order the attachment's own write, which
 //! happens after the function, and the read's fragments of one draw stay unordered

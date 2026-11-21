@@ -45,8 +45,6 @@ fn stage_module_bytes_are_little_endian_words() {
         constant_blob: None,
         rounded_colors: Vec::new(),
         own_pixel_textures: Vec::new(),
-        snapshot_textures: Vec::new(),
-        snapshot_refusals: Vec::new(),
         level_reads: Vec::new(),
         private_bytes: 0,
         specialized_notes: Vec::new(),
@@ -97,8 +95,6 @@ fn a_stage_s_notes_under_a_specialization_are_its_held_clauses() {
         constant_blob: None,
         rounded_colors: Vec::new(),
         own_pixel_textures: Vec::new(),
-        snapshot_textures: Vec::new(),
-        snapshot_refusals: Vec::new(),
         level_reads: Vec::new(),
         private_bytes: 0,
         specialized_notes: vec![
@@ -247,8 +243,6 @@ mod serde_round_trips {
             line_band: Some(crate::pipeline::BandPrimitive::Triangles),
             swizzled_storage: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 6)]),
             addressed_function_tables: true,
-            interlocked_colors: BTreeSet::from([1]),
-            read_only_tests: true,
             address_maps: BTreeMap::from([(
                 slot(Stage::Kernel, SlotClass::Texture, 7),
                 metal::sampler::AddressModeMap::IDENTITY.with(
@@ -260,10 +254,6 @@ mod serde_round_trips {
             primitive_id_indices: Some(metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
-            snapshot_textures: BTreeMap::from([(
-                slot(Stage::Fragment, SlotClass::Texture, 2),
-                crate::pipeline::SnapshotForm::Unorm8,
-            )]),
             cross_class: BTreeMap::from([(
                 slot(Stage::Kernel, SlotClass::Texture, 8),
                 SampledType::Uint,
@@ -346,15 +336,8 @@ mod serde_round_trips {
                     ),
                     (2, None),
                 ]),
-                depth_or_stencil: true,
-                alpha_to_coverage: false,
-                amplified: true,
             }),
             srgb_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
-            snapshot_textures: BTreeMap::from([(
-                slot(Stage::Fragment, SlotClass::Texture, 3),
-                crate::pipeline::SnapshotForm::Half,
-            )]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 9)]),
             ycbcr_planes_sampled: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 9),
@@ -442,7 +425,6 @@ mod serde_round_trips {
             alpha_test: Some(metal::CompareFunction::GreaterEqual),
             logic_operation: Some(crate::vk::LogicOp::XOR),
             depth_compare_clamp_mask: 0x8000_0005,
-            read_only_tests: true,
             rotated_colors: BTreeSet::from([4]),
             alpha_in_red_colors: BTreeSet::from([4]),
             rotated_factors: BTreeMap::from([(
@@ -591,29 +573,8 @@ mod serde_round_trips {
                 push_offset: 20,
                 control_point_index_type: metal::TessellationControlPointIndexType::UInt16,
             }),
-            fragment_imageblock: Some(FragmentImageblock {
-                mechanism: ImageblockMechanism::StorageImageInterlock,
-                words: 3,
-                master: [9; 32],
-                data_size: 12,
-                alignment: 4,
-            }),
             vertex_writes_memory: true,
             writes_viewport_index: true,
-            storage_attachments: vec![StorageAttachmentUse {
-                color_index: 1,
-                format: vk::Format::R16G16B16A16_SFLOAT,
-                writes: true,
-                formatless: false,
-                view: StorageAttachmentView::SamplePlanes { layers: 4 },
-                view_alias: Some(vk::Format::R32_UINT),
-                kept: vk::ColorComponentFlags::G | vk::ColorComponentFlags::A,
-            }],
-            shadow_stencil: Some(ShadowStencilUse {
-                format: vk::Format::R8_UINT,
-                formatless: true,
-                samples: 4,
-            }),
             writes_point_size: true,
             writes_depth: true,
             reads_barycentric_coord: true,
@@ -621,7 +582,6 @@ mod serde_round_trips {
             fragment_writes_memory: true,
             color_outputs: 0b101,
             sample_mask: Some(0b1001),
-            snapshot_reads: true,
             logic_op: Some(vk::LogicOp::EQUIVALENT),
             line_band: Some(crate::pipeline::LineBandState {
                 push_offset: 112,
@@ -970,9 +930,6 @@ mod bind_serde_round_trips {
                 [8.0, -8.0, 1.75, -1.0],
             )),
             resident_ranges: vec![crate::bind::ResidentRange::new(0x9_0000, 0x3_0000, 100)],
-            interlocked_colors: BTreeSet::from([0, 3]),
-            fragment_tests: crate::bind::FragmentTests::Depth { writes: true },
-            snapshot_textures: BTreeSet::from([2]),
             blend_color: [0.25, -0.5, 1.5, 0.75],
             alpha_test_reference: Some(0.375),
             primitive_type: Some(metal::PrimitiveType::TriangleStrip),
@@ -1034,9 +991,6 @@ mod bind_serde_round_trips {
             depth_clamp_range: true,
             rotated_weights: true,
             line_band: Some(crate::pipeline::BandPrimitive::Lines),
-            interlocked_colors: BTreeSet::from([0, 3]),
-            fragment_tests: crate::bind::FragmentTests::Pass,
-            snapshot_textures: BTreeSet::from([2]),
             primitive_id_indices: Some(metal::IndexType::UInt32),
             quad_primitive_ids: true,
             private_list: true,
@@ -1204,7 +1158,6 @@ mod bind_serde_round_trips {
             control_point_index: None,
         });
         round_trip(&WriteSource::TessellationFactors);
-        round_trip(&WriteSource::ShadowStencil);
         round_trip(&UseTarget::TessellationFactors);
         round_trip(&WriteSource::PatchIndices { min_bytes: 16 });
         round_trip(&WriteSource::TileMemory { bytes: 480 });

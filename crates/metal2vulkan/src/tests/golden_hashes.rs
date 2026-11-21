@@ -15,13 +15,10 @@
 //! `engine/multisample`'s render pipelines of four samples. A fragment function of a pipeline
 //! of four samples compiles under `LoweringInputs::multisampled`. Each framebuffer-fetch fixture
 //! (`engine/fragment_fetch`, `exf_*`, `exf2_fetch_unwritten`, `msf_fetch_ms`) adds its fragment
-//! functions under the fetch state of a pipeline of the attachment formats its cases use, which the
-//! interlocked storage form needs, and each whose cases draw multisampled (`exf_fetch_blend`,
-//! `exf_fetch_count`, `msf_fetch_ms`) the same state at four samples, compiled under
-//! `multisampled`: the per-sample forms. `engine/tob_renders` adds the snapshot of its own-pixel
-//! texture read (`tob_read` under `LoweringInputs::snapshot_textures`) in the form that holds a
-//! 16-bit float texel's code and in one of narrower codes: the two-draw copy-and-read form, which
-//! the entry alone, compiled without the input, never reaches.
+//! functions under the fetch state of a pipeline of the attachment formats its cases use, which a
+//! write the function computes over its input attachment needs, and each whose cases draw
+//! multisampled (`exf_fetch_blend`, `exf_fetch_count`, `msf_fetch_ms`) the same state at four
+//! samples, compiled under `multisampled`: the per-sample form.
 //!
 //! A cell is the first 64 bits of SHA-256 over the final SPIR-V words of the subject's stage
 //! modules (each prefixed by its word count), or the typed outcome class of a refusal, so a new
@@ -61,8 +58,8 @@ use crate::pipeline::testing::{
 };
 use crate::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, FramebufferFetchInputs,
-    FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, SlotClass, SlotRef, SnapshotForm,
-    Stage, StageSource, StorageImageClass, TileRenderPipelineDescriptor, VertexAttributeDescriptor,
+    FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, SlotClass, SlotRef, Stage,
+    StageSource, StorageImageClass, TileRenderPipelineDescriptor, VertexAttributeDescriptor,
     VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use crate::Budget;
@@ -128,22 +125,14 @@ enum Subject {
         fragment: &'static str,
     },
     /// Fragment `entry` compiled under the framebuffer-fetch state of a pipeline whose color
-    /// attachments are `formats` (by index, each read), linked alone: the interlocked storage form
-    /// on a device that orders fetch only through the pixel interlock, which the entry alone,
-    /// compiled without the state, needs. Above one sample, compiled under `multisampled`: the
-    /// per-sample forms.
+    /// attachments are `formats` (by index, each read), linked alone: the state a write the
+    /// function computes over its input attachment needs on a device that orders fetch through
+    /// rasterization-order input attachments. Above one sample, compiled under `multisampled`: the
+    /// per-sample form.
     Fetch {
         entry: &'static str,
         formats: &'static [PixelFormat],
         samples: u32,
-    },
-    /// Fragment `entry` compiled under a snapshot of its texture slot 0 in `form`
-    /// (`LoweringInputs::snapshot_textures`), linked alone: the two-draw copy-and-read form a draw
-    /// that reads a texture its own subpass renders takes, which the entry alone, compiled without
-    /// the input, never reaches.
-    Snapshot {
-        entry: &'static str,
-        form: SnapshotForm,
     },
     /// The module does not decode: its refusal class in every column.
     Undecodable(String),
@@ -252,10 +241,6 @@ fn pipelines(fixture: &str) -> Vec<(String, Subject)> {
             [1, 4].map(|samples| fetch_subject(entry, &[PixelFormat::RGBA32Float], samples))
         })
         .collect(),
-        "engine/tob_renders.ll" => [SnapshotForm::Half, SnapshotForm::Unorm8]
-            .into_iter()
-            .map(|form| snapshot_subject("tob_read", form))
-            .collect(),
         "engine/multisample.ll" => [
             "multisample_center_at_sample",
             "multisample_sampled_varying",
@@ -300,13 +285,6 @@ fn fetch_subject(
             formats,
             samples,
         },
-    )
-}
-
-fn snapshot_subject(entry: &'static str, form: SnapshotForm) -> (String, Subject) {
-    (
-        format!("snapshot {entry} as {form:?}"),
-        Subject::Snapshot { entry, form },
     )
 }
 
@@ -613,21 +591,9 @@ fn compiled(lib: &Library, subject: &Subject, dev: &Device) -> Result<Vec<Vec<u3
                 .map(|&f| Some(ColorAttachmentDescriptor::new(f)))
                 .collect();
             let mut inputs = LoweringInputs::new();
-            inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
-                0..formats.len() as u32,
-                &colors,
-                false,
-                false,
-                1,
-            ));
+            inputs.framebuffer_fetch =
+                Some(FramebufferFetchInputs::of(0..formats.len() as u32, &colors));
             inputs.multisampled = *samples > 1;
-            let f = FunctionDescriptor::new(lib.function(entry)?);
-            let c = dev.compile_function(&f, &inputs, &b)?;
-            Ok(vec![link_standalone(c.artifact(), dev.profile())?.1])
-        }
-        Subject::Snapshot { entry, form } => {
-            let mut inputs = LoweringInputs::new();
-            inputs.snapshot_textures.insert(snapshot_slot(), *form);
             let f = FunctionDescriptor::new(lib.function(entry)?);
             let c = dev.compile_function(&f, &inputs, &b)?;
             Ok(vec![link_standalone(c.artifact(), dev.profile())?.1])
@@ -641,15 +607,6 @@ fn compiled(lib: &Library, subject: &Subject, dev: &Device) -> Result<Vec<Vec<u3
 fn storage_slot() -> SlotRef {
     SlotRef {
         stage: Stage::Kernel,
-        class: SlotClass::Texture,
-        index: 0,
-    }
-}
-
-/// The fragment texture slot a snapshot subject reads through its snapshot.
-fn snapshot_slot() -> SlotRef {
-    SlotRef {
-        stage: Stage::Fragment,
         class: SlotClass::Texture,
         index: 0,
     }

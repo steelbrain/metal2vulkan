@@ -103,9 +103,10 @@ pub enum InputsFrom<'a> {
     /// inputs, the attachments among the pipeline's color attachments that the specialized entry
     /// writes and whose pixel format is a signed integer
     /// (`LoweringInputs::signed_color_attachments`), whether the pipeline rasterizes more than one
-    /// sample (`LoweringInputs::multisampled`), on a device that orders framebuffer fetch only
-    /// through the pixel interlock the state of the attachments the entry reads
-    /// (`LoweringInputs::framebuffer_fetch`), and, for each index the pipeline's vertex function
+    /// sample (`LoweringInputs::multisampled`), on a device that orders framebuffer fetch through
+    /// rasterization-order input attachments the state of the attachments whose writes the entry
+    /// computes over them (`LoweringInputs::framebuffer_fetch`), and, for each index the pipeline's
+    /// vertex function
     /// writes (the [`RawIndices`]), whether the entry reads it
     /// (`LoweringInputs::viewport_index_varying`;
     /// `LoweringInputs::render_target_array_index_varying`). The pipeline's
@@ -134,17 +135,14 @@ pub enum InputsFrom<'a> {
 pub(crate) static NO_PRIMITIVE_VARYINGS: BTreeSet<VaryingKey> = BTreeSet::new();
 
 /// The pipeline state a fragment stage compiles under ([`InputsFrom::Fragment`]): its render
-/// pipeline's, or its mesh render pipeline's, which has no vertex amplification and no call stack
-/// depth of its own (Metal's default, 1).
+/// pipeline's, or its mesh render pipeline's, which has no call stack depth of its own (Metal's
+/// default, 1).
 #[derive(Clone, Copy, Debug)]
 pub struct FragmentPass<'a> {
     pub(crate) color_attachments: &'a [Option<ColorAttachmentDescriptor>; 8],
-    /// The pipeline has a depth or a stencil attachment.
-    pub(crate) depth_or_stencil: bool,
     pub(crate) raster_sample_count: u32,
     pub(crate) rasterization_enabled: bool,
     pub(crate) alpha_to_coverage: bool,
-    pub(crate) max_vertex_amplification_count: u32,
     pub(crate) max_call_stack_depth: u32,
     /// The pipeline's `textureWriteRoundingMode`.
     pub(crate) texture_write_rounding_mode: crate::metal::TextureWriteRoundingMode,
@@ -171,11 +169,9 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
     fn from(d: &'a RenderPipelineDescriptor) -> FragmentPass<'a> {
         FragmentPass {
             color_attachments: &d.color_attachments,
-            depth_or_stencil: d.depth_format.is_some() || d.stencil_format.is_some(),
             raster_sample_count: d.raster_sample_count,
             rasterization_enabled: d.rasterization_enabled,
             alpha_to_coverage: d.alpha_to_coverage,
-            max_vertex_amplification_count: d.max_vertex_amplification_count,
             max_call_stack_depth: d.max_fragment_call_stack_depth,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             sample_mask: None,
@@ -194,11 +190,9 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
     fn from(d: &'a MeshPipelineDescriptor) -> FragmentPass<'a> {
         FragmentPass {
             color_attachments: &d.color_attachments,
-            depth_or_stencil: d.depth_format.is_some() || d.stencil_format.is_some(),
             raster_sample_count: d.raster_sample_count,
             rasterization_enabled: d.rasterization_enabled,
             alpha_to_coverage: d.alpha_to_coverage,
-            max_vertex_amplification_count: 1,
             max_call_stack_depth: 1,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             sample_mask: None,
@@ -2497,34 +2491,26 @@ pub(crate) fn unattached_colors_written(
 }
 
 /// The framebuffer-fetch state of pass `d` for the specialized fragment entry `spec` on `p`
-/// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch only through the pixel
-/// interlock, the state of every attachment the entry reads through a `[[color(n)]]` input of a
-/// constant index (one an instruction of its specialized body uses: an input the function's
-/// constants leave unread reads nothing), of every extended-range attachment it writes that the
-/// pass blends (whose blend the function computes from the texel it reads) or writes unblended
-/// under a mask of some of the codes one word holds (`color_writes::merged_extended`), of every
-/// attachment held with its channels rotated whose blend the function computes
-/// (`color_writes::shader_rotated_blend`, in either form below), and of every attachment variant
-/// `v`'s instance keeps out of its subpass that the entry writes through its first output
-/// (`VariantKey::interlocked_colors`); `None` on another device or for an entry that declares none
-/// of them. On a device that orders fetch through rasterization-order input attachments, the state
-/// of every extended-range attachment the entry writes that the pass blends (whose blend the
-/// function computes over its input attachment, `lower::fragment`'s `input_blend`), of every
-/// word attachment it writes under a mask of some of the word's channels (whose word the function
-/// merges into its input attachment's, `color_writes::merged_word`), and of every extended-range
-/// attachment it writes unblended under a mask of some of the codes one word holds (merged so,
-/// `color_writes::merged_extended`). On either device, under a private logic operation the function computes
-/// (`FragmentPass::logic_operation`), the state of every attachment whose format the operation
-/// serves that the entry writes through its first output (`lower::fragment`'s `logic`).
+/// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch through
+/// rasterization-order input attachments, the state of every extended-range attachment the entry
+/// writes that the pass blends (whose blend the function computes over its input attachment,
+/// `lower::fragment`'s `input_blend`), of every attachment held with its channels rotated whose
+/// blend the function computes (`color_writes::shader_rotated_blend`), of every word attachment
+/// it writes under a mask of some of the word's channels (whose word the function merges into its
+/// input attachment's, `color_writes::merged_word`), of every extended-range attachment it writes
+/// unblended under a mask of some of the codes one word holds (merged so,
+/// `color_writes::merged_extended`), and, under a private logic operation the function computes
+/// (`FragmentPass::logic_operation`), of every attachment whose format the operation serves that
+/// the entry writes through its first output (`lower::fragment`'s `logic`); `None` on another
+/// device or for an entry that writes none of them.
 pub(crate) fn fetch_inputs(
     spec: &air::Entry,
     d: FragmentPass<'_>,
-    v: &VariantKey,
     p: &DeviceProfile,
 ) -> Option<crate::pipeline::lower_inputs::FramebufferFetchInputs> {
-    let interlock = crate::lower::fragment::interlock_orders(p);
-    let inputs = crate::lower::fragment::inputs_order(p);
-    if !matches!(spec.ep.stage, AbiStage::Fragment { .. }) || !(interlock || inputs) {
+    if !matches!(spec.ep.stage, AbiStage::Fragment { .. })
+        || !crate::lower::fragment::inputs_order(p)
+    {
         return None;
     }
     let blended = |color: u32| {
@@ -2545,15 +2531,6 @@ pub(crate) fn fetch_inputs(
             .copied()
             .flatten()
             .is_some_and(|c| crate::pipeline::color_writes::merged_extended(&c))
-    };
-    // A word attachment whose writes the function blends over, or merges into, the word it reads.
-    let stored_word = |color: u32| {
-        d.color_attachments
-            .get(color as usize)
-            .copied()
-            .flatten()
-            .and_then(|c| crate::pipeline::color_writes::stored_word(&c, p))
-            .is_some()
     };
     // A word attachment whose writes the function merges into the word its input attachment
     // holds.
@@ -2586,23 +2563,11 @@ pub(crate) fn fetch_inputs(
                 .flatten()
                 .is_some_and(|c| crate::lower::fragment::logic_channels(c.pixel_format).is_some())
     };
-    // A color input counts only where the specialized body reads it, as the lowering plans only
-    // a used parameter: a read the function's constants make dead reads nothing, so it takes
-    // neither the storage form nor its blend in the shader.
-    let used = params_used(spec);
     let read: BTreeSet<u32> = spec
         .ep
-        .params
+        .outputs
         .iter()
-        .filter(|b| used.contains(&b.param))
-        .filter_map(|b| match b.role {
-            ParamRole::ColorInput {
-                index: AbiInt::Const(color),
-                ..
-            } if interlock => Some(color),
-            _ => None,
-        })
-        .chain(spec.ep.outputs.iter().filter_map(|o| match o.role {
+        .filter_map(|o| match o.role {
             OutputRole::RenderTarget {
                 attachment: AbiInt::Const(color),
                 index: 0,
@@ -2610,42 +2575,23 @@ pub(crate) fn fetch_inputs(
             } if blended(color)
                 || rotated_blend(color)
                 || logic(color)
-                || (interlock && (stored_word(color) || merged_extended(color)))
-                || (inputs && (merged_word(color) || merged_extended(color))) =>
+                || merged_word(color)
+                || merged_extended(color) =>
             {
                 Some(color)
             }
-            // A color the draw's instance keeps out of its subpass, written through the storage
-            // form as a fetched one is.
-            OutputRole::RenderTarget {
-                attachment: AbiInt::Const(color),
-                index: 0,
-                ..
-            } if interlock && v.interlocked_colors.contains(&color) => Some(color),
             _ => None,
-        }))
+        })
         .collect();
     if read.is_empty() {
         return None;
     }
     // The blend over an input attachment depends on the attachments' state alone: its write is
     // the fixed function's, which the tests, coverage and views take as any other's.
-    Some(match interlock {
-        true => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
-            read,
-            d.color_attachments,
-            d.depth_or_stencil,
-            d.alpha_to_coverage,
-            d.max_vertex_amplification_count,
-        ),
-        false => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
-            read,
-            d.color_attachments,
-            false,
-            false,
-            1,
-        ),
-    })
+    Some(crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
+        read,
+        d.color_attachments,
+    ))
 }
 
 /// A fragment stage's lowering inputs under variant `v` on `p` that need no decoded entry: the
@@ -2826,7 +2772,7 @@ fn lower_inputs(
             ));
             out.unattached_colors =
                 unattached_colors_written(spec, d.color_attachments, d.alpha_to_coverage);
-            out.framebuffer_fetch = fetch_inputs(spec, d, variant, p);
+            out.framebuffer_fetch = fetch_inputs(spec, d, p);
             let read = raw_indices_read(spec);
             out.viewport_index_varying = written.viewport && read.viewport;
             out.render_target_array_index_varying = written.layer && read.layer;
@@ -3239,37 +3185,9 @@ fn lower_bounded<K>(
     // count's) are the product's.
     let writes_memory = crate::spirv::requirements::writes_memory(&module)?;
     // A fragment function's texture slots read only at the fragment's own pixel.
-    let mut own_pixel_textures = crate::spirv::requirements::own_pixel_textures(&module, m)?;
+    let own_pixel_textures = crate::spirv::requirements::own_pixel_textures(&module, m)?;
     // The levels of its bound view each texture slot's reads reach.
     let level_reads = crate::spirv::requirements::level_reads(&module, m)?;
-    // Those a draw can read through a snapshot an earlier draw of the same primitives took, of a
-    // function that writes no memory, and why each other one is left out. A variant compiled to
-    // read them so states its own, and judges none: its only texel access of each is the entry's
-    // copy, at the fragment's own pixel.
-    let snapshots: Vec<u32> = plan.families.fragment.snapshot.keys().copied().collect();
-    let snapshot_textures = match snapshots.is_empty() {
-        false => {
-            if !crate::spirv::requirements::snapshot_copies_alone(&module, &snapshots, m)? {
-                return Err(Error::Internal(InternalError::new(
-                    InternalKind::Invariant,
-                    "a snapshot variant that reads its texture outside the copy",
-                )));
-            }
-            own_pixel_textures.extend(&snapshots);
-            own_pixel_textures.sort_unstable();
-            own_pixel_textures.dedup();
-            crate::spirv::requirements::Judged {
-                slots: snapshots,
-                refusals: Vec::new(),
-            }
-        }
-        true => crate::spirv::requirements::snapshot_textures(
-            &module,
-            &own_pixel_textures,
-            writes_memory,
-            m,
-        )?,
-    };
     // A `half` rounded through `OpQuantizeToF16` (`QuantizeForm::Device`): the module records the
     // native note on every profile, a result below the smallest normal half the device's.
     let mut precision = plan.precision.clone();
@@ -3365,7 +3283,7 @@ fn lower_bounded<K>(
         &function_tables,
         (reaches_command_buffers, command_writes),
         (writes_textures, numbered_samplers),
-        (own_pixel_textures, snapshot_textures, level_reads),
+        (own_pixel_textures, level_reads),
         unbound,
     );
     let mut requirements = module.requirements.clone();
@@ -3533,11 +3451,7 @@ fn stage_interface(
     function_tables: &std::collections::BTreeSet<u32>,
     (reaches_command_buffers, command_writes): (bool, crate::pipeline::interface::CommandWrites),
     (writes_textures, numbered_samplers): (bool, Vec<crate::pipeline::interface::NumberedSampler>),
-    (own_pixel_textures, snapshots, level_reads): (
-        Vec<u32>,
-        crate::spirv::requirements::Judged,
-        Vec<crate::pipeline::interface::LevelReads>,
-    ),
+    (own_pixel_textures, level_reads): (Vec<u32>, Vec<crate::pipeline::interface::LevelReads>),
     unbound: unbound::Unbound,
 ) -> StageInterface {
     use crate::pipeline::interface::{BufferKind, BufferSlot};
@@ -3603,8 +3517,6 @@ fn stage_interface(
         unbound_storage_textures: unbound.storage_textures,
         numbered_samplers,
         own_pixel_textures,
-        snapshot_textures: snapshots.slots,
-        snapshot_refusals: snapshots.refusals,
         level_reads,
         private_bytes: plan.private_bytes,
         sampler_arrays: crate::lower::sampler::sampler_arrays(plan),

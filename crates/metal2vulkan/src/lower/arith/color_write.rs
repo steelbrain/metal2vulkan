@@ -2,8 +2,8 @@
 //! code itself rather than leaving the conversion to the device.
 //!
 //! A fragment function's color output is the device's to convert (`LoweringInputs::color_writes`),
-//! a unorm channel's too, also where the shader computes a blend in the storage form of framebuffer
-//! fetch (`PrecisionNote::DeviceColorConversion`): these rules serve the writes whose value the
+//! a unorm channel's too, also where the shader computes a blend over its input attachment
+//! (`PrecisionNote::DeviceColorConversion`): these rules serve the writes whose value the
 //! translation computes, Metal's `textureWriteRoundingMode` 2 (a half-float channel rounded to
 //! nearest even), and the private alpha test's 8-bit code ([`unorm8_code`]):
 //!

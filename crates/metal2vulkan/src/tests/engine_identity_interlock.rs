@@ -1,6 +1,6 @@
 //! The pixel interlock under the identity domains (`PointerDomain::Identity` with
 //! `HandleDomain::Identity`): it orders a raster order group on memory the function reads and
-//! writes, and chooses no other form (`lower::fragment::fetch::interlock_forms`).
+//! writes, and chooses no other form.
 //!
 //! On lavapipe's profile under the identity domains without rasterization-order color attachment
 //! access (which the runtime does not enable), with `fragmentShaderPixelInterlock` and without it,
@@ -10,8 +10,8 @@
 //!   runs its body in the ordered pixel interlock where the profile has the feature, its modules
 //!   L3-valid, and is refused `Unsupported{RasterOrderGroups}` naming the feature where not.
 //! - `fetch_ordered` (engine `fragment_fetch`), whose group holds only the color it reads, reads it
-//!   through the pushed texture (`PushField::FetchedColor`) on both: no storage attachment, no
-//!   interlock, and its fragment stage notes `UnorderedFetchWithinDraw`. Its modules are word for
+//!   through the pushed texture (`PushField::FetchedColor`) on both: no interlock, and its
+//!   fragment stage notes `UnorderedFetchWithinDraw`. Its modules are word for
 //!   word the same with and without the feature, so the interlock chose nothing of its form.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -162,10 +162,6 @@ fn the_pixel_interlock_orders_a_raster_order_group_on_memory_alone_under_the_ide
     for (p, what) in [(&read_with, "with"), (&read_without, "without")] {
         let m = fragment(p);
         assert!(!interlocks(&m.spirv), "fetch_ordered {what}: no interlock");
-        assert!(
-            p.graphics.storage_attachments.is_empty(),
-            "fetch_ordered {what}: no storage attachment"
-        );
         assert!(
             (m.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw),
             "fetch_ordered {what}: {:?}",

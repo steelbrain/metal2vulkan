@@ -25,8 +25,7 @@ differences from Metal. The runtime's own guide is [its README](../crates/metal2
   The exceptions are exhaustive on purpose: keys and Vulkan structs (`SlotRef`, `ResourceSlot`,
   `ApiVersion`, ...), and the enums a consumer must interpret completely to bind and draw
   correctly (`StageSource`, `PushHole`, `HeapSource`, `ImageSource`, `SamplerSource`,
-  `UseTarget`, `SlotClass`, `StorageAttachmentView`, `VertexStride`, `TileMapping`, `CopySource`,
-  `DrawCommand`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
+  `UseTarget`, `SlotClass`, `VertexStride`, `TileMapping`, `DrawCommand`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
   and `TextureType`), where a new variant breaks your build on purpose.
 - **Semver** covers this surface from 0.2.0 (still `0.x`: a breaking change bumps the minor
   version).
@@ -818,27 +817,17 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   samples but does not render (the RTX 5080) renders through an `R16_UINT` view of its texture
   (`metal::format::WordAttachment`, `LoweringInputs::word_colors`): the fragment function writes
   the word Metal stores and `graphics` gives the attachment that format; a pass clears it to the
-  word of Metal's clear. Exact, for a write unblended (or blended one and zero); under a mask of
-  some of its channels the function merges the word into the texel in the interlocked storage
-  form (a `GraphicsState::storage_attachments` entry of `R16_UINT`) where the device orders fetch
-  through the pixel interlock. Blended otherwise, there too the function computes Metal's blend of
-  a `half4` or `float4` output over the word it reads, within one code of Metal's
-  (`PrecisionNote::DeviceColorConversion`: the attachment holds codes where Metal's tile holds a
-  clear's or an earlier blend's result in the pass as a `half`, and under fast math Metal sums a
-  few states otherwise). A blend of the second source, and a blend or
-  partial mask on a device without the interlock, is refused as the device lacking the format; a
-  blend of an output of fewer lanes is `NotImplemented`; a color input of
-  one is read in the interlocked storage form, the word decoded to each channel's code over its
-  maximum code rounded to `half`, nearest even, which is Metal's value (measured on an Apple M3
-  Max under macOS 27.0.1 for a `float4` and a `half4` input, every code of each 4-bit channel).
+  word of Metal's clear. Exact, for a write unblended (or blended one and zero). Another blend
+  and a mask of some of its channels are refused as the device lacking the format; a color input
+  of one is `NotImplemented(Format)`.
 - An 8-bit sRGB attachment of one or two channels (`R8Unorm_sRGB`, `RG8Unorm_sRGB`) the device
   does not render (the RTX 5080: it renders neither `R8_SRGB` nor `R8G8_SRGB`, and holds the
   latter in its UNORM twin) renders through an `R8_UINT` or `R16_UINT` view of its texture the
   same way: the fragment function writes the bytes of the device's sRGB encode
   (`DevicePackConversion`), a pass clears it to the bytes of Metal's clear, and a partial mask
-  merges the word in the interlock, or over the attachment's input attachment on a device that
-  orders fetch through rasterization-order input attachments (lavapipe;
-  `RuntimeFact::WordInputMerge`). A blend of one
+  merges the word over the attachment's input attachment on a device that orders fetch through
+  rasterization-order input attachments (lavapipe; `RuntimeFact::WordInputMerge`), and is refused
+  as the device lacking the format elsewhere. A blend of one
   other than one and zero is refused as the device lacking the format; a color input of one is
   `NotImplemented(Format)`.
 - An `RGB9E5Float` attachment the device does not render (the RTX 5080) renders through an
@@ -859,9 +848,9 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   codes, a tie rounded down (a one-bit field's up), within one code of Metal's, which averages its
   tile's finer values. A device whose word's format renders one sample at that
   count refuses the texture (`TextureSampleCount`).
-- A fragment function that reads a color attachment (framebuffer fetch) reads it in an ordered
-  form wherever the device has one. On a device with neither ordered form it reads the attachment
-  as an input attachment without rasterization-order access
+- A fragment function that reads a color attachment (framebuffer fetch) reads it as an input
+  attachment, ordered by rasterization-order attachment access wherever the device has it. On a
+  device without it the input attachment has no rasterization-order access
   (`GraphicsState::rasterization_order_attachment_access` false), and the consumer records a
   barrier of the subpass's dependency on itself, by region, before each draw that reads input
   attachments after an earlier draw of the subpass, or its load operations, wrote a color, and
@@ -875,19 +864,15 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   (`InvalidDescriptor` at the color attachment), or one of a rotated, Y'CbCr or extended-range
   format (`Unsupported{Format}`). A read of one of Apple's extended-range formats (`BGR10_XR`,
   `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins), and a blend into one, are refused on
-  every device in either form (`Unsupported{Format}` at the color attachment): Metal's tile holds
+  every device (`Unsupported{Format}` at the color attachment): Metal's tile holds
   such an attachment as `half` through the render pass and rounds it to the codes only at the
   store, so a read or a blend after an earlier draw's write sees that draw's `half`, which the
-  stored codes do not keep. An unblended write, under any write mask, is built. A
-  raster order group on such a color input, or on a color output of an attachment the function
-  reads, orders that read alone there and takes no interlock; a group on anything else still
-  needs the pixel interlock (`Unsupported{RasterOrderGroups}`).
-  The ordered forms are rasterization-order attachment access, or the interlocked
-  storage form, which binds the attachment as a storage image viewed in
-  `StorageAttachmentUse::view_format()`: its own format, an 8-bit sRGB format's unsigned-integer
-  view, or, where the device declares a BGRA-order format neither typed nor without a format, its
-  RGBA-order twin (the shader exchanges red and blue). A `[[stencil]]` output uses
-  `VK_EXT_shader_stencil_export`.
+  stored codes do not keep. An unblended write, under any write mask, is built. On a device
+  without rasterization-order access, a raster order group on a color input, or on a color output
+  of an attachment the function reads, orders that read alone there and takes no interlock; a group on anything else still
+  needs the pixel interlock (`Unsupported{RasterOrderGroups}`). A `[[stencil]]` output uses
+  `VK_EXT_shader_stencil_export`; a device without it refuses the function
+  (`Unsupported{StencilExport}` naming the extension).
 - `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, whose vertex order is
   Vulkan's first-vertex order and Metal's for every primitive type. A `float3` read takes the
   first two weights and computes the third as `1 - (x + y)` in `float`, as Metal does, not the
@@ -1477,81 +1462,13 @@ What you record from `DispatchCommands` or `DrawCommands`:
   `bind::handle_entry_flags`), as the runtime does.
 - **Push constants.** Write `push_constants`, and fill each of the `push_holes` with the device
   address it names: the uploaded root table, the command buffer's `ExecutionStatus` buffer, an
-  indirect command buffer's records. A snapshot variant's `PushHole::SnapshotPhase` is a word, not
-  an address (below).
+  indirect command buffer's records.
 - **The dispatch or draw.** Record `regions` or `draw` as given: the binder has already applied
   Metal's offsets, bases and clamps.
 - **Status.** Per command buffer, keep one `ExecutionStatus` buffer for what translated shaders
   report (a resident-set miss, for one), and read it when the command buffer completes. A plan
   binds it as `WriteSource::ExecutionStatus` on a device that does not address buffers: bind the
   same buffer there, its `ExecutionStatus::BYTES` bytes.
-
-### Snapshot reads
-
-A draw that reads, at its fragments' own pixels, a texture its own subpass renders can read it
-through a snapshot instead of a copy taken before the render pass instance. The interface lists
-the fragment slots that allow it (`StageInterface::snapshot_textures`, `StageModule::
-snapshot_textures`): own-pixel slots whose texels reach no derivative, sample, quad or subgroup
-operation, branch, integer divisor, dynamic vector index or store outside the invocation, directly
-or through a call, in a function that writes no memory. A selection on a texel is allowed where
-its arms leave through its merge alone and hold no derivative, implicit-level sample or
-level-of-detail query, quad or subgroup operation, loop or undefined operand, nor call a function
-that does; what its arms leave behind (its merge's phis, the variables they store to) is judged
-as the texel is. It says why it leaves out each other
-own-pixel slot (`snapshot_refusals`: each slot with every `SnapshotRefusal` that holds for it).
-Name the slots in `BindState::snapshot_textures`; the plan keeps those its pipeline can read so
-and states them in `variant.snapshot_textures`, each with the form its snapshot holds texels in
-(`SnapshotForm::of` the slot's bound view and declared type: the texel's codes for an 8- or 16-bit
-normalized, half-float or integer format of the slot's class, which a read decodes as Metal reads
-the format, and the fetched lanes' bits for any other), compiled like any other variant. It keeps
-none on a
-device without `fragmentShaderPixelInterlock`, `fragmentStoresAndAtomics`,
-`attachmentFeedbackLoopLayout` or `extendedDynamicState3ColorWriteMask`, for a pipeline of more
-than one sample, a depth or stencil attachment, attachments in the storage form, input
-attachments, an imageblock, tile memory, a shader-side stencil or tests, tessellation or mesh
-stages, or a function that writes memory, and for an amplified or layered draw. Serve every other
-read as before.
-
-A pipeline of that variant states `GraphicsState::snapshot_reads`: create it with
-`VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`; its `dynamic_states` hold
-`VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT`, and its requirements `attachmentFeedbackLoopLayout` and
-`extendedDynamicState3ColorWriteMask`. Bind the slot's own texture in the attachment's feedback-loop
-layout, and at `WriteSource::SnapshotTexels` a storage image of the slot's form's
-`SnapshotForm::format` (`R8G8B8A8_UINT`, `R16G16B16A16_UINT` or `R32G32B32A32_UINT`) covering the
-render area, in `GENERAL` layout. Record each draw twice in its subpass: first with every color
-write mask 0 and `PushHole::SnapshotPhase` set to 1, each fragment copying its texel into the
-snapshot and running nothing else; then with the pipeline's own masks and the phase 0 (the plan's
-bytes), each fragment reading the snapshot. A by-region pipeline barrier before the first draw
-makes the attachment's earlier writes visible to the copy, and one between the two makes the copy
-visible to the reads and orders it before the second draw's color writes. Each step rests on a
-sentence of the Vulkan specification: the feedback loop's per-pixel barrier, the color write mask
-leaving memory unmodified, the invariance of fragment generation under write masks (Rule 2,
-Corollary 1), and the ordered pixel interlock. One draw alone cannot be exact: nothing orders a
-fragment shader's read of a texel before the same draw's color write of it.
-
-Where the attachment's image lacks feedback-loop usage (NVIDIA's drivers make no linear image with
-it), the two draws can run in two render pass instances instead, after the instance before them
-ends. Record the first in a render pass instance of its own over the framebuffer of the instance
-that follows, of a render pass compatible with that instance's that loads every attachment and
-stores none (`VK_ATTACHMENT_STORE_OP_NONE`, core in Vulkan 1.3 and brought below it by
-`VK_KHR_load_store_op_none` or `VK_EXT_load_store_op_none`), every color in `GENERAL` and the
-slot's texture bound in `GENERAL`, between pipeline barriers from everything before and to
-everything after; then begin the next instance and record the second draw first in it, with no
-barrier between the draws. Neither instance enables a feedback loop, and neither needs one: the
-first writes no color, by its masks or by its load and store operations
-(`VUID-vkCmdDraw-None-10795`, `VUID-vkCmdDraw-None-12338`), and the second's fetch of the texture
-never runs. The same pipeline serves both, as render pass compatibility ignores load and store
-operations and layouts. The runtime takes this form for such a read after a memory barrier inside
-the instance (`WorkCounts::reading_draws_snapshotted_leading`), where it would otherwise split the
-instance and copy the texture, and where it weighs cheaper than the split by the scissors' area or,
-on a device with precise occlusion queries, by the pixels the draw covered in its last measured
-pass, even over a buffer's bytes: its first draw reads the texture at every pixel the draw covers.
-
-A draw whose pipeline writes no channel of the color it reads so needs no snapshot: the runtime
-creates its pipeline (the variant without snapshots) with the feedback-loop flag, binds the slot's
-own texture in the attachment's feedback-loop layout, and records a by-region barrier before the
-draw, from the color writes to the fragment shader's reads, and one after it, from those reads to
-the color output (section 10 says what it then reads).
 
 ### Levels a slot reads
 
@@ -1769,8 +1686,7 @@ bound.
   color resolve averages through Vulkan's `AVERAGE` mode, which leaves the rounding of the average
   (and the sRGB encoding) to the device: any
   color attachment but an extended-range one and one resolving into its format's sRGB twin (each
-  resolved after the pass), one a fetching pass's sample planes hold as it ends included (the
-  planes merged back first). Also, on every device, a resolve into an 8-bit UNORM attachment's
+  resolved after the pass). Also, on every device, a resolve into an 8-bit UNORM attachment's
   sRGB twin where the device has
   the sRGB format: the crate-owned resolve decodes the samples and encodes their average by the
   device's own sRGB conversions, where Metal's resolve takes its own 12-bit tables (with correctly
@@ -2037,41 +1953,12 @@ bound.
   mip filter or a runtime sampler's word does. The device takes the level of detail by Vulkan's
   rules, whose scale factor may be approximated; Metal's level of detail from derivatives is not
   measured. The sample may read another level or filter than Metal's near a boundary.
-- `metal2vulkan-degrade-unmeasured-fetch-blend` (precision). `PrecisionNote::UnmeasuredFetchBlend`:
-  A fragment function reads a color attachment the pipeline blends, on a device that orders
-  framebuffer fetch only through the pixel interlock (MoltenVK, RADV, ANV), of a format whose Metal
-  blend arithmetic is not built: a format whose channels read as floats but a 16-bit float, a 32-bit
-  float, an sRGB and an extended-range one (a 16-bit normalized, 8-bit signed normalized, 10-bit,
-  packed float or `A8Unorm` format, among others), an 8-bit unorm one written by an output of fewer
-  than four lanes, a 32-bit float one (`R32Float`, `RG32Float`, `RGBA32Float`) written by an output
-  of fewer than four lanes, by a module without fast math, or under a blend state the one sweep that
-  measured that family does not fit: a color or alpha arithmetic of more than a lone term, a lone
-  fused multiply-add, or a minimum or maximum, outside the states measured word for word. A
-  one-channel attachment's `SourceColor` over `DestinationColor` is such a state, and so is a blend
-  color's difference, which a 16-bit float attachment's blend fits and a 32-bit float one's does
-  not; a lone term that reads the blend color, `OneMinusBlendColor` over `Zero` among them, is
-  fitted and takes the exact form. Also a 16-bit float or 8-bit unorm one under a blend of the
-  second source or beside a second (index 1) output. No Vulkan blend applies to the storage write,
-  so the shader computes the pipeline's blend in `float`: each factor, product and sum rounded to
-  nearest even, the source and the blend color clamped first to a normalized format's range (a NaN
-  to its low end), an output's missing lane zero, and the result stored through the device's
-  conversion. Metal's blend arithmetic for these formats is not measured, so the bound is not known.
-  A factor of the second source reads the function's second output, clamped as the source. An 8-bit
-  sRGB attachment (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`) under a
-  blend of the second source, a one- or two-channel one under a lerp, each in a module compiled with
-  fast math, and one written by an output of fewer than four lanes, record it too: the shader
-  computes Metal's 8-bit unorm blend's rounded forms over the decoded texel, in the output's type (a
-  missing lane zero), and stores the result by the device's sRGB encode (`DevicePackConversion`),
-  Metal's blend without fast math at four lanes; under fast math Metal regroups the blend,
-  unmeasured.
 - `metal2vulkan-degrade-unordered-fetch-within-draw` (precision).
   `PrecisionNote::UnorderedFetchWithinDraw`: A fragment function reads a color attachment
-  (framebuffer fetch) on a device with neither rasterization-order color attachment access nor
-  `fragmentShaderPixelInterlock` (Honeykrisp on Apple's M2 Pro; RADV on the RX 550), or under the
-  identity domains on any device without rasterization-order access, the pixel interlock's included:
-  there the interlock chooses no fetch form, as its storage form is a descriptor the identity
-  domains do not hold. It reads the attachment as an input attachment, and the runtime records a
-  barrier of the draws' subpass's dependency on itself, by region, before each draw that reads input
+  (framebuffer fetch) on a device without rasterization-order color attachment access (among
+  the committed profiles, every one but the lavapipe ones). It reads the attachment as an input
+  attachment, and the runtime records a barrier of the draws' subpass's dependency on itself, by
+  region, before each draw that reads input
   attachments after an earlier draw of its render pass instance, or its load operations, wrote a
   color, and before each draw that writes a color after an earlier one read them: a fetch reads what
   every earlier draw stored at its pixel, Metal's answer. Under the identity domains it reads the
@@ -2145,10 +2032,7 @@ bound.
 - `metal2vulkan-degrade-device-nan-encoding` (precision). `PrecisionNote::DeviceNanEncoding`: A
   `float` NaN result's bit pattern follows the device: Metal answers the canonical `0x7fc00000` for
   the NaN results of its float arithmetic and functions, and Vulkan states no encoding, so a device
-  may answer another sign or payload (llvmpipe: `0xffc00000`). Also a blend
-  a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
-  of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
-  stores every NaN of the blend as `0x7e00`. A texture write records it where the stored NaN is the
+  may answer another sign or payload (llvmpipe: `0xffc00000`). A texture write records it where the stored NaN is the
   device's: a constant texel none of whose lanes is a NaN records nothing, and a `half` or
   `float` write through an argument buffer holds only where the command can name a texture of a
   format family whose stored NaN is the device's (for a `half` write, a texture of any format that
@@ -2224,10 +2108,7 @@ bound.
   the float class that may hold a half-float or small-float format, which Metal rounds to nearest
   even and the device's store as it rounds a `float` (toward zero on every measured driver, one
   unit in the last place, a finite value past 65504 stored as 65504); and a fragment function's
-  `float` blend into a 16-bit float attachment through the pixel interlock, and a blend into an
-  8-bit unorm attachment through
-  the pixel interlock, whose result the storage image's store converts to its code, or into an
-  `ARGB8Unorm` attachment over its input attachment where no Vulkan blend state on its rotated
+  blend into an `ARGB8Unorm` attachment over its input attachment where no Vulkan blend state on its rotated
   image gives Metal's (a destination alpha in a color factor, say), whose result the attachment's
   write converts; and a render pipeline's private logic operation that the fragment function
   computes on a device without `logicOp` into an 8- or 16-bit unorm or snorm attachment, which
@@ -2429,17 +2310,9 @@ bound.
   `PrecisionNote::HalfOutputFastMathBlend`: A fragment function of a module compiled with fast math
   (`air.compile.fast_math_enable`) returns a `half` color output to an attachment the pipeline has
   that stores some channel (its write mask names one of its format's channels;
-  `StageIo::half_fast_colors`, which the pipeline's stage reads, or the interlocked storage form's
-  write), where `PrecisionNote::HalfOutputPrecision`'s conditions hold; or
-  computes the blend of a 16-bit float attachment it fetches in the interlocked storage
-  form (no Vulkan blend applies to a storage write) where Metal's compiler may fold the output's
-  own arithmetic into that blend or regroup a sum of it: within 2 `half` units in the last place of
-  Metal's at the operands' magnitude, 16 at the stored value's under cancellation. Where the output
-  is opaque to the blend and its form fits every measured state, the function's blend is Metal's
-  and records nothing; so does the blend of a fetched 8-bit unorm attachment it computes there
-  (every factor, operation, write mask and blend color it builds), which Metal reads the output
-  into clamped, folding none of it (the storage image's store of its result is the device's
-  conversion, `DeviceColorConversion`). Every device receives the output widened to `float`.
+  `StageIo::half_fast_colors`, which the pipeline's stage reads), where
+  `PrecisionNote::HalfOutputPrecision`'s conditions hold. Every device receives the output widened
+  to `float`.
 - `metal2vulkan-degrade-device-sampling` (precision). `PrecisionNote::DeviceSampling`: Native device
   sampler, on every device (the module requires `VkProperty::DeviceSampling`), its level clamp the
   descriptor's as given (a `lodMinClamp` past level 15, past every texture's last level, handed as
@@ -2652,8 +2525,7 @@ bound.
   `unorm4x8_srgb`'s pack. Recorded on every device. The same conversions
   serve an implicit imageblock access of a normalized attachment (a `half` load rounding the
   unpacked `float` once more), a fragment function's read and write of an 8-bit sRGB attachment
-  in the interlocked storage form or through its word view, and a snapshot read's decode of a
-  normalized code (`c` times the `f32` nearest `1 / D`), noted alike. So does every conversion of
+  through its word view. So does every conversion of
   an extended-range, padded 10-bit or bfloat texel (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`,
   `R10Unorm_X6`, `RG10Unorm_X12`, their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`,
   `RGBA16Bfloat`), which no Vulkan format holds: a read is `float(c - 384)` (a padded code `c`)

@@ -7,17 +7,15 @@ use crate::device::{DeviceDescription, DevicePolicy};
 use crate::spirv::testing::assert_valid;
 use std::path::PathBuf;
 
-/// Every copy draw: each plane of each source, the export of each source, the depth, the
+/// Every copy draw: each plane, the export, the depth, the
 /// depth's and the stencil's bits into colour, a depth's magnitude as a depth and as bits, and a
 /// 16-bit depth's code both ways.
 fn every_copy() -> Vec<DepthStencilCopy> {
     let mut copies = Vec::new();
-    for source in [CopySource::Aspect, CopySource::Shadow] {
-        for bit in StencilBit::ALL {
-            copies.push(DepthStencilCopy::StencilPlane { source, bit });
-        }
-        copies.push(DepthStencilCopy::StencilExport { source });
+    for bit in StencilBit::ALL {
+        copies.push(DepthStencilCopy::StencilPlane { bit });
     }
+    copies.push(DepthStencilCopy::StencilExport);
     copies.push(DepthStencilCopy::Depth);
     copies.push(DepthStencilCopy::DepthBits);
     copies.push(DepthStencilCopy::StencilBits);
@@ -41,8 +39,7 @@ fn each_bit_masks_its_plane() {
 }
 
 /// Each module needs exactly what the module docs say: every fragment stage `sampleRateShading`,
-/// a read of the shadow multisampled storage images, the export the extension, the split
-/// multisampled storage images of an extended format and no sample-rate shading.
+/// the export the extension, and none multisampled storage images.
 #[test]
 fn each_module_needs_what_its_docs_say() {
     for copy in every_copy() {
@@ -51,36 +48,18 @@ fn each_module_needs_what_its_docs_say() {
             r.features.contains(&VkFeature::SampleRateShading),
             "{copy:?}: {r:?}"
         );
-        let export = matches!(copy, DepthStencilCopy::StencilExport { .. });
+        let export = matches!(copy, DepthStencilCopy::StencilExport);
         assert_eq!(
             r.extensions.contains(&VkExtension::ExtShaderStencilExport),
             export,
             "{copy:?}: {r:?}"
         );
-        let shadow = matches!(
-            copy,
-            DepthStencilCopy::StencilPlane {
-                source: CopySource::Shadow,
-                ..
-            } | DepthStencilCopy::StencilExport {
-                source: CopySource::Shadow
-            }
-        );
-        assert_eq!(
-            r.features
+        assert!(
+            !r.features
                 .contains(&VkFeature::ShaderStorageImageMultisample),
-            shadow,
             "{copy:?}: {r:?}"
         );
     }
-    let r = needs(split_typed_module().expect("split"));
-    for feature in [
-        VkFeature::ShaderStorageImageMultisample,
-        VkFeature::ShaderStorageImageExtendedFormats,
-    ] {
-        assert!(r.features.contains(&feature), "{feature:?}: {r:?}");
-    }
-    assert!(!r.features.contains(&VkFeature::SampleRateShading), "{r:?}");
 }
 
 /// Every committed device (`validation/profiles/*.json`), derived with the resident-table domains,
@@ -112,7 +91,7 @@ fn committed_devices() -> Vec<(String, Device)> {
 #[test]
 fn the_modules_are_valid_where_the_device_has_what_they_need() {
     let feature = Feature::SeparateMultisampledDepthStencil;
-    let (mut draws, mut splits) = (0, 0);
+    let mut draws = 0;
     for (name, device) in committed_devices() {
         let profile = device.profile();
         let fits = |m: TypedModule| profile.check(&needs(m)).is_ok();
@@ -132,22 +111,8 @@ fn the_modules_are_valid_where_the_device_has_what_they_need() {
                 Err(other) => panic!("{name} {copy:?}: {other}"),
             }
         }
-        let fit = fits(split_typed_module().expect("split"));
-        match stencil_split_module(&device, feature.clone()) {
-            Ok(module) => {
-                assert!(fit, "{name}");
-                assert_valid(split_typed_module().expect("split"), profile);
-                assert!(!module.spirv.is_empty());
-                splits += 1;
-            }
-            Err(Error::Unsupported(u)) => {
-                assert!(!fit, "{name}");
-                assert_eq!(u.feature, feature, "{name}");
-            }
-            Err(other) => panic!("{name}: {other}"),
-        }
     }
-    assert!(draws > 0 && splits > 0, "{draws} {splits}");
+    assert!(draws > 0);
 }
 
 /// The 16-bit depth pair's arithmetic is exact for **every** code: of all 65536 codes, each one

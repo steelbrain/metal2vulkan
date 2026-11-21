@@ -172,13 +172,6 @@ fn contribution(cx: &SelectCx<'_>, id: InstId, inst: &Inst) -> Reach {
     Reach(r)
 }
 
-/// Whether instruction `id` writes memory another invocation or a later command can read: a
-/// store, atomic, image write, or copy outside `Thread` memory, or a call the walk cannot see
-/// into (the interlocked framebuffer fetch's early-test rule).
-pub(super) fn side_effect(cx: &SelectCx<'_>, id: InstId, inst: &Inst) -> bool {
-    contribution(cx, id, inst).has(Reach::SIDE_EFFECT)
-}
-
 /// Whether instruction `id` is tangled (a derivative, an implicit-LOD sample, a quad or subgroup
 /// operation, a barrier) or a non-quad subgroup operation: what tells the invocations of a quad
 /// apart from each other (the loop over the covered samples). Valid once every instruction is

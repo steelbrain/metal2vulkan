@@ -36,13 +36,9 @@
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
 //! dispatch reads its group counts from Metal's buffer itself ([`IndirectArgs::Buffer`]).
 //! A pass's visibility results are its queries' results copied to their
-//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. A pass whose
-//! fetching draws
-//! read a multisampled attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits
-//! the attachment into them with [`planes_split_module`] and merges them back with
-//! [`planes_merge_modules`], through the [`PlanesCopy`] view of its texel size. A multisampled
+//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. A multisampled
 //! depth or stencil aspect moves between images without colour copies through the draws of
-//! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`]. Compute commands
+//! [`depth_stencil_copy_modules`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
 //! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered
 //! [`ReplayVariant`]s, recorded with [`replay_preprocess_module`], writes each command's arguments
@@ -97,7 +93,6 @@ pub(crate) mod rate_map;
 pub(crate) mod replay;
 pub(crate) mod resident;
 pub(crate) mod sample_interleave;
-pub(crate) mod sample_planes;
 pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod table;
@@ -119,8 +114,7 @@ pub use astc_decode::{AstcDecode, AstcTexels};
 pub use chroma_decode::ChromaDecode;
 pub use depth_clamp::clamped_depth;
 pub use depth_stencil_copy::{
-    depth_stencil_copy_modules, stencil_split_module, CopySource, DepthStencilCopy,
-    DepthStencilCopyModules, StencilBit, StencilSplitModule,
+    depth_stencil_copy_modules, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
@@ -172,8 +166,8 @@ pub use replay::{
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,
-    BufferRanges, BufferShape, FragmentTests, FunctionTablesShape, HeapPlacement, ImageblockSize,
-    ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion, StageShape, StageTable,
+    BufferRanges, BufferShape, FunctionTablesShape, HeapPlacement, ImageblockSize, ResourceClass,
+    SamplerDescriptor, SamplerShape, StageInRegion, StageShape, StageTable,
     TessellationFactorBuffer, TessellationFactors, TextureFacts, TextureShape,
     TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource, UsedShape,
     VertexAmplification, ViewMapping,
@@ -183,10 +177,7 @@ pub use state::{
 pub use pvrtc_decode::PvrtcDecode;
 pub use sample_interleave::{
     interleave_merge_modules, interleave_split_module, InterleaveMergeModules,
-    InterleaveSplitModule,
-};
-pub use sample_planes::{
-    planes_merge_modules, planes_split_module, PlanesCopy, PlanesMergeModules, PlanesSplitModule,
+    InterleaveSplitModule, PlanesCopy,
 };
 pub use status::{ExecutionStatus, ReplayFaults, StatusBits, StatusReport, StatusWord};
 pub use table::{FunctionTableSnapshot, FunctionTableWords};

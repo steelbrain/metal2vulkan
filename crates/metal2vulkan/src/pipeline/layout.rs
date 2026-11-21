@@ -141,9 +141,6 @@ pub enum BindingSource {
         stage: Stage,
         sampler: CombinedSampler,
     },
-    /// The snapshot of the texture the draw binds at this fragment texture slot
-    /// (`ResourceKind::SnapshotTexels`), bound as a storage image.
-    SnapshotTexels(u32),
     /// A constexpr sampler array of `stage` (`ResourceKind::SamplerArray`) that samples set-1
     /// heap images, made for the use with comparison or without (`compare`) of an integer texture
     /// or not (`integer`): its samplers are the binding's `immutable_samplers`, which take no

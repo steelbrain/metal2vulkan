@@ -657,9 +657,8 @@ pub enum Feature {
     // ---- Stages and fragment (lowering B7, B9) ----
     /// Raster order groups without fragment shader interlock.
     RasterOrderGroups,
-    /// Framebuffer fetch without an ordered form on the device (rasterization-order attachment
-    /// access, or the pixel interlock's storage form where the pipeline's state lets it be
-    /// exact), or in a shape not implemented.
+    /// Framebuffer fetch that needs an ordered read the device lacks (rasterization-order
+    /// attachment access), or in a shape not implemented.
     FramebufferFetch,
     /// `[[primitive_id]]` in a fragment function: behind a mesh function on a device without
     /// geometry or tessellation shaders, whose fragment stage reads it from a varying no mesh
@@ -974,8 +973,7 @@ pub enum Feature {
     /// ([`PrivateRenderField`]). Metal's answer for each was measured; building it is open work.
     PrivateRenderState(PrivateRenderField),
     /// A blend the function computes in the shader, into an extended-range attachment
-    /// (`BGRA10_XR`, `BGR10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins) or into a 16-bit
-    /// float attachment in the interlocked storage form, of the part it names
+    /// (`BGRA10_XR`, `BGR10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins), of the part it names
     /// ([`ExtendedRangeBlend`]).
     ExtendedRangeBlend(ExtendedRangeBlend),
     /// A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p
@@ -1004,20 +1002,14 @@ pub enum Feature {
 /// The part of a blend the shader computes that [`Feature::ExtendedRangeBlend`] refuses. An
 /// extended-range attachment's blend, which the shader computes by the device's arithmetic, is
 /// built for every factor, operation and write mask, and refuses only [`Output`](Self::Output);
-/// a 16-bit float attachment's blend in the interlocked storage form refuses the other two, the
-/// generic blend taking their place where the function reads the attachment.
+/// Metal's blend the shader computes refuses [`DualSource`](Self::DualSource) under fast math.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExtendedRangeBlend {
-    /// Into a 16-bit float attachment in the storage form, a factor of the second source
-    /// (`Source1Color`, `Source1Alpha` and their one-minus forms): Metal's blend is not built.
-    /// (A function that writes no second output to the attachment Metal refuses:
-    /// [`DescriptorError::ColorAttachment`].)
+    /// Under fast math, a factor of the second source (`Source1Color`, `Source1Alpha` and their
+    /// one-minus forms): Metal's blend is not built. (A function that writes no second output to
+    /// the attachment Metal refuses: [`DescriptorError::ColorAttachment`].)
     DualSource,
-    /// Into a 16-bit float attachment in the storage form under fast math, a write mask of exactly
-    /// one color channel: Metal blends that channel otherwise than the two or three it blends as
-    /// one vector, by a rule not known. (Without fast math it is built.)
-    OneColorChannel,
     /// An output other than four `half` or `float` lanes, or a second output other than those the
     /// blend reads: not built.
     Output,
@@ -1029,13 +1021,7 @@ pub enum ExtendedRangeBlend {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PrivateRenderField {
-    /// `sampleMask` dropping a sample, in a pipeline whose fragment function writes an
-    /// attachment itself (a storage attachment, a shadow stencil or an imageblock), whose writes
-    /// were not measured under the mask.
-    SampleMask,
-    /// `sampleCoverage` other than 1 at a sample count past 4, where Metal was not measured, or
-    /// in a pipeline whose fragment function writes an attachment itself (a storage attachment,
-    /// a shadow stencil or an imageblock), whose writes were not measured under it.
+    /// `sampleCoverage` other than 1 at a sample count past 4, where Metal was not measured.
     SampleCoverage,
     /// `alphaTestEnabled` with a test the translation has not built: an `alphaTestFunction` past
     /// `MTLCompareFunctionAlways`, a pipeline without a fragment function, a fragment function

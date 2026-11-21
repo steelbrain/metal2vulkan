@@ -30,8 +30,6 @@ use Verdict::{Applied, Fact, Refused};
 
 /// The draw's set-0 bindings, which `draws` refuses (`of_the_device`).
 const SET_0: &str = "a set-0 binding, which draws() refuses";
-/// What the runtime never asks the translator for.
-const VARIANT: &str = "stated only under a VariantKey the runtime never asks for";
 
 const GRAPHICS_STATE: &[(&str, Verdict)] = &[
     (
@@ -63,7 +61,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
         Fact("it matters only to multiview, which refuse() refuses"),
     ),
     ("tessellation", Applied),
-    ("fragment_imageblock", Applied),
     (
         "vertex_writes_memory",
         Fact("the runtime records each draw once, in no rate-mapped pass"),
@@ -75,8 +72,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
              module stores no ViewportIndex",
         ),
     ),
-    ("storage_attachments", Refused(SET_0)),
-    ("shadow_stencil", Applied),
     ("line_band", Applied),
     ("writes_point_size", Applied),
     (
@@ -100,7 +95,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
         Fact("the runtime takes every attachment of a draw's pass as written"),
     ),
     ("sample_mask", Applied),
-    ("snapshot_reads", Refused(VARIANT)),
     ("logic_op", Applied),
 ];
 
@@ -152,8 +146,6 @@ const STAGE_MODULE: &[(&str, Verdict)] = &[
         Fact("the runtime announces every note of precision_notes, these among them"),
     ),
     ("own_pixel_textures", Applied),
-    ("snapshot_textures", Refused(VARIANT)),
-    ("snapshot_refusals", Refused(VARIANT)),
     (
         "level_reads",
         Fact("the runtime takes a read of a texture as one of its whole bound view"),

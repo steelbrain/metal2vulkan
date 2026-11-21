@@ -4,9 +4,9 @@
 //! Metal applies the operation to the code of each channel of a normalized or integer attachment
 //! the function writes, the fragment's code against the stored one, blending ignored and the write
 //! mask kept after it (`pipeline::private_state`'s module docs). On a device that orders
-//! framebuffer fetch, the function's first output's write to such an attachment reads the pixel's
-//! texel, in the interlocked storage form (`fetch`) or through the attachment's input attachment
-//! under rasterization-order access, and stores the operation's result itself ([`operated`]):
+//! framebuffer fetch through rasterization-order input attachments, the function's first output's
+//! write to such an attachment reads the pixel's texel through the attachment's input attachment,
+//! and stores the operation's result itself ([`operated`]):
 //!
 //! - the stored codes from the texel the read gives: a normalized channel's value times its
 //!   largest code, rounded to nearest even (exact: the read's value is a code over that largest
@@ -44,14 +44,12 @@
 //! code past the rounded product), nor is `RGB10A2Uint`'s (it saturates the operation's 32-bit
 //! result), and is refused there (`pipeline::private_state::logic_operation`). So is a write the
 //! operation would read otherwise than as the format's codes: a narrower integer output than 32
-//! bits ([`takes`]), an attachment held through a word view, under alpha to coverage in the storage
-//! form, and, through an input attachment, one held with its channels rotated or with Metal's alpha
-//! in red.
+//! bits ([`takes`]), an attachment held through a word view, and one held with its channels
+//! rotated or with Metal's alpha in red.
 //!
-//! The write mask applies after the operation: the storage form takes the kept channels back from
-//! the texel it read (`fetch`), and over an input attachment the device's write mask keeps them.
-//! Each read is ordered after every earlier fragment's write of the pixel (the pixel interlock, or
-//! rasterization-order attachment access), so overlapping fragments operate in primitive order, as
+//! The write mask applies after the operation: the device's write mask keeps the channels it leaves
+//! out. Each read is ordered after every earlier fragment's write of the pixel (rasterization-order
+//! attachment access), so overlapping fragments operate in primitive order, as
 //! Metal's do; a multisampled pipeline's function runs per sample and operates on its own sample's
 //! codes.
 
@@ -454,8 +452,7 @@ pub struct LogicInput {
 /// input attachment, and states `RuntimeFact::FramebufferFetch`; a normalized one's codes are the
 /// device's conversion (`PrecisionNote::DeviceColorConversion`). An attachment held through a
 /// word, with its channels rotated, or with Metal's alpha in red, and an output the operation does
-/// not take ([`takes`]), are refused naming the operation. (On a device that orders fetch through
-/// the pixel interlock, the storage form computes it, `fetch`.)
+/// not take ([`takes`]), are refused naming the operation.
 pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let Some(op) = cx.inputs.logic_operation else {
         return Ok(());

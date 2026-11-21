@@ -16,7 +16,8 @@
 //! `framebufferIntegerColorSampleCounts` is one sample, and it records no count of that format's
 //! own), so a pipeline of four samples is refused there naming the properties it needs. An
 //! unblended mask of some of the codes one word holds (`BGR10_XR`'s, the two-plane forms') merges
-//! them in the storage form where the device orders fetch through the interlock. No GPU is used.
+//! them over the input attachment where the device orders fetch through rasterization-order input
+//! attachments. No GPU is used.
 //!
 //! `llvm-as` assembles the fixture `rt6_samples`; without it the tests skip visibly.
 
@@ -118,11 +119,6 @@ fn attachment(
     }
     a.write_mask = mask;
     a
-}
-
-/// Whether `pipe` reads and writes color 0 in the interlocked storage form.
-fn stored(pipe: &RenderPipeline) -> bool {
-    (pipe.graphics.storage_attachments.iter()).any(|u| u.color_index == 0)
 }
 
 /// Every shape a wide-gamut client makes writes the blended attachment, so each is refused on every
@@ -267,7 +263,6 @@ fn unwritten_and_masked_extended_range_attachments_are_made() {
                                 continue;
                             };
                             made_count += 1;
-                            assert!(!stored(&pipe), "{what}");
                             let a = pipe.graphics.color_attachments[0].expect("attachment");
                             assert!(a.blend.is_none(), "{what}");
                             assert_eq!(a.format, vk::Format::R16G16B16A16_UINT, "{what}");
@@ -347,17 +342,14 @@ fn an_unordered_device_refuses_an_extended_range_blend_as_every_device_does() {
 
 /// An unblended write of some of the codes one word holds (`BGR10_XR`'s and its twin's word, the
 /// two-plane forms' color word: `color_writes::merged_extended`), which no mask of the raw
-/// components gives: where the device orders fetch only through the pixel interlock, the function
-/// merges its codes into the word it reads first, in the interlocked storage form (color 0 leaves
-/// the subpass), at one sample and four, from a `half4` output and a `float4` one, and every stage
-/// passes L3. On lavapipe, which orders fetch through rasterization-order input attachments, the
-/// function merges them over the input attachment: color 0 stays a color attachment of the raw
-/// format with no blend and a write of every raw component, the stage states
-/// `RuntimeFact::WordInputMerge` with the channels the mask keeps, and it passes L3 (four samples
-/// are its profile's gap). On a device that orders fetch in neither form the refusal names the
-/// orderings the merge needs. Before, every venue refused the mask `NotImplemented(Format)` at link.
+/// components gives: on lavapipe, which orders fetch through rasterization-order input
+/// attachments, the function merges them over the input attachment, from a `half4` output and a
+/// `float4` one: color 0 stays a color attachment of the raw format with no blend and a write of
+/// every raw component, the stage states `RuntimeFact::WordInputMerge` with the channels the mask
+/// keeps, and it passes L3 (four samples are its profile's gap). On a device that does not order
+/// fetch so, the pixel interlock's included, the refusal names the ordering the merge needs.
 #[test]
-fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
+fn a_mask_of_some_codes_of_a_word_merges_them_over_the_input_attachment() {
     let Some(library) = library() else {
         return;
     };
@@ -388,7 +380,6 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
         "runtime-floor",
     ] {
         let dev = device(stem);
-        let interlock = crate::lower::fragment::interlock_orders(dev.profile());
         let inputs = crate::lower::fragment::inputs_order(dev.profile());
         for pf in formats {
             for mask in masks {
@@ -402,8 +393,7 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
                             format!("{stem} {pf:?} mask {} {fill} x{samples}", mask.as_raw());
                         match dev.compile_render_pipeline(&d, &Budget::standard()) {
                             Ok(pipe) => {
-                                assert!(interlock || inputs, "{what}");
-                                assert_eq!(stored(&pipe), interlock, "{what}");
+                                assert!(inputs, "{what}");
                                 if inputs {
                                     let a = pipe.graphics.color_attachments[0].expect("attachment");
                                     let form = ExtendedRange::of(pf).expect("a form");
@@ -436,7 +426,7 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
                                 }
                                 merged += 1;
                             }
-                            Err(Error::Unsupported(u)) if !interlock && !inputs => {
+                            Err(Error::Unsupported(u)) if !inputs => {
                                 assert_eq!(u.feature, unordered.feature, "{what}: {u:?}");
                                 assert_eq!(u.needs, unordered.needs, "{what}: {u:?}");
                             }
@@ -448,6 +438,6 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
             }
         }
     }
-    // Four interlock venues at both counts, lavapipe at one sample.
-    assert_eq!(merged, (4 * 2 + 1) * formats.len() * masks.len() * 2);
+    // Lavapipe at one sample.
+    assert_eq!(merged, formats.len() * masks.len() * 2);
 }

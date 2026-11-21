@@ -44,10 +44,6 @@ pub enum DrawReplayRule {
     VertexWritesMemory,
     /// The state's fragment function writes memory.
     FragmentWritesMemory,
-    /// The state has a fragment imageblock.
-    FragmentImageblock,
-    /// The state tests stencil in its shaders.
-    ShaderStencil,
     /// The state reads its attachments.
     InputAttachments,
     /// The state's indirect draw needs its arguments on the CPU.
@@ -102,8 +98,6 @@ impl fmt::Display for DrawReplayRule {
             DrawReplayRule::FragmentWritesMemory => {
                 "the inherited state's fragment function writes memory"
             }
-            DrawReplayRule::FragmentImageblock => "the inherited state has a fragment imageblock",
-            DrawReplayRule::ShaderStencil => "the inherited state tests stencil in its shaders",
             DrawReplayRule::InputAttachments => "the inherited state reads its attachments",
             DrawReplayRule::ArgumentsOnCpu => {
                 "the inherited state's indirect draw needs its arguments on the CPU"
@@ -193,8 +187,8 @@ pub fn draw_replay_merges(primitive_type: PrimitiveType) -> bool {
 /// The inherited state's rules (its `graphics` facts) for a draw replay, `merged` into one draw or
 /// not: its functions write no memory (but a vertex function where nothing rasterizes, unless the
 /// draws merge: a merged draw runs a vertex for each corner of a whole primitive, which only a
-/// vertex function that writes no memory cannot tell from Metal's), and it has no fragment
-/// imageblock, shader-side stencil or depth test or attachment read.
+/// vertex function that writes no memory cannot tell from Metal's), and it has no depth test or
+/// attachment read.
 pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), DrawReplayRule> {
     let rules = [
         (
@@ -204,14 +198,6 @@ pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), D
         (
             graphics.fragment_writes_memory,
             DrawReplayRule::FragmentWritesMemory,
-        ),
-        (
-            graphics.fragment_imageblock.is_some(),
-            DrawReplayRule::FragmentImageblock,
-        ),
-        (
-            graphics.shadow_stencil.is_some(),
-            DrawReplayRule::ShaderStencil,
         ),
         (
             !graphics.input_attachments.is_empty(),

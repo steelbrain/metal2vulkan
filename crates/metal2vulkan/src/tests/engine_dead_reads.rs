@@ -8,11 +8,12 @@
 //!   draws `dfr_color` (a color 0 input in group 0) and `dfr_buffer` (a buffer in group 0) over
 //!   five colors, and `dfr_output` (a color 0 input of a color 0 output in group 0) over one, with
 //!   the read dead as with it live. Specialized dead, each compiles on every profile here without
-//!   an interlock, including a device without one, passing L3; specialized live, each takes the
-//!   pixel interlock where the device has it, and is refused where it has neither interlock but
-//!   orders a color read in rasterization order. On a device with neither ordered fetch form
-//!   (`vk12-floor`) the group on `dfr_output`'s color orders only what its read orders there: the
-//!   input attachment, between draws, compiled without an interlock and noted
+//!   an interlock, including a device without one, passing L3. Specialized live, `dfr_buffer`
+//!   takes the pixel interlock where the device has it and is refused where it has none;
+//!   `dfr_color` and `dfr_output` take it where the device orders fetch through
+//!   rasterization-order input attachments (`lavapipe`). Elsewhere (`moltenvk-m3` with and
+//!   without the interlock, `runtime-floor`) the group on their color orders only what the read
+//!   orders there: the input attachment, between draws, compiled without an interlock and noted
 //!   (`PrecisionNote::UnorderedFetchWithinDraw`).
 //! - **A color input without an attachment** is Metal's pipeline error whether or not the body
 //!   reads it ("Shaders reads from a color attachment whose pixel format is
@@ -128,11 +129,10 @@ fn interlocks(words: &[u32]) -> bool {
     false
 }
 
-/// Whether `dev` orders framebuffer fetch in neither form: no rasterization-order color attachment
-/// access and no pixel interlock.
+/// Whether `dev` orders framebuffer fetch between draws alone: no rasterization-order color
+/// attachment access.
 fn unordered(dev: &Device) -> bool {
-    let f = dev.profile().fragment();
-    !f.rasterization_order_color_access && !f.pixel_interlock
+    !dev.profile().fragment().rasterization_order_color_access
 }
 
 fn fragment(p: &RenderPipeline) -> &[u32] {
@@ -153,10 +153,11 @@ fn validate(p: &RenderPipeline, dev: &Device, what: &str) {
 /// A raster order group on an input the specialized body never reads orders nothing (the module
 /// docs): dead, `dfr_color`, `dfr_buffer` (five colors) and `dfr_output` (one) compile without an
 /// interlock on `lavapipe`, `moltenvk-m3` and `moltenvk-m3` without either interlock, and
-/// `dfr_output` on `vk12-floor` (no interlock); live, each interlocks where the device has the
-/// pixel interlock, and is refused on `moltenvk-m3` without either interlock. `dfr_output` live on
-/// `vk12-floor`, which has neither ordered fetch form, reads its color as the input attachment
-/// without an interlock, its fragment stage noting `UnorderedFetchWithinDraw`.
+/// `dfr_output` on `runtime-floor` (no interlock). Live, `dfr_buffer` interlocks where the device
+/// has the pixel interlock and is refused on `moltenvk-m3` without either interlock; `dfr_color`
+/// and `dfr_output` interlock on `lavapipe`, and on the devices without rasterization-order
+/// access read their color as the input attachment without an interlock, the fragment stage
+/// noting `UnorderedFetchWithinDraw`.
 #[test]
 fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock() {
     let (Some(vs), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_rog")) else {
@@ -209,13 +210,9 @@ fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock
         let live =
             dev.compile_render_pipeline(&specialized(&vs, &fs, entry, colors, true), &budget);
         match (interlock, live) {
-            (true, Ok(p)) => {
-                assert!(interlocks(fragment(&p)), "{what}: no interlock");
-                validate(&p, dev, &what);
-            }
-            // Neither ordered fetch form: the group orders the color read alone, which is ordered
-            // between draws there.
-            (false, Ok(p)) if unordered(dev) => {
+            // Fetch ordered between draws alone: a group on a color read orders that read alone,
+            // which is ordered between draws there.
+            (_, Ok(p)) if unordered(dev) && *entry != "dfr_buffer" => {
                 assert!(!interlocks(fragment(&p)), "{what}: interlocked");
                 assert_eq!(p.graphics.input_attachments.len(), 1, "{what}");
                 let noted = (p.stages.iter()).any(|m| {
@@ -225,8 +222,12 @@ fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock
                 assert!(noted, "{what}: not noted");
                 validate(&p, dev, &what);
             }
-            // What the device lacks: the interlock, or a fetch form for a color read.
-            (false, Err(Error::Unsupported(_))) => {}
+            (true, Ok(p)) => {
+                assert!(interlocks(fragment(&p)), "{what}: no interlock");
+                validate(&p, dev, &what);
+            }
+            // What the device lacks: the interlock.
+            (false, Err(Error::Unsupported(u))) if u.feature == Feature::RasterOrderGroups => {}
             (_, other) => panic!("{what}: {:?}", other.map(|_| ())),
         }
     }
@@ -283,7 +284,6 @@ fn a_color_input_without_an_attachment_is_refused_dead_or_live() {
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("dfr_lacks dead with color 1 on {stem}: {e}"));
         assert!(p.graphics.input_attachments.is_empty(), "{stem}");
-        assert!(p.graphics.storage_attachments.is_empty(), "{stem}");
         validate(&p, &dev, stem);
     }
     for (kind, whats) in &misses {

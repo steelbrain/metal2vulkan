@@ -384,8 +384,6 @@ impl LineBand {
                     rounded_colors: Vec::new(),
                     specialized_notes: Vec::new(),
                     own_pixel_textures: Vec::new(),
-                    snapshot_textures: Vec::new(),
-                    snapshot_refusals: Vec::new(),
                     level_reads: Vec::new(),
                     private_bytes: 0,
                     stats,

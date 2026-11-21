@@ -87,111 +87,6 @@ pub enum SampledType {
     Uint64,
 }
 
-/// How a draw read through a snapshot keeps a texture's texel in the snapshot
-/// (`VariantKey::snapshot_textures`): the texel's codes, from which the read gives back the
-/// fetched value bit for bit, in as few bytes as hold them, or the fetched lanes' bits.
-///
-/// The copy takes the codes from the value the fetch returns, and the read decodes them as Metal
-/// reads the format: a normalized code `c` as `c / (2^b - 1)` correctly rounded (a signed one's
-/// magnitude so, `-1` at most), a half-float code widened exactly, an integer code extended. A
-/// device whose own decode is exactly that (its value one Metal reads) is given back its fetched
-/// value; one whose decode is not is given Metal's.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SnapshotForm {
-    /// The fetched `vec4`'s 32 bits a lane (`R32G32B32A32_UINT`): any texel.
-    Bits,
-    /// Four 8-bit unsigned normalized codes (`R8G8B8A8_UINT`).
-    Unorm8,
-    /// Four 8-bit signed normalized codes (`R8G8B8A8_UINT`, two's complement).
-    Snorm8,
-    /// Four 16-bit unsigned normalized codes (`R16G16B16A16_UINT`).
-    Unorm16,
-    /// Four 16-bit signed normalized codes (`R16G16B16A16_UINT`, two's complement).
-    Snorm16,
-    /// Four half-float codes (`R16G16B16A16_UINT`).
-    Half,
-    /// Four 8-bit unsigned integer codes (`R8G8B8A8_UINT`).
-    Uint8,
-    /// Four 8-bit signed integer codes (`R8G8B8A8_UINT`, two's complement).
-    Sint8,
-    /// Four 16-bit unsigned integer codes (`R16G16B16A16_UINT`).
-    Uint16,
-    /// Four 16-bit signed integer codes (`R16G16B16A16_UINT`, two's complement).
-    Sint16,
-}
-
-impl SnapshotForm {
-    /// The form a texture slot of sampled type `ty` keeps its texels in, read through a sampled
-    /// view of `format`: the codes of an 8- or 16-bit normalized, half-float or integer format
-    /// whose class is the slot's, one, two or four channels; [`Bits`](Self::Bits) for any other
-    /// format (an sRGB format's view decodes its codes, so its texels are no codes' values).
-    pub fn of(format: vk::Format, ty: SampledType) -> SnapshotForm {
-        use vk::Format as F;
-        let form = match format {
-            F::R8_UNORM
-            | F::R8G8_UNORM
-            | F::R8G8B8A8_UNORM
-            | F::B8G8R8A8_UNORM
-            | F::A8B8G8R8_UNORM_PACK32 => SnapshotForm::Unorm8,
-            F::R8_SNORM | F::R8G8_SNORM | F::R8G8B8A8_SNORM | F::A8B8G8R8_SNORM_PACK32 => {
-                SnapshotForm::Snorm8
-            }
-            F::R16_UNORM | F::R16G16_UNORM | F::R16G16B16A16_UNORM => SnapshotForm::Unorm16,
-            F::R16_SNORM | F::R16G16_SNORM | F::R16G16B16A16_SNORM => SnapshotForm::Snorm16,
-            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT => SnapshotForm::Half,
-            F::R8_UINT | F::R8G8_UINT | F::R8G8B8A8_UINT | F::A8B8G8R8_UINT_PACK32 => {
-                SnapshotForm::Uint8
-            }
-            F::R8_SINT | F::R8G8_SINT | F::R8G8B8A8_SINT | F::A8B8G8R8_SINT_PACK32 => {
-                SnapshotForm::Sint8
-            }
-            F::R16_UINT | F::R16G16_UINT | F::R16G16B16A16_UINT => SnapshotForm::Uint16,
-            F::R16_SINT | F::R16G16_SINT | F::R16G16B16A16_SINT => SnapshotForm::Sint16,
-            _ => SnapshotForm::Bits,
-        };
-        let class = match form {
-            SnapshotForm::Bits => return form,
-            SnapshotForm::Uint8 | SnapshotForm::Uint16 => SampledType::Uint,
-            SnapshotForm::Sint8 | SnapshotForm::Sint16 => SampledType::Sint,
-            _ => SampledType::Float,
-        };
-        match class == ty {
-            true => form,
-            false => SnapshotForm::Bits,
-        }
-    }
-
-    /// The snapshot's format: an unsigned integer format of the codes' width, four channels.
-    pub fn format(self) -> vk::Format {
-        match self {
-            SnapshotForm::Bits => vk::Format::R32G32B32A32_UINT,
-            SnapshotForm::Unorm8
-            | SnapshotForm::Snorm8
-            | SnapshotForm::Uint8
-            | SnapshotForm::Sint8 => vk::Format::R8G8B8A8_UINT,
-            SnapshotForm::Unorm16
-            | SnapshotForm::Snorm16
-            | SnapshotForm::Half
-            | SnapshotForm::Uint16
-            | SnapshotForm::Sint16 => vk::Format::R16G16B16A16_UINT,
-        }
-    }
-
-    /// The width in bits of each code, and whether it is signed; `None` for
-    /// [`Bits`](Self::Bits).
-    pub(crate) fn code(self) -> Option<(u8, bool)> {
-        match self {
-            SnapshotForm::Bits => None,
-            SnapshotForm::Unorm8 | SnapshotForm::Uint8 => Some((8, false)),
-            SnapshotForm::Snorm8 | SnapshotForm::Sint8 => Some((8, true)),
-            SnapshotForm::Unorm16 | SnapshotForm::Half | SnapshotForm::Uint16 => Some((16, false)),
-            SnapshotForm::Snorm16 | SnapshotForm::Sint16 => Some((16, true)),
-        }
-    }
-}
-
 /// Whether an image is sampled or used as a storage image.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -289,9 +184,9 @@ pub enum SyntheticBinding {
     /// instanceStride:`), a read-only storage buffer of a tessellation pipeline's synthesized
     /// control stage, declared with the vertex stage's symbols.
     TessellationFactors,
-    /// The render pass's fragment imageblock: a coherent `R32Uint` 2D-array storage image
-    /// whose layer `w` holds word `w` of every pixel's imageblock cell, read and written inside the
-    /// fragment's ordered pixel-interlock critical section.
+    /// The render pass's imageblock storage: a coherent `R32Uint` 2D-array storage image whose
+    /// layer `w` holds word `w` of every pixel's imageblock cell, which a tile dispatch whose
+    /// function's explicit imageblock stands alone stages its tile's cells from and back.
     Imageblock,
     /// The sampler table: the handle table's layout over the argument buffers' samplers, whose
     /// resource ids live apart from the textures' (the sampler half): 16-byte entries `{id low, id
@@ -301,11 +196,6 @@ pub enum SyntheticBinding {
     /// the index of the entry its id finds (0 for an id the table lacks), and every use of it reads
     /// that entry's element and word.
     SamplerTable,
-    /// The shadow of the render pass's stencil attachment a fragment function's shader-side
-    /// stencil tests and writes (`GraphicsState::shadow_stencil`): a coherent `R8Uint` 2D storage
-    /// image holding pixel `(x, y)`'s stencil value at texel `(x, y)`, read and written inside the
-    /// fragment's ordered pixel-interlock critical section.
-    ShadowStencil,
     /// The function-table directory: the handle table's layout over the visible-function tables
     /// the pipeline state made, whose resource ids live apart from textures' and samplers'.
     FunctionTableDirectory,
@@ -377,11 +267,6 @@ pub enum ResourceKind {
     /// constexpr sampler is the binding's immutable sampler. `ResourceSlot::index` is the use
     /// ([`ResourceSlot::separate_sampler`]), as a heap sampler's is.
     SeparateSampler(SamplerRef),
-    /// The snapshot of the texture bound at fragment texture slot `n` (`ResourceSlot::index` too)
-    /// for a draw that reads it through one (`LoweringInputs::snapshot_textures`): an
-    /// `R32G32B32A32_UINT` 2D storage image covering the draw's render area, each texel the bits
-    /// of the four values a fetch of the texture's level 0 there returned.
-    SnapshotTexels(u32),
     /// The planes of the two-plane YCbCr texture bound at the stage's texture slot
     /// `ResourceSlot::index`, held as an image of the multi-planar format that the device's own
     /// sampler Y′CbCr conversion samples (`LoweringInputs::ycbcr_planes_sampled`): a combined
@@ -948,12 +833,6 @@ pub enum PushField {
     /// sequences ([`PushField::IndirectSequence`]) from 0, and pushes each part's first here. 0
     /// for a direct draw. Placed beside the addresses, so the vertex window always holds it.
     IndirectBase,
-    /// Which draw of a fragment function compiled under `LoweringInputs::snapshot_textures` runs
-    /// (`u32`): a hole the consumer fills (`PushHole::SnapshotPhase`), placed beside the addresses
-    /// so the fragment window always holds it. 1 in the draw that takes the snapshot, whose
-    /// fragments copy their pixels' texels into it and run nothing else; 0 in the draw that reads
-    /// it, whose fragments copy nothing and run the function.
-    SnapshotPhase,
     // The three amplification words come right after the addresses in the order, so every stage
     // window holds them (at most 32 bytes before them, 12 of them): a draw of one amplification
     // writes them alone, between its draws, never through an `ArgumentTable`.
@@ -1033,13 +912,6 @@ pub enum PushField {
     /// the device replay's preprocess module reads (`bind::replay`). No translated function
     /// reads it.
     CommandRecordsAddress,
-    /// The render encoder's stencil state for a fragment function's shader-side stencil
-    /// (`RuntimeFact::ShadowStencil`), a `uvec2`: the front face's word, then the back face's.
-    /// Each word holds the face's `MTLCompareFunction` in bits 0 to 2, its stencil-failure and
-    /// depth-stencil-pass `MTLStencilOperation`s in bits 3 to 5 and 6 to 8, its read mask in bits
-    /// 9 to 16, its write mask in bits 17 to 24, and in bit 31 whether the draw's pass has a
-    /// stencil attachment for the function to test against (`bind::shadow_stencil_words`).
-    ShadowStencilState,
     /// The whole indices (`u64`) from an indexed indirect draw's bound index offset to its index
     /// buffer's end, which the index-clamp prepass reads. No translated function reads it.
     IndexCapacity,
@@ -1086,12 +958,6 @@ pub enum PushField {
     /// reads its raw index at `PushField::CaptureIndexAddress`, and its vertex is that index plus
     /// the base vertex.
     CaptureLayout,
-    /// The channels each storage-form color attachment's write keeps from its texel, where the
-    /// fragment function takes them from the draw: one `u32` whose bits `4c` to `4c + 3` are color
-    /// `c`'s `R`, `G`, `B` and `A`, set where the pipeline's write mask leaves the channel out
-    /// (`StorageAttachmentUse::kept`), so every write mask that keeps some of a format's channels
-    /// shares one module.
-    StorageKeptChannels,
     /// The channel widths of the storage texture bound to the slot (`u32`;
     /// `metal::format::integer_channels_word`, 0 where the binder binds a neutral): byte `c`
     /// holds `32 - bits` of channel `c` (red to alpha) of an integer format narrower than 32 bits,
@@ -1107,7 +973,7 @@ pub enum PushField {
     BicubicTexels(SlotRef),
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
     /// function that computes a blend in the shader under a blend that reads it (an
-    /// extended-range attachment's, or a fetched attachment's in the storage form): one `uvec4`
+    /// extended-range attachment's, or a rotated one's): one `uvec4`
     /// holding the four `f32`s' bits as the encoder set them (`BindState::blend_color`).
     HalfBlendColor,
     /// The render encoder's alpha test reference (`setAlphaTestReferenceValue:`) for a fragment
@@ -1289,7 +1155,6 @@ mod tests {
             PushField::RootTableAddress,
             PushField::ExecutionStatusAddress,
             PushField::CaptureIndexAddress,
-            PushField::SnapshotPhase,
             PushField::DispatchRegion,
             PushField::ReplayRegionAddress,
             PushField::BaseVertexInstance,

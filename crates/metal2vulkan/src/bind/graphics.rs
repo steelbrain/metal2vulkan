@@ -10,12 +10,7 @@
 //!   stage's handle table and the set-1 heap arrays through the heap planner (`bind::heap`): the
 //!   heap's members are shared by both stages, and each stage's table enters the members that reach
 //!   it (a used texture's render stages, a bound texture's own stage). A fragment function's
-//!   imageblock storage binding is `WriteSource::Imageblock`; the pass's imageblock is one plane of
-//!   cells, so a pass of more than one layer or an amplified draw is not implemented. An attachment
-//!   the fragment function reads in the interlocked storage form
-//!   (`GraphicsState::storage_attachments`) is `WriteSource::TileAttachment` in the attachment's
-//!   own format, likewise one 2D view, so such a pass or draw is not implemented either. A fragment
-//!   function's threadgroup arguments (`RuntimeFact::TileThreadgroupMemory`) are the pass's tile
+//!   threadgroup arguments (`RuntimeFact::TileThreadgroupMemory`) are the pass's tile
 //!   memory, `WriteSource::TileMemory` as a tile function's (`plan::compute`): the shape's
 //!   `tile_threadgroup` places each argument, and its `render_area` and `imageblock_size` (the
 //!   pass's tile) the tiles; a layered pass or an amplified draw is not implemented.
@@ -93,29 +88,6 @@
 //!   has no attachment for (`BindShape::dropped_colors`), whose writes plain Metal drops: the
 //!   variant whose fragment function keeps no output there (`VariantKey::dropped_colors`). A mesh
 //!   pipeline's is not implemented.
-//! - **Interlocked colors**. A draw into a render pass instance that leaves color attachments out
-//!   of its subpass for other draws' interlocked storage form (`BindShape::interlocked_colors`)
-//!   runs the variant whose fragment function writes those it writes through that form too
-//!   (`VariantKey::interlocked_colors`), so the draw records in the instance. That variant stores
-//!   them before the depth and stencil tests (tested storage writes, below): the plan of the
-//!   pipeline as compiled selects such a moved writer's tests from
-//!   `RuntimeFact::MovableStorageWrites`. A mesh pipeline's is not implemented, nor a
-//!   multisampled, layered or amplified draw's.
-//! - **Snapshot reads**. A draw the consumer reads a texture of its own subpass for through a
-//!   snapshot (`BindShape::snapshot_textures`) runs the variant whose fragment function reads it so
-//!   (`VariantKey::snapshot_textures`, `lower::fragment`'s `snapshot`), for each slot of the
-//!   fragment stage's `StageInterface::snapshot_textures`, where the pipeline's two draws are
-//!   Metal's one: a device with `fragmentShaderPixelInterlock`, `fragmentStoresAndAtomics`,
-//!   `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask` (the variant's
-//!   pipeline requires the last two: its feedback loop flag and dynamic write masks), one
-//!   sample, no depth or stencil attachment, no rasterizer discard, no memory the vertex or
-//!   fragment function writes, no attachment in the storage form or input attachment, no
-//!   imageblock, tile memory, shader-side stencil or tests, no interlocked or shadowed colors, no
-//!   tessellation or mesh stages, and no amplified or layered draw. Every other
-//!   slot the shape names is left out, and the plan's `variant.snapshot_textures` says which it
-//!   kept. Its plan binds each slot's snapshot (`WriteSource::SnapshotTexels`) and leaves which of
-//!   the two draws runs to the consumer (`PushHole::SnapshotPhase`, zero in the plan's bytes);
-//!   `GraphicsState::snapshot_reads` states the consumer's part.
 //! - **Depth clamp range**. A draw in depth clamp mode through a range above 0 whose Vulkan depth
 //!   clamp holds 0 (`BindShape::depth_clamp_range`) runs the variant whose fragment function, where
 //!   it writes its depth, clamps that depth to the draw's range itself
@@ -125,25 +97,6 @@
 //!   (`BindShape::rotated_weights`) of a pipeline whose fragment function reads
 //!   `[[barycentric_coord]]` runs the variant that takes Metal's weights back from the drawn
 //!   triangle's (`VariantKey::rotated_weights`, `LoweringInputs::rotated_weights`).
-//! - **Tested storage writes**. A fragment function that stores a color through the interlocked
-//!   storage form and declares no early tests only because it discards
-//!   (`RuntimeFact::TestedStorageWrites`), in a pipeline with a depth or stencil attachment, stores
-//!   before Vulkan's tests where Metal stores after its own: a draw whose tests drop no fragment
-//!   (`BindShape::fragment_tests`, `FragmentTests::Pass`) runs it as compiled; one whose tests may
-//!   drop fragments but write neither attachment and count nothing (`Drop`) runs the variant whose
-//!   function declares early tests (`VariantKey::read_only_tests`); any other is
-//!   `NotImplemented(FramebufferFetch)`. A function that also writes other memory, or returns
-//!   depth, stencil, or a sample mask, states the fact without that variant (`early_variant`): a
-//!   draw whose tests drop no fragment runs it as compiled, and any other is
-//!   `NotImplemented(FramebufferFetch)` at the depth attachment (the stencil one where the pipeline
-//!   has no depth attachment). A draw that moves a color the function writes as an ordinary output
-//!   into the storage form (interlocked colors, above) takes its tests alike from
-//!   `RuntimeFact::MovableStorageWrites`, which states the `early_variant` the moved writer's
-//!   variant states, where the pipeline as compiled states no `TestedStorageWrites`; a moved write
-//!   whose mask names none of the attachment's components stores nothing, and takes no tests. (A
-//!   draw whose depth test alone acts, `Depth`, is `NotImplemented(FramebufferFetch)` at the depth
-//!   attachment, unless it writes nothing and the early-tests variant serves it; one whose stencil
-//!   test acts and whose tests write, `Stencil`, is so at the stencil attachment.)
 //! - **Draws.** A Metal draw maps to the Vulkan draw of the same arguments; an indirect draw is
 //!   GPU-side unless a stage reads `BaseVertexInstance` from push constants or the plan is
 //!   multiview, in which case `indirect_needs_arguments` asks for the CPU read.
@@ -268,26 +221,25 @@ use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, large_view_candidates,
-    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, snapshot_forms,
-    srgb_variant, storage_view_variant, texel_buffer_parts_variant, used_uses,
-    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
+    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, srgb_variant,
+    storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
+    ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorTemplate, FieldLocation,
     GraphicsTemplate, GroupLimits, GroupStage, MeshTemplate, PlannedVertexBuffer,
-    PushFieldPlacement, PushTemplate, ResourceUse, ShadowTemplate, StageTemplate, StrideRules,
-    UseTarget, VertexBufferBind, ViewSetup, WriteSource,
+    PushFieldPlacement, PushTemplate, ResourceUse, StageTemplate, StrideRules, UseTarget,
+    VertexBufferBind, ViewSetup, WriteSource,
 };
 use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{
-    offset_alignment, BindShape, BindState, BoundBuffer, BufferShape, FragmentTests,
-    VertexAmplification,
+    offset_alignment, BindShape, BindState, BoundBuffer, BufferShape, VertexAmplification,
 };
 use crate::cache::{SpecializationKey, VariantKey};
 use crate::device::profile::portable_vertex_stride;
 use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::{vk_stage, Device};
-use crate::error::{Attachment, BindError, Capability, Feature, LowerFamily, Unsupported};
+use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
 use crate::float16::{f16_bits_to_f32, f32_to_f16_bits};
 use crate::lower::dispatch::region_bytes;
 use crate::metal;
@@ -719,16 +671,6 @@ fn vertex_layer(p: &RenderPipeline) -> Option<bool> {
     })
 }
 
-/// Whether a draw's write to the ordinary color attachment of state `a` stores something: its
-/// mask names some of the format's color components (Vulkan writes nothing to a component the
-/// mask leaves out, nor to one the format lacks), as the storage form's write stores something
-/// where its mask covers some of the format's channels (`StorageView::stores_nothing`).
-fn stores(a: crate::pipeline::graphics::ColorAttachmentState) -> bool {
-    a.format
-        .block()
-        .is_some_and(|b| a.write_mask.intersects(b.color_components))
-}
-
 fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {
     check_slots(shape)?;
     let tessellation = p.graphics.tessellation.is_some();
@@ -830,28 +772,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         }
         _ => None,
     });
-    // The fragment imageblock is one plane per render pass instance. What Metal gives each layer of
-    // a layered pass, or each view of an amplified draw, is not read yet: such a pass is not
-    // implemented.
-    if p.graphics.fragment_imageblock.is_some()
-        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
-    {
-        return Err(not_implemented(Feature::Imageblocks));
-    }
-    // An attachment read in the interlocked storage form is one 2D view: what a layered pass, or an
-    // amplified draw, reads and writes of each layer or view is not modelled.
-    if !p.graphics.storage_attachments.is_empty()
-        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
-    {
-        return Err(not_implemented(Feature::FramebufferFetch));
-    }
-    // The shader-side stencil's shadow is one 2D image: the same holds.
-    let shadow = shadow_template(p);
-    if shadow.is_some()
-        && (shape.render_target_array_length > 1 || shape.vertex_amplification.count > 1)
-    {
-        return Err(not_implemented(Feature::StencilExport));
-    }
     // A fragment function's tile threadgroup memory is the pass's, every tile's in one buffer:
     // what Metal gives each layer of a layered pass, or each view of an amplified draw, is not
     // read yet, as for a tile dispatch.
@@ -904,101 +824,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             _ => None,
         })
         .collect();
-    // The colors the draw's instance keeps out of its subpass that the fragment function writes
-    // through its first output: the variant that writes them through the interlocked storage
-    // form, as a fetching function does. A pipeline that writes them so is that variant. A mesh
-    // pipeline's is not built.
-    let interlocked_colors: std::collections::BTreeSet<u32> = shape
-        .interlocked_colors
-        .iter()
-        .copied()
-        .filter(|&c| {
-            1u32.checked_shl(c)
-                .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
-        })
-        .collect();
-    if !interlocked_colors.is_empty() && mesh {
-        return Err(not_implemented(Feature::MeshShading));
-    }
-    // Nor a multisampled draw's, whose storage form reads and writes the attachment per sample,
-    // which runs the function per sample where a plain writer runs it per pixel; nor a layered
-    // pass's or an amplified draw's, whose storage form is one 2D view (above).
-    if !interlocked_colors.is_empty()
-        && (p.graphics.rasterization_samples.as_raw() > 1
-            || shape.render_target_array_length > 1
-            || shape.vertex_amplification.count > 1)
-    {
-        return Err(not_implemented(Feature::FramebufferFetch));
-    }
-    let compiled_interlocked: std::collections::BTreeSet<u32> = p
-        .graphics
-        .storage_attachments
-        .iter()
-        .filter(|a| a.writes && shape.interlocked_colors.contains(&a.color_index))
-        .map(|a| a.color_index)
-        .collect();
-    // The fragment texture slots the draw reads through a snapshot: those the shape names that
-    // the fragment function can read so, where the pipeline's two draws are Metal's one. The two
-    // run the same fragments (the pipeline differs only in its dynamic write masks), the first
-    // with every mask 0 running none of the function past its copy, so the pipeline may hold
-    // nothing else either draw writes, tests, or orders: one sample, no depth or stencil, no
-    // memory either function writes, no attachment, imageblock, tile memory or stencil shadow of
-    // the storage form or an input attachment, and no other interlock. A tessellation
-    // or mesh pipeline's, and an amplified or layered draw's are not built.
-    // The device makes the variant's pipeline: its feedback loop flag and dynamic write masks
-    // need `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask`.
-    // Every other slot the shape names is left out, and the consumer reads it as it would without
-    // a snapshot.
-    let enabled = &profile.fields().enabled.features;
-    let snapshot_able = crate::lower::fragment::interlock_forms(profile)
-        && enabled.contains(&VkFeature::FragmentStoresAndAtomics)
-        && enabled.contains(&VkFeature::AttachmentFeedbackLoopLayout)
-        && enabled.contains(&VkFeature::ExtendedDynamicState3ColorWriteMask)
-        && p.graphics.rasterization_samples.as_raw() <= 1
-        && p.graphics.depth_format.is_none()
-        && p.graphics.stencil_format.is_none()
-        && !p.graphics.rasterizer_discard
-        && !p.graphics.vertex_writes_memory
-        && !p.graphics.fragment_writes_memory
-        && p.graphics.storage_attachments.is_empty()
-        && p.graphics.input_attachments.is_empty()
-        && p.graphics.fragment_imageblock.is_none()
-        && p.graphics.tessellation.is_none()
-        && shadow.is_none()
-        && tile_memory.is_none()
-        && !mesh
-        && interlocked_colors.is_empty()
-        && shape.vertex_amplification.count <= 1
-        && shape.render_target_array_length <= 1;
-    let snapshot_textures: std::collections::BTreeSet<SlotRef> = match snapshot_able {
-        true => p
-            .stages
-            .iter()
-            .filter(|m| m.stage == vk::ShaderStage::FRAGMENT)
-            .flat_map(|m| &m.snapshot_textures)
-            .filter(|index| shape.snapshot_textures.contains(index))
-            .map(|&index| SlotRef {
-                stage: Stage::Fragment,
-                class: SlotClass::Texture,
-                index,
-            })
-            .collect(),
-        false => std::collections::BTreeSet::new(),
-    };
-    let compiled_snapshots: std::collections::BTreeSet<SlotRef> = p
-        .layout
-        .sets
-        .iter()
-        .flat_map(|set| &set.bindings)
-        .filter_map(|b| match b.source {
-            BindingSource::SnapshotTexels(index) => Some(SlotRef {
-                stage: Stage::Fragment,
-                class: SlotClass::Texture,
-                index,
-            }),
-            _ => None,
-        })
-        .collect();
     // A draw in depth clamp mode through a range above 0 whose Vulkan depth clamp holds 0: the
     // variant whose fragment function clamps the depth it writes to the draw's range. A pipeline
     // whose fragment function writes no depth has none to clamp.
@@ -1019,93 +844,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // tessellation stages draw them so, which its graphics state states.
     let line_band = shape.line_band;
     let compiled_band = p.graphics.line_band.map(|b| b.primitive);
-    // A fragment function that stores a color through the interlocked storage form before the
-    // depth and stencil tests, since it discards (`RuntimeFact::TestedStorageWrites`), in a
-    // pipeline with a depth or stencil attachment: Metal's store, as compiled, where the draw's
-    // tests drop no fragment; where they drop some but write and count nothing, the variant whose
-    // function declares early tests, which a pipeline compiled under it states; refused
-    // otherwise. A draw that moves a color the function writes as an ordinary output into that
-    // form (an interlocked color) asks for the variant that stores
-    // it so: where the pipeline as compiled stores no color so, the function states that variant's
-    // tests (`RuntimeFact::MovableStorageWrites`), so this plan selects them, and the variant it
-    // names plans itself. A moved write whose mask names none of its attachment's components
-    // stores nothing, so no test bears on it: its variant states none, and this plan selects none
-    // for it. (A color the pipeline as compiled already writes through the storage form has no
-    // ordinary attachment state; its stores state their own tests.)
-    let moves = interlocked_colors.iter().any(|&c| {
-        1u32.checked_shl(c)
-            .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
-            && p.graphics
-                .color_attachments
-                .get(c as usize)
-                .copied()
-                .flatten()
-                .is_some_and(stores)
-    });
-    let tested = p
-        .dependencies
-        .iter()
-        .find_map(|d| match d.fact {
-            RuntimeFact::TestedStorageWrites {
-                early_tests,
-                early_variant,
-            } => Some((early_tests, early_variant)),
-            _ => None,
-        })
-        .or_else(|| {
-            let movable = p.dependencies.iter().find_map(|d| match d.fact {
-                RuntimeFact::MovableStorageWrites { early_variant } => Some((false, early_variant)),
-                _ => None,
-            });
-            movable.filter(|_| moves)
-        });
-    let tested_attachments =
-        p.graphics.depth_format.is_some() || p.graphics.stencil_format.is_some();
-    // What stores before the tests: the storage form's colors, or else the imageblock.
-    let tested_feature = match p.graphics.fragment_imageblock {
-        Some(_) if p.graphics.storage_attachments.is_empty() => Feature::Imageblocks,
-        _ => Feature::FramebufferFetch,
-    };
-    // A draw whose tests drop some fragments but write and count nothing runs the early-tests
-    // variant where the function has one; a draw whose tests may drop a fragment and write, or
-    // count, is not implemented, as the function stores before Vulkan's tests. The refusal is
-    // placed at the tested attachment: the depth one where the pipeline has one, else the
-    // stencil.
-    let depth = p.graphics.depth_format.is_some();
-    let stencil = p.graphics.stencil_format.is_some();
-    let at = |attachment: Attachment| {
-        Err(BindError::Unsupported(
-            Unsupported::not_implemented(tested_feature.clone()).at_attachment(attachment),
-        ))
-    };
-    let read_only_tests = match (tested, shape.fragment_tests) {
-        (Some((_, true)), FragmentTests::Drop | FragmentTests::Depth { writes: false })
-            if tested_attachments =>
-        {
-            true
-        }
-        // A function that writes other memory or returns depth, stencil, or a sample mask: its
-        // stores are Metal's only where no test can drop a fragment.
-        (
-            Some((_, false)),
-            FragmentTests::Drop
-            | FragmentTests::Depth { .. }
-            | FragmentTests::Any
-            | FragmentTests::Stencil,
-        ) if tested_attachments => {
-            return at(match depth {
-                true => Attachment::Depth,
-                false => Attachment::Stencil,
-            });
-        }
-        (Some(_), FragmentTests::Depth { .. }) if depth => return at(Attachment::Depth),
-        (Some(_), FragmentTests::Stencil) if stencil => return at(Attachment::Stencil),
-        (Some(_), FragmentTests::Any | FragmentTests::Stencil) if tested_attachments => {
-            return Err(not_implemented(tested_feature.clone()));
-        }
-        _ => false,
-    };
-    let compiled_tests = tested.is_some_and(|(early, _)| early);
     // A mesh entry's `Layer` at or past `maxMeshOutputLayers` is undefined: a pass of more layers
     // than that, which a mesh function choosing its slice could render into, is past the device.
     let mesh_layers = limits.mesh.max_mesh_output_layers;
@@ -1201,7 +939,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     | PushField::ExecutionStatusAddress
                     | PushField::CaptureIndexAddress
                     | PushField::MergedDrawAddress
-                    | PushField::SnapshotPhase
                     | PushField::ReplayRegionAddress
             );
             match field.field {
@@ -1219,8 +956,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // The draw's vertices per primitive, which instantiation writes from its
                 // primitive type.
                 PushField::VerticesPerPrimitive if stage == Stage::Vertex => {}
-                // Which of a snapshot variant's draws runs: the consumer's hole.
-                PushField::SnapshotPhase if stage == Stage::Fragment => {}
                 PushField::SlotBindOffset(slot)
                     if planned(slot).is_some_and(|b| b.binding.is_some()) => {}
                 // The bound buffer's Metal address; a `set*Bytes` binding has none.
@@ -1266,8 +1001,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // An in-place YCbCr texture's words, and a texture's rows in its texel buffer
                 // view, which instantiation reads from the state.
                 PushField::YCbCrInPlace(_) | PushField::TexelRows(_) => {}
-                // The encoder's stencil state, which instantiation reads from the state.
-                PushField::ShadowStencilState if stage == Stage::Fragment => {}
                 // The encoder's viewport count, which instantiation reads from the state, in the
                 // stage that chooses a viewport (a mesh function per primitive).
                 PushField::ViewportCount if matches!(stage, Stage::Vertex | Stage::Mesh) => {}
@@ -1286,8 +1019,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::AlphaTestReference if stage == Stage::Fragment => {}
                 // The encoder's blend color, which instantiation reads from the state.
                 PushField::HalfBlendColor if stage == Stage::Fragment => {}
-                // The storage form's kept channels, which instantiation reads from the template.
-                PushField::StorageKeptChannels if stage == Stage::Fragment => {}
                 // A draw of one amplification's id and offsets, which instantiation writes before
                 // each draw; the placement order puts them right after the addresses, so the window
                 // holds them.
@@ -1546,12 +1277,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     SyntheticBinding::FunctionTableSnapshot => {
                         planner(&mut heap)?.snapshot(stage, set.set, b.binding)?
                     }
-                    // The pass's imageblock storage.
-                    SyntheticBinding::Imageblock
-                        if stage == Stage::Fragment && p.graphics.fragment_imageblock.is_some() =>
-                    {
-                        WriteSource::Imageblock
-                    }
                     // The pass's tile threadgroup memory.
                     SyntheticBinding::TileMemory if stage == Stage::Fragment => {
                         match &tile_memory {
@@ -1561,21 +1286,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                             None => {
                                 return Err(internal("a tile memory binding without its facts"))
                             }
-                        }
-                    }
-                    // The stencil's shadow, or, in a pass without a stencil attachment, a neutral
-                    // the function never reads (its state says nothing is attached), of the
-                    // pipeline's samples as the function's declaration is.
-                    SyntheticBinding::ShadowStencil if stage == Stage::Fragment => {
-                        match &p.graphics.shadow_stencil {
-                            Some(_) => WriteSource::ShadowStencil,
-                            None => WriteSource::Neutral(NeutralResource::Image {
-                                view_type: vk::ImageViewType::TYPE_2D,
-                                sampled_type: crate::pipeline::sym::SampledType::Uint,
-                                depth_compare: false,
-                                samples: p.graphics.rasterization_samples.as_raw().max(1),
-                                storage_format: Some(crate::lower::fragment::SHADOW_FORMAT),
-                            }),
                         }
                     }
                     // The command buffer's status, on a device that does not address buffers.
@@ -1598,31 +1308,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 BindingSource::AccelerationStructure { slot, level } => {
                     WriteSource::AccelerationStructure { slot, level }
                 }
-                // An attachment the fragment function reads in the interlocked storage form, a
-                // storage view of the attachment, or of its sample planes, in its own format.
-                BindingSource::TileAttachment(color_index) => {
-                    let a = p
-                        .graphics
-                        .storage_attachments
-                        .iter()
-                        .find(|a| a.color_index == color_index)
-                        .ok_or_else(|| {
-                            internal(format!(
-                                "a storage binding of color attachment {color_index}, which the \
-                                 pipeline does not read in the storage form"
-                            ))
-                        })?;
-                    WriteSource::TileAttachment {
-                        color_index,
-                        format: a.format,
-                        view: a.view,
-                        view_alias: a.view_alias,
-                    }
+                // A tile function's attachment, which no render pipeline binds.
+                BindingSource::TileAttachment(_) => {
+                    return Err(internal("a tile attachment binding in a render pipeline"))
                 }
                 // A sparse texture's tile map.
                 BindingSource::TileMap(slot) => resources.tile_map(slot),
-                // A texture's snapshot, which the draw reads the texture through.
-                BindingSource::SnapshotTexels(slot) => WriteSource::SnapshotTexels { slot },
                 // A two-plane YCbCr texture's planes image, through the device's conversion.
                 BindingSource::YCbCrPlanes(slot) => resources.planes_image_write(slot)?,
             };
@@ -1969,28 +1660,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .iter()
         .any(|d| d.fact == RuntimeFact::MergedDraws);
     // The pipeline compiled under other zeroed or dropped colors (or none) is the other variant.
-    let other_colors = compiled_zeroed != zeroed_colors
-        || compiled_dropped != dropped_colors
-        || compiled_interlocked != interlocked_colors
-        || compiled_snapshots != snapshot_textures;
+    let other_colors = compiled_zeroed != zeroed_colors || compiled_dropped != dropped_colors;
     variant.zeroed_colors = zeroed_colors;
     variant.dropped_colors = dropped_colors;
-    variant.interlocked_colors = interlocked_colors;
-    variant.snapshot_textures = snapshot_forms(
-        profile,
-        &snapshot_textures,
-        &p.interface.slots,
-        shape,
-        &variant.cross_class,
-    );
-    // A slot the draw reads through a snapshot reads the snapshot's image, never the rows.
-    variant
-        .texel_rows
-        .retain(|slot| !variant.snapshot_textures.contains_key(slot));
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;
     variant.line_band = line_band;
-    variant.read_only_tests = read_only_tests;
     variant.primitive_id_indices = primitive_id_indices;
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
@@ -2025,7 +1700,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
                 || compiled_band != line_band
-                || compiled_tests != read_only_tests
                 || compiled_quads != quad_primitive_ids
                 || compiled_list != private_list
                 || compiled_regions != region_viewports,
@@ -2052,73 +1726,13 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     u64::from(limits.max_storage_buffer_range),
                 ),
             )?,
-            shadow_stencil: shadow,
             mesh,
             deindexed: primitive_id_indices,
             private_list,
-            storage_kept: storage_kept(p)?,
             line_band: p.graphics.line_band.map(|b| b.push_offset),
         }),
         views,
     })
-}
-
-/// `PushField::StorageKeptChannels` of `p`: each storage-form color attachment's kept channels
-/// (`StorageAttachmentUse::kept`, Vulkan's `R`, `G`, `B` and `A` bits) at bits `4c` to `4c + 3`
-/// for color `c`.
-fn storage_kept(p: &RenderPipeline) -> Result<u32, BindError> {
-    p.graphics
-        .storage_attachments
-        .iter()
-        .try_fold(0u32, |word, s| match s.color_index {
-            c @ 0..8 => Ok(word | ((s.kept.as_raw() & 0xF) << (4 * c))),
-            _ => Err(internal("a storage-form color attachment past the eighth")),
-        })
-}
-
-/// The shader-side stencil of `p`'s fragment function, when it has one.
-fn shadow_template(p: &RenderPipeline) -> Option<ShadowTemplate> {
-    let has = p.interface.push.iter().any(|pl| {
-        pl.fields
-            .iter()
-            .any(|f| f.field == PushField::ShadowStencilState)
-    });
-    has.then(|| ShadowTemplate {
-        attached: p.graphics.shadow_stencil.is_some(),
-        depth_attachment: p.graphics.depth_format.is_some(),
-    })
-}
-
-/// The `PushField::ShadowStencilState` words of a draw under encoder state `state`: the front
-/// face's, then the back face's (`lower::fragment::face_word`). A state whose stencil write could
-/// depend on the depth test is refused as needing stencil export: the pass has a depth attachment,
-/// the depth comparison is not `Always`, and a face's depth-failure operation differs from its pass
-/// operation (the depth test runs after the function).
-fn shadow_stencil_words(t: &ShadowTemplate, state: &BindState) -> Result<FieldBytes, BindError> {
-    let ds = &state.depth_stencil;
-    let faces = [&ds.front_face_stencil, &ds.back_face_stencil];
-    if t.attached
-        && t.depth_attachment
-        && ds.depth_compare_function != metal::CompareFunction::Always
-        && faces
-            .iter()
-            .any(|f| f.depth_failure_operation != f.depth_stencil_pass_operation)
-    {
-        return Err(BindError::Unsupported(Unsupported::needs(
-            Feature::StencilExport,
-            Capability::Extension(crate::device::requirements::VkExtension::ExtShaderStencilExport),
-        )));
-    }
-    Ok(FieldBytes::words(faces.map(|f| {
-        crate::lower::fragment::face_word(
-            f.stencil_compare_function.as_raw(),
-            f.stencil_failure_operation.as_raw(),
-            f.depth_stencil_pass_operation.as_raw(),
-            f.read_mask,
-            f.write_mask,
-            t.attached,
-        )
-    })))
 }
 
 /// The 8-bit unorm code Metal's private alpha test compares the reference `reference` as
@@ -3431,7 +3045,6 @@ fn instantiate(
                 | PushField::ExecutionStatusAddress
                 | PushField::CaptureIndexAddress
                 | PushField::MergedDrawAddress
-                | PushField::SnapshotPhase
                 | PushField::ReplayRegionAddress => {
                     let PushLoc::Push { offset } = f.loc else {
                         return Err(not_implemented(Feature::Lowering(LowerFamily::StageIo)));
@@ -3444,7 +3057,6 @@ fn instantiate(
                         PushField::ExecutionStatusAddress => {
                             PushHole::ExecutionStatusAddress { stages, offset }
                         }
-                        PushField::SnapshotPhase => PushHole::SnapshotPhase { stages, offset },
                         PushField::MergedDrawAddress => {
                             PushHole::MergedDrawAddress { stages, offset }
                         }
@@ -3459,12 +3071,6 @@ fn instantiate(
                     Some(d) => FieldBytes::words(d.layout.iter().copied()),
                     None => return Err(internal("a draw layout without its de-indexed form")),
                 },
-                PushField::ShadowStencilState => {
-                    let Some(shadow) = &t.shadow_stencil else {
-                        return Err(internal("a stencil state without its shader-side stencil"));
-                    };
-                    shadow_stencil_words(shadow, state)?
-                }
                 PushField::DispatchRegion => match mesh.as_ref().and_then(|m| m.region(st.stage)) {
                     Some(region) => FieldBytes::of(&region),
                     None => return Err(internal("a dispatch region outside a mesh draw")),
@@ -3482,7 +3088,6 @@ fn instantiate(
                     .iter()
                     .flat_map(|v| v.to_le_bytes())
                     .collect(),
-                PushField::StorageKeptChannels => FieldBytes::of(&t.storage_kept.to_le_bytes()),
                 // The alpha test reference's code, Metal's 1 where the encoder never set it.
                 PushField::AlphaTestReference => FieldBytes::of(
                     &alpha_test_code(state.alpha_test_reference.unwrap_or(1.0)).to_le_bytes(),

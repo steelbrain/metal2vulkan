@@ -14,7 +14,6 @@ use crate::bind::neutral::NeutralResource;
 use crate::cache::{SpecializationKey, VariantKey};
 use crate::metal::sampler::OpaqueBlackBorder;
 use crate::pipeline::artifact::SpecConstant;
-use crate::pipeline::graphics::StorageAttachmentView;
 use crate::pipeline::interface::{AccessSet, BufferForm, PlacedField, Window};
 
 use crate::pipeline::sym::{
@@ -207,10 +206,6 @@ pub struct GraphicsTemplate {
     /// only without it): a direct indexed draw past its index buffer is drawn, not clamped.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) robust_index_fetch: bool,
-    /// A fragment function's shader-side stencil: its draws write the encoder's stencil state as
-    /// `PushField::ShadowStencilState`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) shadow_stencil: Option<ShadowTemplate>,
     /// A mesh render pipeline's mesh stage: its draws are mesh draws, each of its own
     /// specialization.
     #[cfg_attr(feature = "serde", serde(default))]
@@ -225,11 +220,6 @@ pub struct GraphicsTemplate {
     /// draw call.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) private_list: bool,
-    /// `PushField::StorageKeptChannels`: each storage-form color attachment's kept channels
-    /// (`StorageAttachmentUse::kept`), bits `4c` to `4c + 3` for color `c`, which its draws
-    /// write.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) storage_kept: u32,
     /// A band variant's (`GraphicsState::line_band`): the byte offset of its evaluation stage's
     /// push range, where its draws push `BindState::line_band` (`PushField::LineBand`).
     #[cfg_attr(feature = "serde", serde(default))]
@@ -289,17 +279,6 @@ pub(crate) enum GroupStage {
     Task,
     /// A mesh function's (`MESH_EXT`).
     Mesh,
-}
-
-/// What a draw of a pipeline with a shader-side stencil instantiates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub(crate) struct ShadowTemplate {
-    /// The pass has a stencil attachment, so the plan binds the shadow
-    /// (`GraphicsState::shadow_stencil`); otherwise a neutral stands in and nothing is tested.
-    pub attached: bool,
-    /// The pass has a depth attachment, whose test could decide the stencil write.
-    pub depth_attachment: bool,
 }
 
 /// What a patch draw of a tessellation pipeline instantiates: the control stage's push range, the
@@ -668,41 +647,22 @@ pub enum WriteSource {
         slot: SlotRef,
         level: AccelerationStructureLevel,
     },
-    /// The render pass's fragment imageblock storage (`GraphicsState::fragment_imageblock`): the
-    /// one storage image the consumer creates for the pass instance, in `GENERAL` layout, bound to
-    /// every draw of the pass, and to every tile dispatch whose function's explicit imageblock
-    /// stands alone, which stages its tile's cells from it and back.
+    /// The render pass's imageblock storage: the one storage image the consumer creates for the
+    /// pass instance, in `GENERAL` layout, bound to every tile dispatch whose function's explicit
+    /// imageblock stands alone, which stages its tile's cells from it and back.
     Imageblock,
-    /// A render pass's color attachment `color_index` as a storage image: the view `view` names,
-    /// in `format`, with the identity component mapping, in `GENERAL` layout. For
-    /// [`StorageAttachmentView::Attachment`] that is a 2D view of the attachment's own image, of
-    /// the pass's layer and level; for [`StorageAttachmentView::SamplePlanes`] `{ layers }` a
-    /// 2D-array view of all `layers` layers of the attachment's sample planes, the single-sample
-    /// image the consumer keeps beside a multisampled attachment, never a 2D view.
-    ///
-    /// - A tile dispatch's: the image's format is the tile pipeline descriptor's
-    ///   (`TileRenderPipelineDescriptor::color_attachment_formats`), as Metal requires of the
-    ///   pass, and its extent at least the render area (`BindState::render_area`). `format` is
-    ///   the image's own for an integer format, and for a float format the unsigned-integer
-    ///   format of the same channels and widths (`R16_UINT` for `R16_SFLOAT`), so the dispatch
-    ///   moves the texels' bits: the consumer creates such an image with `MUTABLE_FORMAT` (and
-    ///   `EXTENDED_USAGE` when its own format is not storage-capable).
-    ///   `view` is always `Attachment`.
-    /// - A draw's whose fragment function reads the attachment in the interlocked storage form
-    ///   (`GraphicsState::storage_attachments`): `format` and `view` are the pipeline's
-    ///   [`StorageAttachmentUse`](crate::pipeline::StorageAttachmentUse)'s, and the image has
-    ///   `STORAGE` usage and is no color attachment of the subpass.
+    /// A render pass's color attachment `color_index` as a storage image of a tile dispatch: a 2D
+    /// view of the attachment's own image, of the pass's layer and level, in `format`, with the
+    /// identity component mapping, in `GENERAL` layout. The image's format is the tile pipeline
+    /// descriptor's (`TileRenderPipelineDescriptor::color_attachment_formats`), as Metal requires
+    /// of the pass, and its extent at least the render area (`BindState::render_area`). `format`
+    /// is the image's own for an integer format, and for a float format the unsigned-integer
+    /// format of the same channels and widths (`R16_UINT` for `R16_SFLOAT`), so the dispatch moves
+    /// the texels' bits: the consumer creates such an image with `MUTABLE_FORMAT` (and
+    /// `EXTENDED_USAGE` when its own format is not storage-capable).
     TileAttachment {
         color_index: u32,
         format: vk::Format,
-        view: StorageAttachmentView,
-        /// A draw's: the pipeline's `StorageAttachmentUse::view_alias`, where the view is in that
-        /// format, of an image the consumer made mutable to it (an sRGB attachment's
-        /// unsigned-integer format of its texel size, a BGRA-order one's RGBA-order twin on a
-        /// device that accesses its format without one in neither direction); `None` elsewhere,
-        /// and for a tile dispatch's, whose view is `format`.
-        #[cfg_attr(feature = "serde", serde(alias = "uint_view"))]
-        view_alias: Option<vk::Format>,
     },
     /// The tile map of the sparse texture bound at texture slot `slot` (`bind::SparseTileMap`),
     /// a read-only storage buffer of [`SparseTileMap::byte_len`](crate::bind::SparseTileMap)
@@ -723,11 +683,6 @@ pub enum WriteSource {
         compare: bool,
         integer: bool,
     },
-    /// The shadow of the render pass's stencil attachment that a fragment function's
-    /// shader-side stencil tests and writes (`GraphicsState::shadow_stencil`): the consumer's
-    /// `R8_UINT` 2D storage image of the attachment's extent, in `GENERAL` layout
-    /// ([`ShadowStencilUse`](crate::pipeline::ShadowStencilUse)).
-    ShadowStencil,
     /// Element `index + 1` of the set-1 function-table array: the words of
     /// `BindState::function_tables[index]` (`pipeline::table`'s layout, as
     /// [`FunctionTableWords`](crate::bind::FunctionTableWords) encodes them), a read-only
@@ -769,12 +724,6 @@ pub enum WriteSource {
     /// zero ([`ExecutionStatus::initial`](crate::bind::ExecutionStatus::initial)). The consumer
     /// reads it once the command buffer completes.
     ExecutionStatus,
-    /// The snapshot of the texture the draw binds at fragment texture slot `slot`
-    /// (`BindingSource::SnapshotTexels`, `VariantKey::snapshot_textures`): the consumer's
-    /// single-sample 2D `R32G32B32A32_UINT` storage image covering the draw's render area, in
-    /// `GENERAL` layout, which the draw's fragments write at their pixels in the draw that takes
-    /// the snapshot and read in the draw that reads it (`PushHole::SnapshotPhase`).
-    SnapshotTexels { slot: u32 },
 }
 
 /// The image of a combined image-sampler write.

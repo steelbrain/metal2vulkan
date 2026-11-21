@@ -406,7 +406,7 @@ pub struct StageIoPlan {
     /// Whether a kernel reads the stage-in region (`RuntimeFact::StageInRegion`).
     pub region: bool,
     /// The lanes of each color attachment's output a fragment function rounds itself
-    /// (`color_write`), through an output variable or in the storage form: each by its rule, a
+    /// (`color_write`), through an output variable: each by its rule, a
     /// half-float channel's under `TextureWriteRoundingMode::NearestEven`.
     pub rounded: BTreeMap<u32, [Option<crate::pipeline::lower_inputs::ChannelWrite>; 4]>,
     /// The extended-range color attachments whose `float` or `half` output each return stores
@@ -618,12 +618,7 @@ pub fn select_return(cx: &mut SelectCx<'_>, _at: InstId, v: Option<Value>) -> Re
         None if void => Ok(()),
         None => Err(cx.invariant("an entry with outputs returns no value")),
         Some(_) if void => Err(cx.invariant("an entry without outputs returns a value")),
-        Some(_)
-            if cx.families.stage_io.outputs.is_empty()
-                && !crate::lower::fragment::writes_outside_interface(cx) =>
-        {
-            Ok(())
-        }
+        Some(_) if cx.families.stage_io.outputs.is_empty() => Ok(()),
         Some(v) => {
             let ty = cx
                 .value_ty(v)
@@ -869,47 +864,6 @@ pub fn sample_id(cx: &mut SelectCx<'_>) -> usize {
         Shape::U32,
         crate::pipeline::stage_io::StageBuiltin::SampleId,
     )
-}
-
-/// Plan the fragment's `FrontFacing` input for a family that reads the fragment's face (the
-/// shader-side stencil): the index of its object, shared with a `[[front_facing]]` input.
-pub fn front_facing(cx: &mut SelectCx<'_>) -> usize {
-    plan::builtin(
-        &mut cx.families.stage_io,
-        crate::spv::BuiltIn::FrontFacing,
-        IoDir::Input,
-        Shape::Bool,
-        crate::pipeline::stage_io::StageBuiltin::FrontFacing,
-    )
-}
-
-/// Plan the fragment's `SampleMask` input and output for the shader-side stencil's multisampled
-/// form: the indexes of their objects, the input shared with a `[[sample_mask]]` input. The form
-/// reads the invocation's own coverage, which is not Metal's `[[sample_mask]]` (the pixel's
-/// coverage), so the stage interface states only the output, which the module writes.
-pub fn sample_masks(cx: &mut SelectCx<'_>) -> (usize, usize) {
-    let sp = &mut cx.families.stage_io;
-    let covered = plan::builtin_object(
-        sp,
-        crate::spv::BuiltIn::SampleMask,
-        IoDir::Input,
-        Shape::U32Array(1),
-    );
-    let kept = plan::builtin(
-        sp,
-        crate::spv::BuiltIn::SampleMask,
-        IoDir::Output,
-        Shape::U32Array(1),
-        crate::pipeline::stage_io::StageBuiltin::SampleMaskOut,
-    );
-    (covered, kept)
-}
-
-/// The form of an output of AIR type `ty` that must be a 32-bit integer scalar, as a stencil or
-/// sample-mask output must, for a family that writes it outside the stage interface (the
-/// shader-side stencil).
-pub fn int_scalar_output(cx: &SelectCx<'_>, ty: crate::air::ir::TypeId) -> Result<Form, Error> {
-    plan::int_scalar_form(cx, ty)
 }
 
 /// The global [`declare`] declared for planned object `i`.
@@ -2319,10 +2273,9 @@ fn rotated_second(
 enum NanDrop {
     /// Kill the invocation there (`FragmentPlan::return_kill`).
     Kill(KillForm),
-    /// Inside an interlocked body, record it in the `discarded` predicate: the storage form's
-    /// color stores and the other writes at the return skip it, and the entry kills it after the
-    /// critical section, so a color stored in the shader is dropped as Vulkan's tests would drop an
-    /// output.
+    /// Inside an interlocked body, record it in the `discarded` predicate: the writes at the
+    /// return skip it, and the entry kills it after the critical section, as Vulkan's tests would
+    /// drop an output.
     Record(GlobalId),
 }
 

@@ -55,7 +55,6 @@ use crate::metal::format::{color_output_components, write_conversion, WriteConve
 use crate::metal::TextureWriteRoundingMode;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
-use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::ColorAttachmentState;
 use crate::pipeline::lower_inputs::{ChannelWrite, ExtendedRangeColor, FactorLane};
 use crate::pipeline::rotated_blend::{inexact, rotated_blend, RotatedBlend};
@@ -330,12 +329,10 @@ pub(crate) fn extended_range_colors(
 /// one raw component (`BGR10_XR`, the two-plane forms' color word, and their `_sRGB` twins), is
 /// written unblended under a mask of some of those codes ([`merges_extended`]): no mask of the
 /// raw components keeps one code of a word and writes another, so the fragment function merges its
-/// codes into the word it reads first: in the interlocked storage form (`lower::fragment::fetch`)
-/// where the device orders fetch through the pixel interlock alone, over the attachment's input
-/// attachment (`lower::fragment`'s `input_blend`, `RuntimeFact::WordInputMerge`) where it orders
-/// it through rasterization-order input attachments. On a device that orders fetch in neither
-/// form, link names the orderings the merge needs
-/// (`lower::fragment::fetch::unordered_extended_fetch`).
+/// codes into the word it reads first, over the attachment's input attachment
+/// (`lower::fragment`'s `input_blend`, `RuntimeFact::WordInputMerge`) where the device orders
+/// fetch through rasterization-order input attachments. On a device that does not order fetch so,
+/// link names the ordering the merge needs (`lower::fragment::fetch::unordered_extended_fetch`).
 pub(crate) fn merged_extended(c: &ColorAttachmentDescriptor) -> bool {
     merges_extended(c.pixel_format, c.write_mask, c.blending_enabled)
 }
@@ -361,9 +358,8 @@ pub(crate) fn merges_extended(
 /// Metal stores alike), under a write mask of all of the format's channels or none, or of some of
 /// them where the function merges the word into the texel over its input attachment
 /// ([`merged_word`]), and it is not attachment 0 under alpha-to-coverage (whose coverage reads the
-/// output's alpha as computed). `None` for every other attachment: one the function stores in the
-/// interlocked storage form ([`stored_word`]), or one that takes its format's own attachment, as
-/// the device has it or not.
+/// output's alpha as computed). `None` for every other attachment: one that takes its format's own
+/// attachment, as the device has it or not.
 pub(crate) fn word_color(
     index: u32,
     c: &ColorAttachmentDescriptor,
@@ -420,54 +416,6 @@ pub(crate) fn merged_word(
 ) -> Option<metal::ColorWriteMask> {
     let word = word_color(index, c, alpha_to_coverage, p)?;
     merges_over_input(c, word, p).then(|| word_channels(word).difference(c.write_mask))
-}
-
-/// The word view of color attachment `c` of a render pipeline on profile `p` whose writes the
-/// fragment function stores in the interlocked storage form (`lower::fragment::fetch`), reading
-/// the word first inside the interlock: a packed 16-bit word attachment
-/// (`metal::format::WordAttachment::of`) written under a blend other than one and zero, added,
-/// whose factors read no second source (Metal's packed 16-bit blend, which the function computes
-/// over the word, `extended_range::Blend::packed16`), or a word attachment other than
-/// `RGB9E5Float`'s written unblended under a write mask of some of the format's channels (the
-/// function merges the fields of the channels the mask keeps), on a device that orders fetch
-/// through the pixel interlock alone.
-/// `None` for every other attachment, and for a write mask of none of the format's channels.
-pub(crate) fn stored_word(
-    c: &ColorAttachmentDescriptor,
-    p: &DeviceProfile,
-) -> Option<metal::format::WordAttachment> {
-    use metal::{BlendFactor as F, ColorWriteMask as M};
-    let word = metal::format::WordAttachment::of(c.pixel_format, p)?;
-    let channels = [M::RED, M::GREEN, M::BLUE, M::ALPHA]
-        .into_iter()
-        .zip(word.fields())
-        .filter(|(_, f)| f.is_some())
-        .fold(M::NONE, |m, (bit, _)| m | bit);
-    let kept = c.write_mask & channels;
-    let partial = !kept.is_empty() && kept != channels;
-    let unblended = !c.blending_enabled || replaces(c);
-    let second = [
-        c.source_rgb_blend_factor,
-        c.destination_rgb_blend_factor,
-        c.source_alpha_blend_factor,
-        c.destination_alpha_blend_factor,
-    ]
-    .iter()
-    .any(|f| {
-        matches!(
-            f,
-            F::Source1Color | F::OneMinusSource1Color | F::Source1Alpha | F::OneMinusSource1Alpha
-        )
-    });
-    // Metal's blend of a packed 16-bit word is built; an 8-bit sRGB word's is not, nor is an
-    // `RGB9E5Float` word's blend or partial mask (its mantissas share the exponent).
-    let packed = matches!(word, metal::format::WordAttachment::Packed16 { .. });
-    let fielded = word != metal::format::WordAttachment::Rgb9e5;
-    let stored = match unblended {
-        true => partial && fielded,
-        false => packed && !kept.is_empty() && !second,
-    };
-    (stored && crate::lower::fragment::interlock_orders(p)).then_some(word)
 }
 
 /// The word attachments of a render pipeline whose color attachments are `colors` (covering by
@@ -576,9 +524,8 @@ pub(crate) fn alpha_in_red_colors(
 
 /// The attachments holding Metal's alpha in red that the fragment stage `fragment` writes or reads
 /// in a render pipeline whose color attachments are `colors` on `p`: [`alpha_in_red_colors`]'s,
-/// for the attachments it writes through output variables of either dual-source index, reads
-/// through an input attachment, or reads in the interlocked storage form
-/// (`RuntimeFact::InterlockedFramebufferFetch`), the set it must have compiled under
+/// for the attachments it writes through output variables of either dual-source index or reads
+/// through an input attachment, the set it must have compiled under
 /// (`StageIo::alpha_in_red_colors`).
 pub(crate) fn wanted_alpha_in_red(
     fragment: &FunctionArtifact,
@@ -602,11 +549,7 @@ pub(crate) fn wanted_alpha_in_red(
             crate::pipeline::sym::ResourceKind::InputAttachment(color) => Some(color),
             _ => None,
         });
-    let interlocked = fragment.facts.iter().filter_map(|f| match *f {
-        RuntimeFact::InterlockedFramebufferFetch { color, .. } => Some(color),
-        _ => None,
-    });
-    let used: BTreeSet<u32> = written.chain(inputs).chain(interlocked).collect();
+    let used: BTreeSet<u32> = written.chain(inputs).collect();
     let mut out = alpha_in_red_colors(colors, p);
     out.retain(|a| used.contains(a));
     out
@@ -621,11 +564,10 @@ pub(crate) fn wanted_alpha_in_red(
 /// device that orders framebuffer fetch (`lower::fragment::fetch`). Metal blends the format as
 /// `RGBA8Unorm` with its channels rotated, so the function computes Metal's 8-bit unorm blend
 /// (`extended_range::Blend::unorm8`, which takes every factor and operation but the second
-/// source's) over the texel rotated into Metal's order: in the interlocked storage form where the
-/// device orders fetch through the pixel interlock (`lower::fragment::fetch`), over the
-/// attachment's input attachment where it orders it through rasterization-order input attachments
-/// (`lower::fragment`'s `input_blend`). A device that orders fetch in neither form refuses the
-/// pipeline (`fetch::unordered_extended_fetch`, at link).
+/// source's) over the texel rotated into Metal's order, over the attachment's input attachment
+/// where the device orders fetch through rasterization-order input attachments
+/// (`lower::fragment`'s `input_blend`). A device that does not order fetch so refuses the pipeline
+/// (`fetch::unordered_extended_fetch`, at link).
 pub(crate) fn shader_rotated_blend(c: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
     rotated_blend_in_shader(c, p) && !crate::lower::fragment::fetch::fetch_unordered(p)
 }
@@ -794,7 +736,7 @@ pub(crate) fn wanted_extended_range(
 /// The color writes the fragment stage `fragment` compiles under in a render pipeline whose
 /// color attachments are `colors` (alpha-to-coverage on where `alpha_to_coverage`, rounding by
 /// `rounding`) on `p`: the pipeline's, for the attachments it writes through output variables of
-/// dual-source index 0 or in the storage form ([`written`]).
+/// dual-source index 0 ([`written`]).
 pub(crate) fn wanted(
     fragment: &FunctionArtifact,
     colors: &[Option<ColorAttachmentDescriptor>],
@@ -805,7 +747,7 @@ pub(crate) fn wanted(
 }
 
 /// The color attachments the fragment stage `fragment` writes through output variables of
-/// dual-source index 0 or in the storage form.
+/// dual-source index 0.
 fn written(fragment: &FunctionArtifact) -> impl Iterator<Item = u32> + '_ {
     let outputs = fragment
         .interface
@@ -819,15 +761,7 @@ fn written(fragment: &FunctionArtifact) -> impl Iterator<Item = u32> + '_ {
             } => Some(attachment),
             _ => None,
         });
-    let storage = fragment.facts.iter().filter_map(|f| match *f {
-        RuntimeFact::InterlockedFramebufferFetch {
-            color,
-            writes: true,
-            ..
-        } => Some(color),
-        _ => None,
-    });
-    outputs.chain(storage)
+    outputs
 }
 
 /// Whether the color writes the fragment stage `fragment` compiled under
@@ -913,8 +847,7 @@ pub(crate) fn stores_output(c: &ColorAttachmentState) -> bool {
 /// fast math (`StageIo::half_blend_colors`, `StageIo::float_blend_colors`), whose blend there
 /// Metal computes keeping the destination's product by zero (a NaN of an infinite or NaN texel,
 /// `+0` of a `-0` output over a texel of `+0` or above), which no write of the
-/// output alone stores. The pipeline blends it and announces `PrecisionNote::HalfOutputPrecision`;
-/// the storage form computes Metal's (`lower::fragment::fetch`).
+/// output alone stores. The pipeline blends it and announces `PrecisionNote::HalfOutputPrecision`.
 pub(crate) fn keeps_zero(
     io: &crate::pipeline::stage_io::StageIo,
     color: u32,

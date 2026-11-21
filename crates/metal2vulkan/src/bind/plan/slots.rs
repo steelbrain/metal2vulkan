@@ -18,7 +18,7 @@ use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::SlotInterface;
 use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, Window};
 use crate::pipeline::layout::{BindingSource, PipelineLayout};
-use crate::pipeline::sym::{SampledType, SlotClass, SlotRef, SnapshotForm, SpecKey, Stage};
+use crate::pipeline::sym::{SampledType, SlotClass, SlotRef, SpecKey, Stage};
 use crate::vk;
 
 use super::compute::internal;
@@ -398,39 +398,6 @@ pub(crate) fn srgb_variant(
                 if metal::texel_format::srgb_twin_on(*pixel_format, profile))
         })
         .collect()
-}
-
-/// The form each of the snapshot slots `slots` keeps its texels in (`VariantKey::snapshot_textures`,
-/// `SnapshotForm::of`): by the bound texture's sampled view, which the snapshot's copy fetches
-/// through, and the slot's declared sampled type. [`SnapshotForm::Bits`] at a slot the variant
-/// reads in another class (`cross`), or one whose sampled view the device has no format for (an
-/// 8-bit sRGB format held as its UNORM twin among them). The variant's compile reads the same
-/// key, so its plan for the same shape states the same forms.
-pub(crate) fn snapshot_forms(
-    profile: &DeviceProfile,
-    slots: &std::collections::BTreeSet<SlotRef>,
-    interface: &BTreeMap<SlotRef, SlotInterface>,
-    shape: &BindShape,
-    cross: &BTreeMap<SlotRef, SampledType>,
-) -> BTreeMap<SlotRef, SnapshotForm> {
-    let form = |slot: SlotRef| {
-        let Some(SlotInterface::Texture(t)) = interface.get(&slot) else {
-            return SnapshotForm::Bits;
-        };
-        let Some(TextureShape::Texture { pixel_format, .. }) = bound_texture(shape, slot) else {
-            return SnapshotForm::Bits;
-        };
-        if cross.contains_key(&slot) {
-            return SnapshotForm::Bits;
-        }
-        let usages: std::collections::BTreeSet<_> =
-            [crate::device::requirements::FormatUsage::SampledImage].into();
-        let Ok(m) = metal::format::vk_format(*pixel_format, &usages, profile) else {
-            return SnapshotForm::Bits;
-        };
-        SnapshotForm::of(m.format, t.sampled_type)
-    };
-    slots.iter().map(|&slot| (slot, form(slot))).collect()
 }
 
 /// The sampled texture slots whose function reads their texels in any numeric class

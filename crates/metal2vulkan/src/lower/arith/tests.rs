@@ -4083,9 +4083,7 @@ fn aggregate_leaf_total_is_capped_before_expansion() {
 
 mod atan2;
 mod bicubic;
-mod blend16;
 mod blend8;
-mod blend_packed;
 mod color_write;
 mod convert_suffix;
 mod divide;
@@ -4095,7 +4093,6 @@ mod libm;
 mod narrow;
 mod pack;
 mod round_texel;
-mod snapshot_codes;
 mod specials;
 mod texel_round;
 mod wide;

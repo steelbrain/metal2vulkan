@@ -101,14 +101,6 @@ pub enum PushHole {
         stages: vk::ShaderStageFlags,
         offset: u32,
     },
-    /// Which draw of a snapshot variant (`VariantKey::snapshot_textures`,
-    /// `PushField::SnapshotPhase`) runs, as a `u32` at `offset` of the variant's fragment push
-    /// bytes: 1 in the draw that takes the snapshot (every color write mask 0), 0 in the draw that
-    /// reads it (the pipeline's masks).
-    SnapshotPhase {
-        stages: vk::ShaderStageFlags,
-        offset: u32,
-    },
 }
 
 /// A consumer-owned indirect-argument buffer and the byte offset of the arguments.

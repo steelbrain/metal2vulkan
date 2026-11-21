@@ -263,33 +263,6 @@ pub struct BindState {
     /// the whole set.
     #[cfg_attr(feature = "serde", serde(default))]
     pub resident_apart: bool,
-    /// The color attachments the draw's render pass instance leaves out of its subpass, read and
-    /// written as storage images in the pixel interlock by its other draws, that the draw's
-    /// render pipeline does not itself read or write so: a fragment function that writes one of
-    /// them through its first output runs the variant that writes it through the interlocked
-    /// storage form, so the draw records in that instance. Its variant is part of the shape
-    /// (`BindShape::interlocked_colors`); empty for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub interlocked_colors: BTreeSet<u32>,
-    /// The fragment texture slots the consumer reads through a snapshot, by Metal index: a draw
-    /// that reads a texture its render pass renders, where the consumer draws it twice, first
-    /// taking each fragment's texel into the slot's snapshot with every color write mask zero,
-    /// then with the pipeline's masks reading the snapshot. The plan keeps a slot only where the
-    /// draw's pipeline can (the module docs of `bind::graphics`) and runs the variant that reads
-    /// it so (`VariantKey::snapshot_textures`); `BindingPlan::variant`'s `snapshot_textures` says
-    /// which it kept, and the consumer serves every other read as it would without it. Part of the
-    /// shape (`BindShape::snapshot_textures`); empty for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub snapshot_textures: BTreeSet<u32>,
-    /// What the draw's depth and stencil tests can do to its fragments ([`FragmentTests::of`]),
-    /// which decides whether a fragment function that stores a color through the interlocked
-    /// storage form before the tests (`RuntimeFact::TestedStorageWrites`) stores what Metal
-    /// stores: its plan runs it as compiled, asks for the variant that declares early tests, or
-    /// refuses the draw. Its default, [`FragmentTests::Any`], refuses such a draw; the consumer
-    /// states it for a draw of such a pipeline, and may leave it for every other, whose plan does
-    /// not read it. Part of the shape (`BindShape::fragment_tests`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub fragment_tests: FragmentTests,
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`; Metal's default
     /// `[0, 0, 0, 0]` where the encoder never set it), red first: a fragment function that
     /// computes a blend in the shader under a blend that reads it takes it as push data
@@ -305,104 +278,6 @@ pub struct BindState {
     /// the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub alpha_test_reference: Option<f32>,
-}
-
-/// What a draw's depth and stencil tests can do to its fragments (`BindState::fragment_tests`).
-/// Metal tests a fragment after its function runs, unless the function declares
-/// `[[early_fragment_tests]]`: a function that writes a color attachment through the interlocked
-/// storage form stores inside the shader, so where it discards, and so cannot be tested early
-/// whatever the draw's state, whether its store is Metal's is the draw's tests' to decide.
-///
-/// Where the tests drop fragments and write, such a draw is refused: [`FragmentTests::Depth`] and
-/// [`FragmentTests::Stencil`] name the test that acts, and so the attachment the refusal names.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum FragmentTests {
-    /// The tests may drop a fragment and the encoder counts the fragments that pass them (a
-    /// visibility result mode is set); or the draw does not state them. Such a draw of a function
-    /// that stores before the tests is refused `NotImplemented(FramebufferFetch)`: a store before
-    /// them would keep what they drop, and early tests would count what the function then
-    /// discards. (A draw whose tests write but count nothing is [`FragmentTests::Depth`] or
-    /// [`FragmentTests::Stencil`].)
-    #[default]
-    Any,
-    /// The tests may drop a fragment, but write neither the depth nor the stencil attachment, and
-    /// the encoder counts nothing: early tests drop the fragments Metal's later tests drop and
-    /// leave the attachments as Metal's do, so such a draw runs the variant that declares them
-    /// (`VariantKey::read_only_tests`). (A function that may not declare them, since it writes
-    /// other memory or returns depth, is refused at the tested attachment.)
-    Drop,
-    /// No test can drop a fragment: a store before the tests is the store Metal makes after
-    /// them, so such a draw runs the pipeline as compiled.
-    Pass,
-    /// Only the depth test can drop a fragment, and it writes the depth attachment where
-    /// `writes`; the stencil test can neither drop nor write, and the encoder counts nothing.
-    /// Such a draw of a function that stores before the tests is refused
-    /// `NotImplemented(FramebufferFetch)` at the depth attachment, unless it writes nothing and
-    /// the function has the variant that declares early tests, which it runs, as
-    /// [`FragmentTests::Drop`].
-    Depth { writes: bool },
-    /// The stencil test can drop a fragment or write the stencil attachment, and some test
-    /// writes its attachment (the stencil test's operations, or the depth test's writes; where
-    /// none does, the tests are [`FragmentTests::Drop`]); the encoder counts nothing. Such a draw
-    /// of a function that stores before the tests is refused `NotImplemented(FramebufferFetch)`
-    /// at the stencil attachment.
-    Stencil,
-}
-
-impl FragmentTests {
-    /// The tests of `depth_stencil` in a pass with a depth attachment where `depth` and a
-    /// stencil attachment where `stencil`, the encoder counting the fragments that pass them
-    /// where `counted`: a test of an attachment the pass lacks does nothing. Depth drops a
-    /// fragment unless it compares `Always`, and writes where its writes are enabled; a stencil
-    /// face drops one unless it compares `Always`, and writes where its write mask has a bit set
-    /// and an operation that can apply is not `Keep` (the stencil failure operation where it
-    /// can fail, the depth failure operation where depth can, and the pass operation).
-    pub fn of(
-        depth_stencil: &metal::state::DepthStencilDescriptor,
-        depth: bool,
-        stencil: bool,
-        counted: bool,
-    ) -> FragmentTests {
-        use metal::{CompareFunction, StencilOperation};
-        let depth_drops = depth && depth_stencil.depth_compare_function != CompareFunction::Always;
-        let faces = [
-            &depth_stencil.front_face_stencil,
-            &depth_stencil.back_face_stencil,
-        ];
-        let stencil_drops = stencil
-            && faces
-                .iter()
-                .any(|f| f.stencil_compare_function != CompareFunction::Always);
-        if !depth_drops && !stencil_drops {
-            return FragmentTests::Pass;
-        }
-        let depth_writes = depth && depth_stencil.depth_write_enabled;
-        let stencil_writes = stencil
-            && faces.iter().any(|f| {
-                let fails = f.stencil_compare_function != CompareFunction::Always;
-                let applies = [
-                    (fails, f.stencil_failure_operation),
-                    (depth_drops, f.depth_failure_operation),
-                    (true, f.depth_stencil_pass_operation),
-                ];
-                f.write_mask != 0
-                    && applies
-                        .iter()
-                        .any(|&(can, op)| can && op != StencilOperation::Keep)
-            });
-        if !stencil_drops && !stencil_writes && !counted {
-            return FragmentTests::Depth {
-                writes: depth_writes,
-            };
-        }
-        match (counted, depth_writes || stencil_writes) {
-            (true, _) => FragmentTests::Any,
-            (false, true) => FragmentTests::Stencil,
-            (false, false) => FragmentTests::Drop,
-        }
-    }
 }
 
 /// Where a command's heap arrays (set 1) hold its heap members and its argument samplers. A plan
@@ -587,9 +462,6 @@ impl BindState {
             depth_clamp_range: self.depth_clamp_range.is_some(),
             rotated_weights: self.rotated_weights,
             line_band: self.line_band.map(|(primitive, _)| primitive),
-            interlocked_colors: self.interlocked_colors.clone(),
-            fragment_tests: self.fragment_tests,
-            snapshot_textures: self.snapshot_textures.clone(),
             primitive_id_indices: self.primitive_id_indices,
             quad_primitive_ids: self.quad_primitive_ids,
             private_list: self.private_list,
@@ -672,9 +544,6 @@ impl BindState {
             depth_clamp_range,
             rotated_weights,
             line_band,
-            interlocked_colors,
-            fragment_tests,
-            snapshot_textures,
             primitive_id_indices,
             quad_primitive_ids,
             private_list,
@@ -700,9 +569,6 @@ impl BindState {
             && self.depth_clamp_range.is_some() == *depth_clamp_range
             && self.rotated_weights == *rotated_weights
             && self.line_band.map(|(primitive, _)| primitive) == *line_band
-            && self.interlocked_colors == *interlocked_colors
-            && self.fragment_tests == *fragment_tests
-            && self.snapshot_textures == *snapshot_textures
             && self.primitive_id_indices == *primitive_id_indices
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
@@ -1666,19 +1532,6 @@ pub struct BindShape {
     /// triangles' edges, so (`VariantKey::line_band`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub line_band: Option<crate::pipeline::BandPrimitive>,
-    /// `BindState.interlocked_colors`: the variant whose fragment function writes those it writes
-    /// through the interlocked storage form (`VariantKey::interlocked_colors`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub interlocked_colors: BTreeSet<u32>,
-    /// `BindState.fragment_tests`: whether a fragment function that stores before the tests runs
-    /// as compiled, runs the variant that declares early tests (`VariantKey::read_only_tests`),
-    /// or is refused.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub fragment_tests: FragmentTests,
-    /// `BindState.snapshot_textures`: the variant whose fragment function reads those of them
-    /// the pipeline can read through a snapshot so (`VariantKey::snapshot_textures`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub snapshot_textures: BTreeSet<u32>,
     /// `BindState.primitive_id_indices`: the primitive ID's de-indexed variant of an indexed
     /// draw's index type (`VariantKey::primitive_id_indices`), where the pipeline writes the ID.
     #[cfg_attr(feature = "serde", serde(default))]

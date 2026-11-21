@@ -75,8 +75,6 @@ pub struct ModuleBuilder {
     /// Every storage buffer and storage image resource is decorated `Coherent`
     /// (`ModuleBuilder::coherent_resources`).
     coherent: bool,
-    /// Storage-image resources decorated `Coherent` one by one (`ModuleBuilder::coherent`).
-    coherent_images: BTreeSet<GlobalId>,
     /// Storage-image resources decorated `Volatile` (`ModuleBuilder::volatile`).
     volatile: BTreeSet<GlobalId>,
     /// Buffer bindings whose memory nothing in the module writes (`ModuleBuilder::unwritten_buffer`).
@@ -850,31 +848,6 @@ impl ModuleBuilder {
         self.coherent = true;
     }
 
-    /// Decorate storage-image resource `g` `Coherent`: under the `GLSL450` memory model each access
-    /// to its texels is made available and visible at device scope, as
-    /// [`coherent_resources`](ModuleBuilder::coherent_resources) makes every shared resource's,
-    /// for one image whose accesses an ordered fragment-interlock critical section orders while
-    /// the module's other resources keep plain accesses. Only a `UniformConstant` resource whose
-    /// type is a storage image can be; the Vulkan memory model bans the decoration
-    /// ([`ModuleBuilder::finalize`]).
-    pub fn coherent(&mut self, g: GlobalId) -> BResult<()> {
-        let gv = self.global(g)?;
-        let storage = gv.class == StorageClass::UniformConstant
-            && matches!(gv.kind, GlobalKind::Resource(_))
-            && matches!(
-                self.types.get(gv.pointee)?,
-                Type::Image(ImageType {
-                    usage: ImageUsage::Storage,
-                    ..
-                })
-            );
-        if !storage {
-            return Err(BuildError::Global(GlobalRule::CoherentTarget));
-        }
-        self.coherent_images.insert(g);
-        Ok(())
-    }
-
     /// Decorate storage-image resource `g` `Volatile`: under the `GLSL450` memory model every
     /// access to its texels is a volatile access, so a load never returns a value the invocation
     /// stored to that out-of-bounds location and the device's robustness discarded. Vulkan lets
@@ -1260,15 +1233,14 @@ impl ModuleBuilder {
         if !self.volatile.is_empty() && vulkan {
             return Err(BuildError::Global(GlobalRule::VolatileTarget));
         }
-        if (self.coherent || !self.coherent_images.is_empty()) && vulkan {
+        if self.coherent && vulkan {
             return Err(BuildError::Global(GlobalRule::CoherentTarget));
         }
-        let mut coherent = if self.coherent {
+        let coherent = if self.coherent {
             shared_resources(&self.types, &self.globals)?
         } else {
             BTreeSet::new()
         };
-        coherent.extend(self.coherent_images);
         Ok(TypedModule {
             types: self.types,
             consts: self.consts,

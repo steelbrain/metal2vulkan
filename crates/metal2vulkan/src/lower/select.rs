@@ -1275,8 +1275,8 @@ fn select_entry(
                 .collect();
     }
     tessellation::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;
-    // The framebuffer-fetch forms first: an output to a storage-form attachment is no interface
-    // variable.
+    // The framebuffer-fetch forms first: a write the function computes over its input attachment
+    // decides its output's interface variable.
     fragment::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;
     stage_io::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;
     mesh::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;

@@ -53,8 +53,7 @@ use crate::pipeline::sym::{
 };
 use crate::pipeline::testing::{engine_dir, llvm_assemble, typed_module_with, AssembleError};
 use crate::pipeline::{
-    ComputePipeline, FunctionDescriptor, StageSource, StorageAttachmentView,
-    TileRenderPipelineDescriptor,
+    ComputePipeline, FunctionDescriptor, StageSource, TileRenderPipelineDescriptor,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
@@ -548,8 +547,6 @@ fn a_float_attachment_is_bound_through_its_bits() {
                     == WriteSource::TileAttachment {
                         color_index: c as u32,
                         format: view,
-                        view: StorageAttachmentView::Attachment,
-                        view_alias: None,
                     }),
                 "{stem} {c}: {:?}",
                 plan.descriptors
@@ -1017,8 +1014,6 @@ fn a_tile_pipeline_binds_its_attachments() {
                     == WriteSource::TileAttachment {
                         color_index: c,
                         format: vk::Format::R32_UINT,
-                        view: StorageAttachmentView::Attachment,
-                        view_alias: None,
                     }),
                 "{stem} {c}"
             );
@@ -2444,8 +2439,6 @@ fn a_normalized_attachment_is_bound_through_its_bits() {
                     == WriteSource::TileAttachment {
                         color_index: 0,
                         format: view,
-                        view: StorageAttachmentView::Attachment,
-                        view_alias: None,
                     }),
                 "{stem} {entry} {pf:?}: {:?}",
                 plan.descriptors

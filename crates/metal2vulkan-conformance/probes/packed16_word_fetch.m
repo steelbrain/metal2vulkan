@@ -83,11 +83,9 @@
 //     formats' blends are each other's through the measured field orders and share no word, so no
 //     reading here is a constant and the orders are confirmed.
 //
-// So the word view's refusal of a packed 16-bit color input was ours, and the fetch is built on
-// the decode the blend already uses (`lower::fragment::fetch`, `stage_io::word_color::decode`).
-// The tile answers are the storage form's near-equivalence, not the word view's: our form reads
-// the attachment's memory for every format, so a packed 16-bit attachment the device renders
-// directly reads the codes too.
+// So Metal's fetch of a packed 16-bit attachment reads the value of its codes, by the decode the
+// blend already uses (`stage_io::word_color::decode`): the product's refusal of such a color input
+// (`NotImplemented(Format)`) is its own gap, not Metal's.
 //
 // clang -O2 -fobjc-arc -framework Metal -framework Foundation -o packed16_word_fetch \
 //     packed16_word_fetch.m

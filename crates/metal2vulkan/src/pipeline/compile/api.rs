@@ -24,7 +24,7 @@
 
 use crate::budget::{Budget, Meter};
 use crate::cache::VariantKey;
-use crate::device::requirements::{Requirements, VkExtension, VkFeature, VkLimit, VkProperty};
+use crate::device::requirements::{Requirements, VkExtension, VkFeature, VkLimit};
 use crate::device::{mechanism, Device, DeviceProfile};
 use crate::error::{
     ComputePipelineProblem, DescriptorError, Error, Feature, InternalError, InternalKind,
@@ -51,7 +51,7 @@ use crate::pipeline::descriptor::{
     RenderPipelineDescriptor, StageSource, TileRenderPipelineDescriptor,
 };
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::graphics::{GraphicsState, StorageAttachmentView};
+use crate::pipeline::graphics::GraphicsState;
 use crate::pipeline::link::tessellation::{note_evaluation_stage, synthesized_stages};
 use crate::pipeline::link::{link, LinkInputs, Linked, RenderLinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
@@ -101,8 +101,9 @@ pub struct RenderPipelineKeys {
     pub vertex_inputs: Option<LoweringInputs>,
     /// The inputs a `Function` fragment stage compiles under (`VariantKey::lowering_inputs` of
     /// the fragment stage, the signed-integer color attachments it writes, whether the pipeline is
-    /// multisampled, and the state of the attachments it reads where the device orders framebuffer
-    /// fetch only through the pixel interlock). `None` for a `Compiled` fragment stage or none.
+    /// multisampled, and the state of the attachments whose writes it computes over their input
+    /// attachments where the device orders framebuffer fetch through rasterization-order input
+    /// attachments). `None` for a `Compiled` fragment stage or none.
     pub fragment_inputs: Option<LoweringInputs>,
 }
 
@@ -447,8 +448,7 @@ impl Device {
                 // Every fragment function is decoded, to learn which colors it writes that the
                 // pipeline has no attachment for, as `compile_render_pipeline` and a mesh
                 // pipeline's fragment learn them; and so which signed-integer attachments it
-                // writes, which attachments it reads on a device that orders framebuffer fetch only
-                // through the pixel interlock, and whether it reads the `[[viewport_array_index]]`
+                // writes, and whether it reads the `[[viewport_array_index]]`
                 // or `[[render_target_array_index]]` its vertex function writes.
                 Some(source @ StageSource::Function(f)) => {
                     // Whether the function applies the private masks itself shows only in its
@@ -575,15 +575,9 @@ impl Device {
         v: &VariantKey,
         m: &mut Meter,
     ) -> Result<RenderPipeline, Error> {
-        // A mesh draw's plan zeroes and drops no color, nor writes one through the interlock it
-        // does not fetch, nor shadows one.
-        if !v.zeroed_colors.is_empty()
-            || !v.dropped_colors.is_empty()
-            || !v.interlocked_colors.is_empty()
-        {
-            return Err(invariant(
-                "a mesh variant zeroing, dropping, interlocking or shadowing colors",
-            ));
+        // A mesh draw's plan zeroes and drops no color.
+        if !v.zeroed_colors.is_empty() || !v.dropped_colors.is_empty() {
+            return Err(invariant("a mesh variant zeroing or dropping colors"));
         }
         check_mesh_fields(d)?;
         let p = self.profile();
@@ -969,7 +963,6 @@ impl Device {
         graphics.sample_mask = crate::pipeline::private_state::sample_mask(
             d,
             fragment.as_ref().map(|f| f.artifact()),
-            &graphics,
         )?;
         crate::pipeline::private_state::alpha_tested(d, fragment.as_ref().map(|f| f.artifact()))?;
         crate::pipeline::private_state::depth_compares_clamped(
@@ -979,7 +972,6 @@ impl Device {
         crate::pipeline::private_state::logic_operated(
             logic,
             fragment.as_ref().map(|f| f.artifact()),
-            &graphics,
         )?;
         let logic_op = crate::pipeline::private_state::LogicDraw::vulkan(logic);
         graphics.logic_op = logic_op;
@@ -1093,13 +1085,6 @@ fn graphics_requirements(
     requirements
         .features
         .extend(graphics.dynamic_state_features()?);
-    // A pipeline that reads through snapshots samples a color attachment of its subpass in the
-    // feedback loop layout, created with its flag (`GraphicsState::snapshot_reads`).
-    if graphics.snapshot_reads {
-        requirements
-            .features
-            .insert(VkFeature::AttachmentFeedbackLoopLayout);
-    }
     // Its color blend state: attachments that blend differently, dual-source blending.
     requirements
         .features
@@ -1145,46 +1130,6 @@ fn graphics_requirements(
         requirements
             .features
             .insert(VkFeature::RasterizationOrderColorAttachmentAccess);
-    }
-    // The interlocked form's storage views of the attachments; the module's own requirements name
-    // the interlock and the fragment stores.
-    for a in &graphics.storage_attachments {
-        requirements.formats.extend(a.format_usages());
-    }
-    // The shader-side stencil's shadow; the module's own requirements name the interlock, the
-    // fragment stores, and multisampled storage images. A multisampled shadow is copied by image
-    // copies (`maintenance8`), and it, or the neutral that stands in for it without a stencil
-    // attachment, is a storage image of the pipeline's samples.
-    if let Some(s) = &graphics.shadow_stencil {
-        requirements.formats.extend(s.format_usages());
-        if s.samples > 1 {
-            requirements.features.insert(VkFeature::Maintenance8);
-        }
-    }
-    let multisampled_shadow = artifacts.iter().any(|a| {
-        a.facts.iter().any(|f| {
-            matches!(
-                f,
-                RuntimeFact::ShadowStencil {
-                    multisampled: true,
-                    ..
-                }
-            )
-        })
-    });
-    // A per-sample framebuffer fetch's multisampled storage images have the pipeline's
-    // samples; planes are single-sample.
-    let multisampled_storage = graphics
-        .storage_attachments
-        .iter()
-        .any(|a| a.view == StorageAttachmentView::Attachment)
-        && graphics.rasterization_samples.as_raw() > 1;
-    if multisampled_shadow || multisampled_storage {
-        requirements
-            .properties
-            .insert(VkProperty::StorageImageSampleCount(
-                graphics.rasterization_samples.as_raw(),
-            ));
     }
     // A multiview pipeline needs `multiview` and its view count whether or not a stage reads the
     // view index; the binder draws more amplifications than the device has views one at a time, so
@@ -1691,8 +1636,6 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
         rounded_colors,
         specialized_notes: a.specialized.clone(),
         own_pixel_textures: a.interface.own_pixel_textures.clone(),
-        snapshot_textures: a.interface.snapshot_textures.clone(),
-        snapshot_refusals: a.interface.snapshot_refusals.clone(),
         level_reads: a.interface.level_reads.clone(),
         private_bytes: a.interface.private_bytes,
         // Link resolves the module's symbols and adds no instruction, so the function's own

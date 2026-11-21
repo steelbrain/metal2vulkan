@@ -167,8 +167,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::DispatchRegion | PushField::StageInRegion => FieldShape::UVec4Array(2),
         // A draw's depth clamp range, two `f32`s' bits.
         PushField::DepthClampRange => FieldShape::UVec2,
-        // Which of a snapshot variant's draws runs.
-        PushField::SnapshotPhase => FieldShape::U32,
         // The alpha test reference's code.
         PushField::AlphaTestReference => FieldShape::U32,
         // The blend color and one minus it, four `f32`s' bits each.
@@ -179,12 +177,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::BaseVertexInstance => FieldShape::UVec2,
         // The draw's vertices per primitive.
         PushField::VerticesPerPrimitive => FieldShape::U32,
-        // The front face's word, then the back face's.
-        PushField::ShadowStencilState => FieldShape::UVec2,
         // A zero word, the index count, the first instance, and the base vertex.
         PushField::CaptureLayout => FieldShape::UVec4Array(1),
-        // Four bits of kept channels per color attachment.
-        PushField::StorageKeptChannels => FieldShape::U32,
         // A constexpr sampler's index in its use's sampler array, and the sampled-texture array's
         // element a fetched color attachment is read through.
         PushField::ConstexprSampler(_) | PushField::FetchedColor { .. } => FieldShape::U32,

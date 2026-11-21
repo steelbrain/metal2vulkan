@@ -2966,9 +2966,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   count bits), vertex amplification, a post-tessellation vertex function's per-instance factor
   step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
-  stages the translator synthesizes beside the functions' and a tessellation's, an imageblock, a
-  fragment function's stencil output applied by the function itself (`ShaderStencil`, a form the
-  translator does not choose under the identity domains), a specialization other than the sample and
+  stages the translator synthesizes beside the functions' and a tessellation's, a specialization
+  other than the sample and
   amplification counts, dynamic state beyond Vulkan 1.3's (a vertex buffer layout whose stride is
   set per bind among it), a feature or extension device creation does not enable, and a function
   that reads what a draw does not supply (`DrawInput`: a function table, a table the binder builds,
@@ -2976,9 +2975,19 @@ or does not check is rebuilt from the generations' names, with young counted ful
   an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
   reads only its slots' addresses, resource IDs and constexpr sampler indices. The
   `completionHandler:` forms are not built.
+- A fragment function with imageblock data, an input or an output declared `[[imageblock_data]]`,
+  is refused at creation on every device, an `Error::Translation` naming `Imageblocks`
+  (`NotImplemented`): the translator has no form for it. The runtime has refused such a function on
+  every device all along, worded otherwise before: the only form the translator had bound a storage
+  image through a descriptor, which the identity domains the runtime compiles under hold none of.
+  The states-only plays of the 35 replay streams on lavapipe refuse none of their render or compute
+  states (jobs m3-max-63105 to 63108, and m3-max-63132 and m3-max-63156 for the two streams that
+  ran past those jobs' 300-second limit).
 - On a device that does not list `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]`
-  output is refused at creation, an `Error::Translation` naming `StencilExport`: under the identity
-  domains the pixel interlock chooses no other form. Metal's feature set tables give stencil
+  output is refused at creation, an `Error::Translation` naming `StencilExport`: the translator has
+  no other form. The runtime has refused it on such a device all along, worded otherwise before:
+  the translator's other form bound a storage image through a descriptor, which the identity
+  domains hold none of. Metal's feature set tables give stencil
   feedback to the Apple5 family and later and to Metal 3 and Metal 4. NVIDIA's 615 and 620 drivers
   on the RTX 2080, RTX 3090 and RTX 5080 Laptop list none (`vulkaninfo`, jobs m3-max-48727, 48729
   and 48731); RADV on the RX 7900 XTX, the 780Ms and the RX 550, ANV on the Iris Xe, lavapipe,

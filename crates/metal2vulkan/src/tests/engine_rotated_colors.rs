@@ -12,9 +12,9 @@
 //!   last shuffle fills) through Vulkan's `SRC1` factors where the device blends dual-source and
 //!   the function writes no more attachments than its dual-source limit, else names the feature
 //!   or the limit; one no Vulkan factor gives the function computes over the texel where the
-//!   device orders framebuffer fetch (the interlocked storage form, or over the input attachment,
-//!   `RotatedInputBlend`), noting the device's conversion, and a device that orders it in neither
-//!   form refuses naming both orderings; alpha to coverage over the image is refused
+//!   device orders framebuffer fetch (over the input attachment, `RotatedInputBlend`), noting the
+//!   device's conversion, and a device that does not order it refuses naming the ordering; alpha
+//!   to coverage over the image is refused
 //!   `NotImplemented(Format)` at the attachment;
 //! - a blend not exact by construction records `PrecisionNote::RotatedBlendRounding`.
 //!
@@ -287,11 +287,9 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
             }
         }
         // Blends no Vulkan factor gives on the image: the function computes Metal's 8-bit unorm
-        // blend over the texel where the device orders framebuffer fetch, in the interlocked
-        // storage form (color 0 is no attachment of the subpass) or over the attachment's input
-        // attachment (`RotatedInputBlend`, no Vulkan blend there), and a device that orders it in
-        // neither form names both orderings.
-        let interlock = crate::lower::fragment::interlock_orders(dev.profile());
+        // blend over the texel where the device orders framebuffer fetch, over the attachment's
+        // input attachment (`RotatedInputBlend`, no Vulkan blend there), and a device that does
+        // not order it names the ordering.
         let inputs = crate::lower::fragment::inputs_order(dev.profile());
         for c in [
             blended(F::DestinationAlpha, F::Zero, O::Add, O::Add),
@@ -301,17 +299,6 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
         ] {
             let d = descriptor(&bc, c, true);
             match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                Ok(p) if interlock => {
-                    assert!(p.graphics.color_attachments[0].is_none(), "{stem}: {c:?}");
-                    let stored = &p.graphics.storage_attachments;
-                    assert!(
-                        stored.iter().any(|s| s.color_index == 0
-                            && s.writes
-                            && s.format == vk::Format::R8G8B8A8_UNORM),
-                        "{stem}: {c:?}: {stored:?}"
-                    );
-                    assert!(notes(&p, PrecisionNote::DeviceColorConversion), "{stem}");
-                }
                 Ok(p) if inputs => {
                     let state = p.graphics.color_attachments[0].expect("color 0");
                     assert_eq!(state.blend, None, "{stem}: {c:?}");
@@ -326,16 +313,13 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
                     assert!(notes(&p, PrecisionNote::DeviceColorConversion), "{stem}");
                 }
                 Ok(_) => panic!("{stem}: {c:?}: made on a device that orders no fetch"),
-                Err(Error::Unsupported(u)) if !interlock && !inputs => {
+                Err(Error::Unsupported(u)) if !inputs => {
                     assert_eq!(u.feature, Feature::FramebufferFetch, "{stem}: {c:?}");
                     assert_eq!(
                         u.needs,
-                        Needs::AnyOf(vec![
-                            vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
-                            vec![Capability::Feature(
-                                VkFeature::RasterizationOrderColorAttachmentAccess
-                            )],
-                        ]),
+                        Needs::AnyOf(vec![vec![Capability::Feature(
+                            VkFeature::RasterizationOrderColorAttachmentAccess
+                        )]]),
                         "{stem}: {c:?}"
                     );
                     let at = u.location.as_ref().and_then(|l| l.attachment());

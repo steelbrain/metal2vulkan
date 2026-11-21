@@ -208,10 +208,9 @@ fn an_unobserved_gated_off_input_compiles() {
         assert!(off.facts.is_empty(), "{stem}: {:?}", off.facts);
         validate(&off, &p);
     }
-    // Defined (and so declared), the color input is read: a framebuffer fetch. `vk12-floor` has
-    // neither ordered form, so it reads color 0's input attachment, ordered between draws alone
-    // and noted; `moltenvk-m3` orders a fetch only through the pixel interlock, in a storage form
-    // that needs its pipeline's state, which a standalone compile does not have.
+    // Defined (and so declared), the color input is read: a framebuffer fetch. Neither profile
+    // has rasterization-order access, so each reads color 0's input attachment, ordered between
+    // draws alone and noted.
     for stem in ["runtime-floor", "moltenvk-m3"] {
         let r = compile_bitcode(
             &bc,
@@ -223,8 +222,8 @@ fn an_unobserved_gated_off_input_compiles() {
             &mut meter(),
             SPIRV_WORDS,
         );
-        match (stem, r) {
-            ("runtime-floor", Ok(a)) => {
+        match r {
+            Ok(a) => {
                 assert!(
                     a.facts
                         .contains(&RuntimeFact::FramebufferFetch { color: 0 }),
@@ -238,8 +237,7 @@ fn an_unobserved_gated_off_input_compiles() {
                     a.precision
                 );
             }
-            ("moltenvk-m3", Err(Error::NeedsInput(RuntimeInput::FramebufferFetch))) => {}
-            (_, other) => panic!("{stem}: declared color input: {:?}", other.map(|_| ())),
+            other => panic!("{stem}: declared color input: {:?}", other.map(|_| ())),
         }
     }
 }

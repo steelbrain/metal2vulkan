@@ -40,7 +40,7 @@
 //!   descriptors; otherwise the same layout is used as a pooled set.
 //! - **Render state** ([`vertex`], [`graphics`]): `VertexInputState` and `GraphicsState` from the
 //!   descriptor, checked against the vertex stage's compiled fetch projection, with the fragment
-//!   stage's imageblock ([`imageblock`]) and interlocked framebuffer fetch ([`fetch`]), and the
+//!   stage's framebuffer fetch over input attachments ([`fetch`]), and the
 //!   precision notes of the formats fixed-function vertex input converts for the vertex stage
 //!   (`vertex::fixed_function_notes`), which the module, shared by every such format, cannot
 //!   record, with the measured properties a conversion relies on in place of a note. A mesh
@@ -52,9 +52,7 @@ pub mod band;
 pub mod contract;
 pub mod fetch;
 pub mod graphics;
-pub mod imageblock;
 pub mod mesh;
-pub mod stencil;
 pub mod tessellation;
 pub mod varyings;
 pub mod vertex;
@@ -517,15 +515,6 @@ fn render_state(
     ts: Option<crate::pipeline::graphics::TessellationState>,
     p: &DeviceProfile,
 ) -> Result<GraphicsState, Error> {
-    // The imageblock's refusals first: a multisampled imageblock is the specific reason where
-    // its storage writes would also refuse the sample invocations.
-    let ib = imageblock::fragment_imageblock(r, fragment)?;
-    // The interlocked fetch's form against this pipeline's state, before the sample invocations
-    // its storage writes would also refuse.
-    let storage = fetch::storage_attachments(r, fragment, p)?;
-    // The shader-side stencil against this pipeline's state, before the sample invocations its
-    // shadow writes would also refuse.
-    let shadow = stencil::shadow_stencil(r, fragment, p)?;
     // The extended-range blends the fragment computes over input attachments, against this
     // pipeline's attachments.
     let input_blends = fetch::input_blends(r, fragment, p)?;
@@ -551,22 +540,16 @@ fn render_state(
         (r.alpha_to_coverage, r.texture_write_rounding_mode),
         p,
     )?;
-    gs.fragment_imageblock = ib;
-    gs.color_outputs = color_outputs(fs, &storage)?;
-    gs.storage_attachments = storage;
-    gs.shadow_stencil = shadow;
+    gs.color_outputs = color_outputs(fs)?;
     Ok(gs)
 }
 
 /// The color attachments fragment stage `fs` writes (`GraphicsState::color_outputs`), bit `n`
-/// for attachment `n`: those a first (index 0) color output of its function names, and those it
-/// writes in the interlocked storage form (`storage`). An index past the mask is no output link
-/// admits (`maxFragmentOutputAttachments` and Metal's eight colors are below it).
-fn color_outputs(
-    fs: Option<&StageInterface>,
-    storage: &[crate::pipeline::graphics::StorageAttachmentUse],
-) -> Result<u32, Error> {
-    let outputs = fs
+/// for attachment `n`: those a first (index 0) color output of its function names. An index past
+/// the mask is no output link admits (`maxFragmentOutputAttachments` and Metal's eight colors are
+/// below it).
+fn color_outputs(fs: Option<&StageInterface>) -> Result<u32, Error> {
+    let mut outputs = fs
         .into_iter()
         .flat_map(|f| &f.io.outputs)
         .filter_map(|o| match o.role {
@@ -576,8 +559,7 @@ fn color_outputs(
             } => Some(attachment),
             _ => None,
         });
-    let stored = storage.iter().filter(|s| s.writes).map(|s| s.color_index);
-    outputs.chain(stored).try_fold(0u32, |mask, color| {
+    outputs.try_fold(0u32, |mask, color| {
         1u32.checked_shl(color)
             .map(|bit| mask | bit)
             .ok_or_else(|| {
@@ -719,7 +701,6 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
             stage: slot.stage,
             sampler: CombinedSampler::from_heap_index(sampler, slot.index),
         },
-        ResourceKind::SnapshotTexels(texture) => BindingSource::SnapshotTexels(texture),
         ResourceKind::YCbCrPlanes(_) => BindingSource::YCbCrPlanes(metal(SlotClass::Texture)),
         ResourceKind::SamplerArray { compare, integer } => BindingSource::SamplerArray {
             stage: slot.stage,

@@ -736,8 +736,8 @@ impl Row {
     }
 
     /// What the runtime answers for a row that reads or samples with no barrier, where it takes
-    /// the read through a copy cleared to the clear or through a snapshot (the module docs): the
-    /// clear, as the barrier's rows answer. `None` for every other row.
+    /// the read through a copy cleared to the clear (the module docs): the clear, as the barrier's
+    /// rows answer. `None` for every other row.
     fn drawn(&self) -> Option<Vec<u8>> {
         match self.shape {
             Shape::Small {
@@ -831,7 +831,7 @@ impl Case for PassStartRead {
             })
             .collect();
         // A read with no barrier may answer the clear where the runtime reads it through a copy
-        // cleared to it or a snapshot (the module docs).
+        // cleared to it (the module docs).
         if let Some(bytes) = self.row.drawn() {
             allowances.push(Allowance::new(
                 format!("case/{}", texels_site(0)),

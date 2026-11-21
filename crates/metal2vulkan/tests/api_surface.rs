@@ -355,14 +355,9 @@ surface! {
         enum BandPrimitive E;
         struct BlendState N;
         struct ColorAttachmentState N;
-        struct FragmentImageblock N;
         struct GraphicsState N;
-        enum ImageblockMechanism N;
         struct InputAttachmentUse N;
         struct LineBandState N;
-        struct ShadowStencilUse N;
-        struct StorageAttachmentUse N;
-        enum StorageAttachmentView E;
         struct TessellationState N;
         struct AccessSet N;
         enum AttributeFetch E;
@@ -383,7 +378,6 @@ surface! {
         struct SamplerLevels N;
         struct SamplerSlot N;
         enum SlotInterface N;
-        enum SnapshotRefusal N;
         struct TextureAccess N;
         struct TextureSlot N;
         struct ThreadgroupArgument N;
@@ -428,7 +422,6 @@ surface! {
         enum SamplerRef N;
         enum SlotClass E;
         struct SlotRef E;
-        enum SnapshotForm N;
         enum SpecKey N;
         enum Stage N;
         enum StorageFormatClass N;
@@ -531,7 +524,6 @@ surface! {
         struct FunctionTablesShape N;
         struct TileThreadgroupMemory N;
         struct TileThreadgroupArgument N;
-        enum FragmentTests N;
         struct ExecutionStatus E;
         struct StatusBits E;
         struct StatusReport N;
@@ -635,22 +627,15 @@ surface! {
         enum YCbCrOutput N;
         enum YCbCrRange N;
         enum YCbCrMatrix N;
-        fn planes_merge_modules;
-        fn planes_split_module;
         enum PlanesCopy N;
-        struct PlanesMergeModules N;
-        struct PlanesSplitModule N;
         fn interleave_merge_modules;
         fn interleave_split_module;
         struct InterleaveMergeModules N;
         struct InterleaveSplitModule N;
         fn depth_stencil_copy_modules;
-        fn stencil_split_module;
-        enum CopySource E;
         enum DepthStencilCopy N;
         struct DepthStencilCopyModules N;
         struct StencilBit O;
-        struct StencilSplitModule N;
         mod indirect_commands;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {

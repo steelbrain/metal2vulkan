@@ -599,11 +599,9 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         tessellation: None,
         indirect_first_instance_missing: false,
         robust_index_fetch,
-        shadow_stencil: None,
         mesh: None,
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     };
     let state = BindState::default();
@@ -647,11 +645,9 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         tessellation: None,
         indirect_first_instance_missing: false,
         robust_index_fetch,
-        shadow_stencil: None,
         mesh: None,
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     };
     let state = BindState::default();
@@ -730,11 +726,9 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         tessellation: None,
         indirect_first_instance_missing,
         robust_index_fetch,
-        shadow_stencil: None,
         mesh: None,
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     };
     let state = BindState::default();
@@ -785,11 +779,9 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         tessellation: None,
         indirect_first_instance_missing: false,
         robust_index_fetch: false,
-        shadow_stencil: None,
         mesh: None,
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     };
     let state = |offsets: (u64, u64), stride| {
@@ -875,11 +867,9 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         tessellation: None,
         indirect_first_instance_missing: false,
         robust_index_fetch: false,
-        shadow_stencil: None,
         mesh: None,
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     };
     let state = |attribute_stride| {
@@ -1463,7 +1453,6 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
         tessellation: None,
         indirect_first_instance_missing: false,
         robust_index_fetch: true,
-        shadow_stencil: None,
         mesh: Some(MeshTemplate {
             spec: layout,
             fixed: vec![(SpecKey::Presence(fragment_buffer), 1)],
@@ -1481,7 +1470,6 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
         }),
         deindexed: None,
         private_list: false,
-        storage_kept: 0,
         line_band: None,
     }
 }

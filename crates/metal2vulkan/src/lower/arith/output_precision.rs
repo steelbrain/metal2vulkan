@@ -53,23 +53,11 @@ pub(crate) fn half_output_note(cx: &SelectCx<'_>) -> PrecisionNote {
 /// under every blend and format); in a module compiled with fast math the attachment too
 /// (`StageIo::half_fast_colors`), whose note the pipeline decides by whether the attachment stores
 /// some channel, since one that stores none (its write mask none, or absent from the pipeline)
-/// holds nothing the output could differ by, but [`half_output_note`] itself for an attachment
-/// the function writes in the storage form, which the pipeline's color attachments do not show;
-/// in a module naming no math mode [`half_output_note`] itself. Nothing where the function
-/// computes Metal's 16-bit float blend there itself (a fetched attachment's blend), which stores
-/// Metal's value, nor where it writes the attachment in the
-/// storage form under a write mask that names none of the format's channels, which stores nothing.
+/// holds nothing the output could differ by; in a module naming no math mode
+/// [`half_output_note`] itself.
 pub(crate) fn note_half_output(cx: &mut SelectCx<'_>, color: u32) {
-    // Metal's 16-bit float blend, computed by the function: the attachment stores Metal's value.
-    // A storage write of no channel stores nothing.
-    if crate::lower::fragment::blends_half_in_storage(cx, color)
-        || crate::lower::fragment::stores_nothing_in_storage(cx, color)
-    {
-        return;
-    }
     let math = cx.entry.compile.fast_math;
-    let in_storage = crate::lower::fragment::written_in_storage(cx, color);
-    if math.is_none() || (math == Some(true) && in_storage) {
+    if math.is_none() {
         let note = half_output_note(cx);
         cx.precision.insert(note);
         return;

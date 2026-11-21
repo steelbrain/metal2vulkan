@@ -3,11 +3,9 @@
 //! Vulkan copies a multisampled aspect to or from another image only through maintenance8's
 //! depth-stencil/colour `vkCmdCopyImage`. These crate-owned modules move
 //! each sample another way. The source is read one sample per invocation, through a sampled view
-//! of its copied aspect ([`CopySource::Aspect`]: a multisampled 2D image, unsigned for stencil,
-//! float for depth) or as the shader-side stencil's shadow ([`CopySource::Shadow`]: a
-//! multisampled `R8_UINT` storage image). The destination is written by a draw into it as the
-//! depth/stencil attachment, at sample rate ([`depth_stencil_copy_modules`]), or by a kernel into
-//! a storage image ([`stencil_split_module`]):
+//! of its copied aspect (a multisampled 2D image, unsigned for stencil, float for depth). The
+//! destination is written by a draw into it as the depth/stencil attachment, at sample rate
+//! ([`depth_stencil_copy_modules`]):
 //!
 //! - **A draw** ([`DepthStencilCopyModules`]): a `Vertex` entry `main` that draws one triangle
 //!   over the whole viewport from `VertexIndex` 0 to 2 (no vertex input), and a `Fragment` entry
@@ -48,16 +46,9 @@
 //!   The fragment stage reads `SampleId`, so it runs once per sample (`sampleRateShading`): the
 //!   consumer enables sample shading with `minSampleShading` 1, and each invocation writes its own
 //!   sample. A pixel's `FragCoord` is its center, `(x + 0.5, y + 0.5)`, truncated to `(x, y)`.
-//! - **The stencil split** ([`StencilSplitModule`]): a `GLCompute` entry `main` with local size
-//!   ([`StencilSplitModule::LOCAL_SIZE`], [`StencilSplitModule::LOCAL_SIZE`], 1) whose invocation
-//!   `(x, y, s)` inside the destination fetches sample `s` of pixel `(x, y)` of the unsigned source
-//!   aspect at [`StencilSplitModule::SOURCE_BINDING`] and writes it to sample `s` of texel `(x, y)`
-//!   of the multisampled `R8_UINT` storage image at [`StencilSplitModule::DESTINATION_BINDING`]:
-//!   the shadow's copy in. Dispatch `ceil(width / LOCAL_SIZE)`, `ceil(height / LOCAL_SIZE)`,
-//!   `samples` workgroups over a destination of the copied area.
 //!
 //! **Synchronization** (consumer): the source's writes before the copy's reads, and the
-//! destination's earlier accesses before its attachment or storage writes; the copy's writes
+//! destination's earlier accesses before its attachment writes; the copy's writes
 //! before whatever reads the destination next.
 
 use std::sync::Arc;
@@ -72,19 +63,9 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, Dim, ExecMode, ExecModel, ImageOperands, ImageQuery,
-    ImageType, ImageUsage, IoDir, MemAccess, StorageClass, TexelMemory, Type, TypedModule,
+    BinOp, ConstBits, Constant, ConvOp, Dim, ExecMode, ExecModel, ImageOperands, ImageType,
+    ImageUsage, IoDir, MemAccess, StorageClass, Type, TypedModule,
 };
-
-/// Where a copy reads its source (the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CopySource {
-    /// A sampled view of the source's copied aspect: a multisampled 2D image, unsigned for a
-    /// stencil aspect and float for a depth aspect.
-    Aspect,
-    /// The shader-side stencil's shadow: a multisampled `R8_UINT` storage image.
-    Shadow,
-}
 
 /// One bit of an 8-bit stencil: the plane a [`DepthStencilCopy::StencilPlane`] draw writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -114,9 +95,9 @@ impl StencilBit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DepthStencilCopy {
     /// One bit plane of the stencil: the invocation is killed where its bit is clear.
-    StencilPlane { source: CopySource, bit: StencilBit },
+    StencilPlane { bit: StencilBit },
     /// The stencil, as `FragStencilRefEXT` (`VK_EXT_shader_stencil_export`).
-    StencilExport { source: CopySource },
+    StencilExport,
     /// The depth, as `FragDepth`, from a sampled view of a depth aspect.
     Depth,
     /// The depth's bits, its `f32` bit-cast, as the first component of the unsigned colour output
@@ -144,40 +125,16 @@ pub struct DepthStencilCopyModules {
     /// The fragment stage: SPIR-V 1.5 words, entry point `main`, the source at
     /// [`DepthStencilCopyModules::SOURCE_BINDING`] of set [`DepthStencilCopyModules::SET`].
     pub fragment: Arc<[u32]>,
-    /// What the two stages need from the device: `sampleRateShading`; for the shadow,
-    /// multisampled storage images of an extended format; for the export, the extension.
+    /// What the two stages need from the device: `sampleRateShading`; for the export, the
+    /// extension.
     pub requirements: Requirements,
 }
 
 impl DepthStencilCopyModules {
     /// Descriptor set of the binding.
     pub const SET: u32 = 0;
-    /// The source: a sampled image ([`CopySource::Aspect`]) or a storage image
-    /// ([`CopySource::Shadow`]).
+    /// The source, a sampled image.
     pub const SOURCE_BINDING: u32 = 0;
-}
-
-/// The crate-owned stencil split of one device, validated like any output.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StencilSplitModule {
-    /// SPIR-V 1.5 words, entry point `main`, bindings numbered as below in set 0.
-    pub spirv: Arc<[u32]>,
-    /// What the module needs from the device: multisampled storage images
-    /// (`shaderStorageImageMultisample`) of an extended format
-    /// (`shaderStorageImageExtendedFormats`).
-    pub requirements: Requirements,
-}
-
-impl StencilSplitModule {
-    /// Descriptor set of every binding.
-    pub const SET: u32 = 0;
-    /// The source, a sampled image of the stencil aspect.
-    pub const SOURCE_BINDING: u32 = 0;
-    /// The destination, a multisampled `R8_UINT` storage image.
-    pub const DESTINATION_BINDING: u32 = 1;
-    /// Invocations of one workgroup along x, and along y.
-    pub const LOCAL_SIZE: u32 = 8;
 }
 
 /// The binding symbol of a draw's source ([`DepthStencilCopyModules::SOURCE_BINDING`]).
@@ -186,19 +143,6 @@ const DRAW_SOURCE: ResourceSlot = ResourceSlot {
     kind: ResourceKind::Texture,
     index: 0,
 };
-/// The binding symbol of the split's source ([`StencilSplitModule::SOURCE_BINDING`]).
-const SPLIT_SOURCE: ResourceSlot = ResourceSlot {
-    stage: Stage::Kernel,
-    kind: ResourceKind::Texture,
-    index: 0,
-};
-/// The binding symbol of the split's destination ([`StencilSplitModule::DESTINATION_BINDING`]).
-const SPLIT_DESTINATION: ResourceSlot = ResourceSlot {
-    stage: Stage::Kernel,
-    kind: ResourceKind::Texture,
-    index: 1,
-};
-
 /// The unsigned 32-bit scalar type.
 pub(super) fn u32_ty(b: &mut ModuleBuilder) -> BResult<TypeId> {
     b.ty(Type::Int {
@@ -255,38 +199,21 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
     let f32_ = b.ty(Type::Float { width: 32 })?;
     let vec4 = b.ty(Type::Vector { elem: f32_, len: 4 })?;
     let uvec2 = b.ty(Type::Vector { elem: u32_, len: 2 })?;
-    let source = match copy {
-        DepthStencilCopy::StencilPlane { source, .. }
-        | DepthStencilCopy::StencilExport { source } => source,
-        DepthStencilCopy::Depth
-        | DepthStencilCopy::DepthBits
+    let texel_type = match copy {
+        DepthStencilCopy::Depth | DepthStencilCopy::DepthBits | DepthStencilCopy::Depth16Bits => {
+            f32_
+        }
+        DepthStencilCopy::StencilPlane { .. }
+        | DepthStencilCopy::StencilExport
         | DepthStencilCopy::StencilBits
-        | DepthStencilCopy::Depth16Code
-        | DepthStencilCopy::Depth16Bits => CopySource::Aspect,
+        | DepthStencilCopy::Depth16Code => u32_,
     };
-    let source_ty = match (copy, source) {
-        (
-            DepthStencilCopy::Depth | DepthStencilCopy::DepthBits | DepthStencilCopy::Depth16Bits,
-            _,
-        ) => multisampled_image(
-            &mut b,
-            f32_,
-            ImageUsage::Sampled,
-            crate::spv::ImageFormat::Unknown,
-        )?,
-        (_, CopySource::Aspect) => multisampled_image(
-            &mut b,
-            u32_,
-            ImageUsage::Sampled,
-            crate::spv::ImageFormat::Unknown,
-        )?,
-        (_, CopySource::Shadow) => multisampled_image(
-            &mut b,
-            u32_,
-            ImageUsage::Storage,
-            crate::spv::ImageFormat::R8ui,
-        )?,
-    };
+    let source_ty = multisampled_image(
+        &mut b,
+        texel_type,
+        ImageUsage::Sampled,
+        crate::spv::ImageFormat::Unknown,
+    )?;
     let image = b.resource(DRAW_SOURCE, StorageClass::UniformConstant, source_ty)?;
     let coord = b.builtin(crate::spv::BuiltIn::FragCoord, IoDir::Input, vec4)?;
     let sample = b.builtin(crate::spv::BuiltIn::SampleId, IoDir::Input, i32_)?;
@@ -307,13 +234,10 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         sample: Some(sample),
         ..ImageOperands::default()
     };
-    let texel = match source {
-        CopySource::Aspect => f.fetch(image, pixel, &ops)?,
-        CopySource::Shadow => f.read(image, pixel, &ops, TexelMemory::default())?,
-    };
+    let texel = f.fetch(image, pixel, &ops)?;
     let value = f.composite_extract(texel, &[0])?;
     match copy {
-        DepthStencilCopy::StencilPlane { bit, .. } => {
+        DepthStencilCopy::StencilPlane { bit } => {
             let mask = uint(&mut f, bit.mask())?;
             let set = f.binary(BinOp::BitwiseAnd, value, mask)?;
             let zero = uint(&mut f, 0)?;
@@ -325,7 +249,7 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
             });
             f.if_(&mut (), clear, kill, None)?;
         }
-        DepthStencilCopy::StencilExport { .. } => {
+        DepthStencilCopy::StencilExport => {
             let reference = f.convert(ConvOp::Bitcast, value, i32_)?;
             let output =
                 f.module()
@@ -382,7 +306,7 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
     let mut modes = vec![ExecMode::OriginUpperLeft];
     match copy {
         DepthStencilCopy::StencilPlane { .. } => {}
-        DepthStencilCopy::StencilExport { .. } => modes.push(ExecMode::StencilRefReplacing),
+        DepthStencilCopy::StencilExport => modes.push(ExecMode::StencilRefReplacing),
         DepthStencilCopy::Depth | DepthStencilCopy::Depth16Code => {
             modes.push(ExecMode::DepthReplacing)
         }
@@ -394,96 +318,11 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
     b.finalize()
 }
 
-/// The stencil split as a typed module, before serialization: the module
-/// [`stencil_split_module`] serializes. Its bindings are the symbols [`SPLIT_SOURCE`] and
-/// [`SPLIT_DESTINATION`].
-pub fn split_typed_module() -> BResult<TypedModule> {
-    let mut b = ModuleBuilder::new();
-    let u32_ = u32_ty(&mut b)?;
-    let uvec2 = b.ty(Type::Vector { elem: u32_, len: 2 })?;
-    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
-    let source_ty = multisampled_image(
-        &mut b,
-        u32_,
-        ImageUsage::Sampled,
-        crate::spv::ImageFormat::Unknown,
-    )?;
-    let destination_ty = multisampled_image(
-        &mut b,
-        u32_,
-        ImageUsage::Storage,
-        crate::spv::ImageFormat::R8ui,
-    )?;
-    let source = b.resource(SPLIT_SOURCE, StorageClass::UniformConstant, source_ty)?;
-    let destination = b.resource(
-        SPLIT_DESTINATION,
-        StorageClass::UniformConstant,
-        destination_ty,
-    )?;
-    let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
-    let void = b.ty(Type::Void)?;
-    let mut f = b.function(void)?;
-    let invocation = f.module().global_value(invocation)?;
-    let invocation = f.load(invocation, MemAccess::default())?;
-    let destination = f.module().global_value(destination)?;
-    let destination = f.load(destination, MemAccess::default())?;
-    let size = f.query(ImageQuery::Size, destination)?;
-    let samples = f.query(ImageQuery::Samples, destination)?;
-    let mut inside = None;
-    for axis in 0..3 {
-        let at = f.composite_extract(invocation, &[axis])?;
-        let end = if axis < 2 {
-            f.composite_extract(size, &[axis])?
-        } else {
-            samples
-        };
-        let below = f.binary(BinOp::ULessThan, at, end)?;
-        inside = Some(match inside {
-            None => below,
-            Some(all) => f.binary(BinOp::LogicalAnd, all, below)?,
-        });
-    }
-    let inside = inside.ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)?;
-    let source = f.module().global_value(source)?;
-    // Invocation `(x, y, s)` inside the destination copies sample `s` of pixel `(x, y)`.
-    let copy_sample: ArmFn<'_, ()> = Box::new(move |f, _| {
-        let source = f.load(source, MemAccess::default())?;
-        let x = f.composite_extract(invocation, &[0])?;
-        let y = f.composite_extract(invocation, &[1])?;
-        let s = f.composite_extract(invocation, &[2])?;
-        let pixel = f.composite_construct(uvec2, &[x, y])?;
-        let ops = ImageOperands {
-            sample: Some(s),
-            ..ImageOperands::default()
-        };
-        let texel = f.fetch(source, pixel, &ops)?;
-        f.write(destination, pixel, texel, &ops, TexelMemory::default())?;
-        Ok(ArmEnd::FallThrough(Vec::new()))
-    });
-    f.if_(&mut (), inside, copy_sample, None)?;
-    f.ret(None)?;
-    let id = f.finish()?;
-    b.entry(
-        ExecModel::GLCompute,
-        id,
-        vec![ExecMode::LocalSize {
-            x: StencilSplitModule::LOCAL_SIZE,
-            y: StencilSplitModule::LOCAL_SIZE,
-            z: 1,
-        }],
-    )?;
-    b.finalize()
-}
-
 /// The fixed binding numbers of the modules' symbols.
 fn binding_of(sym: &Symbol) -> Option<u32> {
     match sym {
         Symbol::DescriptorSet(_) => Some(0),
         Symbol::Binding(s) if *s == DRAW_SOURCE => Some(DepthStencilCopyModules::SOURCE_BINDING),
-        Symbol::Binding(s) if *s == SPLIT_SOURCE => Some(StencilSplitModule::SOURCE_BINDING),
-        Symbol::Binding(s) if *s == SPLIT_DESTINATION => {
-            Some(StencilSplitModule::DESTINATION_BINDING)
-        }
         _ => None,
     }
 }
@@ -516,7 +355,7 @@ pub(super) fn finish(
 }
 
 /// The modules of the copy draw `copy` on `device`: built with the typed builder (the vertex
-/// stage is the sample planes merge's, `bind::sample_planes`), checked by the owned verifier
+/// stage is the interleave merge's, `bind::sample_interleave`), checked by the owned verifier
 /// against the device's profile (requirements included), serialized, and numbered with the fixed
 /// binding of [`DepthStencilCopyModules`]. Refused, `Unsupported` naming `feature` (what the
 /// consumer copies for) and what the device lacks, where it lacks what the draw needs.
@@ -527,7 +366,7 @@ pub fn depth_stencil_copy_modules(
 ) -> Result<DepthStencilCopyModules, Error> {
     let (vertex, vertex_needs) = finish(
         device,
-        super::sample_planes::merge_vertex_typed_module()?,
+        super::sample_interleave::merge_vertex_typed_module()?,
         &feature,
         "depth/stencil copy's vertex stage",
     )?;
@@ -543,19 +382,6 @@ pub fn depth_stencil_copy_modules(
     Ok(DepthStencilCopyModules {
         vertex,
         fragment,
-        requirements,
-    })
-}
-
-/// The stencil split on `device`, built and checked as [`depth_stencil_copy_modules`] is;
-/// refused likewise where the device lacks multisampled storage images of `R8_UINT`.
-pub fn stencil_split_module(
-    device: &Device,
-    feature: Feature,
-) -> Result<StencilSplitModule, Error> {
-    let (spirv, requirements) = finish(device, split_typed_module()?, &feature, "stencil split")?;
-    Ok(StencilSplitModule {
-        spirv,
         requirements,
     })
 }

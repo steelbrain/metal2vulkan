@@ -10,7 +10,7 @@
 //! `x`; the runtime copies the buffer to and from that wide image with ordinary buffer-image
 //! copies (one per row, so any `bytesPerRow`, overlapping rows included, is exact) and moves the
 //! samples between it and the multisampled texture with these two crate-owned modules, each
-//! through an unsigned-integer view of the texel size ([`PlanesCopy`], reused), so every texel's
+//! through an unsigned-integer view of the texel size ([`PlanesCopy`]), so every texel's
 //! bits cross unchanged whatever the format. `n` is baked into each module, so the split is one
 //! per [`PlanesCopy`] and sample count, and the merge (whose fragment stage writes an unsigned
 //! `uvec4` whatever the attachment's format) one per sample count.
@@ -29,7 +29,7 @@
 //!   wide image. Dispatch `ceil((width / n) / LOCAL_SIZE)`, `ceil(height / LOCAL_SIZE)`, `n`
 //!   workgroups.
 //! - **The merge** ([`interleave_merge_modules`], buffer to texture): the fullscreen-triangle
-//!   vertex entry ([`super::sample_planes::merge_vertex_typed_module`], shared) and a `Fragment`
+//!   vertex entry ([`merge_vertex_typed_module`], which the depth/stencil copies share) and a `Fragment`
 //!   entry `main` with one sampled 2D image, the wide image in [`PlanesCopy::format`], at
 //!   [`InterleaveMergeModules::WIDE_BINDING`] of set 0. Each invocation at texel `(x, y)` sample
 //!   `s` fetches wide texel `(x * n + s, y)` and writes it, an unsigned `uvec4`, to the color
@@ -45,7 +45,6 @@
 
 use std::sync::Arc;
 
-use super::sample_planes::PlanesCopy;
 use crate::budget::{Budget, Meter};
 use crate::device::requirements::Requirements;
 use crate::device::Device;
@@ -56,9 +55,61 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ExecMode, ExecModel, ImageOperands, ImageQuery, ImageType, ImageUsage, IoDir, MemAccess,
-    StorageClass, TexelMemory, Type, TypedModule,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, ExecModel, ImageOperands, ImageQuery, ImageType,
+    ImageUsage, IoDir, MemAccess, StorageClass, TexelMemory, Type, TypedModule,
 };
+use crate::vk::Format;
+
+/// The unsigned-integer format of a color format's texel size, through which the split and the
+/// merge move a texel's bits unchanged (the module docs).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PlanesCopy {
+    /// One byte: `R8_UINT`.
+    R8,
+    /// Two bytes: `R16_UINT`.
+    R16,
+    /// Four bytes: `R32_UINT`.
+    R32,
+    /// Eight bytes: `R32G32_UINT`.
+    Rg32,
+    /// Sixteen bytes: `R32G32B32A32_UINT`.
+    Rgba32,
+}
+
+impl PlanesCopy {
+    /// Every copy format, by texel size.
+    pub const ALL: [PlanesCopy; 5] = [
+        PlanesCopy::R8,
+        PlanesCopy::R16,
+        PlanesCopy::R32,
+        PlanesCopy::Rg32,
+        PlanesCopy::Rgba32,
+    ];
+
+    /// The Vulkan format of the copy's views, an unsigned-integer one.
+    pub fn format(self) -> Format {
+        match self {
+            PlanesCopy::R8 => Format::R8_UINT,
+            PlanesCopy::R16 => Format::R16_UINT,
+            PlanesCopy::R32 => Format::R32_UINT,
+            PlanesCopy::Rg32 => Format::R32G32_UINT,
+            PlanesCopy::Rgba32 => Format::R32G32B32A32_UINT,
+        }
+    }
+
+    /// The SPIR-V image format of a storage view in [`PlanesCopy::format`].
+    pub(crate) fn spirv_format(self) -> crate::spv::ImageFormat {
+        match self {
+            PlanesCopy::R8 => crate::spv::ImageFormat::R8ui,
+            PlanesCopy::R16 => crate::spv::ImageFormat::R16ui,
+            PlanesCopy::R32 => crate::spv::ImageFormat::R32ui,
+            PlanesCopy::Rg32 => crate::spv::ImageFormat::Rg32ui,
+            PlanesCopy::Rgba32 => crate::spv::ImageFormat::Rgba32ui,
+        }
+    }
+}
 
 /// The crate-owned split module of one copy format and sample count on one device.
 #[non_exhaustive]
@@ -317,18 +368,12 @@ fn finish(
 
 /// The split module of `copy` at `samples` on `device`, built, verified, serialized and
 /// numbered. Refused, `Unsupported` (feature `Format`) naming what the device lacks: an extended
-/// copy format's storage without `shaderStorageImageExtendedFormats`; and `NotImplemented` for a
-/// copy that moves no bits ([`PlanesCopy::Alpha8`], the sample planes' alone).
+/// copy format's storage without `shaderStorageImageExtendedFormats`.
 pub fn interleave_split_module(
     device: &Device,
     copy: PlanesCopy,
     samples: u32,
 ) -> Result<InterleaveSplitModule, Error> {
-    if !copy.moves_bits() {
-        return Err(Error::Unsupported(Unsupported::not_implemented(
-            Feature::Format,
-        )));
-    }
     let (spirv, requirements) = finish(
         device,
         split_typed_module(copy, samples)?,
@@ -348,7 +393,7 @@ pub fn interleave_merge_modules(
 ) -> Result<InterleaveMergeModules, Error> {
     let (vertex, vertex_needs) = finish(
         device,
-        super::sample_planes::merge_vertex_typed_module()?,
+        merge_vertex_typed_module()?,
         "interleave merge's vertex stage",
     )?;
     let (fragment, fragment_needs) = finish(
@@ -364,6 +409,60 @@ pub fn interleave_merge_modules(
         fragment,
         requirements,
     })
+}
+
+/// The merge's vertex stage as a typed module: one triangle over the viewport, `VertexIndex`
+/// 0, 1, 2 at clip positions (-1, -1), (3, -1), (-1, 3).
+pub(super) fn merge_vertex_typed_module() -> BResult<TypedModule> {
+    let mut b = ModuleBuilder::new();
+    let i32_ = b.ty(Type::Int {
+        width: 32,
+        signed: true,
+    })?;
+    let f32_ = b.ty(Type::Float { width: 32 })?;
+    let vec4 = b.ty(Type::Vector { elem: f32_, len: 4 })?;
+    let index = b.builtin(crate::spv::BuiltIn::VertexIndex, IoDir::Input, i32_)?;
+    let position = b.builtin(crate::spv::BuiltIn::Position, IoDir::Output, vec4)?;
+    let void = b.ty(Type::Void)?;
+    let mut f = b.function(void)?;
+    let int = |f: &mut FunctionBuilder<'_>, v: i32| -> BResult<Value> {
+        let c = f.module().constant(Constant::Scalar {
+            ty: i32_,
+            bits: ConstBits(u64::from(v as u32)),
+        })?;
+        f.module().const_value(c)
+    };
+    let float = |f: &mut FunctionBuilder<'_>, v: f32| -> BResult<Value> {
+        let c = f.module().constant(Constant::Scalar {
+            ty: f32_,
+            bits: ConstBits(u64::from(v.to_bits())),
+        })?;
+        f.module().const_value(c)
+    };
+    let index = f.module().global_value(index)?;
+    let index = f.load(index, MemAccess::default())?;
+    let one = int(&mut f, 1)?;
+    let two = int(&mut f, 2)?;
+    // x = (i << 1) & 2, y = i & 2: (0, 0), (2, 0), (0, 2); the position is twice that, less 1.
+    let shifted = f.binary(BinOp::ShiftLeftLogical, index, one)?;
+    let x = f.binary(BinOp::BitwiseAnd, shifted, two)?;
+    let y = f.binary(BinOp::BitwiseAnd, index, two)?;
+    let x = f.convert(ConvOp::ConvertSToF, x, f32_)?;
+    let y = f.convert(ConvOp::ConvertSToF, y, f32_)?;
+    let twice = float(&mut f, 2.0)?;
+    let less = float(&mut f, 1.0)?;
+    let x = f.binary(BinOp::FMul, x, twice)?;
+    let x = f.binary(BinOp::FSub, x, less)?;
+    let y = f.binary(BinOp::FMul, y, twice)?;
+    let y = f.binary(BinOp::FSub, y, less)?;
+    let zero = float(&mut f, 0.0)?;
+    let at = f.composite_construct(vec4, &[x, y, zero, less])?;
+    let position = f.module().global_value(position)?;
+    f.store(position, at, MemAccess::default())?;
+    f.ret(None)?;
+    let id = f.finish()?;
+    b.entry(ExecModel::Vertex, id, Vec::new())?;
+    b.finalize()
 }
 
 #[cfg(test)]

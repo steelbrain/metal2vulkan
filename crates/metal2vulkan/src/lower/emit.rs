@@ -219,11 +219,6 @@ pub struct EmitCx<'a> {
     /// `stage_io::emit_draw_entry` finds before the body and before any other hook reads it
     /// (`stage_io::StageIoPlan::merged_fragment`), defined in the function's straight-line entry.
     pub(crate) merged_fragment_table: Option<SValue>,
-    /// The texel of each storage-form color attachment a fragment function reads, by Metal
-    /// color index, at the invocation's pixel (and sample), which `fragment::emit_entry` reads
-    /// before the body: defined in the function's straight-line entry, inside the interlock, so
-    /// every use of the color in a later block takes the one texel (`fragment::fetch::value`).
-    pub(crate) fetched: Vec<(u32, SValue)>,
 }
 
 /// A value that is the same wherever an invocation computes it, so a block computes it once, and
@@ -286,7 +281,6 @@ impl<'a> EmitCx<'a> {
             sampling: Default::default(),
             merged_draw: None,
             merged_fragment_table: None,
-            fetched: Vec::new(),
         }
     }
 
@@ -864,7 +858,6 @@ impl<'a> Emitter<'a> {
                 sampling: Default::default(),
                 merged_draw: None,
                 merged_fragment_table: None,
-                fetched: Vec::new(),
             },
             vars: None,
             phis,
@@ -1471,7 +1464,7 @@ impl CodeEmitter for Emitter<'_> {
 
     fn on_return(&mut self, v: Option<ValueId>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
         stage_io::emit_return(&mut self.cx, fb, v)?;
-        fragment::emit_return(&mut self.cx, fb, v)
+        fragment::emit_return(&mut self.cx, fb)
     }
 }
 

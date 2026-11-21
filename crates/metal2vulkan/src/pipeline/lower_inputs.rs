@@ -17,7 +17,7 @@ use crate::metal;
 use crate::pipeline::descriptor::{
     StageInputDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
 };
-use crate::pipeline::sym::{SampledType, SlotRef, SnapshotForm, VaryingKey};
+use crate::pipeline::sym::{SampledType, SlotRef, VaryingKey};
 use crate::vk;
 
 /// Per-function lowering inputs, public projection.
@@ -90,8 +90,8 @@ pub struct LoweringInputs {
     /// `InterpolateAtOffset` at offset 0 on a device with interpolation functions whose offset
     /// reads from the center (`VkProperty::InterpolateAtOffsetCentered`): the pixel center whatever
     /// samples its invocation shades (`StageIo::{multisampled, varyings_at_pixel}`). A function
-    /// that reads its color attachments (`framebuffer_fetch`) reads, and in the storage form
-    /// writes, each one's multisampled image at its `SampleId`, running once per covered sample, as
+    /// that reads its color attachments (`framebuffer_fetch`) reads each one's multisampled image
+    /// at its `SampleId`, running once per covered sample, as
     /// Metal does. `Device::compile_render_pipeline` sets it for a `Function` fragment stage, and a
     /// fragment compiled on its own for such a pipeline compiles under it: link refuses one
     /// compiled without it whose sample-rate invocations would read either elsewhere, or that reads
@@ -131,20 +131,15 @@ pub struct LoweringInputs {
     /// states `RuntimeFact::MergedDraws`. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub merged_draws: bool,
-    /// The render pipeline state a fragment function's framebuffer fetch takes its form from, on
-    /// a device that orders a fetch only through the ordered pixel interlock (no
-    /// `rasterizationOrderColorAttachmentAccess`, with `fragmentShaderPixelInterlock`): there each
-    /// color attachment the function reads is read, and written, as a storage image inside the
-    /// interlock where the pipeline's state lets that form be exact, and otherwise is refused.
-    /// `Device::compile_render_pipeline`
-    /// sets it for a `Function` fragment stage that declares a `[[color(n)]]` input on such a
-    /// device, and a fragment compiled on its own for such a pipeline compiles under the same
-    /// state; without it such a function is `NeedsInput(FramebufferFetch)`. On a device that orders
-    /// fetch through rasterization-order input attachments, the state of each extended-range
-    /// attachment the function writes where the pipeline blends it, whose blend the function
-    /// computes over its input attachment (its depth, coverage and amplification bits unset,
-    /// which that blend does not read); without it such a function is
-    /// `NeedsInput(FramebufferFetch)` there too. `None` on every other device and for every other
+    /// The render pipeline state of the attachments whose writes a fragment function computes
+    /// over their input attachments, on a device that orders fetch through rasterization-order
+    /// input attachments: an extended-range attachment the pipeline blends, one held with its
+    /// channels rotated whose blend no Vulkan state gives, a word or extended-range attachment
+    /// written under a mask of some of a word's channels, and an attachment a private logic
+    /// operation the function computes serves. `Device::compile_render_pipeline` sets it for a
+    /// `Function` fragment stage on such a device, and a fragment compiled on its own for such a
+    /// pipeline compiles under the same state; without it such a function is
+    /// `NeedsInput(FramebufferFetch)`. `None` on every other device and for every other
     /// function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub framebuffer_fetch: Option<FramebufferFetchInputs>,
@@ -156,20 +151,6 @@ pub struct LoweringInputs {
     /// `PrecisionNote::SrgbTexelDecode`. A slot of no such access is ignored.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
-    /// Fragment texture slots of `StageInterface::snapshot_textures` the draw reads through a
-    /// snapshot (`VariantKey::snapshot_textures`), each with its snapshot's form, drawn twice
-    /// (`PushField::SnapshotPhase`). The entry opens with the ordered pixel interlock's critical
-    /// section, in which, in the draw that takes the snapshot, a non-helper invocation copies
-    /// each slot's texel at its pixel into the slot's snapshot (`ResourceKind::SnapshotTexels`),
-    /// in the slot's form; that draw then returns. In the draw that
-    /// reads it, the critical section is empty, and every read of the slot reads the snapshot, or
-    /// nothing in a helper invocation (`lower::fragment`'s `snapshot`). The binder names only slots
-    /// of that interface fact (`bind::graphics`); for another, the reads are not Metal's.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, with = "crate::pipeline::serde_pairs")
-    )]
-    pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>,
     /// Texture slots bound to a two-plane YCbCr texture whose planes are read in place
     /// (`VariantKey::ycbcr_in_place`, `RuntimeFact::YCbCrInPlace`): each is declared as the
     /// planes' uniform texel buffer, and its samples, reads and size queries read the codes and
@@ -492,7 +473,7 @@ pub struct LoweringInputs {
     /// unblended (or blended with factors one and zero, added), under a write mask of all of the
     /// format's channels or none, and that is not attachment 0 under alpha-to-coverage, of a format
     /// the device samples but does not render (one written under a mask of some of its channels
-    /// is stored in the interlocked storage form instead, named in
+    /// is merged over the input attachment where the device orders fetch so, named in
     /// [`framebuffer_fetch`](Self::framebuffer_fetch)). The function writes such an attachment
     /// through an output variable of the word's unsigned integer, the word Metal stores for its
     /// `float` or `half` output (`ChannelWrite::HalfUnorm`'s rule per channel); a dual-source
@@ -630,14 +611,6 @@ pub struct LoweringInputs {
     /// `Function` fragment stage. Any other function compiles as with 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub depth_compare_clamp_mask: u32,
-    /// The depth and stencil tests of the draws that run the fragment function write neither
-    /// attachment and count no visibility result (`VariantKey::read_only_tests`): a function that
-    /// stores a color through the interlocked storage form and declares no early tests only
-    /// because it discards (`RuntimeFact::TestedStorageWrites`) is lowered with early fragment
-    /// tests, which then drop what Metal's later tests drop and leave the attachments as Metal's
-    /// do, and states the fact with `early_tests`. Any other function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub read_only_tests: bool,
     /// The color attachments the fragment function's render pipeline gives a format held with
     /// its channels rotated (`metal::format::rotated_channels`, `ARGB8Unorm`), by color index:
     /// each such attachment's image holds Metal's alpha, red, green and blue in its red, green,
@@ -659,7 +632,7 @@ pub struct LoweringInputs {
     /// red), so alpha to coverage through attachment 0 reads Metal's alpha as Metal's does; a
     /// color input (`[[color(n)]]`) of one reads the image's red as Metal's alpha, `(0, 0, 0, r)`,
     /// as Metal reads an `A8Unorm` attachment (probe `a8`'s uses on an M3 Max under macOS
-    /// 27.0.1), through the input attachment or the interlocked storage form alike.
+    /// 27.0.1), through the input attachment.
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
     /// pipeline's color attachments, and link refuses a fragment compiled under another set as
     /// `NeedsInput(ColorWrites)`. Empty for any other function.
@@ -1020,8 +993,9 @@ impl AmplificationDraws {
     }
 }
 
-/// The render pipeline state a fragment function's interlocked framebuffer fetch depends on
-/// (`LoweringInputs::framebuffer_fetch`).
+/// The render pipeline state a fragment function's computed writes over its input attachments
+/// depend on (`LoweringInputs::framebuffer_fetch`): the attachments whose blend, merge or logic
+/// operation the function computes over the texel it reads.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1029,26 +1003,14 @@ pub struct FramebufferFetchInputs {
     /// Each color attachment index the function declares a `[[color(n)]]` input for: the
     /// descriptor's attachment there, `None` where the descriptor sets none.
     pub attachments: BTreeMap<u32, Option<FetchedAttachment>>,
-    /// The pipeline has a depth or a stencil attachment, whose tests can drop a fragment after
-    /// its function ran.
-    pub depth_or_stencil: bool,
-    /// The descriptor enables alpha to coverage.
-    pub alpha_to_coverage: bool,
-    /// The descriptor's `maxVertexAmplificationCount` is above 1: the pipeline may draw
-    /// multiview.
-    pub amplified: bool,
 }
 
 impl FramebufferFetchInputs {
-    /// The state of a pipeline whose color attachments are `colors` (by Metal index), whose depth
-    /// and stencil formats are `depth` and `stencil`, under `alpha_to_coverage` and
-    /// `max_vertex_amplification_count`, for a function that declares color inputs at `read`.
+    /// The state of a pipeline whose color attachments are `colors` (by Metal index), for a
+    /// function whose writes at `read` the function computes over its input attachments.
     pub fn of(
         read: impl IntoIterator<Item = u32>,
         colors: &[Option<crate::pipeline::descriptor::ColorAttachmentDescriptor>],
-        depth_or_stencil: bool,
-        alpha_to_coverage: bool,
-        max_vertex_amplification_count: u32,
     ) -> FramebufferFetchInputs {
         FramebufferFetchInputs {
             attachments: read
@@ -1073,14 +1035,12 @@ impl FramebufferFetchInputs {
                     (color, attachment)
                 })
                 .collect(),
-            depth_or_stencil,
-            alpha_to_coverage,
-            amplified: max_vertex_amplification_count > 1,
         }
     }
 }
 
-/// What the interlocked framebuffer fetch reads of one color attachment's descriptor.
+/// What a function's computed write over its input attachment reads of one color attachment's
+/// descriptor.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1135,28 +1095,6 @@ impl BlendEquation {
             source_alpha: c.source_alpha_blend_factor,
             destination_alpha: c.destination_alpha_blend_factor,
             alpha_operation: c.alpha_blend_operation,
-        })
-    }
-
-    /// Whether a factor reads the fragment's second output (`[[color(n), index(1)]]`): dual-source
-    /// blending.
-    pub(crate) fn reads_second_source(&self) -> bool {
-        use metal::BlendFactor as F;
-        [
-            self.source_rgb,
-            self.destination_rgb,
-            self.source_alpha,
-            self.destination_alpha,
-        ]
-        .into_iter()
-        .any(|f| {
-            matches!(
-                f,
-                F::Source1Color
-                    | F::OneMinusSource1Color
-                    | F::Source1Alpha
-                    | F::OneMinusSource1Alpha
-            )
         })
     }
 }

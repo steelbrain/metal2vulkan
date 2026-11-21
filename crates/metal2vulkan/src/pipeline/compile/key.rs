@@ -240,11 +240,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.srgb_textures).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
-    if !inputs.snapshot_textures.is_empty() {
-        h.bytes(b"snapshot-textures")
-            .bytes(format!("{:?}", inputs.snapshot_textures).as_bytes());
-    }
-    // Appended only when set, as `storage_view_slots`.
     if !inputs.ycbcr_in_place.is_empty() {
         h.bytes(b"ycbcr-in-place")
             .bytes(format!("{:?}", inputs.ycbcr_in_place).as_bytes());
@@ -438,10 +433,6 @@ pub fn function_key(
     if inputs.depth_compare_clamp_mask != 0 {
         h.bytes(b"depth-compare-clamp")
             .bytes(&inputs.depth_compare_clamp_mask.to_le_bytes());
-    }
-    // Appended only when set.
-    if inputs.read_only_tests {
-        h.bytes(b"read-only-tests");
     }
     // Appended only when set.
     if inputs.threadgroup_size_matches_tile_size {

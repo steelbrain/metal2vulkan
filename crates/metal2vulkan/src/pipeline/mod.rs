@@ -117,16 +117,15 @@ pub use descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 pub use graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, FragmentImageblock, GraphicsState,
-    ImageblockMechanism, InputAttachmentUse, LineBandState, ShadowStencilUse, StorageAttachmentUse,
-    StorageAttachmentView, TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, GraphicsState, InputAttachmentUse,
+    LineBandState, TessellationState,
 };
 pub use indirect_draws::IndirectDrawLayout;
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
     LevelReads, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
     PushPlacement, SampledLevels, SamplerArray, SamplerLevels, SamplerSlot, SlotInterface,
-    SnapshotRefusal, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
+    TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 pub use layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -159,8 +158,7 @@ pub use crate::lower::simd::workgroup::arena_bytes;
 pub use sym::{
     AccelerationStructureLevel, AirUserKey, Axis, CombinedSampler, HandleClass, ImageAccess,
     ImageDim, ImageHandleClass, PushField, ResourceKind, ResourceSlot, SampledType, SamplerRef,
-    SlotClass, SlotRef, SnapshotForm, SpecKey, Stage, StorageFormatClass, Symbol, SyntheticBinding,
-    VaryingKey,
+    SlotClass, SlotRef, SpecKey, Stage, StorageFormatClass, Symbol, SyntheticBinding, VaryingKey,
 };
 pub use vertex::{PulledAttribute, VertexAttribute, VertexBinding, VertexInputState, VertexStride};
 

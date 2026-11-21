@@ -7,9 +7,8 @@
 //!   owned fixture `engine/stage_io_tail`'s `tail_vertex_bool` returns such a struct.
 //! - Only the entry reads the `SampleMask` input: where the entry wraps the body (an interlock; the
 //!   loop over the covered samples), the body reads the entry's copy. SPIRV-Cross declares the
-//!   input a scalar in the entry and passes it to a function as an array. The owned fixtures
-//!   `engine/msf_fetch_ms`'s `msf_fetch_mask_in` (the interlocked storage form of a framebuffer
-//!   fetch) and `engine/coverage_loop`'s `cov_loop_record` (the loop) read it.
+//!   input a scalar in the entry and passes it to a function as an array. The owned fixture
+//!   `engine/coverage_loop`'s `cov_loop_record` (the loop) reads it.
 //!
 //! And one form that keeps MoltenVK's pipeline creation within the ceiling: SPIRV-Cross
 //! force-inlines every function it writes, so Metal's back end compiles a routine once per call. A
@@ -27,14 +26,10 @@ use std::path::Path;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Error;
 use crate::library::Library;
-use crate::metal::PixelFormat;
 use crate::pipeline::testing::{
     engine_dir, link_standalone, llvm_assemble, moltenvk_msl_compile, AssembleError,
 };
-use crate::pipeline::{
-    ColorAttachmentDescriptor, FramebufferFetchInputs, FunctionDescriptor, LoweringInputs,
-    RenderPipelineDescriptor, StageSource,
-};
+use crate::pipeline::{FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, StageSource};
 use crate::spirv::testing::check_words_valid;
 use crate::Budget;
 
@@ -200,49 +195,6 @@ fn a_bool_vector_member_is_held_as_words() {
             .unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         compiles_as_moltenvk_msl(&stem, &words, &format!("{stem} tail_vertex_bool"));
     }
-}
-
-/// `msf_fetch_mask_in` reads `[[sample_mask]]` beside a framebuffer fetch. Wherever it compiles to
-/// the interlocked storage form (the entry calls the body inside the critical section), at one and
-/// four samples, only the entry reads the `SampleMask` input; every module passes L3 and, on macOS,
-/// compiles as MoltenVK's MSL.
-#[test]
-fn only_the_entry_reads_the_coverage_of_an_interlocked_body() {
-    let Some(lib) = library("msf_fetch_ms") else {
-        return;
-    };
-    let mut wrapped = 0;
-    for (stem, dev) in devices() {
-        for samples in [1u32, 4] {
-            let what = format!("{stem} msf_fetch_mask_in at {samples}");
-            let colors = vec![Some(ColorAttachmentDescriptor::new(
-                PixelFormat::RGBA32Float,
-            ))];
-            let mut inputs = LoweringInputs::new();
-            inputs.framebuffer_fetch =
-                Some(FramebufferFetchInputs::of(0..1, &colors, false, false, 1));
-            inputs.multisampled = samples > 1;
-            let f = FunctionDescriptor::new(lib.function("msf_fetch_mask_in").expect("fragment"));
-            let c = match dev.compile_function(&f, &inputs, &Budget::standard()) {
-                Ok(c) => c,
-                Err(Error::Unsupported(_) | Error::NeedsInput(_)) => continue,
-                Err(e) => panic!("{what}: {e}"),
-            };
-            let words = link_standalone(c.artifact(), dev.profile())
-                .unwrap_or_else(|e| panic!("{what}: link: {e}"))
-                .1;
-            let functions = instructions(&words)
-                .iter()
-                .filter(|(op, _)| *op == OP_FUNCTION)
-                .count();
-            wrapped += usize::from(functions > 1);
-            assert!(!sample_mask_input_outside_entry(&words), "{what}");
-            check_words_valid(&words, &c.artifact().requirements, dev.profile())
-                .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            compiles_as_moltenvk_msl(&stem, &words, &what);
-        }
-    }
-    assert!(wrapped >= 2, "{wrapped} interlocked modules");
 }
 
 /// The loop over the covered samples of `cov_loop_record` at four samples reads the coverage in

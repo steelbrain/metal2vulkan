@@ -10,14 +10,10 @@
 //! Specialized with the read dead (`dfk_reads` false, `dfk_weight` zero), each function reads
 //! nothing of the attachment, so on every committed profile its pipeline is the one of a function
 //! that declares no color input: color 0 an ordinary color attachment that the device blends
-//! where the pipeline blends, no storage attachment (no pixel interlock, no blend computed in the
-//! shader) and no input attachment, its stages passing L3. Specialized with the read live, each
-//! reads color 0 in the form the device orders a fetch by: a written storage attachment and no
-//! color attachment where it orders fetch through the pixel interlock alone, an input attachment
-//! where it orders it through rasterization-order input attachments, and an input attachment
-//! ordered between draws alone where it has neither, its fragment stage noting
-//! `UnorderedFetchWithinDraw`. Before the fetch state was decided from the specialized function's uses, a dead read
-//! took the storage form on every interlock profile, with the blend computed in the shader.
+//! where the pipeline blends, and no input attachment, its stages passing L3. Specialized with the
+//! read live, each reads color 0 through an input attachment: ordered where the device orders it
+//! through rasterization-order input attachments, and ordered between draws alone elsewhere, its
+//! fragment stage noting `UnorderedFetchWithinDraw`.
 //! No GPU is used.
 
 use std::path::Path;
@@ -26,7 +22,7 @@ use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Error;
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
-use crate::lower::fragment::{inputs_order, interlock_orders};
+use crate::lower::fragment::inputs_order;
 use crate::metal::{BlendFactor, BlendOperation, DataType, PixelFormat};
 use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
@@ -106,20 +102,10 @@ fn pipeline(
     dev.compile_render_pipeline(&d, &Budget::standard())
 }
 
-/// Each storage attachment of `pipe`: its color and whether the function writes it.
-fn storage(pipe: &RenderPipeline) -> Vec<(u32, bool)> {
-    (pipe.graphics.storage_attachments.iter())
-        .map(|u| (u.color_index, u.writes))
-        .collect()
-}
-
 /// The dead specialization's misses in `pipe` (color 0 `blended` or not): each way it differs from
 /// the pipeline of a function that declares no color input.
 fn dead_misses(pipe: &RenderPipeline, blended: bool) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if !pipe.graphics.storage_attachments.is_empty() {
-        out.push("it takes the storage form");
-    }
     if !pipe.graphics.input_attachments.is_empty() {
         out.push("it takes an input attachment");
     }
@@ -137,8 +123,8 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
         return;
     };
     let mut misses = std::collections::BTreeMap::<&str, Vec<String>>::new();
-    // Pipelines checked dead, and live on an interlock profile.
-    let (mut dead, mut interlocked) = (0, 0);
+    // Pipelines checked dead.
+    let mut dead = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for entry in ENTRIES {
@@ -154,37 +140,24 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
                         .unwrap_or_else(|e| panic!("{what}, dead: L3: {e}"));
                 }
                 dead += 1;
-                let live = pipeline(&dev, &library, entry, true, blended);
-                if interlock_orders(&p) {
-                    let pipe = live.unwrap_or_else(|e| panic!("{what}, live: {e}"));
-                    assert_eq!(storage(&pipe), [(0, true)], "{what}, live");
-                    assert!(
-                        pipe.graphics.color_attachments[0].is_none(),
-                        "{what}, live: {:?}",
-                        pipe.graphics.color_attachments[0]
-                    );
-                    interlocked += 1;
-                } else {
-                    // Rasterization-order input attachments, or with neither ordered form input
-                    // attachments ordered between draws alone, noted.
-                    let pipe = live.unwrap_or_else(|e| panic!("{what}, live: {e}"));
-                    let read: Vec<u32> = (pipe.graphics.input_attachments.iter())
-                        .map(|u| u.color_index)
-                        .collect();
-                    assert_eq!(read, [0], "{what}, live");
-                    assert_eq!(storage(&pipe), [], "{what}, live");
-                    let noted = (pipe.stages.iter()).any(|s| {
-                        (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
-                    });
-                    assert_eq!(noted, !inputs_order(&p), "{what}, live");
-                }
+                // Rasterization-order input attachments, or input attachments ordered between
+                // draws alone, noted.
+                let pipe = pipeline(&dev, &library, entry, true, blended)
+                    .unwrap_or_else(|e| panic!("{what}, live: {e}"));
+                let read: Vec<u32> = (pipe.graphics.input_attachments.iter())
+                    .map(|u| u.color_index)
+                    .collect();
+                assert_eq!(read, [0], "{what}, live");
+                let noted = (pipe.stages.iter()).any(|s| {
+                    (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
+                });
+                assert_eq!(noted, !inputs_order(&p), "{what}, live");
             }
         }
     }
-    eprintln!("{dead} dead pipelines, {interlocked} live interlocked ones");
+    eprintln!("{dead} dead pipelines");
     for (kind, whats) in &misses {
         eprintln!("{}: {kind} (first: {})", whats.len(), whats[0]);
     }
     assert!(misses.is_empty(), "{misses:#?}");
-    assert!(interlocked > 0, "no interlock profile checked");
 }

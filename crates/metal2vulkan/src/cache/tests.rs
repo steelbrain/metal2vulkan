@@ -537,31 +537,6 @@ fn the_version_190_members_round_trip() {
     assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
 }
 
-/// The fields format version 193 adds encode and decode with the fact and the pipeline state that
-/// carry them: `RuntimeFact::FragmentImageblock`'s and `FragmentImageblock`'s `data_size` and
-/// `alignment`.
-#[test]
-fn the_version_193_fields_round_trip() {
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::{FragmentImageblock, ImageblockMechanism};
-    let fact = RuntimeFact::FragmentImageblock {
-        words: 3,
-        writes: true,
-        master: [5; 32],
-        data_size: 11,
-        alignment: 2,
-    };
-    assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
-    let state = FragmentImageblock {
-        mechanism: ImageblockMechanism::StorageImageInterlock,
-        words: 8,
-        master: [6; 32],
-        data_size: 32,
-        alignment: 16,
-    };
-    assert_eq!(decode::<FragmentImageblock>(&encode(&state)), Ok(state));
-}
-
 /// The members format version 187 appends encode and decode, and each decodes as itself:
 /// `PushField::ViewportCount`, `RuntimeFact::ViewportCount`, and `IoRole::ViewportIndex`.
 #[test]
@@ -786,8 +761,7 @@ fn the_version_535_member_round_trips() {
 
 /// The members format versions 153, 154, 155, 157 and 161 joined from every side encode and
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
-/// `CombinedSampler`, `RuntimeFact::InterlockedFramebufferFetch` and
-/// `GraphicsState::storage_attachments`, `RuntimeFact::SrgbTexture` and
+/// `CombinedSampler`, `RuntimeFact::SrgbTexture` and
 /// `SrgbTexture`, and `PrecisionNote::HalfTexelConversion`,
 /// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
 /// `HandleClass::Sampler { compare, integer }` and
@@ -797,7 +771,6 @@ fn the_version_535_member_round_trips() {
 fn the_merged_members_round_trip_in_one_render_pipeline() {
     use crate::pipeline::artifact::{PrecisionNote, RuntimeDependency, SpecConstant};
     use crate::pipeline::facts::{Mechanism, RuntimeFact};
-    use crate::pipeline::graphics::StorageAttachmentUse;
     use crate::pipeline::layout::{BindingSource, DescriptorBinding, DescriptorSetLayout};
     use crate::pipeline::sym::{
         CombinedSampler, HandleClass, ResourceKind, SamplerRef, SpecKey, SyntheticBinding,
@@ -904,34 +877,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     if let Some(last) = p.layout.sets.last_mut() {
         last.bindings.extend(argument_samplers);
     }
-    p.graphics.storage_attachments.push(StorageAttachmentUse {
-        color_index: 0,
-        format: vk::Format::R8G8B8A8_UNORM,
-        writes: true,
-        formatless: false,
-        view: crate::pipeline::StorageAttachmentView::SamplePlanes { layers: 4 },
-        view_alias: Some(vk::Format::R32_UINT),
-        kept: vk::ColorComponentFlags::B,
-    });
-    p.dependencies.push(RuntimeDependency {
-        fact: RuntimeFact::InterlockedFramebufferFetch {
-            color: 0,
-            format: vk::Format::R8G8B8A8_UNORM,
-            writes: true,
-            early_tests: true,
-            kept: vk::ColorComponentFlags::A,
-            blend: Some(crate::pipeline::lower_inputs::BlendEquation {
-                source_rgb: crate::metal::BlendFactor::One,
-                destination_rgb: crate::metal::BlendFactor::OneMinusSourceAlpha,
-                rgb_operation: crate::metal::BlendOperation::Add,
-                source_alpha: crate::metal::BlendFactor::One,
-                destination_alpha: crate::metal::BlendFactor::Zero,
-                alpha_operation: crate::metal::BlendOperation::Add,
-            }),
-            rounded: true,
-        },
-        mechanism: Mechanism::RenderPassContract,
-    });
     p.dependencies.push(RuntimeDependency {
         fact: RuntimeFact::SrgbTexture { slot: texture },
         mechanism: Mechanism::Variant,
@@ -984,14 +929,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         sealed.dependencies.iter().any(|d| d.fact == fact),
         "{fact:?}"
     );
-    assert_eq!(sealed.graphics.storage_attachments.len(), 1);
-    assert!(sealed.dependencies.iter().any(|d| matches!(
-        d.fact,
-        RuntimeFact::InterlockedFramebufferFetch {
-            early_tests: true,
-            ..
-        }
-    )));
     assert!(sealed.dependencies.iter().any(|d| d.fact == ulong_view));
 }
 

@@ -3,21 +3,21 @@
 //! extended-range forms is refused, `fetch::codes_round_the_tile`).
 //!
 //! Such an attachment holds Metal's raw texels in its raw unsigned format, which no device blends.
-//! On a device that fetches in the pixel interlock the storage form computes the blend in the
-//! shader (`fetch`); on one that fetches through input attachments with rasterization-order access
-//! (lavapipe) the function computes it over the attachment's input attachment instead: its first
+//! On a device that fetches through input attachments with rasterization-order access (lavapipe)
+//! the function computes the blend over the attachment's input attachment: its first
 //! output's write reads the pixel's raw texel there (at the invocation's sample in a multisampled
 //! pipeline), decodes it to Metal's tile value (`extended_range::tile_value`, as a fetch reads it),
 //! blends the output over that by the device's arithmetic (`extended_range::blend::native`, the
-//! second source and blend color as the storage form reads them, `fetch::blend_second`,
-//! `fetch::blend_constant`),
+//! second source the function's index-1 output and the blend color push data,
+//! `fetch::blend_second`, `fetch::blend_constant`),
 //! and writes the kernel write's encode of the result as the raw texel through the output variable
 //! (`extended_range::encode`), the channels a write mask keeps taken from the texel read
 //! (`extended_range::encode_keeping`). The attachment then takes no Vulkan blend and every raw
 //! component is written (link, from `RuntimeFact::ExtendedRangeInputBlend`). Rasterization-order
 //! attachment access orders each fragment's read after every earlier fragment's write of the pixel,
-//! so each blend reads the codes the one before stored, as a draw of the storage form does (the
-//! announcement, `extended-range-blends-stored-codes`, stays the runtime's there).
+//! so each blend reads the codes the one before stored (the announcement,
+//! `extended-range-blends-stored-codes`, stays the runtime's there). On a device that does not
+//! order fetch so, the blend is refused (`fetch::unordered_extended_fetch`).
 //!
 //! There too an unblended write of some of the codes one word holds (`BGR10_XR`'s word, the
 //! two-plane forms' color word, `color_writes::merged_extended`), which no mask of the raw
@@ -31,16 +31,15 @@
 //! too ([`RotatedInputBlend`]): Metal blends the format as `RGBA8Unorm` with its channels rotated, so
 //! the first output's write reads the pixel's texel through the input attachment, rotates it into
 //! Metal's order, computes Metal's 8-bit unorm blend of the clamped output over it
-//! (`extended_range::Blend::unorm8`, `extended_range::blend::blend_unorm8`, as the storage form
-//! computes it), and writes the result through the output variable, which the stage interface
+//! (`extended_range::Blend::unorm8`, `extended_range::blend::blend_unorm8`), and writes the result through the output variable, which the stage interface
 //! rotates into the image's order as every output to such an attachment
 //! (`stage_io::output_part`); the device's conversion stores its code
 //! (`PrecisionNote::DeviceColorConversion`), and the descriptor's write mask, rotated, keeps the
 //! channels it leaves out. It states `RuntimeFact::RotatedInputBlend`, and link gives the
 //! attachment no Vulkan blend.
 //!
-//! The blend takes a `half4` or `float4` output under every factor, operation and write mask, as
-//! the storage form does (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
+//! The blend takes a `half4` or `float4` output under every factor, operation and write mask
+//! (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
 //! second source is the function's index-1 output, read from the returned value and stored nowhere
 //! else ([`select_second_output`]). A write of none of the format's channels stores nothing and
 //! blends nothing. A padded attachment's blend is built so too; a bfloat attachment's is Metal's
@@ -122,8 +121,8 @@ impl RotatedInputBlend {
 }
 
 /// Whether the device orders framebuffer fetch through rasterization-order input attachments,
-/// where this module computes an extended-range blend (on one that orders it through the pixel
-/// interlock, the storage form does, `fetch::interlock_orders`).
+/// where this module computes an extended-range blend (on another it is refused,
+/// `fetch::unordered_extended_fetch`).
 fn through_inputs(cx: &SelectCx<'_>) -> bool {
     fetch::inputs_order(cx.profile)
 }
@@ -384,7 +383,7 @@ fn rotated(
             cx.facts.insert(RuntimeFact::FramebufferFetch { color });
             // The result is the device's to convert to its code; the blend is Metal's where the
             // module states its math (Metal clamps the output first, so none of the output's
-            // arithmetic folds into it), as the storage form's is.
+            // arithmetic folds into it).
             cx.precision.insert(PrecisionNote::DeviceColorConversion);
             if cx.entry.compile.fast_math.is_none() {
                 let note = crate::lower::arith::output_precision::half_output_note(cx);

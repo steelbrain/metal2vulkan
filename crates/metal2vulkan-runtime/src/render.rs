@@ -531,8 +531,6 @@ fn draws(
             // the `SpecKey::SampleCount` constant, which the state's creation sets to its
             // `rasterSampleCount`, the count of every pass it draws in (`renders_into`).
             RuntimeFact::SampleCount => {}
-            // A colour moved into a storage form, which the runtime never moves.
-            RuntimeFact::MovableStorageWrites { .. } => {}
             // The pulled attributes and their layouts' strides of a post-tessellation function and
             // of a state made for indirect command buffers, which pulls every attribute: the
             // content's own descriptor, whose projection link checked. A stride set per bind is
@@ -815,10 +813,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         RenderPipelineKind::Tessellation
     } else if synthesized {
         RenderPipelineKind::SynthesizedStages
-    } else if g.fragment_imageblock.is_some() {
-        RenderPipelineKind::Imageblock
-    } else if g.shadow_stencil.is_some() {
-        RenderPipelineKind::ShaderStencil
     } else if !(g.dynamic_states.iter()).all(|state| DYNAMIC.contains(&dynamic(*state))) {
         RenderPipelineKind::DynamicState
     } else if unenabled {

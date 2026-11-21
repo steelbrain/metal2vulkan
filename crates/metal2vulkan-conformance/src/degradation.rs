@@ -165,8 +165,6 @@ pub enum Degradation {
     CoverageReadsRoundedAlpha,
     /// `metal2vulkan-degrade-device-alpha-coverage`.
     DeviceAlphaCoverage,
-    /// `metal2vulkan-degrade-unmeasured-fetch-blend`.
-    UnmeasuredFetchBlend,
     /// `metal2vulkan-degrade-unordered-fetch-within-draw`.
     UnorderedFetchWithinDraw,
     /// `metal2vulkan-degrade-native-logic-operation`.
@@ -263,7 +261,6 @@ impl Degradation {
         Degradation::DeviceSampleLevel,
         Degradation::CoverageReadsRoundedAlpha,
         Degradation::DeviceAlphaCoverage,
-        Degradation::UnmeasuredFetchBlend,
         Degradation::UnorderedFetchWithinDraw,
         Degradation::NativeLogicOperation,
         Degradation::NativeFloat8,
@@ -391,7 +388,6 @@ impl Degradation {
                 "metal2vulkan-degrade-coverage-reads-rounded-alpha"
             }
             Degradation::DeviceAlphaCoverage => "metal2vulkan-degrade-device-alpha-coverage",
-            Degradation::UnmeasuredFetchBlend => "metal2vulkan-degrade-unmeasured-fetch-blend",
             Degradation::UnorderedFetchWithinDraw => {
                 "metal2vulkan-degrade-unordered-fetch-within-draw"
             }
@@ -483,7 +479,6 @@ impl Degradation {
             PrecisionNote::DeviceSampleLevel => Degradation::DeviceSampleLevel,
             PrecisionNote::CoverageReadsRoundedAlpha => Degradation::CoverageReadsRoundedAlpha,
             PrecisionNote::DeviceAlphaCoverage => Degradation::DeviceAlphaCoverage,
-            PrecisionNote::UnmeasuredFetchBlend => Degradation::UnmeasuredFetchBlend,
             PrecisionNote::UnorderedFetchWithinDraw => Degradation::UnorderedFetchWithinDraw,
             PrecisionNote::NativeLogicOperation => Degradation::NativeLogicOperation,
             PrecisionNote::NativeFloat8 => Degradation::NativeFloat8,

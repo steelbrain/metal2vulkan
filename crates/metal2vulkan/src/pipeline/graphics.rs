@@ -7,9 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::air::container::Hash256;
 use crate::device::requirements::{VkFeature, VkProperty};
-use crate::device::DeviceProfile;
 use crate::error::{
     Attachment, Capability, Error, Feature, InternalError, InternalKind, Unsupported,
 };
@@ -62,9 +60,8 @@ pub struct GraphicsState {
     /// `VK_SUBPASS_DESCRIPTION_RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_BIT_EXT` and the
     /// pipeline's color blend state with
     /// `VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT`, and
-    /// the pipeline's requirements name the feature. A device without the feature but with
-    /// `fragmentShaderPixelInterlock` takes no input attachment: a fetch there is the interlocked
-    /// storage form or refused. A device with neither reads them without this flag: the consumer
+    /// the pipeline's requirements name the feature. A device without it reads them without this
+    /// flag: the consumer
     /// then orders each draw that reads them after the color writes of the earlier draws of its
     /// subpass, and each draw that writes a color after the input attachment reads of the earlier
     /// ones, by a barrier of the subpass's dependency on itself (by region) between the two, which
@@ -87,10 +84,6 @@ pub struct GraphicsState {
     /// its stages are the synthesized vertex and tessellation control stages, then the function's
     /// evaluation stage, then the fragment stage.
     pub tessellation: Option<TessellationState>,
-    /// The render pass's fragment imageblock, when the fragment function reads or writes it: the
-    /// consumer binds the pass's imageblock storage to every draw of the pass
-    /// (`WriteSource::Imageblock`).
-    pub fragment_imageblock: Option<FragmentImageblock>,
     /// The vertex function (a post-tessellation vertex function included) writes memory
     /// (`StageInterface::writes_memory`): each run of the pipeline's vertex stage repeats its
     /// side effects. A rate-mapped pass drawn region by region records each draw once per region,
@@ -108,26 +101,6 @@ pub struct GraphicsState {
     /// one, and the runtime refuses it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_viewport_index: bool,
-    /// The color attachments the fragment function reads, and may write, as storage images
-    /// inside the ordered pixel interlock (framebuffer fetch on a device without
-    /// `rasterizationOrderColorAttachmentAccess`): each such attachment's entry of
-    /// `color_attachments` is `None`, its subpass color reference is `VK_ATTACHMENT_UNUSED`, and
-    /// the consumer binds a 2D view of the attachment's image as a storage image
-    /// (`WriteSource::TileAttachment`) in `GENERAL` layout, over the pixels of the render pass; in
-    /// a pipeline of more than one sample the image has `rasterization_samples` samples, or, where
-    /// the attachment's `view` is [`StorageAttachmentView::SamplePlanes`], the consumer binds a
-    /// 2D-array view of a single-sample image of one layer per sample in its place. See
-    /// [`StorageAttachmentUse`] for the consumer contract.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub storage_attachments: Vec<StorageAttachmentUse>,
-    /// The fragment function's `[[stencil]]` output is a shader-side stencil over a shadow of
-    /// the pass's stencil attachment: on a device without `VK_EXT_shader_stencil_export`, the
-    /// function applies Metal's stencil test and operations itself, inside the ordered pixel
-    /// interlock. `None` for every other pipeline, and for one whose pass has no stencil
-    /// attachment (the function then tests nothing, as Metal's output reaches no attachment).
-    /// See [`ShadowStencilUse`] for the consumer contract.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shadow_stencil: Option<ShadowStencilUse>,
     /// A render pipeline variant that draws its lines as bands of triangles
     /// (`VariantKey::line_band`, `pipeline::link::band`): its `topology` is `PATCH_LIST` (never
     /// dynamic), its stages the vertex stage, the band's synthesized tessellation control and
@@ -176,9 +149,7 @@ pub struct GraphicsState {
     pub fragment_writes_memory: bool,
     /// The color attachments the fragment function may write, as a mask: bit `n` for color
     /// attachment `n`. Each attachment that a first (`[[color(n)]]`, index 0) output of the
-    /// function names is set, whether the function writes it through an output variable or, for
-    /// an attachment it reads in the interlocked storage form, through its storage image. It is
-    /// decided from the stage's outputs, which come from the AIR's output metadata of the entry its
+    /// function names is set. It is decided from the stage's outputs, which come from the AIR's output metadata of the entry its
     /// function constants specialized, never from names.
     ///
     /// An attachment not set is one the function never writes:
@@ -211,15 +182,6 @@ pub struct GraphicsState {
     /// or declares `[[early_fragment_tests]]` does; the consumer then passes no mask.
     #[cfg_attr(feature = "serde", serde(default))]
     pub sample_mask: Option<u32>,
-    /// The fragment function reads textures through snapshots (`VariantKey::snapshot_textures`):
-    /// each draw of the pipeline is drawn twice in its subpass, the texture's attachment in
-    /// `VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`, first with every color write mask 0,
-    /// then with the pipeline's own (`PushHole::SnapshotPhase`), which it sets for every color
-    /// blend element: `dynamic_states` holds `VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT`. The consumer
-    /// creates the pipeline with `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`. Its
-    /// requirements name `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub snapshot_reads: bool,
     /// `VkPipelineColorBlendStateCreateInfo::logicOp` with `logicOpEnable`: the descriptor's
     /// private `logicOperation`
     /// ([`PrivateRenderState::logic_operation`](crate::pipeline::PrivateRenderState::logic_operation)),
@@ -364,11 +326,8 @@ impl GraphicsState {
             max_vertex_amplification_count: 1,
             declares_layer: false,
             tessellation: None,
-            fragment_imageblock: None,
             vertex_writes_memory: false,
             writes_viewport_index: false,
-            storage_attachments: Vec::new(),
-            shadow_stencil: None,
             line_band: None,
             writes_point_size: false,
             writes_depth: false,
@@ -377,7 +336,6 @@ impl GraphicsState {
             fragment_writes_memory: false,
             color_outputs: 0,
             sample_mask: None,
-            snapshot_reads: false,
             logic_op: None,
         }
     }
@@ -570,9 +528,6 @@ fn dynamic_state_feature(state: vk::DynamicState) -> Result<Option<VkFeature>, E
         // `VK_EXT_extended_dynamic_state2`'s first feature (core in Vulkan 1.3 without one), made
         // dynamic only where the profile has it.
         D::PRIMITIVE_RESTART_ENABLE => Some(VkFeature::ExtendedDynamicState2),
-        // `VK_EXT_extended_dynamic_state3`'s color write masks, dynamic only in a pipeline that
-        // reads through snapshots (`GraphicsState::snapshot_reads`).
-        D::COLOR_WRITE_MASK_EXT => Some(VkFeature::ExtendedDynamicState3ColorWriteMask),
         other => {
             return Err(Error::Internal(InternalError::new(
                 InternalKind::Invariant,
@@ -583,56 +538,6 @@ fn dynamic_state_feature(state: vk::DynamicState) -> Result<Option<VkFeature>, E
             )))
         }
     })
-}
-
-/// How a render pipeline's fragment function reaches the render pass's imageblock.
-///
-/// Metal keeps a fragment imageblock in tile memory: per pixel, for the whole render pass, its
-/// contents undefined when the pass begins, and every pipeline of the pass that declares
-/// `[[imageblock_data]]` sees the same bytes at its layout's offsets.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FragmentImageblock {
-    /// The representation the profile's capabilities chose.
-    pub mechanism: ImageblockMechanism,
-    /// The 32-bit words of each pixel's cell the function reaches: the pass's storage needs at
-    /// least this many, and the largest over the pass's pipelines.
-    pub words: u32,
-    /// The fingerprint of the master layout the fragment function's views view: SHA-256 over
-    /// its data size and the layout's Merkle digest (SHA-256 over each member's offset, size,
-    /// array length, user key, and nested layout's digest). Equal fingerprints are structurally
-    /// equal masters. A view of another master of the same `data_size` and `alignment` in the
-    /// same pass reaches the same bytes at its own offsets, as each layout's words in the storage
-    /// hold them (measured on an M3 Max and an M4 without Metal's API validation, which stops
-    /// such a pass); which bytes one of another size or alignment reaches is not read in full, so a
-    /// consumer refuses such a pass (the translator sees one pipeline at a time and cannot).
-    pub master: Hash256,
-    /// The bytes of a cell (`air.imageblock_data_size`).
-    pub data_size: u32,
-    /// The alignment Metal states for the fragment function's views (`air.arg_type_align_size`:
-    /// their master layout's). With `data_size` it gives Metal's `imageblockSampleLength` of the
-    /// pipeline (measured on an M3 Max): `data_size` plus the bytes its color attachments pack to,
-    /// rounded up to 8 and then to `alignment`.
-    pub alignment: u32,
-}
-
-/// The representation of a fragment imageblock.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ImageblockMechanism {
-    /// One coherent `R32Uint` 2D-array storage image per render pass instance: layer `w` holds
-    /// word `w` of the cell of pixel `(x, y)` at texel `(x, y)`, the pixel's framebuffer
-    /// coordinate (`FragCoord`). The fragment function reads its input view and writes its
-    /// output view inside the ordered pixel-interlock critical section
-    /// (`fragmentShaderPixelInterlock`), which orders overlapping fragments of the pass in
-    /// primitive order across draws, as Metal's raster order groups do. The consumer creates the
-    /// image with `STORAGE` usage, an extent covering the pass's render area's offset plus its
-    /// extent (texel `(x, y)` is framebuffer pixel `(x, y)`, not relative to the area), and at
-    /// least `words` layers, keeps it in `GENERAL` layout for the whole pass, binds it to every
-    /// draw of the pass, and draws only pipelines of one `master` in the pass.
-    StorageImageInterlock,
 }
 
 /// One color attachment's format, write mask, and blend state.
@@ -712,271 +617,6 @@ impl BlendState {
                 vk::BlendFactor::CONSTANT_ALPHA | vk::BlendFactor::ONE_MINUS_CONSTANT_ALPHA
             )
         })
-    }
-}
-
-/// A color attachment a render pipeline's fragment function reads, and may write, as a storage
-/// image inside the ordered pixel interlock (`GraphicsState::storage_attachments`).
-///
-/// The draw orders every fragment's read, body, and write of a pixel after the earlier fragments
-/// of the pixel in primitive order, across draws and instances of the subpass, as Metal orders
-/// framebuffer fetch. The consumer:
-///
-/// - leaves the attachment out of the color attachments of every subpass a pipeline that names
-///   it draws in (its color reference there is `VK_ATTACHMENT_UNUSED`): an image a subpass
-///   writes as an attachment is no storage image of the same subpass;
-/// - binds the image `view` names, in `format` with the identity mapping, as the plan's
-///   `WriteSource::TileAttachment { color_index, format, view }` (which carries the same `view`),
-///   in `GENERAL` layout, texel `(x, y)` being framebuffer pixel `(x, y)` (so the image covers
-///   the render area's offset plus its extent):
-///   - [`StorageAttachmentView::Attachment`]: a 2D view of the attachment's own image, of the
-///     render pass's layer and level, the image created with `STORAGE` usage (beside its own).
-///     In a pipeline of more than one sample that image is the pass's multisampled attachment,
-///     of the pipeline's `GraphicsState::rasterization_samples`, the one sample count of the
-///     pipeline and its storage images, and the fragment function runs once per covered sample,
-///     reading and writing its own sample; the pipeline's requirements name
-///     `shaderStorageImageMultisample` and the count's `storageImageSampleCounts` bit;
-///   - [`StorageAttachmentView::SamplePlanes`] `{ layers }` (a pipeline of more than one sample
-///     on a device without multisampled storage images): a 2D-array view
-///     (`VK_IMAGE_VIEW_TYPE_2D_ARRAY`) of all `layers` layers of the attachment's sample planes,
-///     a single-sample 2D-array image the consumer keeps beside the attachment, of `format`, with
-///     `STORAGE` usage and `layers` (the pipeline's `rasterization_samples`) layers, never a 2D
-///     view and never the multisampled attachment itself. The fragment function runs once per
-///     covered sample and reads and writes sample `s` of pixel `(x, y)` at texel `(x, y)` of
-///     layer `s`, so the planes need no multisampled storage image and no
-///     `storageImageSampleCounts` bit. The consumer fills layer `s` from sample `s` of the
-///     attachment's image before the draws (no copy changes a sample count, so a per-sample
-///     shader read does), and after them writes layer `s` back into sample `s` (a sample-rate
-///     pass that writes only its own sample), or, where the pass resolves the attachment or the
-///     attachment is memoryless, resolves from the planes as Metal resolves the samples;
-/// - makes earlier writes of the image visible to the fragment shader's storage reads before
-///   the draws (a color attachment write of an earlier subpass or pass, a transfer, a load
-///   operation), and the fragment shader's storage writes visible to later uses after them.
-///
-/// A pass of more than one layer, and an amplified draw, are not implemented: the binder refuses
-/// them.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StorageAttachmentUse {
-    pub color_index: u32,
-    /// The attachment's format, which the storage view takes.
-    pub format: vk::Format,
-    /// The fragment function writes the attachment (otherwise it only reads it).
-    pub writes: bool,
-    /// The function declares the storage image without a format (`Unknown`), so the view's
-    /// format ([`view_format`](Self::view_format)) supports storage reads (and, when `writes`,
-    /// writes) without one (`VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` and its write
-    /// twin); otherwise the declaration names the view's format's SPIR-V image format.
-    pub formatless: bool,
-    /// The image the consumer binds and how it views it: the attachment's own image, or its
-    /// sample planes (see the type's docs). The plan's `WriteSource::TileAttachment` carries the
-    /// same value.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub view: StorageAttachmentView,
-    /// Where `Some`, the storage view is in this format, not in `format`, which stays the
-    /// attachment's own ([`view_alias_of`](Self::view_alias_of) decides it from `format` and the
-    /// device):
-    ///
-    /// - an 8-bit sRGB attachment's unsigned-integer format of its texel size (`R32_UINT` for a
-    ///   4-byte texel): its format has no storage access, and the function unpacks the texels in
-    ///   `format`'s byte order and decodes and encodes them itself, by Metal's measured
-    ///   conversions;
-    /// - a BGRA-order attachment's RGBA-order twin (`R8G8B8A8_UNORM` for `B8G8R8A8_UNORM`,
-    ///   `A2B10G10R10_UNORM_PACK32` for `A2R10G10B10_UNORM_PACK32`) on a device that neither
-    ///   reads nor writes `format` without a format (SPIR-V names no image format for it): the
-    ///   function exchanges red and blue on every read and write, and the device converts each
-    ///   channel as it converts `format`'s.
-    ///
-    /// The consumer binds such a view of an image made with `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT`
-    /// (and `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` where `format` has no storage access), whose
-    /// `VkImageFormatListCreateInfo` lists `format` and this format, with `STORAGE` usage (the
-    /// sample planes of [`StorageAttachmentView::SamplePlanes`] in this format); its draws that
-    /// do not fetch render the image through a view in `format`. `None` for any other format, and
-    /// on a device that accesses a BGRA-order format without one: the view is in `format`.
-    #[cfg_attr(feature = "serde", serde(default, alias = "uint_view"))]
-    pub view_alias: Option<vk::Format>,
-    /// The channels the function's write keeps from the texel it reads first, by the pipeline's
-    /// write mask: empty where it does not write the attachment or the mask covers every channel of
-    /// the format, all four where it covers none of them (the write stores nothing), else those of
-    /// the format the mask leaves out. One module serves every write mask that keeps some of a
-    /// format's channels (a blended 8-bit unorm attachment with alpha: each of alpha alone, one
-    /// color channel, and more): the binder writes these into each draw's push bytes, where the
-    /// function reads them. Nothing for the consumer to do.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub kept: vk::ColorComponentFlags,
-}
-
-/// The image a storage view of a color attachment binds, and how it is viewed
-/// (`StorageAttachmentUse::view`, `WriteSource::TileAttachment`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum StorageAttachmentView {
-    /// A 2D view (`VK_IMAGE_VIEW_TYPE_2D`) of the attachment's own image, of the pass's layer
-    /// and level: single-sample in a pass of one sample, of the pass's samples in a multisampled
-    /// pass.
-    #[default]
-    Attachment,
-    /// A 2D-array view (`VK_IMAGE_VIEW_TYPE_2D_ARRAY`) of every layer of the attachment's sample
-    /// planes: a single-sample 2D-array image of `layers` layers (the pipeline's
-    /// `rasterization_samples`), layer `s` holding sample `s` of each pixel, which the consumer
-    /// fills from the multisampled attachment before the draws and writes back (or resolves)
-    /// after them.
-    SamplePlanes { layers: u32 },
-}
-
-impl StorageAttachmentUse {
-    /// Color attachment `color_index` of `format` bound as a storage image through `view`, written
-    /// where `writes`, declared without a format where `formatless`.
-    pub fn new(
-        color_index: u32,
-        format: vk::Format,
-        writes: bool,
-        formatless: bool,
-        view: StorageAttachmentView,
-    ) -> StorageAttachmentUse {
-        StorageAttachmentUse {
-            color_index,
-            format,
-            writes,
-            formatless,
-            view,
-            view_alias: None,
-            kept: vk::ColorComponentFlags::empty(),
-        }
-    }
-
-    /// The use whose write keeps `kept` from the texel ([`kept`](Self::kept)).
-    pub fn with_kept(self, kept: vk::ColorComponentFlags) -> StorageAttachmentUse {
-        StorageAttachmentUse { kept, ..self }
-    }
-
-    /// The use with its storage view in `view_alias` ([`view_alias`](Self::view_alias)).
-    pub fn with_view_alias(self, view_alias: vk::Format) -> StorageAttachmentUse {
-        StorageAttachmentUse {
-            view_alias: Some(view_alias),
-            ..self
-        }
-    }
-
-    /// The format of the storage view: [`view_alias`](Self::view_alias) where it is set, else
-    /// `format`.
-    pub fn view_format(&self) -> vk::Format {
-        self.view_alias.unwrap_or(self.format)
-    }
-
-    /// The format other than `format` a fetching draw views a color attachment of `format` in,
-    /// where a fragment function reads it in the storage form on `profile`
-    /// ([`view_alias`](Self::view_alias)): `R32_UINT` for `B8G8R8A8_SRGB` and `R8G8B8A8_SRGB`,
-    /// `R16_UINT` for `R8G8_SRGB` and `R8_UINT` for `R8_SRGB`, on every device; `R8G8B8A8_UNORM`
-    /// for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32` for `A2R10G10B10_UNORM_PACK32` where
-    /// the device neither reads nor writes the attachment's format without a format, and stores
-    /// the twin and declares it (without a format, or by its SPIR-V image format,
-    /// `shaderStorageImageExtendedFormats` for an extended one); `None` for any other format and
-    /// device. The compile layer and a consumer that makes an attachment's image before it knows
-    /// the pipeline (a memoryless attachment's backing, a render target's free usage) both take
-    /// it from here, so the image is made mutable to the view the pipeline binds. The compile
-    /// layer sets an sRGB view only where it builds the form (today the four-byte formats).
-    pub fn view_alias_of(format: vk::Format, profile: &DeviceProfile) -> Option<vk::Format> {
-        crate::metal::format::fetch_view_alias(format, profile)
-    }
-
-    /// The format usages the consumer's image and view need: `StorageImage` of the view's
-    /// format, and the without-format accesses of a formatless declaration.
-    pub(crate) fn format_usages(
-        &self,
-    ) -> Vec<(vk::Format, crate::device::requirements::FormatUsage)> {
-        use crate::device::requirements::FormatUsage as U;
-        let view = self.view_format();
-        let mut out = vec![(view, U::StorageImage)];
-        if self.formatless {
-            out.push((view, U::StorageImageReadWithoutFormat));
-            if self.writes {
-                out.push((view, U::StorageImageWriteWithoutFormat));
-            }
-        }
-        out
-    }
-}
-
-/// A render pipeline whose fragment function's `[[stencil]]` output is a shader-side stencil
-/// (`GraphicsState::shadow_stencil`).
-///
-/// Metal tests and writes the stencil with the function's output as the reference of both faces
-/// (its low 8 bits): `(r & readMask) cmp (s & readMask)`, then `s' = (s & ~writeMask) |
-/// (op(s, r) & writeMask)`, before the depth test, per sample in primitive order. Without
-/// `VK_EXT_shader_stencil_export` no fixed-function state takes a per-fragment reference, so the
-/// function does it: inside the ordered pixel interlock it reads the pixel's value from a shadow
-/// of the stencil, applies the face's test and operation from the encoder's state
-/// (`BindState::depth_stencil`, written as `PushField::ShadowStencilState`), writes the shadow,
-/// and kills a fragment that fails. A discarded fragment changes nothing. The depth test stays
-/// fixed-function, after the function. In a pipeline of more than one sample the shadow holds
-/// each sample, the function tests each sample of its coverage, and its `SampleMask` output keeps
-/// the samples that pass.
-///
-/// The consumer, for each draw with such a pipeline:
-///
-/// - creates the pipeline with the stencil test disabled (`stencilTestEnable` false, or
-///   `vkCmdSetStencilTestEnable(false)` where the pipeline makes it dynamic): the function is the
-///   test, and the attachment's stencil is not written during the draw;
-/// - keeps the shadow: a 2D image of `format` and `samples` samples (the pipeline's) with
-///   `STORAGE` and transfer usage, of the stencil attachment's extent, whose texel `(x, y)` (each
-///   sample) is framebuffer pixel `(x, y)` (that sample), bound in `GENERAL` layout as the plan's
-///   `WriteSource::ShadowStencil`;
-/// - copies the stencil into the shadow before the draw and back after it, outside the render
-///   pass: of one sample, `vkCmdCopyImageToBuffer` of the attachment's stencil aspect (one byte
-///   per texel) then `vkCmdCopyBufferToImage` into the shadow, and the reverse afterwards; of more,
-///   `vkCmdCopyImage` between the stencil aspect and the shadow, both ways, which
-///   `VK_KHR_maintenance8`'s depth/stencil-to-color copies allow (no buffer copy takes a
-///   multisampled image; the pipeline requires `maintenance8` then). A render pass instance
-///   that holds such a draw is therefore split around it: end the pass, copy in, begin it again
-///   loading every attachment, draw, end it, copy out, and begin it again. Consecutive such draws
-///   share one copy in and one copy out while nothing else writes the stencil between them. Each
-///   copy needs its barriers: attachment writes before the copy out of the stencil, the copy into
-///   the shadow before the fragment shader's storage reads and writes, those before the copy
-///   back, and that copy before the next attachment access;
-/// - sets `BindState::depth_stencil` to the encoder's `MTLDepthStencilDescriptor` for the draw.
-///   The binder refuses a state whose stencil write could depend on the depth test, typed as
-///   needing the extension: a depth attachment, a depth comparison other than `Always`, and a
-///   face whose depth-failure operation differs from its pass operation. The stencil references
-///   are unused (the function's output is the reference of both faces), and the front face is the
-///   pipeline's, from the encoder's winding.
-///
-/// The split costs a render pass instance per such draw (or run of draws). Synchronizing the
-/// shadow inside the pass (an input-attachment read of the stencil under a feedback-loop layout,
-/// and an in-pass write-back) would avoid it; that is a possible later optimisation, not part of
-/// this contract.
-///
-/// An amplified draw and a pass of more than one layer are not implemented: the binder refuses
-/// them. Alpha to coverage, which changes a fragment's samples before Metal's stencil test, is
-/// refused at link as needing the extension.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ShadowStencilUse {
-    /// The shadow's format, `R8_UINT`.
-    pub format: vk::Format,
-    /// The function declares the shadow without a format (`Unknown`), so the format supports
-    /// storage reads and writes without one (`VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`
-    /// and its write twin); otherwise the declaration names `R8ui`.
-    pub formatless: bool,
-    /// The shadow's samples: the pipeline's rasterization samples.
-    pub samples: u32,
-}
-
-impl ShadowStencilUse {
-    /// The format usages the consumer's shadow image and view need: `StorageImage`, and the
-    /// without-format accesses of a formatless declaration.
-    pub(crate) fn format_usages(
-        &self,
-    ) -> Vec<(vk::Format, crate::device::requirements::FormatUsage)> {
-        use crate::device::requirements::FormatUsage as U;
-        let mut out = vec![(self.format, U::StorageImage)];
-        if self.formatless {
-            out.push((self.format, U::StorageImageReadWithoutFormat));
-            out.push((self.format, U::StorageImageWriteWithoutFormat));
-        }
-        out
     }
 }
 

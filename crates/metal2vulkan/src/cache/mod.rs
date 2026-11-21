@@ -36,7 +36,7 @@ use std::fmt;
 pub use crate::air::container::Hash256;
 use crate::device::Device;
 use crate::pipeline::lower_inputs::StorageImageChoice;
-use crate::pipeline::sym::{SlotRef, SnapshotForm};
+use crate::pipeline::sym::SlotRef;
 use crate::vk;
 
 mod artifacts;
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2254;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 586;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 587;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -196,19 +196,6 @@ pub struct VariantKey {
     /// states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
-    /// Fragment texture slots the draw reads through a snapshot an earlier draw of the same
-    /// primitives took (`LoweringInputs::snapshot_textures`), each with the form the snapshot
-    /// keeps its texels in (`SnapshotForm::of` the slot's bound view): the slots
-    /// `BindShape::snapshot_textures` names, each one of the fragment stage's
-    /// `StageInterface::snapshot_textures`. The plan of a pipeline compiled under it states it,
-    /// and binds each slot's snapshot (`WriteSource::SnapshotTexels`, an image of the form's
-    /// `SnapshotForm::format`) and leaves which of its draws runs to the consumer
-    /// (`PushHole::SnapshotPhase`).
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, with = "crate::pipeline::serde_pairs")
-    )]
-    pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>,
     /// Texture slots whose function reads the two-plane YCbCr texture the shape binds there in
     /// place: every slot of a `RuntimeFact::YCbCrInPlace` the shape binds a texture whose planes
     /// are read so (`TextureShape::Texture::ycbcr_in_place`). Each such slot binds the planes'
@@ -376,24 +363,6 @@ pub struct VariantKey {
     /// (`FunctionTablesShape::bytes_class`). The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub addressed_function_tables: bool,
-    /// Color attachments the draw's render pass instance leaves out of its subpass, which its
-    /// draws read and write as storage images in the pixel interlock, that the fragment function
-    /// writes through its first output (`BindShape::interlocked_colors`): the variant's function
-    /// writes each through the interlocked storage form, as a function that fetches the color
-    /// writes it, so the draw records in that instance. Not a lowering input of its own: the render
-    /// pipeline's compile adds the colors to the fragment function's
-    /// `LoweringInputs::framebuffer_fetch`, whose exactness conditions refuse what the form does
-    /// not keep Metal's (a blend, among others).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub interlocked_colors: BTreeSet<u32>,
-    /// The draw's depth and stencil tests may drop fragments but write neither attachment and
-    /// count no visibility result (`BindShape::fragment_tests`), and the fragment function stores
-    /// a color through the interlocked storage form before the tests
-    /// (`RuntimeFact::TestedStorageWrites`): the variant whose function declares early fragment
-    /// tests (`LoweringInputs::read_only_tests`). The plan of a pipeline compiled under it states
-    /// it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub read_only_tests: bool,
     /// The runtime sampler slots of a `RuntimeFact::CubicSampler` that the shape binds to a
     /// sampler whose min or mag filter is `Cubic`, each with the bound word masked by
     /// `SamplerWord::CUBIC_STATE` (`LoweringInputs::cubic_samplers`): the variant whose function
@@ -535,7 +504,6 @@ impl VariantKey {
             && self.unit_axes == 0
             && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
-            && self.snapshot_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
             && self.ycbcr_planes_sampled.is_empty()
             && self.texel_rows.is_empty()
@@ -557,8 +525,6 @@ impl VariantKey {
             && self.line_band.is_none()
             && self.swizzled_storage.is_empty()
             && !self.addressed_function_tables
-            && self.interlocked_colors.is_empty()
-            && !self.read_only_tests
             && self.cubic_samplers.is_empty()
             && self.primitive_id_indices.is_none()
             && !self.quad_primitive_ids
@@ -643,12 +609,6 @@ impl VariantKey {
             .filter(|s| s.stage == stage)
             .copied()
             .collect();
-        out.snapshot_textures = self
-            .snapshot_textures
-            .iter()
-            .filter(|(s, _)| s.stage == stage)
-            .map(|(s, form)| (*s, *form))
-            .collect();
         out.ycbcr_in_place = self
             .ycbcr_in_place
             .iter()
@@ -720,7 +680,6 @@ impl VariantKey {
             out.dropped_colors = self.dropped_colors.clone();
             out.depth_clamp_range = self.depth_clamp_range;
             out.rotated_weights = self.rotated_weights;
-            out.read_only_tests = self.read_only_tests;
         }
         out.primitive_id_indices = self
             .primitive_id_indices

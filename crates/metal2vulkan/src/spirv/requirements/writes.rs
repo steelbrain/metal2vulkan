@@ -24,17 +24,10 @@
 //! The trace also ends at an `OpIAdd` whose one operand is a load of the address member, whatever
 //! the other: the guest does not hold the address, so no sum of the guest's has such an operand.
 //!
-//! The shader-side stencil's shadow (`Synthetic(ShadowStencil)`) is the product's too: its writes
-//! carry Metal's stencil test, which Metal applies per sample whether the function runs per pixel
-//! or per sample, so they do not make the function run per sample. An image write counts unless its
-//! image is a load of that binding.
-//!
-//! So is a color attachment's interlocked storage form (`TileAttachment`): its writes carry
-//! Metal's color attachment write, a
-//! color output, which Metal masks as it masks any (a sample mask, a failed test) and stores per
-//! sample whether the function runs per pixel or per sample, and which no other invocation or
-//! command reads but through the attachment. A multisampled pipeline's storage form runs per sample
-//! by its own `SampleId`. The function's other writes count as before.
+//! A tile function's color attachment (`TileAttachment`) is the product's too: its writes carry
+//! Metal's color attachment write, a color output, which no other invocation or command reads but
+//! through the attachment. An image write counts unless its image is a load of that binding. The
+//! function's other writes count as before.
 
 #[cfg(test)]
 mod tests;
@@ -93,8 +86,7 @@ fn class(m: &TypedModule, ptr: Value) -> BResult<StorageClass> {
 struct Status<'m> {
     /// The variables of the `Synthetic(ExecutionStatus)` binding.
     bindings: Vec<Value>,
-    /// The variables of the `Synthetic(ShadowStencil)`, `TileAttachment` and `SnapshotTexels`
-    /// bindings, and the loads of them.
+    /// The variables of the `TileAttachment` bindings, and the loads of them.
     shadows: Vec<Value>,
     /// The push block's variable.
     block: Option<Value>,
@@ -119,12 +111,7 @@ impl<'m> Status<'m> {
                     s.bindings.push(g.value);
                 }
                 GlobalKind::Resource(slot)
-                    if matches!(
-                        slot.kind,
-                        ResourceKind::Synthetic(SyntheticBinding::ShadowStencil)
-                            | ResourceKind::TileAttachment(_)
-                            | ResourceKind::SnapshotTexels(_)
-                    ) =>
+                    if matches!(slot.kind, ResourceKind::TileAttachment(_)) =>
                 {
                     s.shadows.push(g.value);
                 }
@@ -178,8 +165,8 @@ impl<'m> Status<'m> {
         Ok(s)
     }
 
-    /// Whether image `image` is the product's (the shadow of a shader-side stencil, the depth's
-    /// stand-in, a color's storage form or `half` shadow): a load of its binding.
+    /// Whether image `image` is the product's (a tile function's color attachment): a load of its
+    /// binding.
     fn shadow(&self, image: Value) -> bool {
         self.shadows.contains(&image)
     }

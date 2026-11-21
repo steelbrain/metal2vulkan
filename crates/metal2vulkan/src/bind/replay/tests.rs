@@ -340,7 +340,6 @@ fn run_preprocess_counted(
             PushHole::CommandRecordsAddress { offset, .. } => (offset, RECORDS),
             PushHole::ReplayRegionAddress { .. } => panic!("the preprocess reads no region"),
             PushHole::CaptureIndexAddress { .. } => panic!("the preprocess reads no index"),
-            PushHole::SnapshotPhase { .. } => panic!("the preprocess draws no snapshot"),
             PushHole::MergedDrawAddress { .. } => panic!("the preprocess draws no merged draw"),
         };
         push[offset as usize..offset as usize + 8].copy_from_slice(&address.to_le_bytes());

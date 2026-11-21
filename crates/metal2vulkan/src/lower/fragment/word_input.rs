@@ -3,8 +3,7 @@
 //!
 //! An attachment the device renders through a view of its word (`metal::format::WordAttachment`)
 //! has one component, which the device writes whole, so the device's write mask cannot keep a
-//! field of it. On a device that orders fetch through the pixel interlock the storage form merges
-//! the word (`fetch`); on one that orders it through input attachments with rasterization-order
+//! field of it. On a device that orders fetch through input attachments with rasterization-order
 //! access (lavapipe) the function reads the texel's word through the attachment's input attachment
 //! at its first output's write (at the invocation's sample in a multisampled pipeline) and stores
 //! Metal's word of the output (`stage_io::word_color::encode`) with the fields of the channels the

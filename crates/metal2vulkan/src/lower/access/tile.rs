@@ -89,9 +89,8 @@
 //! is not aliased onto one. Metal keeps it in the tile memory a fragment function's
 //! `[[imageblock_data]]` is in, each pixel's same bytes, for the whole pass (measured on an M4,
 //! `runtime::fragment_imageblock`). Its cells are the pass's imageblock storage
-//! (`SyntheticBinding::Imageblock`, a fragment imageblock's `R32Uint` 2D-array storage image,
-//! layer `w` word `w` of pixel `(x, y)`'s cell at texel `(x, y)`, which covers every pixel of
-//! every tile): the entry stages each word of every cell of its tile from the storage into the
+//! (`SyntheticBinding::Imageblock`, an `R32Uint` 2D-array storage image, layer `w` word `w` of
+//! pixel `(x, y)`'s cell at texel `(x, y)`, which covers every pixel of every tile): the entry stages each word of every cell of its tile from the storage into the
 //! threadgroup cells before the function runs, and back after it where the function may write
 //! them, as it stages attachments, a cell past the render area too. The function records
 //! `RuntimeFact::TileImageblock`, its size and alignment, which the consumer matches against the
@@ -327,8 +326,8 @@ pub struct TilePlan {
 }
 
 /// A tile function's explicit imageblock that stands alone (`TilePlan::pass_cells`): the pass's
-/// imageblock storage, `SyntheticBinding::Imageblock`, which the pass's fragment functions'
-/// imageblocks are in, each cell's words staged into the tile's cells and back.
+/// imageblock storage, `SyntheticBinding::Imageblock`, each cell's words staged into the tile's
+/// cells and back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PassCells {
     /// The function reaches its cells: the staging loads them.
@@ -1072,8 +1071,8 @@ pub fn declare(mb: &mut ModuleBuilder, access: &super::AccessPlan) -> BResult<Ti
         signed: false,
     })?;
     if plan.pass_cells().is_some() {
-        // The fragment functions' `R32Uint` 2D-array storage image (`lower::fragment::imageblock`):
-        // layer `w` is word `w` of every pixel's cell.
+        // The pass's `R32Uint` 2D-array storage image: layer `w` is word `w` of every pixel's
+        // cell.
         let ty = mb.ty(SType::Image(ImageType {
             sampled_type: u32_,
             dim: Dim::D2,

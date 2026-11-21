@@ -1410,10 +1410,6 @@ pub enum RenderPipelineKind {
     /// Stages the translator synthesizes beside the functions' but a tessellation's: lines drawn as
     /// bands of triangles.
     SynthesizedStages,
-    /// A fragment function that reaches the render pass's imageblock.
-    Imageblock,
-    /// A fragment function's stencil output applied by the shader.
-    ShaderStencil,
     /// A specialization the draw would set, beside the sample and amplification counts.
     Specialization,
     /// Dynamic state the translator asks for beyond what Vulkan 1.3 leaves dynamic.

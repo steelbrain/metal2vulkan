@@ -351,8 +351,8 @@ pub struct StageInterface {
     /// a buffer or a texture, or updates one atomically (`spirv::requirements::writes_memory`).
     /// Metal runs a multisampled fragment function with such a side effect once per covered
     /// sample. The `ExecutionStatus` buffer's words, which the resident-miss count updates, are not
-    /// the function's, nor a color's interlocked storage form's or `half` shadow's, which carry
-    /// Metal's color attachment write.
+    /// the function's, nor a tile function's color attachment's, which carry Metal's color
+    /// attachment write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_memory: bool,
     /// An object or mesh function's payload arena's bytes (`memory::arena::payload_bytes` of its
@@ -430,22 +430,6 @@ pub struct StageInterface {
     /// its helper invocations, clamped as the coordinate is. Empty for every other stage.
     #[cfg_attr(feature = "serde", serde(default))]
     pub own_pixel_textures: Vec<u32>,
-    /// Those of `own_pixel_textures` a draw can read through a snapshot an earlier draw of the
-    /// same primitives took, sorted (`spirv::requirements::snapshot_textures`): no value a fetch
-    /// of the slot returns reaches, directly or through a call, a derivative, a sample, a quad or
-    /// subgroup operation, a branch, an integer divisor, a dynamic vector index, or a store other
-    /// than to a `Function`, `Private` or `Output` variable, so a helper invocation's value of it
-    /// reaches no fragment's result and gives it no undefined behavior; and the function writes no
-    /// memory and holds no interlock. Its variant (`LoweringInputs::snapshot_textures`) reads the slot through
-    /// the snapshot. Empty for every other stage.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub snapshot_textures: Vec<u32>,
-    /// Why each slot of `own_pixel_textures` that `snapshot_textures` leaves out is left out:
-    /// every [`SnapshotRefusal`] that holds for it, sorted by slot and then by refusal, so a slot
-    /// may appear more than once. Empty for every other stage, and for a function compiled to read
-    /// slots through snapshots (`LoweringInputs::snapshot_textures`), which judges none.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>,
     /// The levels of its bound view that each texture slot's reads reach, one entry a slot, sorted
     /// by slot ([`LevelReads`]): what a runtime needs to tell whether a slot whose texture presents
     /// a color attachment of the draw's render pass instance at some level reads that level.
@@ -476,51 +460,6 @@ pub struct SamplerArray {
     pub slot: ResourceSlot,
     /// Each element's constexpr sampler, in element order.
     pub samplers: Vec<crate::pipeline::sym::SamplerRef>,
-}
-
-/// What leaves an own-pixel texture slot of a fragment function out of the slots a draw can read
-/// through a snapshot an earlier draw of the same primitives took
-/// (`StageInterface::snapshot_refusals`, `StageModule::snapshot_refusals`). A helper invocation
-/// reads a constant from the snapshot, so the slot is left out where a helper's value of it could
-/// reach another invocation's result, give it undefined behavior, or where the snapshot cannot be
-/// made beside the function. The first eight say where a value that a fetch of the slot reaches,
-/// through any instruction, phi, call, or `Function`, `Private` or `Output` variable, is used.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SnapshotRefusal {
-    /// It decides a conditional branch or a switch, but for a selection whose arms leave through
-    /// its merge alone and hold no derivative, implicit-level sample or level-of-detail query,
-    /// subgroup or quad operation, loop, or operand undefined at a value that is not a constant,
-    /// nor call a function that does (a helper may take either of those arms).
-    Branch,
-    /// It is an operand of a derivative.
-    Derivative,
-    /// It is an operand of a sample, a gather or a level-of-detail query of any image.
-    Sample,
-    /// It is an operand of a subgroup or quad operation.
-    GroupOperation,
-    /// It is stored to a storage class other than `Function`, `Private` or `Output`, or through
-    /// a function parameter's pointer.
-    Store,
-    /// It is an operand of an atomic.
-    Atomic,
-    /// It is an operand of an image write or a texel pointer.
-    ImageWrite,
-    /// It is an operand an instruction's behavior is undefined for at some value: an integer
-    /// divisor, the dividend of a signed division or remainder whose divisor may be `-1`, or a
-    /// dynamic vector component index.
-    UndefinedOperand,
-    /// The function writes memory (`StageInterface::writes_memory`).
-    WritesMemory,
-    /// The module holds a fragment interlock critical section.
-    Interlock,
-    /// The module has a `Coherent` resource or uses the Vulkan memory model.
-    Coherent,
-    /// Anything else: the slot's index is 128 or more, its values take more than 16 passes over
-    /// the module to settle, or one is an operand of a ray query, a mesh output count or a call
-    /// whose callee's parameters it does not match, or the entry's returned value.
-    Other,
 }
 
 /// The levels of its bound view that a texture slot's reads reach, each counted from the view's

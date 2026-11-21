@@ -157,8 +157,8 @@ pub struct StageIo {
     #[cfg_attr(feature = "serde", serde(default))]
     pub coverage_loop: CoverageLoop,
     /// How the fragment function writes each color attachment whose format converts its float
-    /// output (`LoweringInputs::color_writes`), for every attachment it writes, through an output
-    /// variable or in the storage form: link refuses a stage compiled for another map than the
+    /// output (`LoweringInputs::color_writes`), for every attachment it writes through an output
+    /// variable: link refuses a stage compiled for another map than the
     /// pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>,
@@ -202,8 +202,8 @@ pub struct StageIo {
     pub rotated_colors: std::collections::BTreeSet<u32>,
     /// The attachments whose image holds Metal's alpha in red
     /// (`LoweringInputs::alpha_in_red_colors`) that the fragment function writes through an output
-    /// variable of either dual-source index, or reads (`[[color(n)]]`) through an input attachment
-    /// or the interlocked storage form, by color index: each such output holds Metal's alpha in
+    /// variable of either dual-source index, or reads (`[[color(n)]]`) through an input
+    /// attachment, by color index: each such output holds Metal's alpha in
     /// the image's alpha lane too, which alpha to coverage reads, and each read takes the image's
     /// red as Metal's alpha. Link refuses a stage compiled for another set than the pipeline's
     /// (`NeedsInput(ColorWrites)`).
@@ -323,8 +323,7 @@ pub struct StageIo {
     #[cfg_attr(feature = "serde", serde(default))]
     pub float_blend_colors: Vec<u32>,
     /// The attachments a `half` color output of a module compiled with fast math
-    /// (`air.compile.fast_math_enable`) reaches as color attachments, by color index, sorted (not
-    /// one the function writes in the storage form).
+    /// (`air.compile.fast_math_enable`) reaches as color attachments, by color index, sorted.
     /// Metal's compiler folds the attachment's blend and conversion into the function under fast
     /// math, so the pipeline's stage records `PrecisionNote::HalfOutputFastMathBlend` where one of
     /// these attachments stores some channel (`color_writes::stores_output`). One whose write mask
