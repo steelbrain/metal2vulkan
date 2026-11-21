@@ -3049,6 +3049,18 @@ impl Made {
     }
 }
 
+/// Where the texels of a texture in place over a buffer lie ([`Buffer::new_texture`]): the
+/// `VkBuffer` commands reach the buffer's bytes through, which spans their allocation, so that two
+/// textures whose bytes meet name one; the first texel's offset there; and the bytes from one
+/// row's start to the next's, the row pitch the device reports for the linear image
+/// (`vkGetImageSubresourceLayout`, which the image is made only at).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rows {
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) offset: u64,
+    pub(crate) pitch: u64,
+}
+
 /// A region of one level and slice of a texture, checked against the texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Placed {
@@ -4660,6 +4672,19 @@ pub(crate) trait TextureObject {
     fn bicubic_texels(&self) -> Option<u32> {
         let inner = self.object();
         bicubic_texels_word(inner.descriptor.pixel_format, inner.reads())
+    }
+
+    /// Of a texture in place over a buffer, where its texels lie in the bytes shaders reach (a
+    /// Managed buffer's device copy, where it has one); `None` for any other texture.
+    fn in_place(&self) -> Option<Rows> {
+        let named = (self.object().named.as_ref()).filter(|named| named.form == Form::InPlace)?;
+        let place = named.places[0];
+        let (buffer, at) = named.buffer.device_range();
+        Some(Rows {
+            buffer,
+            offset: at + place.offset,
+            pitch: place.bytes_per_row,
+        })
     }
 
     /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a

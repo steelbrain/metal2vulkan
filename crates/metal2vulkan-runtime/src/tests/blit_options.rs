@@ -34,6 +34,7 @@ fn copy(
         format,
         unit: None,
         base: [0, 0],
+        rows: None,
     };
     let lies = Lies {
         base: 0,

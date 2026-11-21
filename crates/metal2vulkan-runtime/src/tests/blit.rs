@@ -6,7 +6,10 @@
 //!   among it, is `Gap::TextureCopy`; within one level and slice of one image (one texture, or a
 //!   texture and its view), regions apart copy in the general layout, the same region copies
 //!   nothing, and overlapping regions, which Metal leaves undefined, copy in slabs across the
-//!   axis of fewest, each no thicker than the shift there, the far end of the shift first; a
+//!   axis of fewest, each no thicker than the shift there, the far end of the shift first; so do
+//!   regions of two textures in place over one buffer whose bytes meet, each shift that from a
+//!   destination row to a source row on its bytes, and where no axis cuts them so they are
+//!   `Gap::TextureCopy`, while rows that interleave or other bytes copy whole; a
 //!   level, slice or region outside a texture or off its block grid is `Refusal::TextureRegion`;
 //!   a size of 0 on an axis a texture lacks copies one texel there, and on another copies
 //!   nothing; a 3D texture's image copies to and from a 2D slice.
@@ -22,7 +25,10 @@
 //!   in the conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-43464, plain and under
 //!   the validation layer). Overlapping regions of one level and slice leave the source's bytes
 //!   from before the copy, toward higher and lower coordinates on each axis, through a view, and
-//!   in BC1 blocks where the device makes them, at one barrier more a slab after the first.
+//!   in BC1 blocks where the device makes them, at one barrier more a slab after the first. So do
+//!   regions of two textures in place over one buffer whose bytes meet, a row on and within the
+//!   rows, each way, every other byte of the buffer kept; whole rows each across the end of its
+//!   own source row and the start of the next are refused, and record nothing.
 //! - Between a buffer and a texture: each image of the region lies at its own offset, its rows a
 //!   count of texels apart; what Metal's validation stops is `Refusal::BufferCopyLayout`, and an
 //!   offset or row stride a copy command cannot address `Gap::BufferCopyAlignment`. Under a device
@@ -58,9 +64,9 @@ use crate::blit::{
     Lies, Side, Slabs, Span, TexturePlace,
 };
 use crate::error::{Error, Gap, Refusal};
-use crate::texture::{CopyUnit, Placed};
+use crate::texture::{CopyUnit, Placed, Rows};
 use crate::{PixelFormat, TextureDescriptor, TextureType};
-use ash::vk;
+use ash::vk::{self, Handle};
 
 /// A side of a copy: a texture of `d` held in `format`, of `unit`.
 fn side(d: &TextureDescriptor, format: vk::Format, unit: Option<CopyUnit>) -> Side<'_> {
@@ -69,6 +75,20 @@ fn side(d: &TextureDescriptor, format: vk::Format, unit: Option<CopyUnit>) -> Si
         format,
         unit,
         base: [0, 0],
+        rows: None,
+    }
+}
+
+/// A side of an RGBA8 texture of `d` in place over a buffer: its first texel at `offset` in the
+/// `VkBuffer` numbered `buffer`, its rows `pitch` apart.
+fn over(d: &TextureDescriptor, buffer: u64, offset: u64, pitch: u64) -> Side<'_> {
+    Side {
+        rows: Some(Rows {
+            buffer: vk::Buffer::from_raw(buffer),
+            offset,
+            pitch,
+        }),
+        ..side(d, vk::Format::R8G8B8A8_UNORM, color(4))
     }
 }
 
@@ -339,6 +359,78 @@ fn overlapping_regions_copy_in_slabs_the_far_end_of_the_shift_first() {
         slab_regions(&within([0, 0, 0], [4, 4, 1], [4, 0, 0])),
         [([0, 0], [4, 0], [4, 4])]
     );
+}
+
+#[test]
+fn regions_of_two_textures_over_one_buffer_copy_in_slabs_where_their_bytes_meet() {
+    // Rows of 16 texels of 4 bytes, 64 bytes apart.
+    let d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [16, 4, 1]);
+    let first = over(&d, 1, 0, 64);
+    let copy = |from: &Side<'_>, to: &Side<'_>, size| {
+        texture_copy(from, at(0, 0, [0; 3]), size, to, at(0, 0, [0; 3]), false)
+    };
+    let slabs = |from: &Side<'_>, to: &Side<'_>, size| copied(copy(from, to, size)).slabs;
+    let cut = |axis, thickness, reversed| Slabs {
+        axis,
+        thickness,
+        reversed,
+    };
+    let whole = [16, 4, 1];
+    // A texture a row on: slabs of a row, the end the shift points to first.
+    let row_on = over(&d, 1, 64, 64);
+    let forward = copied(copy(&first, &row_on, whole));
+    assert!(!forward.shared, "two images");
+    assert_eq!(
+        slab_regions(&forward),
+        [
+            ([0, 3], [0, 3], [16, 1]),
+            ([0, 2], [0, 2], [16, 1]),
+            ([0, 1], [0, 1], [16, 1]),
+            ([0, 0], [0, 0], [16, 1]),
+        ]
+    );
+    assert_eq!(slabs(&row_on, &first, whole), cut(1, 1, false));
+    assert_eq!(slabs(&first, &over(&d, 1, 128, 64), whole), cut(1, 2, true));
+    // Two texels on, a region that stays inside the other's rows: slabs of two texels across.
+    let within = over(&d, 1, 8, 64);
+    assert_eq!(slabs(&first, &within, [12, 4, 1]), cut(0, 2, true));
+    assert_eq!(slabs(&within, &first, [12, 4, 1]), cut(0, 2, false));
+    // A row and two texels on, whole rows: each destination row across the end of one source
+    // row and the start of the next, neither its own, so slabs of a row.
+    assert_eq!(slabs(&first, &over(&d, 1, 72, 64), whole), cut(1, 1, true));
+    // Two texels on, whole rows: each destination row across the end of its own source row and
+    // the start of the next. No cut along one axis keeps the order.
+    assert!(matches!(
+        gap(copy(&first, &within, whole)),
+        Gap::TextureCopy { .. }
+    ));
+    // Rows of two pitches that meet at their starts: no cut either.
+    let wider = over(&d, 1, 0, 128);
+    assert!(matches!(
+        gap(copy(&first, &wider, [8, 4, 1])),
+        Gap::TextureCopy { .. }
+    ));
+    // Regions whose rows interleave, touching, of one pitch or two, and textures over other bytes,
+    // share no byte: one slab, the whole region.
+    let (left, interleaved) = (over(&d, 1, 0, 128), over(&d, 1, 64, 128));
+    assert_eq!(slabs(&left, &interleaved, whole), cut(0, 16, false));
+    assert_eq!(
+        slabs(&first, &over(&d, 1, 32, 128), [8, 4, 1]),
+        cut(0, 8, false)
+    );
+    assert_eq!(slabs(&first, &over(&d, 2, 0, 64), whole), cut(0, 16, false));
+    // The same bytes: nothing to copy.
+    assert!(matches!(
+        texture_copy(
+            &first,
+            at(0, 0, [0, 1, 0]),
+            [16, 3, 1],
+            &row_on,
+            at(0, 0, [0; 3]),
+            false
+        ),
+        Ok(None)
+    ));
 }
 
 #[test]
@@ -1673,6 +1765,157 @@ pub(crate) mod on_device {
                 assert_eq!(to.read(), copy.after(), "{name}: {case}");
             }
             println!("{name}: overlapping copies, each from the source before the copy");
+        });
+    }
+
+    /// Two textures in place over one Shared buffer, rows the device's own pitch apart, whose
+    /// regions' bytes meet, which Metal leaves undefined, leave each destination texel holding
+    /// what the source held before the copy, the answer an Apple M3 Max gives (the conformance
+    /// crate's `buffer_texture_blits.rs`, its rows a row on), every other byte of the buffer kept:
+    /// a texture a row on from the other, onto it and from it, in slabs of a row; one a memory
+    /// alignment on, a region within the other's rows, onto it and from it, in slabs of that many
+    /// bytes across; regions apart in one command. Each copy is one submission and copies no byte
+    /// of the runtime's own; each slab after the first costs one barrier more than a copy's three.
+    /// Whole rows a memory alignment on, each destination row across the end of its own source
+    /// row and the start of the next, are `Gap::TextureCopy`, and record nothing.
+    #[test]
+    fn every_device_copies_between_textures_over_one_buffer_from_the_source_before_the_copy() {
+        use crate::texture::TextureObject;
+        const HEIGHT: u32 = 4;
+        each_device("blit_over_one_buffer", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 4)
+                .expect("a grant");
+            let format = PixelFormat::RGBA8Unorm;
+            let mut d = TextureDescriptor::new(TextureType::Type2D, format, 64, HEIGHT);
+            d.usage = TextureUsage::SHADER_READ;
+            // A place in the buffer's bytes that a linear image takes: a memory alignment on, a
+            // texel at least.
+            let memory = (device.linear_memory_alignment(&d)).expect("a linear image");
+            let step = memory.max(4);
+            let align = (device.minimum_linear_texture_alignment(format))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Rows of four steps at least, at the device's own pitch: a texture a step on starts
+            // inside the other's first row, and a region a step narrower than a row lies inside
+            // the other's rows.
+            let pitch = [256, 4 * step, align].into_iter().max().expect("a pitch");
+            d.width = u32::try_from(pitch / 4).expect("a width");
+            let len = (2 * u64::from(HEIGHT) + 1) * pitch;
+            let block = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let buffer = (device.new_buffer(block.id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut indices = 4096..;
+            let mut over = |offset: u64| {
+                let texture = (buffer.new_texture(&d, indices.next(), offset, pitch))
+                    .unwrap_or_else(|error| panic!("{name}: at {offset}: {error}"));
+                assert!(
+                    texture.copied_over().is_none(),
+                    "{name}: at {offset}: in place"
+                );
+                (texture, offset)
+            };
+            let first = over(0);
+            let row_on = over(pitch);
+            let within = over(step);
+            let apart = over(u64::from(HEIGHT) * pitch);
+            let queue = device.new_command_queue(4).expect("a queue");
+            // The textures' moves home go with a command buffer of their own.
+            let homes = queue.command_buffer().expect("a command buffer");
+            homes
+                .record_for_test(&[], |_, _| {})
+                .expect("a command buffer's commands");
+            homes.commit().expect("a commit");
+            finished(name, &homes);
+            let counters = device.counters();
+            let width = d.width;
+            let shift = u32::try_from(step / 4).expect("a shift");
+            let across = (width - shift).div_ceil(shift);
+            // Each case: the source and the destination with their offsets in the buffer, the
+            // region's width (its height is the textures'), and the slabs the copy takes.
+            let cases = [
+                ("a row on", &first, &row_on, width, HEIGHT),
+                ("a row back", &row_on, &first, width, HEIGHT),
+                (
+                    "within the rows, on",
+                    &first,
+                    &within,
+                    width - shift,
+                    across,
+                ),
+                (
+                    "within the rows, back",
+                    &within,
+                    &first,
+                    width - shift,
+                    across,
+                ),
+                ("apart", &first, &apart, width, 1),
+            ];
+            let at = TexturePlace::default();
+            for (seed, (case, (from, from_at), (to, to_at), columns, slabs)) in (1..).zip(cases) {
+                let before = pattern(len as usize, seed);
+                write(&buffer, &before);
+                settled(&device);
+                let metrics = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                (encoder.copy_from_texture(from, at, [columns, HEIGHT, 1], to, at))
+                    .unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let rows = (0..u64::from(HEIGHT)).map(|row| {
+                    (
+                        (from_at + row * pitch) as usize,
+                        (to_at + row * pitch) as usize,
+                    )
+                });
+                let want = moved(before.clone(), &before, rows, 4 * columns as usize);
+                assert_eq!(read(&buffer), want, "{name}: {case}: the buffer's bytes");
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.submissions - metrics.submissions,
+                        after.barriers - metrics.barriers,
+                        after.bytes_copied - metrics.bytes_copied,
+                    ),
+                    (1, 2 + u64::from(slabs), 0),
+                    "{name}: {case}: submissions, barriers, bytes copied"
+                );
+            }
+
+            // Whole rows a memory alignment on: refused, nothing recorded, every byte kept.
+            let before = read(&buffer);
+            settled(&device);
+            let metrics = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            let refused =
+                encoder.copy_from_texture(&first.0, at, [width, HEIGHT, 1], &within.0, at);
+            assert!(
+                matches!(refused, Err(Error::Unsupported(Gap::TextureCopy { .. }))),
+                "{name}: whole rows a memory alignment on: {refused:?}"
+            );
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - metrics.submissions,
+                    after.barriers - metrics.barriers
+                ),
+                (0, 0),
+                "{name}: the refused copy records nothing"
+            );
+            assert_eq!(
+                read(&buffer),
+                before,
+                "{name}: the refused copy keeps every byte"
+            );
+            println!(
+                "{name}: copies between textures over one buffer from the source before the copy, \
+                 rows {pitch} bytes apart, a memory alignment of {memory}"
+            );
         });
     }
 

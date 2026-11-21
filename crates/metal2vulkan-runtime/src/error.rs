@@ -1143,12 +1143,15 @@ pub enum Gap {
         pixel_format: PixelFormat,
     },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
-    /// that no single `vkCmdCopyImage` in the floor makes: a multisample texture; a format of
-    /// depth and stencil both; one pixel format held in two Vulkan formats, which the two
-    /// textures' usages chose; or a 1D texture with one of another type.
+    /// that the floor's `vkCmdCopyImage` does not make: a multisample texture; a format of depth
+    /// and stencil both; one pixel format held in two Vulkan formats, which the two textures'
+    /// usages chose; a 1D texture with one of another type; or regions of two textures in place
+    /// over one buffer whose rows meet shifted both ways, or not shifted, along each axis, so
+    /// that no cut into slabs along one axis copies them as from the source before the copy (a
+    /// destination row across the end of its own source row and the start of the next is one).
     ///
-    /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a replay
-    /// stream makes one).
+    /// Basis: ours (Vulkan 1.3 copies none of these with one command, nor these regions in slabs
+    /// along one axis; each is built when a replay stream makes one).
     TextureCopy {
         /// The source texture's pixel format.
         source: PixelFormat,

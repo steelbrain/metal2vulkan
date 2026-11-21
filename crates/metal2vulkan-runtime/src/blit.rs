@@ -7,8 +7,9 @@
 //! once the copy has run, and holds one global memory barrier beside the image barriers, so the
 //! copy's writes are visible to every later command through any resource over the same bytes (a
 //! heap's aliases), not through the image alone. Nothing is copied but the region Metal names.
-//! Overlapping regions of one level and slice are the one exception to one command: slabs, one
-//! `vkCmdCopyImage` each, an execution barrier between two ([`Slabs`]).
+//! Regions whose bytes meet, of one level and slice or of two textures in place over one buffer,
+//! are the one exception to one command: slabs, one `vkCmdCopyImage` each, an execution barrier
+//! between two ([`Slabs`]).
 //!
 //! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
 //! `vkCmdCopyImageToBuffer` against the bytes shaders reach (the buffer's range of its block, or a
@@ -46,7 +47,7 @@ use crate::over::{self, Reached};
 use crate::record::{memory_barrier, Reach};
 use crate::surface::Surface;
 use crate::texture::{
-    copy_unit, place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor,
+    copy_unit, place, BytesPlace, CopyUnit, Placed, Region, Rows, Texture, TextureDescriptor,
     TextureObject,
 };
 use ash::vk;
@@ -167,18 +168,22 @@ impl BlitCommandEncoder {
     /// nothing, as plain Metal does where its validation stops the call. Within one level and
     /// slice of one image (the texture into itself, or a texture and its view), regions apart
     /// copy with that subresource in the general layout, and the same region copies nothing and
-    /// records no command, every texel already its own. Overlapping regions there, which Metal
-    /// leaves undefined, copy as if the source were read whole before any texel is written, the
-    /// answer an Apple M3 Max gives: in slabs across one axis, each no thicker than the shift
-    /// between the regions there, so that its two regions lie apart, one `vkCmdCopyImage` a slab
-    /// and the far end of the shift first, an execution barrier between two slabs. The axis is the
-    /// one of fewest slabs; a shift of one texel takes one slab a texel. The command buffer keeps
-    /// both textures until it retires.
+    /// records no command, every texel already its own. Overlapping regions there, and regions of
+    /// two textures in place over one buffer ([`Buffer::new_texture`]) whose bytes meet, which
+    /// Metal leaves undefined, copy as if the source were read whole before any texel is written,
+    /// the answer an Apple M3 Max gives: in slabs across one axis, each no thicker than the shift
+    /// between the regions there (between two textures over one buffer, from each destination
+    /// row to each source row on its bytes: in rows along y, in whole texels along x), so that its
+    /// two regions share no byte, one `vkCmdCopyImage` a slab and the far end of the shift first,
+    /// an execution barrier between two slabs. The axis is the one of fewest slabs; a shift of one
+    /// texel takes one slab a texel. Two textures over one buffer whose regions are the same bytes
+    /// copy nothing. The command buffer keeps both textures until it retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::TextureRegion`] for
     /// a level, slice or region outside either texture or off its format's block grid;
-    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`]; [`Error::Vulkan`] where the command
-    /// buffer cannot record.
+    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`], regions of two textures over one
+    /// buffer whose bytes meet where no axis cuts them so among it; [`Error::Vulkan`] where the
+    /// command buffer cannot record.
     pub fn copy_from_texture(
         &mut self,
         source: &Texture,
@@ -241,7 +246,7 @@ impl BlitCommandEncoder {
                 (&away_one, &back_one)
             }
         };
-        // Between two slabs, every hazard is a write after a read: no slab reads a texel an
+        // Between two slabs, every hazard is a write after a read: no slab reads a byte an
         // earlier one wrote (`Slabs`), so an execution dependency orders them.
         let between = [vk::MemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COPY)
@@ -250,8 +255,8 @@ impl BlitCommandEncoder {
         let (named_read, named_write) = (source.copy_layout(read), destination.copy_layout(write));
         // SAFETY: the command buffer records outside any render pass and keeps both images until
         // it retires; each subresource is in its home layout between commands, and in its copy
-        // layout between the barriers: two subresources, or one in the general layout whose two
-        // regions lie apart in each slab (`texture_copy`); each slab's regions lie in both.
+        // layout between the barriers: two subresources, or one in the general layout; each
+        // slab's two regions share no byte (`texture_copy`), and lie in both.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
@@ -1235,13 +1240,15 @@ unsafe fn close(core: &Core, command: vk::CommandBuffer, back: &[vk::ImageMemory
     core.counters.closed(dependency.memory_barrier_count);
 }
 
-/// One texture of a copy: its descriptor, its image's format, the unit its copies move, and
-/// where it starts in its image (a view's first level and array layer).
+/// One texture of a copy: its descriptor, its image's format, the unit its copies move, where it
+/// starts in its image (a view's first level and array layer), and, in place over a buffer, where
+/// its texels lie in the buffer's bytes.
 pub(crate) struct Side<'a> {
     pub(crate) descriptor: &'a TextureDescriptor,
     pub(crate) format: vk::Format,
     pub(crate) unit: Option<CopyUnit>,
     pub(crate) base: [u32; 2],
+    pub(crate) rows: Option<Rows>,
 }
 
 impl<'a> Side<'a> {
@@ -1251,6 +1258,7 @@ impl<'a> Side<'a> {
             format: texture.format(),
             unit: texture.unit(),
             base: texture.base(),
+            rows: texture.in_place(),
         }
     }
 
@@ -1323,12 +1331,12 @@ impl ImageCopy {
 
 /// The slabs a copy between textures runs as, one copy command each: the region cut across
 /// `axis` into slabs `thickness` texels thick (the last what is left), from the far end of the
-/// axis first where `reversed`. Regions apart copy as one slab. Overlapping regions of one
-/// subresource are cut no thicker than the shift between them along an axis they are shifted
-/// along, so that each slab's two regions lie apart, on the axis of fewest slabs; and the slab
-/// at the end the shift points to goes first, so that no slab reads a texel an earlier one
-/// wrote. The copy so gives what reading its source whole before writing gives, as `memmove`
-/// does.
+/// axis first where `reversed`. Regions that share no byte copy as one slab. Regions that do are
+/// cut ([`cut`]) no thicker than the least shift between them along an axis every shift points
+/// the same way along, so that each slab's two regions share no byte, on the axis of fewest
+/// slabs; and the slab at the end the shifts point to goes first, so that no slab reads a byte
+/// an earlier one wrote. The copy so gives what reading its source whole before writing gives,
+/// as `memmove` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Slabs {
     pub(crate) axis: usize,
@@ -1658,35 +1666,39 @@ pub(crate) fn texture_copy(
         return Ok(None);
     };
     // One subresource of one image, the textures one or a texture and its view, copies in the
-    // general layout (`VUID-vkCmdCopyImage-srcImage-09460`), and no command's source and
-    // destination share a texel (`-pRegions-00124`). The same region copies nothing, every texel
-    // already its own. Metal leaves a copy whose regions overlap undefined (Apple's
-    // `copy(from:...to:...)` page: "unexpected behavior"); an Apple M3 Max reads the source whole
-    // before it writes, which slabs give (`Slabs`).
+    // general layout (`VUID-vkCmdCopyImage-srcImage-09460`); two textures in place over one
+    // buffer may share bytes too. No command's source and destination share a byte
+    // (`-pRegions-00124`). The same texels copy nothing, every one already its own. Metal leaves
+    // a copy whose regions overlap undefined (Apple's `copy(from:...to:...)` page: "unexpected
+    // behavior"); an Apple M3 Max reads the source whole before it writes, which slabs give
+    // (`Slabs`).
     let shared = same && from.level == to.level && from.layer == to.layer;
-    let apart = (0..3).any(|axis| {
-        let (a, b, extent) = (from.origin[axis], to.origin[axis], from.size[axis]);
-        a + extent <= b || b + extent <= a
-    });
-    let slabs = match shared && !apart {
-        false => Slabs {
-            axis: 0,
-            thickness: from.size[0],
-            reversed: false,
-        },
-        true => {
-            let shifted = (0..3).filter(|&axis| from.origin[axis] != to.origin[axis]);
-            let thickness = |axis: usize| from.origin[axis].abs_diff(to.origin[axis]);
-            let fewest = shifted.min_by_key(|&axis| from.size[axis].div_ceil(thickness(axis)));
-            let Some(axis) = fewest else {
-                return Ok(None);
-            };
-            Slabs {
-                axis,
-                thickness: thickness(axis),
-                reversed: to.origin[axis] > from.origin[axis],
-            }
+    let slabs = match (source.rows, destination.rows) {
+        _ if shared => {
+            let apart = (0..3).any(|axis| {
+                let (a, b, extent) = (from.origin[axis], to.origin[axis], from.size[axis]);
+                a + extent <= b || b + extent <= a
+            });
+            let shift = std::array::from_fn(|axis| {
+                i128::from(to.origin[axis]) - i128::from(from.origin[axis])
+            });
+            cut((!apart).then_some(shift), [1; 3], from.size)
         }
+        (Some(a), Some(b)) if a.buffer == b.buffer => {
+            let texel = u64::from(unit.bytes);
+            let first = |rows: Rows, placed: &Placed| Rows {
+                offset: rows.offset
+                    + u64::from(placed.origin[1]) * rows.pitch
+                    + u64::from(placed.origin[0]) * texel,
+                ..rows
+            };
+            let rows = meeting(first(a, &from), first(b, &to), from.size, texel);
+            cut(rows, [u128::from(texel), 1, 1], from.size)
+        }
+        _ => cut(None, [1; 3], from.size),
+    };
+    let Some(slabs) = slabs.ok_or_else(gap)? else {
+        return Ok(None);
     };
     Ok(Some(ImageCopy {
         from,
@@ -1695,6 +1707,82 @@ pub(crate) fn texture_copy(
         shared,
         slabs,
     }))
+}
+
+/// The slabs of a copy of `size` texels from `shifts`: for each destination texel, or row, on
+/// bytes of a source texel, or row, how far that source lies from it in the region (the source's
+/// place less the destination's), along each axis in `units`: texels, or bytes along x between
+/// two textures over one buffer. Regions of no shift share no byte, and copy as one slab. Shifts
+/// all of 0 make every destination texel its own source: `Some(None)`, nothing to copy. Otherwise
+/// an axis that every shift moves along, all one way, is cut no thicker than the least shift
+/// along it in whole texels, so that no slab's source and destination share a byte; the slab at
+/// the end the shifts point to goes first, so that no slab reads a byte an earlier one wrote (an
+/// earlier slab's destination bytes that are a later one's source would be a shift the other
+/// way). The cut is along the axis of fewest slabs, the first of them; `None` where no axis cuts.
+fn cut(
+    shifts: impl IntoIterator<Item = [i128; 3]>,
+    units: [u128; 3],
+    size: [u32; 3],
+) -> Option<Option<Slabs>> {
+    // Along each axis: the least shift's size, and whether a shift points toward lower and one
+    // toward higher coordinates.
+    let mut along = [(u128::MAX, false, false); 3];
+    let (mut any, mut own) = (false, true);
+    for shift in shifts {
+        any = true;
+        own &= shift == [0; 3];
+        for ((least, lower, higher), shift) in along.iter_mut().zip(shift) {
+            *least = (*least).min(shift.unsigned_abs());
+            *lower |= shift < 0;
+            *higher |= shift > 0;
+        }
+    }
+    if !any {
+        return Some(Some(Slabs {
+            axis: 0,
+            thickness: size[0],
+            reversed: false,
+        }));
+    }
+    if own {
+        return Some(None);
+    }
+    (0..3)
+        .filter_map(|axis| {
+            let (least, lower, higher) = along[axis];
+            let thickness = u32::try_from(least / units[axis]).ok()?;
+            (thickness > 0 && !(lower && higher)).then_some(Slabs {
+                axis,
+                thickness,
+                reversed: higher,
+            })
+        })
+        .min_by_key(|slabs| size[slabs.axis].div_ceil(slabs.thickness))
+        .map(Some)
+}
+
+/// The shifts ([`cut`]) of a copy of `size` texels of `texel` bytes between two textures in place
+/// over one buffer, from the region whose first texel is at `from` to the one at `to`: for each
+/// destination row on bytes of a source row, the destination row's first byte less the source
+/// row's along x (in bytes, the source texel on a destination texel's bytes less that texel, in
+/// the region), and the source row less the destination row along y. A row of the texture is no
+/// longer than its pitch, so a source row meets at most the two destination rows whose starts lie
+/// nearest before and after its own. Regions whose spans of bytes do not meet meet in no row.
+fn meeting(from: Rows, to: Rows, size: [u32; 3], texel: u64) -> impl Iterator<Item = [i128; 3]> {
+    let row = i128::from(size[0]) * i128::from(texel);
+    let rows = i128::from(size[1]);
+    let (first, pitch) = (i128::from(from.offset), i128::from(from.pitch));
+    let (onto, onto_pitch) = (i128::from(to.offset), i128::from(to.pitch));
+    let spans =
+        first < onto + (rows - 1) * onto_pitch + row && onto < first + (rows - 1) * pitch + row;
+    (0..if spans { rows } else { 0 }).flat_map(move |j| {
+        let start = first + j * pitch;
+        let k = (start - onto).div_euclid(onto_pitch);
+        [k, k + 1].into_iter().filter_map(move |k| {
+            let shift = onto + k * onto_pitch - start;
+            ((0..rows).contains(&k) && shift.abs() < row).then_some([shift, j - k, 0])
+        })
+    })
 }
 
 /// Whether Apple defines mipmaps of `pf`: a colour-renderable, filterable format, which is not a

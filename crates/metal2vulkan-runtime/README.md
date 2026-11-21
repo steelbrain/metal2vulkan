@@ -2189,6 +2189,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   no thicker than the shift there, and the slab at the far end of the shift goes first. Each slab
   is one `vkCmdCopyImage`, with an execution barrier between two slabs. A shift of one texel takes
   one slab and one barrier per texel of the region's extent on that axis.
+- Regions of two textures in place over one buffer whose bytes meet copy the same way, each shift
+  that from a destination row to a source row on its bytes, by the row pitch the device reports
+  for the linear images: in rows along y, in whole texels along x. Regions on the same bytes copy
+  nothing. Where the rows meet shifted both ways, or not shifted, along each axis (a destination
+  row across the end of its own source row and the start of the next), no cut along one axis
+  keeps the order, and the copy is `Gap::TextureCopy`.
 - `copy_from_buffer` is `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`
   `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
   `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`
