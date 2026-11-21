@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1322 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7323 |
+| ledger rows (a case whose gap is recorded) | 8019 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3386,6 +3386,52 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3404,6 +3450,56 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3422,6 +3518,52 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3440,6 +3582,52 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3458,6 +3646,56 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3476,6 +3714,56 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
@@ -3494,56 +3782,288 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
 | `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: the downscale's linear filter is the device's. At `grid` and `ulp` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike: at `grid` and `ulp` both sources answer Metal's digests. At `frac` the texture slot's runtime pixel sampl… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), at every size alike. At `frac` the texture slot's runtime pixel sampler (`slot`) hands the device's normalized sampler the coo… |
 | `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
 | `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
 | `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
 | `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
 | `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): lavapipe's mirror clamp to edge at the normalized coordinates over the size. Our `norm` (an argument buffer's normalized neare… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
 | `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
 | `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg`, `const` and `slot`; `norm` its own. Meta… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const`, `norm` and … |
 | `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `norm` its own. Metal's: one digest ac… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1): `arg`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`. The device… |
 | `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
 | `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours: one digest across `arg` and `slot`; `const` its own; `norm` its o… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `norm` and `slot`; `… |
 | `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): lavapipe's mirror clamp to edge at the normalized coordinates over the size. Our `norm` (an argument buffer's normalized neare… |
 | `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): `norm` differs from Metal's (`arg` and `slot` read Metal's answer). The device's nearest filter at the normalized coordinate o… |
 | `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
 | `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg`, `const` and `slot`; … |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
 | `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
@@ -3555,6 +4075,20 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const`, `norm` and `slot` differ from Metal's. Ours split as Metal's do: one digest across `arg` and `slot`; `const` i… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1): `arg`, `const` and `slot` differ from Metal's (`norm` reads Metal's answer). Ours split as Metal's do: one digest across `arg`… |
 | `read-through-a8` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `read-through-heap-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `read-through-heap-sampler` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
@@ -9321,6 +9855,22 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
 | `vertex-format-float4` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
 | `vertex-format-float4` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
 | `vertex-format-float4` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
@@ -9331,6 +9881,31 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-float4` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
 | `vertex-format-float4` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3f48… |
 | `vertex-format-float4` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-float4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
@@ -9367,6 +9942,86 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's conversion to 16 bits and … |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded by `OpQuantizeToF16` alone (the RX 550 has no `shade… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-half4` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
 | `vertex-format-constant-step` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
 | `vertex-format-constant-step` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
 | `vertex-format-constant-step` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
@@ -9377,12 +10032,53 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-constant-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
 | `vertex-format-constant-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3f48… |
 | `vertex-format-constant-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-constant-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
 | `vertex-format-instance-step` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` vertex attribute widened by the device's fetch keeps its payload where Metal reads the canonica… |
 | `vertex-format-instance-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
 | `vertex-format-instance-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
 | `vertex-format-instance-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3efe… |
 | `vertex-format-instance-step` | The device's own answer (rule 1): the fixed-function conversion of a normalized vertex attribute, 1 ulp from Metal's correctly rounded value. Metal reads 0x3f48… |
+| `vertex-format-instance-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-instance-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-instance-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-instance-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
+| `vertex-format-instance-step` | The device's own answer (rule 1): a NaN vertex attribute reaches the function in the device's encoding, where Metal reads the canonical NaN. Metal reads 0x7fc00… |
 | `tessellation-factor-scales` | Refused until built: `setTessellationFactorScale:` is no runtime method (the runtime README's known gaps of render encoders, "Not built, and so not methods"), s… |
 | `tessellation-factor-scales` | Refused until built: `setTessellationFactorScale:` is no runtime method (the runtime README's known gaps of render encoders, "Not built, and so not methods"), s… |
 | `vertex-step-rate-instances` | Refused on a device without `supportsNonZeroFirstInstance` (lavapipe's): a draw at a base instance other than 0 through a state that steps a layout per instance… |
+| `indirect-range-gpu-written-at-zero` | The device's own answer (rule 2): the Iris Xe (ANV, Mesa 26.2.6) does not list `VK_EXT_device_generated_commands`, so an indirect command buffer's execution is … |
+| `indirect-range-gpu-written-past-zero` | The device's own answer (rule 2): the Iris Xe (ANV, Mesa 26.2.6) does not list `VK_EXT_device_generated_commands`, so an indirect command buffer's execution is … |
+| `indirect-range-written-by-an-earlier-draw` | The device's own answer (rule 2): the Iris Xe (ANV, Mesa 26.2.6) does not list `VK_EXT_device_generated_commands`, so an indirect command buffer's execution is … |
+| `pixel-samplers-rgba16f-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-border` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-edge` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-edge` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 
