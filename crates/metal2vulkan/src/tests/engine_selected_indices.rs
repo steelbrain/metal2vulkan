@@ -259,17 +259,18 @@ fn one_geometry_stage_serves_the_weights_the_primitive_and_the_slice() {
 }
 
 /// A fragment function that reads the slice or viewport no stage writes reads 0 on a device that
-/// cannot declare the builtin, which it lists; on the floor a vertex function that selects its slice
-/// is refused needing either feature, and its variant for a pass of one layer compiles.
+/// cannot declare the builtin, which it lists; below the floor (`runtime-floor` without
+/// `shaderOutputLayer`, which the floor requires) a vertex function that selects its slice is
+/// refused needing either feature, and its variant for a pass of one layer compiles.
 #[test]
-fn on_the_floor_a_read_is_zero_and_a_selected_slice_needs_either_feature() {
+fn below_the_floor_a_read_is_zero_and_a_selected_slice_needs_either_feature() {
     let Some(layered) = assemble("rt6_layered.ll") else {
         return;
     };
     let Some(amp) = assemble("vertex_amplification.ll") else {
         return;
     };
-    let floor = device("runtime-floor", &[]);
+    let floor = device("runtime-floor", &[F::ShaderOutputLayer]);
     for (entry, zero) in [
         ("amp_fragment_layer", vec![StageBuiltin::Layer]),
         ("amp_fragment", vec![StageBuiltin::ViewportIndex]),
@@ -302,7 +303,10 @@ fn on_the_floor_a_read_is_zero_and_a_selected_slice_needs_either_feature() {
     let one = floor
         .compile_render_variant(&d, &key, &budget)
         .expect("dropped variant");
-    assert_eq!(geometry_stages(&one, &floor, "floor, one layer"), 0);
+    assert_eq!(
+        geometry_stages(&one, &floor, "below the floor, one layer"),
+        0
+    );
 }
 
 /// A vertex function whose slice and viewport index differ among the vertices of a primitive

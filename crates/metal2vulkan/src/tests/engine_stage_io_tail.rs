@@ -215,9 +215,11 @@ fn a_fragment_primitive_id_takes_the_enabled_alternative() {
     validate(&a, &floor);
 }
 
-/// Fragment `Layer` and `ViewportIndex` inputs take their enabled alternatives. On the floor, which
-/// can declare neither, no stage can have written either, so the function reads both as 0, Metal's
-/// value with no vertex write (`StageIo::zero_indices`), and declares neither.
+/// Fragment `Layer` and `ViewportIndex` inputs take their enabled alternatives. The floor declares
+/// `Layer` through `shaderOutputLayer` and cannot declare `ViewportIndex`, so no stage can have
+/// written the viewport index and the function reads it as 0, Metal's value with no vertex write
+/// (`StageIo::zero_indices`). Below the floor, without `shaderOutputLayer`, it reads both as 0 and
+/// declares neither.
 #[test]
 fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
     let Some(bc) = fixture() else { return };
@@ -239,6 +241,26 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
     let floor = prof("runtime-floor");
     let a = compile(&bc, "tail_fragment_layer", &floor).expect("floor");
     let io = &a.interface.io;
+    assert_eq!(io.zero_indices, [StageBuiltin::ViewportIndex]);
+    assert!(io.builtins.contains(&StageBuiltin::Layer));
+    assert!(!io.builtins.contains(&StageBuiltin::ViewportIndex));
+    assert!(a
+        .requirements
+        .spirv_capabilities
+        .contains(&spirv_cap(Cap::ShaderLayer)));
+    assert!(!a
+        .requirements
+        .spirv_capabilities
+        .contains(&spirv_cap(Cap::MultiViewport)));
+    validate(&a, &floor);
+    let below = profile_without(
+        "runtime-floor",
+        &[F::ShaderOutputLayer],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor");
+    let a = compile(&bc, "tail_fragment_layer", &below).expect("below the floor");
+    let io = &a.interface.io;
     assert_eq!(
         io.zero_indices,
         [StageBuiltin::Layer, StageBuiltin::ViewportIndex]
@@ -249,7 +271,7 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
         .requirements
         .spirv_capabilities
         .contains(&spirv_cap(Cap::MultiViewport)));
-    validate(&a, &floor);
+    validate(&a, &below);
 }
 
 /// `[[barycentric_coord]]` reads `BaryCoordKHR` (perspective) or `BaryCoordNoPerspKHR`, through

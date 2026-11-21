@@ -838,13 +838,14 @@ fn a_variant_draws_each_amplification_with_its_push_fields() {
 }
 
 /// The variant's layered `Layer` needs `shaderOutputLayer` or `geometryShader`, which
-/// `lunarg-desktop-baseline-2023` both lacks; and a tessellation pipeline is drawn amplified only as views (`lavapipe` has
+/// `runtime-floor` without `shaderOutputLayer` (below the runtime's floor) both lacks; and a
+/// tessellation pipeline is drawn amplified only as views (`lavapipe` has
 /// `multiviewTessellationShader`).
 #[test]
 fn amplification_draws_refuse_what_the_variant_cannot_be() {
     let Some(bc) = fixture() else { return };
     let budget = Budget::standard();
-    let dev = device("runtime-floor");
+    let dev = below_the_floor();
     let d = render(&bc, "amp_vertex_store", None, 2);
     let p = dev.compile_render_pipeline(&d, &budget).expect("base");
     let state = amplified(2, &[(0, 1), (0, 0)]);
@@ -876,6 +877,15 @@ fn amplification_draws_refuse_what_the_variant_cannot_be() {
     }
 }
 
+/// `runtime-floor` without `shaderOutputLayer`, which the runtime's floor requires: a device below
+/// the floor, with neither the output nor `geometryShader`.
+fn below_the_floor() -> Device {
+    let mut desc = description("runtime-floor");
+    assert!(desc.features.remove(&F::ShaderOutputLayer));
+    assert!(!desc.features.contains(&F::GeometryShader));
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+}
+
 /// What a variant that stores a layered amplification's slice needs on a device without
 /// `shaderOutputLayer`: the feature, or the geometry stage that stores the slice instead.
 fn output_layer_or_geometry() -> Needs {
@@ -892,20 +902,22 @@ fn output_layer_or_geometry() -> Needs {
 /// Metal probe case `amp2_len1` on the M3 Max and an M4); and in a pass of more layers, whose
 /// variant must store the amplification's slice as `Layer`, through the synthesized geometry
 /// stages where the device has `geometryShader` (`lavapipe` without the output), and otherwise
-/// (`lunarg-desktop-baseline-2023`) `Unsupported(VertexAmplification)` needing either feature.
+/// (`runtime-floor` without `shaderOutputLayer`) `Unsupported(VertexAmplification)` needing either
+/// feature.
 #[test]
 fn a_profile_without_shader_output_layer_draws_or_refuses_every_amplification() {
     let Some(bc) = fixture() else { return };
     let budget = Budget::standard();
-    let lunarg = "runtime-floor";
-    assert!(!description(lunarg).features.contains(&F::ShaderOutputLayer));
-    assert!(!description(lunarg).features.contains(&F::GeometryShader));
     let mut lavapipe = description("lavapipe");
     assert!(lavapipe.features.remove(&F::ShaderOutputLayer));
     assert!(lavapipe.features.contains(&F::GeometryShader));
     let lavapipe = Device::from_queries(lavapipe, DevicePolicy::default()).expect("device");
     for (stem, dev, geometry) in [
-        (lunarg, device(lunarg), false),
+        (
+            "runtime-floor without shaderOutputLayer",
+            below_the_floor(),
+            false,
+        ),
         ("lavapipe without shaderOutputLayer", lavapipe, true),
     ] {
         let d = render(&bc, "amp_vertex_store", None, 2);

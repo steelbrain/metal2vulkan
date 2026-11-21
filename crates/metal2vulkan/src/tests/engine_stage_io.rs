@@ -254,8 +254,8 @@ fn locations_are_relocation_only() {
 
 /// The refusals of the fixture's feature-dependent entries name the capability (the primitive id's
 /// too), and the invariant position compiles with its `Invariant` decoration. The floor states
-/// clip distances, sample-rate shading and dual-source blending, so each of those refusals is on
-/// `runtime-floor` without its feature (below the runtime's floor).
+/// clip distances, sample-rate shading, dual-source blending and the vertex `Layer` output, so each
+/// of those refusals is on `runtime-floor` without its feature (below the runtime's floor).
 #[test]
 fn feature_dependent_entries_name_their_capability() {
     use crate::device::requirements::VkFeature as F;
@@ -282,7 +282,14 @@ fn feature_dependent_entries_name_their_capability() {
         F::ShaderClipDistance,
     );
     // A vertex `Layer` takes the output feature or a geometry stage that writes it.
-    match compile(&bc, "stage_io_vertex_layer", &floor) {
+    compile(&bc, "stage_io_vertex_layer", &floor).expect("the floor's Layer output");
+    let below = profile_without(
+        "runtime-floor",
+        &[F::ShaderOutputLayer],
+        DevicePolicy::default(),
+    )
+    .expect("below the runtime's floor");
+    match compile(&bc, "stage_io_vertex_layer", &below) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::LayeredRendering);
             assert_eq!(
