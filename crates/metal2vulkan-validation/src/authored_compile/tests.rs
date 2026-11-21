@@ -489,13 +489,13 @@ fn host_replayed_command_buffers_are_reported_uncovered() {
     let warm = corpus.run(&compiler, None, false, None).unwrap();
     assert!(warm.passed(), "{:#?}", warm.lines());
     let beta = case("beta").case_id;
+    // The report lists its uncovered cells sorted, by case and then profile label.
+    let mut uncovered = PROFILES
+        .map(|label| (beta.clone(), label.to_string(), 2))
+        .to_vec();
+    uncovered.sort();
     for report in [&cold, &warm] {
-        assert_eq!(
-            report.uncovered,
-            PROFILES
-                .map(|label| (beta.clone(), label.to_string(), 2))
-                .to_vec()
-        );
+        assert_eq!(report.uncovered, uncovered);
     }
     let text = std::fs::read_to_string(corpus.expectations()).unwrap();
     assert!(

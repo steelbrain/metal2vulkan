@@ -584,7 +584,6 @@ fn a_row_waiting_on_metal_is_stale_without_metal_until_metal_requalifies() {
             .iter()
             .map(|case| case.air_sha256.clone())
             .collect(),
-        ..C3Input::default()
     };
     let judge = |input: &C3Input| {
         report_of(
