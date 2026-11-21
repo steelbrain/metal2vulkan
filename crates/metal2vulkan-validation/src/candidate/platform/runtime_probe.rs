@@ -14,10 +14,6 @@
 //!   uses at a chosen offset (both ways, by copies), and, where
 //!   `VK_EXT_image_drm_format_modifier` is present, whether the caller can choose the row pitch
 //!   through `DRM_FORMAT_MOD_LINEAR` with an explicit layout.
-//! - **The fragment's depth** ([`depth_source`]): per case of our probe (bias, clamp and
-//!   depth range), at one sample and per sample, whether a fragment shader's `FragCoord.z`, clamped
-//!   to the viewport's range, is the depth the device's own test stores, with the depth attachment
-//!   in the subpass, out of it, and in it with its test off.
 //! - **A fetch through an input attachment** ([`input_fetch`]): at 4 samples beside a depth/stencil
 //!   attachment, with and without early fragment tests, the bytes a fragment shader stores that
 //!   reads its own sample of the color attachment through an input attachment aliasing it and
@@ -35,7 +31,6 @@ use crate::gpu::DeviceType;
 use ash::vk;
 use serde::Serialize;
 
-mod depth_source;
 mod host_memory;
 mod input_fetch;
 mod linear_images;
@@ -59,7 +54,6 @@ pub(super) struct Report {
     opening_messages: Vec<String>,
     host_memory: host_memory::HostMemory,
     linear_textures: linear_images::LinearTextures,
-    depth_source: depth_source::DepthSource,
     input_fetch: input_fetch::InputFetch,
     /// Every validation message of the run (the steps' own, and the opening's): a report with one
     /// is not evidence.
@@ -94,12 +88,10 @@ fn measure(context: &VulkanContext) -> Report {
     let device = identity(context);
     let host_memory = host_memory::measure(context);
     let linear_textures = linear_images::measure(context);
-    let depth_source = depth_source::measure(context);
     let input_fetch = input_fetch::measure(context);
     let validation_messages = opening_messages.len()
         + host_memory.validation_messages.len()
         + linear_textures.validation_messages.len()
-        + depth_source.validation_messages.len()
         + input_fetch.validation_messages.len();
     Report {
         probe: "corpus-vulkan --probe-runtime",
@@ -107,7 +99,6 @@ fn measure(context: &VulkanContext) -> Report {
         opening_messages,
         host_memory,
         linear_textures,
-        depth_source,
         input_fetch,
         validation_messages,
     }

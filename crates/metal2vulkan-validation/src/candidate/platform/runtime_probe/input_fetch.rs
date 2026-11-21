@@ -23,8 +23,8 @@
 //! sample back through a `B8G8R8A8_UNORM` view and packs its bytes (r, g, b, a, low byte first),
 //! as the Metal probe does: the lower-left half takes four writes, the upper-right half three.
 
-use super::depth_source::enabled;
-use super::{result_name, Owned, VulkanContext};
+use super::super::pipeline::create_shader_module;
+use super::{result_name, Object, Owned, VulkanContext};
 use ash::vk;
 use metal2vulkan::device::VkFeature;
 use serde::Serialize;
@@ -715,6 +715,168 @@ fn pipeline(
         .render_pass(pass)
         .subpass(0);
     owned.graphics_pipeline(&info, "input fetch")
+}
+
+/// Whether the probe's context enabled `feature`.
+fn enabled(context: &VulkanContext, feature: VkFeature) -> bool {
+    context.enabled.features.contains(&feature)
+}
+
+/// The objects one case creates, beyond [`Owned`]'s own kinds.
+impl Owned<'_> {
+    /// A device-local `info` image bound to memory of its own.
+    fn bound_image(&mut self, info: &vk::ImageCreateInfo<'_>) -> Result<vk::Image, String> {
+        let image = self
+            .image(info)
+            .map_err(|error| format!("create an image: {}", result_name(error)))?;
+        // SAFETY: the image was just created on this device.
+        let requirements = unsafe { self.device().get_image_memory_requirements(image) };
+        let memory_type = device_type(self.context, requirements.memory_type_bits)
+            .ok_or("no memory type for an image")?;
+        let memory = self.memory(
+            &vk::MemoryAllocateInfo::default()
+                .allocation_size(requirements.size)
+                .memory_type_index(memory_type),
+        )?;
+        // SAFETY: the image and memory are this device's, unbound, and the type fits.
+        unsafe { self.device().bind_image_memory(image, memory, 0) }
+            .map_err(|error| format!("bind an image: {}", result_name(error)))?;
+        Ok(image)
+    }
+
+    fn view(
+        &mut self,
+        image: vk::Image,
+        format: vk::Format,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<vk::ImageView, String> {
+        let info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(range(aspect));
+        // SAFETY: the image is a live image of this device of `format`.
+        let view = unsafe { self.device().create_image_view(&info, None) }
+            .map_err(|error| format!("create an image view: {}", result_name(error)))?;
+        self.objects.push(Object::ImageView(view));
+        Ok(view)
+    }
+
+    fn render_pass(
+        &mut self,
+        info: &vk::RenderPassCreateInfo<'_>,
+    ) -> Result<vk::RenderPass, String> {
+        // SAFETY: the device is live, and `info` is valid for the call.
+        let pass = unsafe { self.device().create_render_pass(info, None) }
+            .map_err(|error| format!("create a render pass: {}", result_name(error)))?;
+        self.objects.push(Object::RenderPass(pass));
+        Ok(pass)
+    }
+
+    fn framebuffer(
+        &mut self,
+        pass: vk::RenderPass,
+        views: &[vk::ImageView],
+        side: u32,
+    ) -> Result<vk::Framebuffer, String> {
+        let info = vk::FramebufferCreateInfo::default()
+            .render_pass(pass)
+            .attachments(views)
+            .width(side)
+            .height(side)
+            .layers(1);
+        // SAFETY: the pass and views are live objects of this device, compatible with each other.
+        let framebuffer = unsafe { self.device().create_framebuffer(&info, None) }
+            .map_err(|error| format!("create a framebuffer: {}", result_name(error)))?;
+        self.objects.push(Object::Framebuffer(framebuffer));
+        Ok(framebuffer)
+    }
+
+    fn module(&mut self, spv: &[u8], label: &str) -> Result<vk::ShaderModule, String> {
+        let module = create_shader_module(self.context, spv, label)?;
+        self.objects.push(Object::ShaderModule(module));
+        Ok(module)
+    }
+
+    /// A pipeline layout of one set and no push constants.
+    fn plain_layout(&mut self, set: vk::DescriptorSetLayout) -> Result<vk::PipelineLayout, String> {
+        let sets = [set];
+        let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&sets);
+        // SAFETY: the set layout is a live object of this device.
+        let layout = unsafe { self.device().create_pipeline_layout(&info, None) }
+            .map_err(|error| format!("create a pipeline layout: {}", result_name(error)))?;
+        self.objects.push(Object::PipelineLayout(layout));
+        Ok(layout)
+    }
+
+    /// `count` descriptor sets of `layout` from a pool of their own of `sizes`.
+    fn sets(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+        sizes: &[vk::DescriptorPoolSize],
+        count: u32,
+    ) -> Result<Vec<vk::DescriptorSet>, String> {
+        let info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(count)
+            .pool_sizes(sizes);
+        // SAFETY: the device is live, and `info` is valid for the call.
+        let pool = unsafe { self.device().create_descriptor_pool(&info, None) }
+            .map_err(|error| format!("create a descriptor pool: {}", result_name(error)))?;
+        self.objects.push(Object::DescriptorPool(pool));
+        let layouts = vec![layout; count as usize];
+        let allocate = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(pool)
+            .set_layouts(&layouts);
+        // SAFETY: the pool and layout are live objects of this device; the pool has room.
+        unsafe { self.device().allocate_descriptor_sets(&allocate) }
+            .map_err(|error| format!("allocate descriptor sets: {}", result_name(error)))
+    }
+
+    fn graphics_pipeline(
+        &mut self,
+        info: &vk::GraphicsPipelineCreateInfo<'_>,
+        label: &str,
+    ) -> Result<vk::Pipeline, String> {
+        // SAFETY: every object `info` names is a live object of this device.
+        let pipelines = unsafe {
+            self.device()
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[*info], None)
+        }
+        .map_err(|(_, error)| format!("create the {label} pipeline: {}", result_name(error)))?;
+        self.objects.push(Object::Pipeline(pipelines[0]));
+        Ok(pipelines[0])
+    }
+}
+
+/// The first memory type among `bits` that is device-local, else the first among them.
+fn device_type(context: &VulkanContext, bits: u32) -> Option<u32> {
+    // SAFETY: the context's physical device belongs to its live instance.
+    let properties = unsafe {
+        context
+            .instance
+            .get_physical_device_memory_properties(context.physical)
+    };
+    let types = properties.memory_types_as_slice();
+    let allowed = |index: &usize| bits & (1 << index) != 0;
+    (0..types.len())
+        .filter(allowed)
+        .find(|&index| {
+            types[index]
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        })
+        .or_else(|| (0..types.len()).find(allowed))
+        .map(|index| index as u32)
+}
+
+fn range(aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: aspect,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    }
 }
 
 #[cfg(test)]
