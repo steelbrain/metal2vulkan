@@ -40,7 +40,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
     [vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN];
 
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
-/// reconvergence modes, each for the optional features of its own, the portability subset, which
+/// reconvergence modes, each for the optional features of its own, quad control, for
+/// `shaderQuadControl` where the device reports it, the portability subset, which
 /// Vulkan requires enabled where a device lists it, with the portability features the floor asks
 /// of such a device, the vertex attribute divisor's two extensions, for the step-rate feature
 /// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
@@ -57,6 +58,7 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
+    ash::khr::shader_quad_control::NAME,
     ash::khr::portability_subset::NAME,
     ash::khr::vertex_attribute_divisor::NAME,
     ash::ext::vertex_attribute_divisor::NAME,
@@ -105,6 +107,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrShaderMaximalReconvergence)
     } else if name == ash::khr::shader_subgroup_uniform_control_flow::NAME {
         Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
+    } else if name == ash::khr::shader_quad_control::NAME {
+        Some(VkExtension::KhrShaderQuadControl)
     } else if name == ash::ext::robustness2::NAME {
         Some(VkExtension::ExtRobustness2)
     } else if name == ash::khr::portability_subset::NAME {
@@ -221,6 +225,9 @@ pub struct Features {
     /// it.
     pub subgroup_uniform_control_flow:
         vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceShaderQuadControlFeaturesKHR`, of `VK_KHR_shader_quad_control`: read and
+    /// enabled only where the device lists it.
+    pub quad_control: vk::PhysicalDeviceShaderQuadControlFeaturesKHR<'static>,
     /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: `nullDescriptor` and
     /// `robustImageAccess2` are enabled, never the robust buffer access beside them.
     pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
@@ -279,6 +286,9 @@ macro_rules! feature {
     };
     (@structure subgroup_uniform_control_flow) => {
         "VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR"
+    };
+    (@structure quad_control) => {
+        "VkPhysicalDeviceShaderQuadControlFeaturesKHR"
     };
     (@structure robustness2) => {
         "VkPhysicalDeviceRobustness2FeaturesEXT"
@@ -483,6 +493,15 @@ pub(crate) const STEP_RATES: &[Feature] = &[feature!(
     divisor.vertex_attribute_instance_rate_divisor => VertexAttributeInstanceRateDivisor
 )];
 
+/// The feature of `VK_KHR_shader_quad_control` (one of [`OPTIONAL_EXTENSIONS`]), which device
+/// creation enables where the device lists the extension and reports it: a fragment function whose
+/// group operations read, combine or count other lanes runs its quads whole
+/// (`RequireFullQuadsKHR`), helpers included, as Metal runs them, the one form the translator
+/// builds; on a device without it the translator refuses the function (`SubgroupOperations`). No
+/// answer chooses a second form.
+pub(crate) const QUAD_CONTROL: &[Feature] =
+    &[feature!(quad_control.shader_quad_control => ShaderQuadControl)];
+
 /// The features of `VK_EXT_border_color_swizzle` ([`BORDER_SWIZZLE_EXTENSIONS`]): enabled together
 /// where the device lists the extensions and reports `borderColorSwizzleFromImage` (Vulkan requires
 /// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a second form, and the
@@ -510,6 +529,7 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     for feature in (REQUIRED.iter().chain(OPTIONAL))
         .chain(PORTABILITY)
         .chain(STEP_RATES)
+        .chain(QUAD_CONTROL)
     {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
@@ -686,9 +706,9 @@ pub struct Capabilities {
     /// loop.
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
-    /// step-rate and linear-attachment ones the device reports, the attachment-read ones where
-    /// [`feedback_loop`](Self::feedback_loop) holds, and the border-swizzle ones where the device
-    /// reports both.
+    /// step-rate, quad-control and linear-attachment ones the device reports, the attachment-read
+    /// ones where [`feedback_loop`](Self::feedback_loop) holds, and the border-swizzle ones where
+    /// the device reports both.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
@@ -791,6 +811,7 @@ unsafe fn query(
         let maximal_reconvergence_listed = listed(ash::khr::shader_maximal_reconvergence::NAME);
         let uniform_control_flow_listed =
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
+        let quad_control_listed = listed(ash::khr::shader_quad_control::NAME);
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
         let portability_listed = listed(ash::khr::portability_subset::NAME);
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
@@ -809,6 +830,7 @@ unsafe fn query(
             vulkan13,
             maximal_reconvergence,
             subgroup_uniform_control_flow,
+            quad_control,
             robustness2,
             portability,
             feedback_loop,
@@ -827,6 +849,9 @@ unsafe fn query(
         }
         if uniform_control_flow_listed {
             features = features.push_next(&mut *subgroup_uniform_control_flow);
+        }
+        if quad_control_listed {
+            features = features.push_next(&mut *quad_control);
         }
         if robustness2_listed {
             features = features.push_next(&mut *robustness2);
@@ -859,6 +884,7 @@ unsafe fn query(
         vulkan13.p_next = std::ptr::null_mut();
         maximal_reconvergence.p_next = std::ptr::null_mut();
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
+        quad_control.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
         portability.p_next = std::ptr::null_mut();
         feedback_loop.p_next = std::ptr::null_mut();
@@ -951,7 +977,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     let Some((queue_family, _)) = family.filter(|_| missing.is_empty()) else {
         return Err(BelowFloor { missing });
     };
-    for feature in OPTIONAL.iter().chain(STEP_RATES) {
+    for feature in (OPTIONAL.iter().chain(STEP_RATES)).chain(QUAD_CONTROL) {
         *(feature.field)(&mut features) = *(feature.field)(&mut reported);
     }
     let listed =

@@ -2836,15 +2836,19 @@ or does not check is rebuilt from the generations' names, with young counted ful
   an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
   reads only its slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
-- A fragment function whose group operations read, combine or count other lanes (every SIMD-group
-  and quad group function, and the SIMD-group matrix functions) is refused at creation, an
-  `Error::Translation` naming `SubgroupOperations` and `shaderQuadControl`: Metal runs the helpers
-  of a partly covered quad, and they take part in those operations, which Vulkan gives only under
-  `RequireFullQuadsKHR`; rt enables `shaderQuadControl` on no device. No replay stream has one: no
-  fragment module of the 26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix
-  function (each library whose bytes name one disassembled with `llvm-dis`, jobs m3-max-52530,
-  52531, 52532, 52557 and 52604). Their libraries that call quad functions, 2 to 5 a stream, call
-  them from no fragment function.
+- On a device without `shaderQuadControl` (Quad control, under Floor), a fragment function whose
+  group operations read, combine or count other lanes (every SIMD-group and quad group function, and
+  the SIMD-group matrix functions) is refused at creation, an `Error::Translation` naming
+  `SubgroupOperations` and `shaderQuadControl`: Metal runs the helpers of a partly covered quad, and
+  they take part in those operations, which Vulkan gives only under `RequireFullQuadsKHR`. Of the
+  venues run, KosmicKrisp on the M3 Max and the UHD 630's Windows driver lack the feature
+  (`vulkaninfo`, jobs m3-max-61179 and 61190). No replay stream has one: no fragment module of the
+  26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix function (each library whose
+  bytes name one disassembled with `llvm-dis`, jobs m3-max-52530, 52531, 52532, 52557 and 52604).
+  Their libraries that call quad functions, 2 to 5 a stream, call them from no fragment function.
+- A fragment function's raster order groups are refused at creation on every device, an
+  `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`: device
+  creation does not enable `VK_EXT_fragment_shader_interlock`.
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
 - On a driver that keeps the topology class in a pipeline (dynamicPrimitiveTopologyUnrestricted
@@ -3415,6 +3419,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_line_rasterization` | device | lines drawn by Bresenham's rule, through `bresenhamLines` below; every venue's driver lists this name (RADV, ANV, lavapipe, NVIDIA's, KosmicKrisp, and the UHD 630's Windows driver, a Vulkan 1.3 device) |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
+| `VK_KHR_shader_quad_control` | device, where listed | a fragment function's group operations over other lanes, through the quad-control feature below |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
@@ -3514,6 +3519,18 @@ changes.
 | Step-rate feature | Structure | Used for |
 |---|---|---|
 | `vertexAttributeInstanceRateDivisor` | `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR` | a vertex binding's divisor other than 1 |
+
+### Quad control
+
+A fragment function whose group operations read, combine or count other lanes has one form: its
+quads run whole under `RequireFullQuadsKHR`, helpers included, as Metal runs them. Where the
+device lists `VK_KHR_shader_quad_control` and reports the feature below, device creation enables
+both, and the translator builds the function; elsewhere it refuses the function at creation, an
+`Error::Translation` naming `SubgroupOperations` (Known gaps of render pipeline states).
+
+| Quad-control feature | Structure | Used for |
+|---|---|---|
+| `shaderQuadControl` | `VkPhysicalDeviceShaderQuadControlFeaturesKHR` | a fragment function's quads run whole for its group operations over other lanes |
 
 ### Limits
 

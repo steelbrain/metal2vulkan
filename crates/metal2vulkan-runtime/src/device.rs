@@ -500,6 +500,7 @@ impl Device {
             mut vulkan13,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
+            mut quad_control,
             mut robustness2,
             mut portability,
             mut feedback_loop,
@@ -539,6 +540,9 @@ impl Device {
         }
         if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
             features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
+        if enabled(ash::khr::shader_quad_control::NAME) {
+            features = features.push_next(&mut quad_control);
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);

@@ -35,6 +35,7 @@ impl DeviceExtension {
     /// `VkPhysicalDeviceVulkan11Features`, `12`, `13`,
     /// `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR`,
     /// `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR`,
+    /// `VkPhysicalDeviceShaderQuadControlFeaturesKHR`,
     /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`,
     /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` or
     /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`.

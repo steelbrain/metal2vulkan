@@ -219,6 +219,11 @@ impl Case for DiscardHoist {
                 .into_iter()
                 .map(|kind| crate::replay::notice_allowance(kind.code())),
             )
+            // And the runtime's note of a sample through a runtime sampler slot, which every
+            // shape's sample records under the identity domains (`pixel_sampler_scaling_notice`).
+            .chain(std::iter::once(
+                crate::replay::pixel_sampler_scaling_notice(),
+            ))
             .collect()
     }
 

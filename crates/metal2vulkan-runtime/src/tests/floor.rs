@@ -7,8 +7,8 @@ use crate::floor::{
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BORDER_SWIZZLE,
     BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
     MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
-    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS,
-    VERSION,
+    PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS,
+    TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -328,7 +328,7 @@ fn a_device_at_the_floor_is_above_it() {
             required.member
         );
     }
-    for optional in OPTIONAL.iter().chain(STEP_RATES) {
+    for optional in (OPTIONAL.iter().chain(STEP_RATES)).chain(QUAD_CONTROL) {
         assert!(!holds(enabled, optional), "{} is enabled", optional.member);
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
@@ -1135,6 +1135,40 @@ fn the_step_rate_feature_is_enabled_where_reported() {
         .contains(&VkExtension::ExtVertexAttributeDivisor));
 }
 
+/// A device that lists `VK_KHR_shader_quad_control` and reports `shaderQuadControl` is given both,
+/// and the translator sees both; one that lists the extension without the feature is given the
+/// extension alone.
+#[test]
+fn quad_control_is_enabled_where_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let extension = ash::khr::shader_quad_control::NAME;
+    let mut device = at_the_floor();
+    device.extensions.push(extension.to_owned());
+    let unreported = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(unreported.extensions.contains(&extension));
+    assert!(QUAD_CONTROL
+        .iter()
+        .all(|feature| !holds(&unreported.features, feature)));
+    let enables = shader_enables(&unreported);
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::KhrShaderQuadControl));
+    assert!(!enables.features.contains(&VkFeature::ShaderQuadControl));
+
+    device.features.quad_control.shader_quad_control = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(
+        capabilities.features.quad_control.shader_quad_control,
+        vk::TRUE
+    );
+    let enables = shader_enables(&capabilities);
+    assert!(enables.features.contains(&VkFeature::ShaderQuadControl));
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::KhrShaderQuadControl));
+}
+
 /// A device that lists `VK_EXT_border_color_swizzle` and reports `borderColorSwizzleFromImage` is
 /// given the extension, `VK_EXT_custom_border_color` (which it requires: Vulkan's
 /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`), and both its features; one that lists it
@@ -1452,6 +1486,10 @@ fn the_readme_states_the_floor() {
         ),
         (["Step-rate feature", "Structure", "Used for"], STEP_RATES),
         (
+            ["Quad-control feature", "Structure", "Used for"],
+            QUAD_CONTROL,
+        ),
+        (
             ["Border-swizzle feature", "Structure", "Used for"],
             BORDER_SWIZZLE,
         ),
@@ -1629,6 +1667,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut vulkan13,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
+            mut quad_control,
             mut robustness2,
             mut portability,
             mut feedback_loop,
@@ -1651,6 +1690,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
             features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
+        if enabled(ash::khr::shader_quad_control::NAME) {
+            features = features.push_next(&mut quad_control);
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);
