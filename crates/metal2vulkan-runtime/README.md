@@ -1503,6 +1503,16 @@ made, with no lock, and never rewritten for layouts.
   as no declaration tells it from a sample: it reads the texture's storage element without a
   format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and Vulkan does
   not define what that read returns.
+- A texture buffer's storage texel buffer is declared without a format too, and its answers are
+  its format's buffer features, of which Vulkan requires neither
+  `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT` nor the read bit, whatever the device's
+  features and the format. Where they lack the write bit it has no storage element, and where
+  they lack the read bit it is not read without a format: a draw or dispatch whose function writes
+  it at a slot, or reads it there through `access::read_write`, is `Gap::StorageElement`
+  (`VUID-vkCmdDispatch-OpTypeImage-07029`, `-07030`), whatever its format. The UHD Graphics
+  630's Windows driver (101.2145) answers neither bit for any format: there every texture buffer
+  a function writes or reads through `access::read_write` is refused, and one it reads through
+  `access::read` runs.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor

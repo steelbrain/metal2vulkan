@@ -6,7 +6,11 @@
 //!   another through the storage array: in bounds it reads the buffer's bytes and writes them,
 //!   and past the width it reads zero and writes nothing, as the Metal Shading Language defines
 //!   (a read out of bounds returns zero, a write out of bounds is ignored); the bytes around both
-//!   keep theirs, and the host reads the written texels through the texture and the buffer alike;
+//!   keep theirs, and the host reads the written texels through the texture and the buffer alike.
+//!   Its write is declared without a format, so where the device's buffer features for
+//!   `R32_UINT` lack `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT` the written texture
+//!   buffer has no storage element and the dispatch is `Gap::StorageElement` at its slot, exactly
+//!   there (`VUID-vkCmdDispatch-OpTypeImage-07029`);
 //! - an owned kernel adds to an `R32Uint` texture buffer's texels through an atomic and loads them
 //!   again (`access::read_write`), answering the texels the buffer held and leaving the sums there;
 //! - what Metal refuses (an offset off the device's alignment, a `bytesPerRow` below the row,
@@ -29,6 +33,7 @@ mod on_device {
         TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
         TextureViewKind,
     };
+    use ash::vk;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text, AssembleError};
 
     /// The bytes of the Shared block every buffer of a test lies in.
@@ -85,15 +90,31 @@ mod on_device {
         words[first..first + values.len()].copy_from_slice(values);
     }
 
+    /// The device's buffer features for `format` (`VkFormatProperties3::bufferFeatures`).
+    fn buffer_features(device: &Device, format: vk::Format) -> vk::FormatFeatureFlags2 {
+        let core = device.core();
+        let mut three = vk::FormatProperties3::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut three);
+        // SAFETY: the physical device is the instance's, which is Vulkan 1.3.
+        unsafe {
+            (core.instance.vk()).get_physical_device_format_properties2(
+                core.physical,
+                format,
+                &mut properties,
+            )
+        };
+        three.buffer_features
+    }
+
     /// One dispatch of `state` over `threads` threads in one threadgroup, with `textures` and
-    /// `buffers` at their slots, committed and finished.
+    /// `buffers` at their slots, committed and finished: the dispatch's answer.
     fn dispatch(
         device: &Device,
         state: &ComputePipelineState,
         textures: &[&Texture],
         buffers: &[&Buffer],
         threads: u32,
-    ) {
+    ) -> Result<(), Error> {
         let queue = device.new_command_queue(1).expect("a queue");
         let command_buffer = queue.command_buffer().expect("a command buffer");
         let mut encoder =
@@ -107,13 +128,12 @@ mod on_device {
         for (slot, buffer) in (0..).zip(buffers) {
             encoder.set_buffer(Some(buffer), 0, slot).expect("a buffer");
         }
-        encoder
-            .dispatch_threadgroups([1, 1, 1], [threads, 1, 1])
-            .expect("the dispatch");
+        let dispatched = encoder.dispatch_threadgroups([1, 1, 1], [threads, 1, 1]);
         encoder.end_encoding();
         command_buffer.commit().expect("a commit");
         finished("texture buffers", &command_buffer);
         assert_eq!(command_buffer.error(), None);
+        dispatched
     }
 
     #[test]
@@ -162,7 +182,27 @@ mod on_device {
             assert_eq!(read.descriptor().storage_mode, StorageMode::Shared);
             assert_eq!(read.gpu_resource_id().index, 1);
             let kernel = state(&device, &library, "ob1_texel_buffer");
-            dispatch(&device, &kernel, &[&read, &written], &[&idx, &out], 8);
+            let writes = buffer_features(&device, vk::Format::R32_UINT)
+                .contains(vk::FormatFeatureFlags2::STORAGE_WRITE_WITHOUT_FORMAT);
+            match (
+                writes,
+                dispatch(&device, &kernel, &[&read, &written], &[&idx, &out], 8),
+            ) {
+                (true, Ok(())) => {}
+                (
+                    false,
+                    Err(Error::Unsupported(Gap::StorageElement {
+                        slot: Some(1),
+                        pixel_format: PixelFormat::R32Uint,
+                    })),
+                ) => {
+                    println!("{name}: a texture buffer written without a format is refused");
+                    return;
+                }
+                (writes, other) => panic!(
+                    "{name}: the dispatch, its storage writes without a format {writes}: {other:?}"
+                ),
+            }
             // In bounds, the buffer's texels; past the width, zero.
             assert_eq!(words(&out)[..8], [11, 22, 33, 44, 0, 0, 0, 0], "{name}");
             let bytes = words(&data);
@@ -242,7 +282,8 @@ declare <4 x i32> @air.atomic_load_explicit_texture_buffer_1d.u.v4i32(ptr addrsp
                 (data.new_texture(&descriptor(PixelFormat::R32Uint, 4, usage), Some(1), 0, 16))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             let kernel = state(&device, &library, "tb_atomic");
-            dispatch(&device, &kernel, &[&texels], &[&out], 4);
+            (dispatch(&device, &kernel, &[&texels], &[&out], 4))
+                .unwrap_or_else(|error| panic!("{name}: the dispatch: {error:?}"));
             let answers = words(&out);
             assert_eq!(answers[..4], [10, 20, 30, 40], "{name}: the texels held");
             assert_eq!(

@@ -1337,7 +1337,14 @@ pub enum Gap {
     /// `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`, `BGR10A2Unorm` and
     /// `RG11B10Float` among others on ANV before Gfx12.5): such a read is outside Vulkan's valid
     /// usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats are outside Metal's
-    /// read-write tiers, whose reads Metal's documentation defines. With no slot: a dispatch whose
+    /// read-write tiers, whose reads Metal's documentation defines. A texture buffer's answers are
+    /// its format's buffer features, of which Vulkan requires neither bit, whatever the device's
+    /// features and the format: it has no storage element where they lack
+    /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`
+    /// (`VUID-vkCmdDispatch-OpTypeImage-07029`), and is not read without a format where they lack
+    /// the read bit (`-07030`). The UHD Graphics 630's Windows driver (101.2145) answers neither
+    /// bit for any format, so there every texture buffer a function writes, or reads through
+    /// `access::read_write`, is refused, `R32Uint` included. With no slot: a dispatch whose
     /// kernel, or a draw whose vertex or fragment function, may reach a texture through its
     /// storage image beyond its slots (an argument buffer's `access::write` or
     /// `access::read_write` texture, a resource ID), in an encoder where `use_resource` declared a

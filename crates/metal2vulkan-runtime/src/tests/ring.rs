@@ -41,6 +41,15 @@ mod on_device {
         core.ring.chunks().expect("the ring's lock is free")
     }
 
+    /// The ring's blocks and free chunks once the block-maker thread has answered every ask. Where
+    /// it makes none, its answer to a take's ask (`Ring::unasked`) takes the ring's lock on its own
+    /// thread, at whatever time the host's scheduler runs it, so a read before that answer may
+    /// find the lock held.
+    fn settled(core: &Core) -> (usize, usize) {
+        core.pool.await_internals();
+        chunks(core)
+    }
+
     #[test]
     fn the_block_maker_thread_makes_the_ring_s_next_block_ahead_of_the_takes() {
         each_device("ring_ahead", |name, _, device| {
@@ -115,14 +124,14 @@ mod on_device {
         each_device_with("ring_off_the_lock", options, |name, _, device| {
             let core = device.core();
             let ring = &core.ring;
-            if chunks(core).1 == 0 {
+            if settled(core).1 == 0 {
                 taken(core, 1).give_back(core);
             }
             // Every free chunk taken, one of them apart to give back while a block is made.
-            let (before, free) = chunks(core);
+            let (before, free) = settled(core);
             let held = taken(core, free - 1);
             let spare = taken(core, 1);
-            assert_eq!(chunks(core), (before, 0), "{name}: every chunk taken");
+            assert_eq!(settled(core), (before, 0), "{name}: every chunk taken");
             let park = Arc::new(Barrier::new(2));
             *lock(&ring.park) = Some(Arc::clone(&park));
             let maker = take_one(core);
@@ -142,7 +151,7 @@ mod on_device {
             let made = maker.join().expect("the maker");
             let waited = waiter.join().expect("the waiter");
             assert_eq!(
-                chunks(core).0,
+                settled(core).0,
                 before + 1,
                 "{name}: takes that met made one block between them"
             );
@@ -150,13 +159,13 @@ mod on_device {
                 writes.give_back(core);
             }
             // A fill past the ring's chunks makes one block; chunks given back are taken again.
-            let (blocks, free) = chunks(core);
+            let (blocks, free) = settled(core);
             let past = taken(core, free + 1);
-            assert_eq!(chunks(core).0, blocks + 1, "{name}: one block past");
+            assert_eq!(settled(core).0, blocks + 1, "{name}: one block past");
             past.give_back(core);
-            let again = taken(core, chunks(core).1);
+            let again = taken(core, settled(core).1);
             assert_eq!(
-                chunks(core),
+                settled(core),
                 (blocks + 1, 0),
                 "{name}: chunks given back are taken before a block is made"
             );
