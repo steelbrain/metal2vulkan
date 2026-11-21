@@ -469,13 +469,6 @@ pub fn function_key(
         h.bytes(b"cubic-samplers")
             .bytes(format!("{:?}", inputs.cubic_samplers).as_bytes());
     }
-    // Appended only when set, in its derived `Debug` form, as `dropped_colors` is: the shadowed
-    // variant of a function whose fetch inputs already hold the color (a blend's) is otherwise the
-    // unshadowed one's key, and a cache would hand it the unshadowed artifact.
-    if !inputs.extended_shadows.is_empty() {
-        h.bytes(b"extended-shadows")
-            .bytes(format!("{:?}", inputs.extended_shadows).as_bytes());
-    }
     // Appended only when set: the default mode keeps every key.
     if inputs.texture_write_rounding != crate::metal::TextureWriteRoundingMode::TowardZero {
         h.bytes(b"texture-write-rounding-nearest-even");

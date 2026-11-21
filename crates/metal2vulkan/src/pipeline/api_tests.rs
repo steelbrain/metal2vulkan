@@ -264,7 +264,6 @@ mod serde_round_trips {
             primitive_id_indices: Some(metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
-            extended_shadows: BTreeSet::from([0]),
             snapshot_textures: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 2),
                 crate::pipeline::SnapshotForm::Unorm8,
@@ -477,7 +476,6 @@ mod serde_round_trips {
                 (4, crate::pipeline::RotatedBlendForm::Premultiplied),
                 (6, crate::pipeline::RotatedBlendForm::Unmeasured),
             ]),
-            extended_shadows: BTreeSet::from([0]),
             cross_class: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 10),
                 SampledType::Float,
@@ -1016,7 +1014,6 @@ mod bind_serde_round_trips {
             resident_ranges: vec![crate::bind::ResidentRange::new(0x9_0000, 0x3_0000, 100)],
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Depth { writes: true },
-            extended_shadows: BTreeSet::from([0]),
             snapshot_textures: BTreeSet::from([2]),
             depth_range: [0.25, 0.75],
             depth_clip_mode_clamp: true,
@@ -1085,7 +1082,6 @@ mod bind_serde_round_trips {
             line_band: Some(crate::pipeline::BandPrimitive::Lines),
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Pass,
-            extended_shadows: BTreeSet::from([0]),
             snapshot_textures: BTreeSet::from([2]),
             primitive_id_indices: Some(metal::IndexType::UInt32),
             quad_primitive_ids: true,

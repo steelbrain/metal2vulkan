@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2224;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 570;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 571;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -455,13 +455,6 @@ pub struct VariantKey {
     /// (`RuntimeFact::PrivateList`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
-    /// Extended-range color attachments whose `half` shadow the draw's render pass instance
-    /// holds (`BindShape::extended_shadows`): the variant's fragment function reads and writes
-    /// each through the interlocked storage form against the shadow as Metal's tile value
-    /// (`LoweringInputs::extended_shadows`), and keeps writing the codes. The runtime asks for it
-    /// for every draw of an instance that holds the shadow and reads or writes the attachment.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub extended_shadows: BTreeSet<u32>,
     /// Sampled texture slots whose compile states `RuntimeFact::CrossClassReads` bound to a
     /// texture of a color format whose numeric class is not the slot's declared one, by the
     /// bound format's class (`LoweringInputs::cross_class`): the variant's function reads,
@@ -489,8 +482,8 @@ pub struct VariantKey {
     /// draws them in groups (`crate::pipeline::ColorGroup`, `GraphicsState::color_group`): its
     /// fragment function writes that group's attachments alone, at locations `0..`
     /// (`LoweringInputs::color_group`), and its graphics state holds them alone. The key's other
-    /// choices of colors (`zeroed_colors`, `dropped_colors`, `interlocked_colors`,
-    /// `extended_shadows`) then name the group's locations, as a bind plan of the variant over its
+    /// choices of colors (`zeroed_colors`, `dropped_colors`, `interlocked_colors`) then name the
+    /// group's locations, as a bind plan of the variant over its
     /// group's part of the pass asks for them; no bind plan sets the group itself. 0, the first
     /// group, by default; a group past the pipeline's last is no plan's (an invariant). Not a
     /// lowering input of its own: the render pipeline's compile derives the fragment function's
@@ -618,7 +611,6 @@ impl VariantKey {
             && self.primitive_id_indices.is_none()
             && !self.quad_primitive_ids
             && !self.private_list
-            && self.extended_shadows.is_empty()
             && self.cross_class.is_empty()
             && self.anisotropic_samplers.is_empty()
             && self.open_cl_lines.is_empty()
@@ -786,7 +778,6 @@ impl VariantKey {
             out.read_only_tests = self.read_only_tests;
             out.shader_tests = self.shader_tests;
             out.shader_stencil = self.shader_stencil;
-            out.extended_shadows = self.extended_shadows.clone();
         }
         out.window_depth_varying =
             self.window_depth_varying && stage == crate::pipeline::sym::Stage::Vertex;

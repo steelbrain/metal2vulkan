@@ -2046,7 +2046,6 @@ field	metal2vulkan::bind::AstcDecode.width	pub width: u32
 field	metal2vulkan::bind::BindShape.argument_samplers	pub argument_samplers: ArgumentSamplersShape
 field	metal2vulkan::bind::BindShape.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::bind::BindShape.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::bind::BindShape.extended_shadows	pub extended_shadows: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.fragment_tests	pub fragment_tests: FragmentTests
 field	metal2vulkan::bind::BindShape.function_tables	pub function_tables: FunctionTablesShape
@@ -2077,7 +2076,6 @@ field	metal2vulkan::bind::BindState.depth_clip_mode_clamp	pub depth_clip_mode_cl
 field	metal2vulkan::bind::BindState.depth_range	pub depth_range: [f32; 2]
 field	metal2vulkan::bind::BindState.depth_stencil	pub depth_stencil: metal::state::DepthStencilDescriptor
 field	metal2vulkan::bind::BindState.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::bind::BindState.extended_shadows	pub extended_shadows: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.fragment_tests	pub fragment_tests: FragmentTests
 field	metal2vulkan::bind::BindState.function_tables	pub function_tables: Vec<ArgumentFunctionTable>
@@ -2522,7 +2520,6 @@ field	metal2vulkan::cache::VariantKey.dropped_colors	pub dropped_colors: BTreeSe
 field	metal2vulkan::cache::VariantKey.dropped_vertex_layer	pub dropped_vertex_layer: bool
 field	metal2vulkan::cache::VariantKey.emulated_simdgroups	pub emulated_simdgroups: bool
 field	metal2vulkan::cache::VariantKey.extended_range	pub extended_range: BTreeMap<SlotRef, crate::metal::format::ExtendedRange>
-field	metal2vulkan::cache::VariantKey.extended_shadows	pub extended_shadows: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.flat_grid	pub flat_grid: bool
 field	metal2vulkan::cache::VariantKey.folded_groups	pub folded_groups: bool
 field	metal2vulkan::cache::VariantKey.interlocked_colors	pub interlocked_colors: BTreeSet<u32>
@@ -3093,7 +3090,6 @@ field	metal2vulkan::pipeline::LoweringInputs.dropped_vertex_layer	pub dropped_ve
 field	metal2vulkan::pipeline::LoweringInputs.emulated_simdgroups	pub emulated_simdgroups: bool
 field	metal2vulkan::pipeline::LoweringInputs.extended_range	pub extended_range: BTreeMap<SlotRef, metal::format::ExtendedRange>
 field	metal2vulkan::pipeline::LoweringInputs.extended_range_colors	pub extended_range_colors: BTreeMap<u32, ExtendedRangeColor>
-field	metal2vulkan::pipeline::LoweringInputs.extended_shadows	pub extended_shadows: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.flat_grid	pub flat_grid: bool
 field	metal2vulkan::pipeline::LoweringInputs.folded_groups	pub folded_groups: bool
 field	metal2vulkan::pipeline::LoweringInputs.framebuffer_fetch	pub framebuffer_fetch: Option<FramebufferFetchInputs>
@@ -9938,7 +9934,6 @@ variant	metal2vulkan::bind::WriteSource::ConstantBlob	ConstantBlob { stage: Stag
 variant	metal2vulkan::bind::WriteSource::ControlPointIndices	ControlPointIndices
 variant	metal2vulkan::bind::WriteSource::DepthStandIn	DepthStandIn
 variant	metal2vulkan::bind::WriteSource::ExecutionStatus	ExecutionStatus
-variant	metal2vulkan::bind::WriteSource::ExtendedShadow	ExtendedShadow { color_index: u32 }
 variant	metal2vulkan::bind::WriteSource::FunctionTable	FunctionTable { index: u32 }
 variant	metal2vulkan::bind::WriteSource::FunctionTableSnapshot	FunctionTableSnapshot
 variant	metal2vulkan::bind::WriteSource::HandleTable	HandleTable { stage: Stage, bytes_len: u32 }
@@ -11031,7 +11026,6 @@ variant	metal2vulkan::pipeline::BandPrimitive::Triangles	Triangles
 variant	metal2vulkan::pipeline::BindingSource::AccelerationStructure	AccelerationStructure { slot: SlotRef, level: AccelerationStructureLevel }
 variant	metal2vulkan::pipeline::BindingSource::Buffer	Buffer(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::CombinedTextureSampler	CombinedTextureSampler { texture: SlotRef, sampler: CombinedSampler }
-variant	metal2vulkan::pipeline::BindingSource::ExtendedShadow	ExtendedShadow(u32)
 variant	metal2vulkan::pipeline::BindingSource::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::BindingSource::HeapSampler	HeapSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::IdentityArray	IdentityArray
@@ -11254,7 +11248,6 @@ variant	metal2vulkan::pipeline::RegionFanOut::RegionCopies	RegionCopies
 variant	metal2vulkan::pipeline::ResourceKind::AccelerationStructure	AccelerationStructure(AccelerationStructureLevel)
 variant	metal2vulkan::pipeline::ResourceKind::Buffer	Buffer
 variant	metal2vulkan::pipeline::ResourceKind::CombinedTextureSampler	CombinedTextureSampler(CombinedSampler)
-variant	metal2vulkan::pipeline::ResourceKind::ExtendedShadow	ExtendedShadow(u32)
 variant	metal2vulkan::pipeline::ResourceKind::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::ResourceKind::HeapSampler	HeapSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::InputAttachment	InputAttachment(u32)

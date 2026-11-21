@@ -31,8 +31,8 @@
 //! (`Synthetic(DepthStandIn)` and `Synthetic(StencilStandIn)`), whose writes carry Metal's depth
 //! and stencil tests.
 //!
-//! So are a color attachment's interlocked storage form (`TileAttachment`) and an extended-range
-//! color's `half` shadow (`ExtendedShadow`): their writes carry Metal's color attachment write, a
+//! So is a color attachment's interlocked storage form (`TileAttachment`): its writes carry
+//! Metal's color attachment write, a
 //! color output, which Metal masks as it masks any (a sample mask, a failed test) and stores per
 //! sample whether the function runs per pixel or per sample, and which no other invocation or
 //! command reads but through the attachment. A multisampled pipeline's storage form runs per sample
@@ -96,8 +96,8 @@ struct Status<'m> {
     /// The variables of the `Synthetic(ExecutionStatus)` binding.
     bindings: Vec<Value>,
     /// The variables of the `Synthetic(ShadowStencil)`, `Synthetic(DepthStandIn)`,
-    /// `Synthetic(StencilStandIn)`, `TileAttachment`, `ExtendedShadow` and `SnapshotTexels`
-    /// bindings, and the loads of them.
+    /// `Synthetic(StencilStandIn)`, `TileAttachment` and `SnapshotTexels` bindings, and the loads
+    /// of them.
     shadows: Vec<Value>,
     /// The push block's variable.
     block: Option<Value>,
@@ -129,7 +129,6 @@ impl<'m> Status<'m> {
                                 | SyntheticBinding::DepthStandIn
                                 | SyntheticBinding::StencilStandIn
                         ) | ResourceKind::TileAttachment(_)
-                            | ResourceKind::ExtendedShadow(_)
                             | ResourceKind::SnapshotTexels(_)
                     ) =>
                 {

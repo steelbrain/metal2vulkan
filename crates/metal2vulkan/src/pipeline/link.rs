@@ -842,7 +842,6 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
             stage: slot.stage,
             sampler: CombinedSampler::from_heap_index(sampler, slot.index),
         },
-        ResourceKind::ExtendedShadow(color) => BindingSource::ExtendedShadow(color),
         ResourceKind::SnapshotTexels(texture) => BindingSource::SnapshotTexels(texture),
         ResourceKind::YCbCrPlanes(_) => BindingSource::YCbCrPlanes(metal(SlotClass::Texture)),
         ResourceKind::SamplerArray { compare, integer } => BindingSource::SamplerArray {

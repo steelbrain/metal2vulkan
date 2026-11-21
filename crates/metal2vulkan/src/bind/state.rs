@@ -290,15 +290,6 @@ pub struct BindState {
     /// (`BindShape::interlocked_colors`); empty for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub interlocked_colors: BTreeSet<u32>,
-    /// The extended-range color attachments whose `half` shadow the draw's render pass instance
-    /// holds (Metal's tile value of each texel), by color index: a fragment function that writes or
-    /// reads one in the interlocked storage form runs the variant that reads and writes the shadow
-    /// beside the codes (`VariantKey::extended_shadows`), and the consumer binds the instance's
-    /// shadow where the plan writes `WriteSource::ExtendedShadow`. The colors the function writes
-    /// this way the instance leaves out of its subpass, as it does `interlocked_colors`. Its
-    /// variant is part of the shape (`BindShape::extended_shadows`); empty for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub extended_shadows: BTreeSet<u32>,
     /// The fragment texture slots the consumer reads through a snapshot, by Metal index: a draw
     /// that reads a texture its render pass renders, where the consumer draws it twice, first
     /// taking each fragment's texel into the slot's snapshot with every color write mask zero,
@@ -641,7 +632,6 @@ impl BindState {
             line_band: self.line_band.map(|(primitive, _)| primitive),
             interlocked_colors: self.interlocked_colors.clone(),
             fragment_tests: self.fragment_tests,
-            extended_shadows: self.extended_shadows.clone(),
             snapshot_textures: self.snapshot_textures.clone(),
             primitive_id_indices: self.primitive_id_indices,
             quad_primitive_ids: self.quad_primitive_ids,
@@ -728,7 +718,6 @@ impl BindState {
             line_band,
             interlocked_colors,
             fragment_tests,
-            extended_shadows,
             snapshot_textures,
             primitive_id_indices,
             quad_primitive_ids,
@@ -758,7 +747,6 @@ impl BindState {
             && self.line_band.map(|(primitive, _)| primitive) == *line_band
             && self.interlocked_colors == *interlocked_colors
             && self.fragment_tests == *fragment_tests
-            && self.extended_shadows == *extended_shadows
             && self.snapshot_textures == *snapshot_textures
             && self.primitive_id_indices == *primitive_id_indices
             && self.quad_primitive_ids == *quad_primitive_ids
@@ -1733,11 +1721,6 @@ pub struct BindShape {
     /// or is refused.
     #[cfg_attr(feature = "serde", serde(default))]
     pub fragment_tests: FragmentTests,
-    /// `BindState.extended_shadows`: the variant whose fragment function reads and writes those
-    /// it reads or writes in the storage form against their shadows
-    /// (`VariantKey::extended_shadows`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub extended_shadows: BTreeSet<u32>,
     /// `BindState.snapshot_textures`: the variant whose fragment function reads those of them
     /// the pipeline can read through a snapshot so (`VariantKey::snapshot_textures`).
     #[cfg_attr(feature = "serde", serde(default))]

@@ -2544,11 +2544,7 @@ pub(crate) fn unattached_colors_written(
 /// word attachment it writes under a mask of some of the word's channels (whose word the function
 /// merges into its input attachment's, `color_writes::merged_word`), and of every extended-range
 /// attachment it writes unblended under a mask of some of the codes one word holds (merged so,
-/// `color_writes::merged_extended`); and, where `v`'s instance holds extended-range shadows
-/// (`VariantKey::extended_shadows`), the state of each shadowed attachment the entry reads or
-/// writes through its first output, with the pass's depth or stencil attachment and alpha to
-/// coverage, which bear on the shadow the function stores (`lower::fragment`'s `input_shadow`).
-/// On either device, under a private logic operation the function computes
+/// `color_writes::merged_extended`). On either device, under a private logic operation the function computes
 /// (`FragmentPass::logic_operation`), the state of every attachment whose format the operation
 /// serves that the entry writes through its first output (`lower::fragment`'s `logic`).
 pub(crate) fn fetch_inputs(
@@ -2562,9 +2558,6 @@ pub(crate) fn fetch_inputs(
     if !matches!(spec.ep.stage, AbiStage::Fragment { .. }) || !(interlock || inputs) {
         return None;
     }
-    // An extended-range color whose `half` shadow the draw's instance holds, which a function on
-    // a device that fetches through input attachments reads beside it.
-    let shadowed = |color: u32| inputs && v.extended_shadows.contains(&color);
     let blended = |color: u32| {
         d.color_attachments
             .get(color as usize)
@@ -2637,7 +2630,7 @@ pub(crate) fn fetch_inputs(
             ParamRole::ColorInput {
                 index: AbiInt::Const(color),
                 ..
-            } if interlock || shadowed(color) => Some(color),
+            } if interlock => Some(color),
             _ => None,
         })
         .chain(spec.ep.outputs.iter().filter_map(|o| match o.role {
@@ -2660,14 +2653,6 @@ pub(crate) fn fetch_inputs(
                 index: 0,
                 ..
             } if interlock && v.interlocked_colors.contains(&color) => Some(color),
-            // An extended-range color whose `half` shadow the draw's instance holds, written
-            // through the storage form against it, or over an input attachment beside its shadow
-            // (`lower::fragment`'s `input_shadow`).
-            OutputRole::RenderTarget {
-                attachment: AbiInt::Const(color),
-                index: 0,
-                ..
-            } if v.extended_shadows.contains(&color) => Some(color),
             _ => None,
         }))
         .collect();
@@ -2675,9 +2660,7 @@ pub(crate) fn fetch_inputs(
         return None;
     }
     // The blend over an input attachment depends on the attachments' state alone: its write is
-    // the fixed function's, which the tests, coverage and views take as any other's. A shadow
-    // beside it is stored by the function, so the tests and the coverage bear on it.
-    let shadows = inputs && !v.extended_shadows.is_empty();
+    // the fixed function's, which the tests, coverage and views take as any other's.
     Some(match interlock {
         true => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
             read,
@@ -2689,8 +2672,8 @@ pub(crate) fn fetch_inputs(
         false => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
             read,
             d.color_attachments,
-            shadows && d.depth_or_stencil,
-            shadows && d.alpha_to_coverage,
+            false,
+            false,
             1,
         ),
     })

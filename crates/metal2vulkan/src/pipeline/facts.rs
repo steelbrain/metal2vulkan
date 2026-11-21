@@ -524,8 +524,8 @@ pub enum RuntimeFact {
     /// fragment function writes
     /// a color through its first output and does not declare early fragment tests, and it
     /// discards, writes other memory, or returns depth, stencil, or a sample mask. A draw may move
-    /// such a color into the interlocked storage form (`BindShape::interlocked_colors`, or an
-    /// extended-range color's `BindShape::extended_shadows`), whose variant then stores before the
+    /// such a color into the interlocked storage form (`BindShape::interlocked_colors`), whose
+    /// variant then stores before the
     /// depth and stencil tests and states [`TestedStorageWrites`](Self::TestedStorageWrites) with
     /// this `early_variant`, where the write stores something. So the plan of a pipeline that
     /// writes no color so selects the tests of such a draw from this as from that fact, and the

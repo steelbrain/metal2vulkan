@@ -1,8 +1,7 @@
 //! Plain color writers a draw moves into the interlocked storage form.
 //!
 //! A render pass instance can keep a color out of its subpass for other draws' interlocked storage
-//! form (`BindShape::interlocked_colors`), or hold an extended-range color's `half` shadow
-//! (`BindShape::extended_shadows`); a draw there of a pipeline that writes the color as an
+//! form (`BindShape::interlocked_colors`); a draw there of a pipeline that writes the color as an
 //! ordinary output runs the variant that writes it through the storage form, inside the fragment
 //! function and so before the depth and stencil tests. The owned fixture `smw_writers` has one
 //! plain writer of color 0 per way those tests bear on such a store: none (no discard, no other
@@ -60,14 +59,6 @@ const WRITERS: [(&str, Class); 6] = [
     ("smw_mask", Class::Untested),
 ];
 
-/// How a draw moves color 0 into the storage form: an interlocked `RGBA16Float` color, or a
-/// `BGRA10_XR` color's `half` shadow.
-#[derive(Clone, Copy, Debug)]
-enum Move {
-    Interlocked,
-    Shadow,
-}
-
 const TESTS: [FragmentTests; 6] = [
     FragmentTests::Pass,
     FragmentTests::Drop,
@@ -107,20 +98,15 @@ fn ordering_devices() -> Vec<(String, Device)> {
         .collect()
 }
 
-/// The bind state of a draw under `tests` that moves color 0 as `moved` does (none for `None`).
-fn moving(tests: FragmentTests, moved: Option<Move>) -> BindState {
+/// The bind state of a draw under `tests` that moves color 0 into the interlocked storage form
+/// where `moved`.
+fn moving(tests: FragmentTests, moved: bool) -> BindState {
     let mut state = BindState {
         fragment_tests: tests,
         ..Default::default()
     };
-    match moved {
-        Some(Move::Interlocked) => {
-            state.interlocked_colors.insert(0);
-        }
-        Some(Move::Shadow) => {
-            state.extended_shadows.insert(0);
-        }
-        None => {}
+    if moved {
+        state.interlocked_colors.insert(0);
     }
     state
 }
@@ -180,89 +166,84 @@ fn a_moved_writer_selects_its_tests_in_its_first_plan() {
     for (stem, dev) in &devices {
         checked.push(stem.as_str());
         for (writer, class) in WRITERS {
-            for moved in [Move::Interlocked, Move::Shadow] {
-                let mut d = RenderPipelineDescriptor::new(stage(&library, "smw_full"));
-                d.fragment = Some(stage(&library, writer));
-                d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(match moved {
-                    Move::Interlocked => PixelFormat::RGBA16Float,
-                    Move::Shadow => PixelFormat::BGRA10XR,
-                }));
-                d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
-                d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
-                let what = format!("{stem} {writer} {moved:?}");
-                // A device short of what the writer needs (a fragment store) refuses it whole.
-                let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                    Ok(base) => base,
-                    Err(e) => {
-                        eprintln!("{what}: refused as compiled: {e}");
+            let mut d = RenderPipelineDescriptor::new(stage(&library, "smw_full"));
+            d.fragment = Some(stage(&library, writer));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+            d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+            d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+            let what = format!("{stem} {writer}");
+            // A device short of what the writer needs (a fragment store) refuses it whole.
+            let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                Ok(base) => base,
+                Err(e) => {
+                    eprintln!("{what}: refused as compiled: {e}");
+                    continue;
+                }
+            };
+            assert!(base.graphics.storage_attachments.is_empty(), "{what}");
+            // The `early_variant` the function states, and its variant with it.
+            let stated = match class {
+                Class::Free => None,
+                Class::EarlyVariant => Some(true),
+                Class::Untested => Some(false),
+            };
+            let movable = base.dependencies.iter().find_map(|d| match d.fact {
+                RuntimeFact::MovableStorageWrites { early_variant } => Some(early_variant),
+                _ => None,
+            });
+            assert_eq!(movable, stated, "{what}: the function's movable writes");
+            for tests in TESTS {
+                let shape = moving(tests, true).shape();
+                let what = format!("{what} {tests:?}");
+                let planned = base.plan(dev, &shape);
+                // The variant the plan names, compiled, plans itself: the runtime fails a draw
+                // whose compiled variant asks for another one.
+                let variant = planned.as_ref().ok().map(|plan| {
+                    let variant = dev
+                        .compile_render_variant(&d, &plan.variant, &Budget::standard())
+                        .unwrap_or_else(|e| panic!("{what}: the variant: {e}"));
+                    let again = variant.plan(dev, &shape).unwrap_or_else(|e| {
+                        panic!("{what}: the variant planned refuses the draw: {e}")
+                    });
+                    assert_eq!(again.variant, plan.variant, "{what}: a fixed point");
+                    variant
+                });
+                let plan = match (planned, wanted(class, tests)) {
+                    (Ok(plan), Some(_)) => plan,
+                    (Err(BindError::Unsupported(_)), None) => continue,
+                    // The function's own tests the device does not ship.
+                    (Err(BindError::Unsupported(u)), Some((_, true))) => {
+                        eprintln!("{what}: its own tests refused: {u:?}");
                         continue;
                     }
-                };
-                assert!(base.graphics.storage_attachments.is_empty(), "{what}");
-                // The `early_variant` the function states, and its variant with it.
-                let stated = match class {
-                    Class::Free => None,
-                    Class::EarlyVariant => Some(true),
-                    Class::Untested => Some(false),
-                };
-                let movable = base.dependencies.iter().find_map(|d| match d.fact {
-                    RuntimeFact::MovableStorageWrites { early_variant } => Some(early_variant),
-                    _ => None,
-                });
-                assert_eq!(movable, stated, "{what}: the function's movable writes");
-                for tests in TESTS {
-                    let shape = moving(tests, Some(moved)).shape();
-                    let what = format!("{what} {tests:?}");
-                    let planned = base.plan(dev, &shape);
-                    // The variant the plan names, compiled, plans itself: the runtime fails a draw
-                    // whose compiled variant asks for another one.
-                    let variant = planned.as_ref().ok().map(|plan| {
-                        let variant = dev
-                            .compile_render_variant(&d, &plan.variant, &Budget::standard())
-                            .unwrap_or_else(|e| panic!("{what}: the variant: {e}"));
-                        let again = variant.plan(dev, &shape).unwrap_or_else(|e| {
-                            panic!("{what}: the variant planned refuses the draw: {e}")
-                        });
-                        assert_eq!(again.variant, plan.variant, "{what}: a fixed point");
-                        variant
-                    });
-                    let plan = match (planned, wanted(class, tests)) {
-                        (Ok(plan), Some(_)) => plan,
-                        (Err(BindError::Unsupported(_)), None) => continue,
-                        // The function's own tests the device does not ship.
-                        (Err(BindError::Unsupported(u)), Some((_, true))) => {
-                            eprintln!("{what}: its own tests refused: {u:?}");
-                            continue;
-                        }
-                        (planned, want) => {
-                            panic!(
-                                "{what}: planned {:?}, wanted {want:?}",
-                                planned.map(|p| p.variant)
-                            )
-                        }
-                    };
-                    let (read_only, shader) = wanted(class, tests).expect("planned");
-                    assert_eq!(
-                        (plan.variant.read_only_tests, plan.variant.shader_tests),
-                        (read_only, shader),
-                        "{what}"
-                    );
-                    let variant = variant.expect("compiled for the plan");
-                    assert!(
-                        storage_write(&variant).is_some(),
-                        "{what}: the variant writes color 0 through the storage form"
-                    );
-                    assert_eq!(
-                        stored_before_tests(&variant),
-                        stated,
-                        "{what}: the variant's store before the tests"
-                    );
-                    for m in &variant.stages {
-                        check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                            .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                    (planned, want) => {
+                        panic!(
+                            "{what}: planned {:?}, wanted {want:?}",
+                            planned.map(|p| p.variant)
+                        )
                     }
-                    fixed_points.insert((writer, (read_only, shader)));
+                };
+                let (read_only, shader) = wanted(class, tests).expect("planned");
+                assert_eq!(
+                    (plan.variant.read_only_tests, plan.variant.shader_tests),
+                    (read_only, shader),
+                    "{what}"
+                );
+                let variant = variant.expect("compiled for the plan");
+                assert!(
+                    storage_write(&variant).is_some(),
+                    "{what}: the variant writes color 0 through the storage form"
+                );
+                assert_eq!(
+                    stored_before_tests(&variant),
+                    stated,
+                    "{what}: the variant's store before the tests"
+                );
+                for m in &variant.stages {
+                    check_words_valid(&m.spirv, &variant.requirements, dev.profile())
+                        .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 }
+                fixed_points.insert((writer, (read_only, shader)));
             }
         }
     }
@@ -301,63 +282,58 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
     let mut states = 0usize;
     for (stem, dev) in &devices {
         for (writer, _) in WRITERS {
-            for moved in [Move::Interlocked, Move::Shadow] {
-                let mut d = RenderPipelineDescriptor::new(stage(&library, "smw_full"));
-                d.fragment = Some(stage(&library, writer));
-                let mut color = ColorAttachmentDescriptor::new(match moved {
-                    Move::Interlocked => PixelFormat::RGBA16Float,
-                    Move::Shadow => PixelFormat::BGRA10XR,
-                });
-                color.write_mask = ColorWriteMask::NONE;
-                d.color_attachments[0] = Some(color);
-                d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
-                d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
-                let what = format!("{stem} {writer} {moved:?} (write mask none)");
-                let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                    Ok(base) => base,
+            let mut d = RenderPipelineDescriptor::new(stage(&library, "smw_full"));
+            d.fragment = Some(stage(&library, writer));
+            let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float);
+            color.write_mask = ColorWriteMask::NONE;
+            d.color_attachments[0] = Some(color);
+            d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+            d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+            let what = format!("{stem} {writer} (write mask none)");
+            let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                Ok(base) => base,
+                Err(e) => {
+                    eprintln!("{what}: refused as compiled: {e}");
+                    continue;
+                }
+            };
+            assert_eq!(stored_before_tests(&base), None, "{what}");
+            for tests in TESTS {
+                states += 1;
+                let shape = moving(tests, true).shape();
+                let what = format!("{what} {tests:?}");
+                let mut miss = |kind: &'static str| {
+                    misses.entry(kind).or_default().push(what.clone());
+                };
+                let plan = match base.plan(dev, &shape) {
+                    Ok(plan) => plan,
                     Err(e) => {
-                        eprintln!("{what}: refused as compiled: {e}");
+                        miss("the plan refuses the draw");
+                        eprintln!("{what}: the plan refuses the draw: {e}");
                         continue;
                     }
                 };
-                assert_eq!(stored_before_tests(&base), None, "{what}");
-                for tests in TESTS {
-                    states += 1;
-                    let shape = moving(tests, Some(moved)).shape();
-                    let what = format!("{what} {tests:?}");
-                    let mut miss = |kind: &'static str| {
-                        misses.entry(kind).or_default().push(what.clone());
-                    };
-                    let plan = match base.plan(dev, &shape) {
-                        Ok(plan) => plan,
-                        Err(e) => {
-                            miss("the plan refuses the draw");
-                            eprintln!("{what}: the plan refuses the draw: {e}");
-                            continue;
-                        }
-                    };
-                    let key = &plan.variant;
-                    if key.read_only_tests || key.shader_tests || key.shader_stencil {
-                        miss("the plan selects tests");
-                    }
-                    let variant = dev
-                        .compile_render_variant(&d, key, &Budget::standard())
-                        .unwrap_or_else(|e| panic!("{what}: the variant: {e}"));
-                    assert_eq!(
-                        storage_write(&variant),
-                        Some(vk::ColorComponentFlags::known_bits()),
-                        "{what}: the variant's write of color 0 keeps every channel"
-                    );
-                    if stored_before_tests(&variant).is_some() {
-                        miss("the variant states a store before the tests");
-                    }
-                    match variant.plan(dev, &shape) {
-                        Ok(again) if again.variant == *key => {}
-                        Ok(_) => miss("the variant's plan asks for another variant"),
-                        Err(_) => miss("the variant's plan refuses the draw"),
-                    }
-                    planned.insert((writer, format!("{moved:?}"), format!("{tests:?}")));
+                let key = &plan.variant;
+                if key.read_only_tests || key.shader_tests || key.shader_stencil {
+                    miss("the plan selects tests");
                 }
+                let variant = dev
+                    .compile_render_variant(&d, key, &Budget::standard())
+                    .unwrap_or_else(|e| panic!("{what}: the variant: {e}"));
+                assert_eq!(
+                    storage_write(&variant),
+                    Some(vk::ColorComponentFlags::known_bits()),
+                    "{what}: the variant's write of color 0 keeps every channel"
+                );
+                if stored_before_tests(&variant).is_some() {
+                    miss("the variant states a store before the tests");
+                }
+                match variant.plan(dev, &shape) {
+                    Ok(again) if again.variant == *key => {}
+                    Ok(_) => miss("the variant's plan asks for another variant"),
+                    Err(_) => miss("the variant's plan refuses the draw"),
+                }
+                planned.insert((writer, format!("{moved:?}"), format!("{tests:?}")));
             }
         }
     }
@@ -428,7 +404,7 @@ fn an_unread_color_input_takes_no_storage_form() {
             for tests in TESTS {
                 states += 1;
                 let what = format!("{what} {tests:?}");
-                let kind = match base.plan(dev, &moving(tests, None).shape()) {
+                let kind = match base.plan(dev, &moving(tests, false).shape()) {
                     Ok(plan) if plan.variant == VariantKey::new() => continue,
                     Ok(_) => "the plan asks for a variant",
                     Err(_) => "the plan refuses the draw",

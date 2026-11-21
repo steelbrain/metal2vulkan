@@ -636,16 +636,6 @@ fn function_keys_cover_their_inputs() {
     assert_ne!(with_true, maps(&[(0, edges)]));
     assert_ne!(maps(&[(0, edges)]), maps(&[(1, edges)]));
     assert_ne!(maps(&[(0, edges)]), maps(&[(0, mirrored)]));
-    // So are the extended-range colors whose `half` shadow the draw's instance holds.
-    let shadowed = |colors: &[u32]| {
-        let mut i = LoweringInputs::new();
-        i.extended_shadows = colors.iter().copied().collect();
-        a.function_compile_key(&fd, &i)
-    };
-    assert_eq!(with_true, shadowed(&[]));
-    assert_ne!(with_true, shadowed(&[0]));
-    assert_ne!(shadowed(&[0]), shadowed(&[1]));
-    assert_ne!(shadowed(&[0]), shadowed(&[0, 1]));
 }
 
 /// A key without the emulated-simdgroups and dropped-vertex-layer inputs hashes the inputs as it
@@ -737,7 +727,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", address_maps: {}", "")
                 .replace(", cubic_samplers: {}", "")
                 .replace(", rotated_blends: {}", "")
-                .replace(", extended_shadows: {}", "")
                 .replace(", cross_class: {}", "")
                 .replace(", texture_write_rounding: TowardZero", "")
                 .replace(", anisotropic_samplers: {}", "")

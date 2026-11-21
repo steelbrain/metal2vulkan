@@ -42,8 +42,7 @@
 //! interface records the attachment (`StageIo::extended_range_colors`), so link holds a stage
 //! compiled for it to the pipeline's attachments. Where the pipeline blends such an attachment the
 //! function writes, the write blends over the same input attachment (`input_blend`), which a
-//! `[[color(n)]]` read of the attachment shares ([`input_texel`]). Where the draw's instance holds
-//! the attachment's `half` shadow, a read is the shadow's texel instead (`input_shadow`).
+//! `[[color(n)]]` read of the attachment shares ([`input_texel`]).
 //!
 //! **An 8-bit sRGB attachment** (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB` and the rest) reads through
 //! its input attachment the device's decode of its bytes, Vulkan's sRGB EOTF within the device's
@@ -554,19 +553,17 @@ pub(super) fn value(
     if cx.plan.families.fragment.fetch.contains_key(&c.color) {
         return super::fetch::value(cx, fb, c);
     }
-    let texel = match (c.extended, super::input_shadow::shadows(cx, c.color)) {
-        // The instance's shadow holds the tile value itself (`input_shadow`).
-        (Some(_), Some(_)) => super::input_shadow::read(cx, fb, c.color)?,
-        (Some(form), None) => {
+    let texel = match c.extended {
+        Some(form) => {
             let texel = input_texel(cx, fb, c.color)?;
             extended_range::tile_value(fb, form, texel)?
         }
         // The image's red, Metal's alpha: `(0, 0, 0, r)`.
-        (None, _) if c.alpha_red => {
+        None if c.alpha_red => {
             let texel = input_texel(cx, fb, c.color)?;
             alpha_in_red(fb, texel)?
         }
-        (None, _) => input_texel(cx, fb, c.color)?,
+        None => input_texel(cx, fb, c.color)?,
     };
     let x = match c.form.lanes {
         4 => texel,

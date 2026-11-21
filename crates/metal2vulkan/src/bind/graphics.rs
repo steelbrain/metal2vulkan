@@ -100,12 +100,10 @@
 //!   of its subpass for other draws' interlocked storage form (`BindShape::interlocked_colors`)
 //!   runs the variant whose fragment function writes those it writes through that form too
 //!   (`VariantKey::interlocked_colors`), so the draw records in the instance. That variant stores
-//!   them before the depth and stencil tests (tested storage writes, below), and so does the
-//!   variant of a draw that holds the `half` shadow of an extended-range color the function writes
-//!   (`BindShape::extended_shadows`): the plan of the pipeline as compiled selects such a moved
-//!   writer's tests from `RuntimeFact::MovableStorageWrites`. A mesh pipeline's is not
-//!   implemented, nor a multisampled, layered or amplified draw's; a multisampled draw holds the
-//!   shadow of a color its pipeline already reads in the storage form (a blended or fetched one).
+//!   them before the depth and stencil tests (tested storage writes, below): the plan of the
+//!   pipeline as compiled selects such a moved writer's tests from
+//!   `RuntimeFact::MovableStorageWrites`. A mesh pipeline's is not implemented, nor a
+//!   multisampled, layered or amplified draw's.
 //! - **Snapshot reads**. A draw the consumer reads a texture of its own subpass for through a
 //!   snapshot (`BindShape::snapshot_textures`) runs the variant whose fragment function reads it so
 //!   (`VariantKey::snapshot_textures`, `lower::fragment`'s `snapshot`), for each slot of the
@@ -992,53 +990,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .filter(|a| a.writes && shape.interlocked_colors.contains(&a.color_index))
         .map(|a| a.color_index)
         .collect();
-    // The extended-range colors whose `half` shadow the draw's instance holds that the fragment
-    // function writes or reads in the storage form, or, on a device that fetches through input
-    // attachments, writes or reads through its input attachment: the variant that reads and writes
-    // the shadows beside the codes. Every such color is in a pass of one layer (the encoder holds
-    // no other shadow); a pipeline compiled with shadows binds them. In a multisampled pipeline
-    // only a color the pipeline already reads (a blended or fetched one, whose function runs per
-    // sample): a plain writer's would run the function per sample where Metal runs it per pixel,
-    // as for the interlocked colors above.
-    let reads_color = |c: u32| {
-        p.graphics
-            .storage_attachments
-            .iter()
-            .any(|a| a.color_index == c)
-            || p.graphics
-                .input_attachments
-                .iter()
-                .any(|a| a.color_index == c)
-    };
-    let extended_shadows: std::collections::BTreeSet<u32> = shape
-        .extended_shadows
-        .iter()
-        .copied()
-        .filter(|&c| {
-            1u32.checked_shl(c)
-                .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
-                || reads_color(c)
-        })
-        .collect();
-    let moved_shadow = extended_shadows.iter().any(|&c| !reads_color(c));
-    if !extended_shadows.is_empty()
-        && (mesh
-            || (p.graphics.rasterization_samples.as_raw() > 1 && moved_shadow)
-            || shape.render_target_array_length > 1
-            || shape.vertex_amplification.count > 1)
-    {
-        return Err(not_implemented(Feature::FramebufferFetch));
-    }
-    let compiled_shadows: std::collections::BTreeSet<u32> = p
-        .layout
-        .sets
-        .iter()
-        .flat_map(|set| &set.bindings)
-        .filter_map(|b| match b.source {
-            BindingSource::ExtendedShadow(color) => Some(color),
-            _ => None,
-        })
-        .collect();
     // The fragment texture slots the draw reads through a snapshot: those the shape names that
     // the fragment function can read so, where the pipeline's two draws are Metal's one. The two
     // run the same fragments (the pipeline differs only in its dynamic write masks), the first
@@ -1071,7 +1022,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && tile_memory.is_none()
         && !mesh
         && interlocked_colors.is_empty()
-        && extended_shadows.is_empty()
         && shape.vertex_amplification.count <= 1
         && shape.render_target_array_length <= 1;
     let snapshot_textures: std::collections::BTreeSet<SlotRef> = match snapshot_able {
@@ -1129,26 +1079,23 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // tests drop no fragment; where they drop some but write and count nothing, the variant whose
     // function declares early tests, which a pipeline compiled under it states; refused
     // otherwise. A draw that moves a color the function writes as an ordinary output into that
-    // form (an interlocked color, a shadowed extended-range one) asks for the variant that stores
+    // form (an interlocked color) asks for the variant that stores
     // it so: where the pipeline as compiled stores no color so, the function states that variant's
     // tests (`RuntimeFact::MovableStorageWrites`), so this plan selects them, and the variant it
     // names plans itself. A moved write whose mask names none of its attachment's components
     // stores nothing, so no test bears on it: its variant states none, and this plan selects none
     // for it. (A color the pipeline as compiled already writes through the storage form has no
     // ordinary attachment state; its stores state their own tests.)
-    let moves = interlocked_colors
-        .iter()
-        .chain(&extended_shadows)
-        .any(|&c| {
-            1u32.checked_shl(c)
-                .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
-                && p.graphics
-                    .color_attachments
-                    .get(c as usize)
-                    .copied()
-                    .flatten()
-                    .is_some_and(stores)
-        });
+    let moves = interlocked_colors.iter().any(|&c| {
+        1u32.checked_shl(c)
+            .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
+            && p.graphics
+                .color_attachments
+                .get(c as usize)
+                .copied()
+                .flatten()
+                .is_some_and(stores)
+    });
     let tested = p
         .dependencies
         .iter()
@@ -1806,10 +1753,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 }
                 // A sparse texture's tile map.
                 BindingSource::TileMap(slot) => resources.tile_map(slot),
-                // The `half` shadow of an extended-range attachment the draw's instance holds.
-                BindingSource::ExtendedShadow(color_index) => {
-                    WriteSource::ExtendedShadow { color_index }
-                }
                 // A texture's snapshot, which the draw reads the texture through.
                 BindingSource::SnapshotTexels(slot) => WriteSource::SnapshotTexels { slot },
                 // A two-plane YCbCr texture's planes image, through the device's conversion.
@@ -2163,12 +2106,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     let other_colors = compiled_zeroed != zeroed_colors
         || compiled_dropped != dropped_colors
         || compiled_interlocked != interlocked_colors
-        || compiled_shadows != extended_shadows
         || compiled_snapshots != snapshot_textures;
     variant.zeroed_colors = zeroed_colors;
     variant.dropped_colors = dropped_colors;
     variant.interlocked_colors = interlocked_colors;
-    variant.extended_shadows = extended_shadows;
     variant.snapshot_textures = snapshot_forms(
         profile,
         &snapshot_textures,

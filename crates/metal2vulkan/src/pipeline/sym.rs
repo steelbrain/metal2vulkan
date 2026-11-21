@@ -400,14 +400,6 @@ pub enum ResourceKind {
     /// constexpr sampler is the binding's immutable sampler. `ResourceSlot::index` is the use
     /// ([`ResourceSlot::separate_sampler`]), as a heap sampler's is.
     SeparateSampler(SamplerRef),
-    /// The `half` shadow of extended-range color attachment `n` (`ResourceSlot::index` too) for
-    /// the draw's render pass instance (`VariantKey::extended_shadows`): an `RGBA16_SFLOAT` 2D
-    /// storage image of the attachment's extent holding Metal's tile value of each texel, which
-    /// the function's interlocked storage form reads and writes beside the attachment's codes. In
-    /// a multisampled pipeline it holds the samples as the attachment's storage image does: a
-    /// multisampled image of the pipeline's samples, or a 2D array of one layer per sample
-    /// (`StorageAttachmentView::SamplePlanes`'s shape).
-    ExtendedShadow(u32),
     /// The snapshot of the texture bound at fragment texture slot `n` (`ResourceSlot::index` too)
     /// for a draw that reads it through one (`LoweringInputs::snapshot_textures`): an
     /// `R32G32B32A32_UINT` 2D storage image covering the draw's render area, each texel the bits

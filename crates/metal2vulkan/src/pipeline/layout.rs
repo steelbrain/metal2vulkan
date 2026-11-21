@@ -141,10 +141,6 @@ pub enum BindingSource {
         stage: Stage,
         sampler: CombinedSampler,
     },
-    /// The `half` shadow of the extended-range color attachment of this color index that the
-    /// draw's render pass instance holds (`ResourceKind::ExtendedShadow`), bound as a storage
-    /// image.
-    ExtendedShadow(u32),
     /// The snapshot of the texture the draw binds at this fragment texture slot
     /// (`ResourceKind::SnapshotTexels`), bound as a storage image.
     SnapshotTexels(u32),

@@ -586,7 +586,6 @@ impl Device {
         if !v.zeroed_colors.is_empty()
             || !v.dropped_colors.is_empty()
             || !v.interlocked_colors.is_empty()
-            || !v.extended_shadows.is_empty()
         {
             return Err(invariant(
                 "a mesh variant zeroing, dropping, interlocking or shadowing colors",

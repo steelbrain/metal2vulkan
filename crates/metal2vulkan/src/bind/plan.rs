@@ -808,11 +808,6 @@ pub enum WriteSource {
     /// the stand-in's view says, in `GENERAL` layout
     /// ([`StandInUse`](crate::pipeline::StandInUse)).
     DepthStandIn,
-    /// The `half` shadow of the render pass's extended-range color attachment `color_index`
-    /// (`BindingSource::ExtendedShadow`): the consumer's `R16G16B16A16_SFLOAT` single-sample 2D
-    /// storage image of the attachment's extent, in `GENERAL` layout, holding Metal's tile value
-    /// of each texel of the pass (`VariantKey::extended_shadows`).
-    ExtendedShadow { color_index: u32 },
     /// The snapshot of the texture the draw binds at fragment texture slot `slot`
     /// (`BindingSource::SnapshotTexels`, `VariantKey::snapshot_textures`): the consumer's
     /// single-sample 2D `R32G32B32A32_UINT` storage image covering the draw's render area, in

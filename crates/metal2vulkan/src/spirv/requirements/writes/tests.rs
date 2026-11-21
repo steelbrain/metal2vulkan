@@ -249,10 +249,7 @@ fn the_shadow_stencils_writes_are_not_the_functions() {
 /// texture's write is.
 #[test]
 fn a_colors_storage_form_and_half_shadow_writes_are_not_the_functions() {
-    for kind in [
-        ResourceKind::TileAttachment(2),
-        ResourceKind::ExtendedShadow(0),
-    ] {
+    for kind in [ResourceKind::TileAttachment(2)] {
         assert!(
             !writes_memory(&image_write(kind)).expect("color"),
             "{kind:?}"
