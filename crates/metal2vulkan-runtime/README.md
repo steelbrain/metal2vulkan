@@ -1738,7 +1738,14 @@ made, with no lock, and never rewritten for layouts.
   the fill ended (job m3-max-52432, and with compute dispatches, job m3-max-52186); where the fill
   was committed behind one command buffer of long work on its queue (job m3-max-52432) or three
   (job m3-max-52415), the copy read none of it, and behind one it reached the GPU about 1 ms
-  before any of that queue's work. `Scheduled` means the last segment is in
+  before any of that queue's work. On a 2019 MacBook Pro, a second process's read of a shared
+  surface completed only after the first process's writer, behind that writer's whole backlog:
+  on its Radeon Pro 5300M 164 to 170 ms after the read's commit, behind 8 command buffers of
+  20 ms each, and 0.7 to 0.8 ms after the writer, every round (controls 1 to 2 ms), and the
+  read then passed the writer's later work, completing 19.2 ms before the first of 4 later
+  command buffers; its Intel UHD 630 ran them first in, first out across the processes (job
+  64081). The room above follows the 5300M's order: where Macs differ, the runtime takes the
+  faster. `Scheduled` means the last segment is in
   a submission: passed to `vkQueueSubmit2`, or held, in a group or for room; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
   "Presenting"). One that waits for an event's value whose signal is submitted, of an `Event` or
