@@ -68,8 +68,8 @@ fn gap(case: &AuthoredCase, expected: &str) {
 /// writing like the oracle's `useResource`; the owner is created holding the buffer's address and
 /// each texture's resource id at their fields; a texture's region is an output; and an owner that
 /// is not bound, a key authored twice, a field named twice, and overlapping fields are refused. A
-/// texture buffer maps, as a run through the runtime makes it, and the executor's own bind state
-/// refuses it.
+/// texture buffer maps, as a run through the runtime makes it, and binds as a used texture of
+/// Metal's `TextureBuffer` type, in the shape the authored compile census compiles for.
 #[test]
 fn argument_buffer_members_are_written_into_their_owner() {
     let mut case = kernel_case();
@@ -218,8 +218,25 @@ fn argument_buffer_members_are_written_into_their_owner() {
         texel.argument_buffer_textures[&(0, 16)].texture_type,
         TextureType::Buffer
     );
-    let refused = bind_state(&texel, &addresses, &embedded, BufferRanges::default()).unwrap_err();
-    assert!(refused.contains("texture buffer"), "{refused}");
+    let state = bind_state(&texel, &addresses, &embedded, BufferRanges::default()).unwrap();
+    let ResourceClass::Texture(facts) = state.used_resources[1].class else {
+        panic!("{:?}", state.used_resources);
+    };
+    assert_eq!(
+        (facts.texture_type, facts.pixel_format),
+        (MetalType::TextureBuffer, PixelFormat::RGBA8Unorm)
+    );
+    assert_eq!(
+        (
+            state.used_resources[1].token,
+            state.used_resources[1].resource_id
+        ),
+        (1, Some(resource_id(1)))
+    );
+    assert_eq!(
+        compute_shape(&texel, true, BufferRanges::default()).unwrap(),
+        state.shape()
+    );
 }
 
 /// End to end without a device: `argument_buffer_read` of the owned `handles` fixture on

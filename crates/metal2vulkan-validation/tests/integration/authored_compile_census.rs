@@ -357,3 +357,53 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         assert_eq!(cells[0].compiles, 1, "{name}");
     }
 }
+
+/// A case whose argument buffer holds a texture buffer, which a run draws through the runtime,
+/// compiles in the census under the identity domains (the runtime's): the member is a used
+/// texture of Metal's `TextureBuffer` type in the bind shape the census compiles for
+/// (`argument_buffers::used_texture`), where the census failed the case. Each committed case that
+/// holds one, on lavapipe, whose profile holds a texel-buffer heap array.
+#[test]
+fn the_census_compiles_a_texture_buffer_an_argument_buffer_holds() {
+    use metal2vulkan_validation::authored_compile::compile_case;
+    use metal2vulkan_validation::case::TextureType;
+    if !llvm_as_available() {
+        return;
+    }
+    let worker = {
+        let program = bin_exe!("corpus-triage");
+        let _ = Command::new(&program).arg("--help").output();
+        CompileWorker::program(program)
+    };
+    let lavapipe = metal2vulkan_validation::worker::compile::WorkerDevice::new(
+        metal2vulkan_validation::engine::load_description("lavapipe").unwrap(),
+        metal2vulkan::device::DevicePolicy::default(),
+    )
+    .unwrap();
+    let holding = CorpusStore::new(metal2vulkan_validation::source::corpus_root())
+        .read_all_cases()
+        .unwrap()
+        .into_iter()
+        .filter(|case| {
+            case.argument_buffer_textures
+                .iter()
+                .any(|member| member.texture_type == TextureType::Buffer)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !holding.is_empty(),
+        "no committed case holds a texture buffer member"
+    );
+    for held in &holding {
+        let (scratch, case) = corpus_with_templates(&held.name);
+        let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe]);
+        assert_eq!(cells.len(), 1, "{}", case.name);
+        assert_eq!(
+            cells[0].outcome,
+            Ok(CellOutcome::Compiled),
+            "{}: {cells:?}",
+            case.name
+        );
+        assert_eq!(cells[0].compiles, 1, "{}", case.name);
+    }
+}

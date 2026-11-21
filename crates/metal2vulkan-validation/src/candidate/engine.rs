@@ -1925,7 +1925,8 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
 
 /// Whether the executor's own context refuses a case whose argument buffers hold `members`: a
 /// texture buffer among them, which a run through the runtime makes over a buffer of its bytes
-/// (`platform::runtime_textures`) and the binder's planned heap holds no member of
+/// (`platform::runtime_textures`) and the binder's planned heap holds no member of (the
+/// translator's `bind::heap`), so a handle loaded from its field would miss
 /// ([`argument_buffers::used_texture`]).
 pub fn own_context_refuses_members<'a>(
     mut members: impl Iterator<Item = &'a LiteralTexture>,

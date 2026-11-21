@@ -153,14 +153,12 @@ pub fn texel_buffer_length(texture: &LiteralTexture) -> Result<u64, String> {
 }
 
 /// What the binder sees bound for an authored texture: a texture buffer's view (offset 0, its
-/// width in texels), or an image texture's facts (Metal's `arrayLength` counts cubes for a cube
-/// array, its levels, shader read and write usage, and `isSparse` for a sparse texture).
+/// width in texels), or an image texture's facts ([`texture_facts`]).
 pub fn bound_texture(texture: &LiteralTexture) -> Result<BoundTexture, String> {
-    let pixel_format = pixel_format(texture.format);
     if texture.texture_type == TextureType::Buffer {
         let length = texel_buffer_length(texture)?;
         return Ok(BoundTexture::Buffer {
-            pixel_format,
+            pixel_format: pixel_format(texture.format),
             offset: 0,
             length,
             bytes_per_row: length,
@@ -169,10 +167,29 @@ pub fn bound_texture(texture: &LiteralTexture) -> Result<BoundTexture, String> {
             parts: 1,
         });
     }
-    let layout = texture.layout()?;
-    let mut facts = TextureFacts::new(self::texture_type(texture.texture_type), pixel_format);
-    facts.sample_count = layout.sample_count;
+    Ok(BoundTexture::Texture {
+        facts: texture_facts(texture)?,
+        resource_id: None,
+    })
+}
+
+/// The facts of an authored texture, as the binder sees an image texture bound and a used
+/// resource (`useResource`) names any texture: its type, its pixel format, and shader read and
+/// write usage; an image texture's sample count, Metal's `arrayLength` (which counts cubes for a
+/// cube array), its levels, and `isSparse` for a sparse texture. A texture buffer is one sample,
+/// level and slice of Metal's `TextureBuffer` type, its width checked ([`texel_buffer_length`]).
+pub fn texture_facts(texture: &LiteralTexture) -> Result<TextureFacts, String> {
+    let mut facts = TextureFacts::new(
+        self::texture_type(texture.texture_type),
+        pixel_format(texture.format),
+    );
     facts.usage = metal::TextureUsage::SHADER_READ | metal::TextureUsage::SHADER_WRITE;
+    if texture.texture_type == TextureType::Buffer {
+        texel_buffer_length(texture)?;
+        return Ok(facts);
+    }
+    let layout = texture.layout()?;
+    facts.sample_count = layout.sample_count;
     facts.array_length = match texture.texture_type {
         TextureType::D1Array | TextureType::D2Array | TextureType::D2MultisampleArray => {
             layout.array_layers
@@ -182,10 +199,7 @@ pub fn bound_texture(texture: &LiteralTexture) -> Result<BoundTexture, String> {
     };
     facts.sparse = texture.sparse.is_some();
     facts.mipmap_level_count = texture.mip_levels;
-    Ok(BoundTexture::Texture {
-        facts,
-        resource_id: None,
-    })
+    Ok(facts)
 }
 
 /// The `MTLSamplerDescriptor` the Metal oracle creates for `sampler`: the defaults, with the

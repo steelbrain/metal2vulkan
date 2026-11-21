@@ -15,7 +15,8 @@
 //! - a texture is its `gpuResourceID` in the owner and a used resource of class `Texture` with
 //!   that resource id ([`used_texture`]): a heap member, which the plan writes into every heap
 //!   array whose class holds it and enters in each stage's handle table, so a handle loaded from
-//!   the field finds its element;
+//!   the field finds its element; a texture buffer is one of Metal's `TextureBuffer` type, which
+//!   the plan's heap holds no member of, so only a run through the runtime draws it;
 //! - a sampler is its `gpuResourceID` in the owner and an argument sampler of the bind state with
 //!   that id ([`embed_samplers`], [`sampler_ids`]): the plan writes it into each sampler array
 //!   and enters it in each stage's sampler table, so a sampler loaded from the field finds its
@@ -25,7 +26,7 @@ use super::resources;
 use super::BufferAddress;
 use crate::case::ArgumentBufferSamplerResource;
 use crate::literal::{LiteralArgumentBufferBuffer, LiteralArgumentBufferTexture, LiteralTexture};
-use metal2vulkan::bind::{ArgumentSampler, BoundTexture, ResourceClass, UsedResource};
+use metal2vulkan::bind::{ArgumentSampler, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use std::collections::BTreeMap;
 
@@ -266,21 +267,19 @@ pub fn used_buffer(
 }
 
 /// The used resource of the argument-buffer texture `texture` whose consumer token is `token`
-/// ([`texture_tokens`]): a `Texture` of the facts a bound texture of it has
-/// ([`resources::bound_texture`]), whose resource id is [`resource_id`] of its token, resident
-/// for reading and writing in `stages` as the Metal oracle's `useResource` makes it. A texture
-/// buffer is refused: the binder's planned heap makes no texture buffer a member, so a handle
-/// naming one would miss.
+/// ([`texture_tokens`]): a `Texture` of its facts ([`resources::texture_facts`]), a texture
+/// buffer's of Metal's `TextureBuffer` type, whose resource id is [`resource_id`] of its token,
+/// resident for reading and writing in `stages` as the Metal oracle's `useResource` makes it.
+/// The binder's planned heap makes no texture buffer a member (the translator's `bind::heap`), so
+/// the executor's own context refuses a case that holds one
+/// ([`own_context_refuses_members`](super::own_context_refuses_members)); a run through the
+/// runtime draws it, and the authored compile census compiles its pipeline for this bind shape.
 pub fn used_texture(
     token: u32,
     texture: &LiteralTexture,
     stages: RenderStages,
 ) -> Result<UsedResource, String> {
-    let BoundTexture::Texture { facts, .. } = resources::bound_texture(texture)? else {
-        return Err(format!(
-            "argument-buffer texture {token} is a texture buffer, which no heap array holds"
-        ));
-    };
+    let facts = resources::texture_facts(texture)?;
     let mut used = UsedResource::new(ResourceClass::Texture(facts), token);
     used.usage = ResourceUsage::READ | ResourceUsage::WRITE;
     used.stages = stages;
