@@ -1164,7 +1164,8 @@ fn a_compute_state_the_runtime_does_not_build_is_counted_and_its_dispatch_skippe
     let executed = &report.total.executed;
     assert_eq!(executed["skipped_compute_states"], 1, "{executed:?}");
     assert_eq!(executed["skipped_dispatches"], 1, "{executed:?}");
-    let line = "skipped compute states IndirectCommandBuffers 1, the first #5: ";
+    let line =
+        "skipped compute states IndirectCommandBuffers { kind: ComputeCommands } 1, the first #5: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
 }
 
