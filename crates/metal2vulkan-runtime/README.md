@@ -3699,18 +3699,30 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   least recently used forgotten first), in the upload of the next commit.
   `BlitCommandEncoder::reset_commands_in_buffer` copies the same commands over its range, and
   `optimize_indirect_command_buffer` records nothing.
-- `RenderCommandEncoder::execute_commands_in_buffer` runs the range in parts of 64 commands, in
-  order, the last part the rest: one `vkCmdExecuteGeneratedCommandsEXT` a part, a sequence a
-  command, with the encoder's pipeline state and render state: a push constant token for each
-  slot word the state's functions read, the index buffer token, a sequence index token and the
-  indexed draw token. Before each part the execution pushes the part's
+- `RenderCommandEncoder::execute_commands_in_buffer` runs the range in parts, in order, the last
+  part the rest: one `vkCmdExecuteGeneratedCommandsEXT` a part, a sequence a command, with the
+  encoder's pipeline state and render state: a push constant token for each slot word the state's
+  functions read, the index buffer token, a sequence index token and the indexed draw token. A
+  part is the most commands whose preprocess bytes, as
+  `vkGetGeneratedCommandsMemoryRequirementsEXT` answers for them with the inherited pipeline, stay
+  at or under 2 MiB, one rule on every device (known gaps, below): the device is asked from one
+  command up, doubling while the answer stays at or under the bound, then again at fewer, in
+  proportion to the last answer, until it is. Before each part the execution pushes the part's
   first command, which the vertex function adds to the sequence index. The device keeps 64 command
-  layouts, one per shape of tokens, and 256 execution shapes of a part's 64 commands, one per
-  state, raster state (the depth clip and triangle fill modes, which choose the state's pipeline)
-  and layout. `execute_commands_in_buffer_with_range` reads the range
-  (`MTLIndirectCommandBufferExecutionRange`) where a buffer holds it when the command runs: the
-  execution runs every command of the buffer, and the vertex function returns before its body for
-  a command outside the range.
+  layouts, one per shape of tokens, and 256 execution shapes, each with its part, one per state,
+  raster state (the depth clip and triangle fill modes, which choose the state's pipeline), layout
+  and capacity.
+- `execute_commands_in_buffer_with_range` reads the range (`MTLIndirectCommandBufferExecutionRange`)
+  where a buffer holds it when the command runs, the one form for every range the GPU reads,
+  location 0 included: the rendering ends, the device's count kernel (the translator's
+  `OwnKernel::ExecutionCounts`, made at its first use and counted in `pipelines_created`) runs one
+  workgroup a part, reads the range and writes each part's count into the command buffer's ring,
+  one global barrier follows, and the rendering begins again, loading what it stored. The parts
+  run from command 0, each through the range's last command (its `sequenceCountAddress`), none
+  past it and none wholly before its location; in the part that holds the location, the vertex
+  function returns before its body for each command before it. A range past the buffer's
+  commands is clamped to them. A range the CPU gives (`execute_commands_in_buffer`) runs no
+  kernel.
 - A state made with `supportIndirectCommandBuffers` pulls every vertex attribute its vertex function
   reads, at its layout's stride from the descriptor, so a command binds no vertex buffer of its
   own, and its vertex function tests its command against the execution's range; a direct draw of
@@ -3723,10 +3735,11 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   the next draw pushes and binds its own; the pipeline and the vertex buffers stay bound.
 - Each execution takes a preprocess region when it is recorded, an idle one of the device's pool
   or one made then, its parts' preprocess one after another, each sized by
-  `vkGetGeneratedCommandsMemoryRequirementsEXT` with the inherited pipeline at 64 commands, and
+  `vkGetGeneratedCommandsMemoryRequirementsEXT` with the inherited pipeline at its part, and
   gives it back when its command buffer completes. Its sizes are those of a token per slot word
   (known gaps, below): on the 2080 a part of 64 commands of four slot words takes 69,888 bytes,
-  1,092 a command, and one of 17 tokens 151,808. The pool keeps at most 128 MiB of idle regions,
+  1,092 a command, and 17 tokens take about 592 bytes a command at 1,024 commands or more. The
+  pool keeps at most 64 MiB of idle regions,
   the oldest freed past that, and the block-maker thread frees each region idle for 250 ms, the
   idle age, as it frees idle allocations: at rest the pool holds nothing.
   `Metrics::preprocess_regions_remade` counts the regions made within a second after one was freed
@@ -3738,8 +3751,18 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 
 ### Known gaps of indirect command buffers
 
-- An execution over a range a buffer holds processes the buffer's whole capacity: each command
-  outside the range, reset or not, costs its vertex work and draws nothing.
+- An execution over a range a buffer holds runs its parts from command 0: each part wholly before
+  the range's location runs no command but costs its execution (below), and the part that holds
+  the location runs its commands before it, at most a part's less one, each costing its vertex
+  work and drawing nothing.
+- An execution over a range a buffer holds ends the rendering for its count kernel and begins it
+  again: one more dispatch, one barrier, and the attachments stored and loaded. With the probe's
+  form of the split, Apple's rendering sample's frame (11 such executions) took 1,003.4 us of GPU
+  time against 931.8 without it on an RTX 2080, and 617.0 against 588.5 on a Radeon RX 7900 XTX
+  (job 63481, medians of 9). While a visibility result's query counts the draws (after a draw
+  under a `Boolean` or `Counting` mode) the rendering cannot end, so such an execution is refused,
+  `Gap::Draw` of `DrawKind::VisibilityResultInterrupt`, counted in
+  `Metrics::visibility_interrupts_refused`; one before the mode's first draw runs.
 - A state made with `supportIndirectCommandBuffers` pays one 8-byte load a vertex on its direct
   draws too: its vertex function reads the execution range.
 - A state made with `supportIndirectCommandBuffers` whose vertex descriptor has a layout of
@@ -3748,20 +3771,24 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   stride each bind sets (`setVertexBuffer:offset:attributeStride:atIndex:`, a command's included)
   from a push field the encoder does not fill.
 - An execution over a range a buffer holds takes a preprocess region for the buffer's whole
-  capacity, whatever the range, held until the command buffer completes. A part of 64 commands of
-  17 tokens takes 151,808 bytes on NVIDIA's driver (an RTX 2080; 2,372 a command) and 39,680 on
-  RADV (a Radeon RX 7900 XTX; 620 a command).
-- Every execution runs in parts of 64 commands, on every device. One execution of more did not
-  draw every command in order where it was measured: on RADV (Mesa 26.2.6, a Radeon RX 7900 XTX)
-  an execution of N commands whose generated commands pass about 4 MiB (296 bytes a command,
-  14,170 commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's
-  driver (620.70.06, an RTX 2080) one of 96 commands or more (65 drew right) ended with its own
-  29th to 32nd commands on top of every later one, under the token bug below. The parts cost, at
-  14,000 commands against one execution: 62% more GPU time on the XTX and 61 times as much on the
-  2080, and 25 to 34 times the recording time. Their memory, for a frame of Apple's rendering
-  sample at its worst (45,024 commands of 17 tokens in 11 executions, 710 parts): about 108 MB of
-  preprocess regions on the 2080 and 28 MB on the XTX, where single executions would take about 27
-  MB on each (592 and 608 bytes a command).
+  capacity, whatever the range, held until the command buffer completes: 17 tokens take about 592
+  bytes a command on NVIDIA's driver (an RTX 2080) and 776 on RADV (a Radeon 780M), at 1,024
+  commands or more.
+- Every execution runs in parts of at most 2 MiB of preprocess bytes, on every device: half of
+  about 4 MiB, past which one execution did not draw where it was measured on RADV, a driver bug,
+  and since a wrong guess loses the guest's device, the bound keeps that margin. On a Radeon RX
+  7900 XTX (Mesa 26.2.6) an execution of N commands whose generated commands pass about 4 MiB (296
+  bytes a command, 14,170 commands) drew only its first N - 14,170 commands, or none; on a Radeon
+  780M (Mesa 26.2.6) one execution of 8,162 commands of 17 tokens (about 6.3 MB) lost the device.
+  Mesa 26.3.1's source chains the generated commands into further command buffers by the count of
+  sequences alone (65,536), not by their bytes. NVIDIA's driver draws one execution of a buffer's
+  whole capacity right, so there each part past the first is paid for the other driver's limit,
+  about 10.5 us of GPU time a part: Apple's rendering sample's frame (45,024 commands of 17 tokens
+  in 11 executions, each run through its range's last command) took 2,598.9 us in 182 parts,
+  1,648.8 in 91, 1,175.6 in 46, 907.2 in 16 and 870.5 in 11 (one part an execution), against
+  391.4 drawn directly (job 63460, an RTX 2080 on NVIDIA's 620.70.06, medians of 9). On the XTX a
+  part costs about 2.4 us. The frame's parts at the bound took 931.8 us on the 2080 and 588.5 on
+  the XTX (job 63481).
 - A command's buffer slots reach its functions through the push bytes alone, so each slot a
   command binds needs its word in the state's 256 push bytes, which the vertex and fragment
   functions and all their other fields share. The translator places the vertex function's fields
@@ -3809,9 +3836,9 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 - On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
   `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
   command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver
-  bug. Each part is sized at its 64 commands, which the wrap does not reach, but that size is
-  large: 557,568 bytes for commands of four buffers (8,712 a command; 134,750,208 bytes at 1,024
-  commands).
+  bug. The part search asks from one command up, doubling, so it asks at no count the wrap
+  reaches, and the parts are small: 64 commands of four buffers take 557,568 bytes (8,712 a
+  command; 134,750,208 bytes at 1,024 commands).
 - On the Iris Xe (ANV, Mesa 26.2.6), which does not list `VK_EXT_device_generated_commands`, an
   indirect command buffer is refused (`Gap::IndirectCommandBuffers`,
   `IndirectCommandsKind::Extension`).

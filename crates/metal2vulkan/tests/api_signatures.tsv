@@ -211,6 +211,10 @@ assoc-const	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	pub const RENDER
 assoc-const	metal2vulkan::pipeline::CommandWrites::RESET	pub const RESET: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	pub const STAGE_IN_REGION: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	pub const THREADGROUP_MEMORY: u32
+assoc-const	metal2vulkan::pipeline::ExecutionCounts::CAPACITY_AT	pub const CAPACITY_AT: u32
+assoc-const	metal2vulkan::pipeline::ExecutionCounts::COUNTS_AT	pub const COUNTS_AT: u32
+assoc-const	metal2vulkan::pipeline::ExecutionCounts::PART_AT	pub const PART_AT: u32
+assoc-const	metal2vulkan::pipeline::ExecutionCounts::RANGE_AT	pub const RANGE_AT: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	pub const NULL_WORD: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	pub const RESERVED_WORD: u32
 assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::CAPACITY_AT	pub const CAPACITY_AT: u32
@@ -433,6 +437,10 @@ assoc-const-value	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	1 <<9
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::RESET	1 <<13
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	1 <<11
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	1 <<10
+assoc-const-value	metal2vulkan::pipeline::ExecutionCounts::CAPACITY_AT	8
+assoc-const-value	metal2vulkan::pipeline::ExecutionCounts::COUNTS_AT	16
+assoc-const-value	metal2vulkan::pipeline::ExecutionCounts::PART_AT	12
+assoc-const-value	metal2vulkan::pipeline::ExecutionCounts::RANGE_AT	0
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	0
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	1
 assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::CAPACITY_AT	0
@@ -932,6 +940,7 @@ enum	metal2vulkan::pipeline::KernelVariant	#[cfg_attr(feature = "serde", derive(
 enum	metal2vulkan::pipeline::LinkedList	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinkedList<'a>
 enum	metal2vulkan::pipeline::Mechanism	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Mechanism
 enum	metal2vulkan::pipeline::NumberedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumberedSampler
+enum	metal2vulkan::pipeline::OwnKernel	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum OwnKernel
 enum	metal2vulkan::pipeline::PatchDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PatchDomain
 enum	metal2vulkan::pipeline::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan::pipeline::PushField	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PushField
@@ -3470,6 +3479,7 @@ fn	metal2vulkan::pipeline::grid_tile	pub fn grid_tile(threads: [u32; 3]) -> [u32
 fn	metal2vulkan::pipeline::heap_sampler_capacity	pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32
 fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pending(p: &DeviceProfile) -> bool
 fn	metal2vulkan::pipeline::nonuniform_region_bytes	pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
+fn	metal2vulkan::pipeline::own_kernel	pub fn own_kernel(kernel: OwnKernel, profile: &DeviceProfile) -> Result<Vec<u32>, Error>
 fn	metal2vulkan::pipeline::region_bytes	pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
 macro-decl	metal2vulkan-air::ir::ArgIdx	ir_id! ArgIdx
 macro-decl	metal2vulkan-air::ir::BlockId	id_type! BlockId
@@ -7861,6 +7871,7 @@ struct	metal2vulkan::pipeline::DescriptorSetLayout	#[cfg_attr(feature = "serde",
 struct	metal2vulkan::pipeline::DynamicLibraries	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct DynamicLibraries
 struct	metal2vulkan::pipeline::EntryDescriptor	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EntryDescriptor<'a>
 struct	metal2vulkan::pipeline::EntryPlan	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct EntryPlan
+struct	metal2vulkan::pipeline::ExecutionCounts	#[derive(Clone, Copy, Debug)] pub struct ExecutionCounts
 struct	metal2vulkan::pipeline::ExtendedRangeColor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ExtendedRangeColor
 struct	metal2vulkan::pipeline::FetchedAttachment	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FetchedAttachment
 struct	metal2vulkan::pipeline::FramebufferFetchInputs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FramebufferFetchInputs
@@ -10883,6 +10894,7 @@ variant	metal2vulkan::pipeline::Mechanism::Variant	Variant
 variant	metal2vulkan::pipeline::NumberedSampler::Constexpr	Constexpr([u64; 2])
 variant	metal2vulkan::pipeline::NumberedSampler::Read	Read
 variant	metal2vulkan::pipeline::NumberedSampler::Write	Write
+variant	metal2vulkan::pipeline::OwnKernel::ExecutionCounts	ExecutionCounts
 variant	metal2vulkan::pipeline::PatchDomain::Quad	Quad
 variant	metal2vulkan::pipeline::PatchDomain::Triangle	Triangle
 variant	metal2vulkan::pipeline::PrecisionNote::AnisotropicFilter	AnisotropicFilter

@@ -216,7 +216,7 @@ impl MemoryInfo {
     }
 }
 
-/// `VkGeneratedCommandsInfoEXT`, with no execution set and no count address.
+/// `VkGeneratedCommandsInfoEXT`, with no execution set.
 #[repr(C)]
 pub(crate) struct CommandsInfo {
     s_type: vk::StructureType,
@@ -234,14 +234,15 @@ pub(crate) struct CommandsInfo {
 }
 
 impl CommandsInfo {
-    /// `sequences` sequences of `layout` at `indirect` (`size` bytes), preprocessed into
-    /// `preprocess` (`preprocess_size` bytes), with the inherited `pipeline`.
+    /// At most `sequences` sequences of `layout` at `indirect` (`size` bytes), preprocessed into
+    /// `preprocess` (`preprocess_size` bytes), with the inherited `pipeline`: all of them where
+    /// `count` is 0, else as many as the `u32` at device address `count` says, up to `sequences`.
     pub(crate) fn new(
         pipeline: &PipelineInfo,
         layout: u64,
         (indirect, size): (u64, u64),
         (preprocess, preprocess_size): (u64, u64),
-        sequences: u32,
+        (sequences, count): (u32, u64),
     ) -> CommandsInfo {
         CommandsInfo {
             s_type: structure(4),
@@ -254,7 +255,7 @@ impl CommandsInfo {
             preprocess_address: preprocess,
             preprocess_size,
             max_sequence_count: sequences,
-            sequence_count_address: 0,
+            sequence_count_address: count,
             max_draw_count: 0,
         }
     }

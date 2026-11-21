@@ -90,6 +90,7 @@ pub(crate) mod interface;
 pub(crate) mod layout;
 pub(crate) mod link;
 pub(crate) mod lower_inputs;
+mod own;
 pub(crate) mod private_state;
 pub(crate) mod relocate;
 pub(crate) mod rotated_blend;
@@ -136,6 +137,7 @@ pub use lower_inputs::{
     FetchedAttachment, FramebufferFetchInputs, KernelVariant, LoweringInputs, StorageImageChoice,
     StorageImageClass, VertexFetch, VertexFetchProjection,
 };
+pub use own::{own_kernel, ExecutionCounts, OwnKernel};
 pub use table::FunctionHandle;
 // The vocabulary the pipeline surface reaches: render-pipeline keys, runtime facts and their
 // mechanisms, and the link symbols artifacts, layouts, and plans name.

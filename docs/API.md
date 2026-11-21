@@ -263,6 +263,12 @@ and so do the command line, the compile worker and every validation tool. It hol
   and its command, `PushField::IndirectSequence` (a part's sequence index) plus
   `PushField::IndirectBase` (the part's first command), a command outside the range draws nothing,
   and the function pulls every vertex attribute it reads.
+  Where the GPU writes the range, the parts' counts come from a kernel built from no Metal
+  function, `pipeline::own_kernel(OwnKernel::ExecutionCounts, profile)`: one workgroup a part
+  reads the range and writes the part's count, the commands it runs through the range's last,
+  into the parameter block `pipeline::ExecutionCounts` lays out, where each part's
+  `sequenceCountAddress` reads it. Its interface is a compiled function's: the one push range,
+  holding the block's device address at offset 0, and no descriptor.
 - **The resident-table domains** (`DevicePolicy::RESIDENT_TABLES`: `PointerDomain::ResidentTable`
   with `HandleDomain::Table`) exist for the validation executor alone, which builds the resident
   root and the handle table itself. Besides it, only the translator's own tests of that lowering

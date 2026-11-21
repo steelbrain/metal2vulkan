@@ -17,6 +17,15 @@
 //!     commands 0 and 1, then a direct draw of command 2, then command 3, the direct draw drawing
 //!     after an execution as it does alone. A range past the commands and a range buffer's offset
 //!     off a multiple of 4 are refused.
+//!   - an execution of three parts and eight commands (a part the most commands whose preprocess
+//!     bytes the device puts at or under 2 MiB) draws as its draws direct: all of it, a CPU range
+//!     across three parts, and ranges a buffer holds, which the count kernel reads: at location 0
+//!     across two parts, from inside the second part, and past the commands, clamped to them.
+//!   - at the widest layout the device can take, the part of an execution of the most commands it
+//!     takes has queried preprocess bytes at or under 2 MiB.
+//!   - an execution over a range a buffer holds runs as a `Boolean` visibility mode's first draw,
+//!     its samples counted, and after a draw of a mode it is
+//!     `DrawKind::VisibilityResultInterrupt`, counted.
 //!   - a kernel's reset of command 1 and a blit's reset of command 3 leave commands 0 and 2 to
 //!     draw; an optimize records nothing; a blit reset past the commands is refused.
 //!   - a command's slots go unchecked on both sides: a vertex function that reads four elements
@@ -27,8 +36,8 @@
 //!     device that takes fewer (lavapipe's 16), and executes on one that takes as many.
 //!   - the device's caches hold at most their capacities past them: 16 templates, 256 execution
 //!     shapes and 64 command layouts.
-//!   - the preprocess pool: regions held past 128 MiB in use all go back, the idle bytes at most
-//!     128 MiB after them; as many taken again at once count the regions made again past the
+//!   - the preprocess pool: regions held past 64 MiB in use all go back, the idle bytes at most
+//!     64 MiB after them; as many taken again at once count the regions made again past the
 //!     bound; past the idle age the idle bytes reach 0, the pool at rest; 200 executions keep the
 //!     regions' bytes flat between the 100th and the 200th; every indirect gauge is zero once the
 //!     device is dropped.
@@ -137,17 +146,17 @@ fn an_executions_tokens_are_a_token_per_slot_word() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::indirect::{IDLE_BYTES, LAYOUTS, PART, SHAPES, TEMPLATES};
+    use crate::indirect::{Tokens, IDLE_BYTES, LAYOUTS, PART_BYTES, SHAPES, TEMPLATES};
     use crate::render::Raster;
     use crate::tests::command::on_device::each_device;
     use crate::tests::draw::on_device::{library, pass, read, run, state, target, Buffers};
     use crate::{
         Buffer, ColorAttachmentDescriptor, ComputePipelineDescriptor, ComputePipelineState,
-        CullMode, Device, DispatchType, Error, FunctionDescriptor, Gap, IndexBuffer, IndexType,
-        IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType,
+        CullMode, Device, DispatchType, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,
+        IndexType, IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType,
         IndirectCommandsKind, Library, MemoryClass, PixelFormat, PrimitiveType, Refusal,
         RenderCommandEncoder, RenderPipelineDescriptor, RenderPipelineKind, RenderPipelineState,
-        Resource, ResourceUsage, StageSource, TextureUsage,
+        Resource, ResourceUsage, StageSource, TextureUsage, VisibilityResultMode,
     };
     use ash::vk;
     use metal2vulkan::metal::VertexFormat;
@@ -336,7 +345,10 @@ mod on_device {
                 ResourceUsage::WRITE,
             ),
         );
-        ok(name, e.dispatch_threadgroups([1, 1, 1], [threads, 1, 1]));
+        ok(
+            name,
+            e.dispatch_threads([threads, 1, 1], [threads.min(64), 1, 1]),
+        );
         e.end_encoding();
         run(name, &command_buffer);
     }
@@ -495,29 +507,40 @@ mod on_device {
     }
 
     /// An execution of more commands than one part holds runs its parts in order, each command
-    /// tested against the range as its own: whole, over a CPU range and over a range a buffer
-    /// holds, each across parts, against the same draws direct.
+    /// tested against the range as its own, against the same draws direct: whole, over a CPU range
+    /// across three parts, and over ranges a buffer holds, which the count kernel reads: one at
+    /// location 0 across two parts, one from a location inside a part (the part's commands before
+    /// it run and draw nothing), and one past the commands, clamped to them.
     #[test]
     fn every_device_draws_an_execution_of_several_parts_as_its_draws_direct() {
-        const MANY: u32 = 3 * PART + 8;
         let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
             return;
         };
         each_device("icb_parts", |name, _, device| {
-            let Some(commands) = commands(name, &device, &descriptor(3, 1), MANY) else {
-                return;
-            };
             let state = flagged(
                 name,
                 &device,
                 &indexed,
                 ("icb_indexed_vertex", "icb_indexed_fragment"),
             );
+            // The device's part for this state, from a buffer of as many commands as it takes up
+            // to 2^16.
+            let most = (device.core().indirect.as_ref()).map_or(1, |i| i.limits.sequences);
+            let Some(sized) = commands(name, &device, &descriptor(3, 1), most.min(1 << 16)) else {
+                return;
+            };
+            let mut part = 0;
+            drawn(name, &device, &state, |e| {
+                part = ok(name, e.execution_part(&sized));
+            });
+            drop(sized);
+            let many = (3 * part + 8).min(most.min(1 << 16));
+            let commands = commands(name, &device, &descriptor(3, 1), many).expect("a buffer");
             let kernel = kernel(name, &device, &indexed, "icb_indexed_16");
             let mut buffers = Buffers::new(&device);
-            let s = Scene::of(&device, &mut buffers, &commands, MANY);
+            let s = Scene::of(&device, &mut buffers, &commands, many);
             let at = (&s, &s.xy, 0);
-            encode(name, &device, &kernel, &commands, at, MANY);
+            encode(name, &device, &kernel, &commands, at, many);
             let direct_of = |range: std::ops::Range<u32>| {
                 drawn(name, &device, &state, |e| {
                     for i in range {
@@ -538,36 +561,130 @@ mod on_device {
                     })
                     .collect()
             };
+            let check = |what: &str, texels: Vec<u8>, range: std::ops::Range<u32>| {
+                assert_eq!(texels, direct_of(range.clone()), "{name}: {what}");
+                assert_eq!(marks(name, &texels), last(range), "{name}: {what}");
+            };
             let all = drawn(name, &device, &state, |e| {
-                ok(name, e.execute_commands_in_buffer(&commands, 0..MANY))
+                ok(name, e.execute_commands_in_buffer(&commands, 0..many))
             });
-            assert_eq!(all, direct_of(0..MANY), "{name}: all {MANY}");
-            assert_eq!(marks(name, &all), last(0..MANY), "{name}: all {MANY}");
-            let part = drawn(name, &device, &state, |e| {
-                ok(name, e.execute_commands_in_buffer(&commands, 60..140))
-            });
-            assert_eq!(part, direct_of(60..140), "{name}: commands 60 to 139");
-            assert_eq!(
-                marks(name, &part),
-                last(60..140),
-                "{name}: commands 60 to 139"
-            );
-            let range = buffers.of(&device, &words(&[70, 100]));
-            let held = drawn(name, &device, &state, |e| {
+            check("all", all, 0..many);
+            let across = part / 2..(2 * part + part / 2).min(many);
+            let cpu = drawn(name, &device, &state, |e| {
                 ok(
                     name,
-                    e.execute_commands_in_buffer_with_range(&commands, &range, 0),
+                    e.execute_commands_in_buffer(&commands, across.clone()),
                 )
             });
-            assert_eq!(held, direct_of(70..170), "{name}: the range 70 to 169");
-            assert_eq!(
-                marks(name, &held),
-                last(70..170),
-                "{name}: the range 70 to 169"
+            check("a CPU range across three parts", cpu, across);
+            let mut held = |location: u32, length: u32| {
+                let range = buffers.of(&device, &words(&[location, length]));
+                drawn(name, &device, &state, |e| {
+                    ok(
+                        name,
+                        e.execute_commands_in_buffer_with_range(&commands, &range, 0),
+                    )
+                })
+            };
+            check(
+                "a held range at location 0 across two parts",
+                held(0, part + 5),
+                0..part + 5,
+            );
+            let inside = part + part / 2;
+            check(
+                "a held range from inside the second part",
+                held(inside, part),
+                inside..(inside + part).min(many),
+            );
+            check(
+                "a held range past the commands",
+                held(many - 6, 100),
+                many - 6..many,
             );
             println!(
-                "{name}: {MANY} encoded commands, commands 60 to 139 and the range 70 to 169 a \
-                 buffer holds, in parts of {PART}, each draw as their draws direct"
+                "{name}: {many} encoded commands in parts of {part}: all, a CPU range across three \
+                 parts and ranges a buffer holds (at 0, inside the second part, past the \
+                 commands) each draw as their draws direct"
+            );
+        });
+    }
+
+    /// An execution over a range a buffer holds, as a `Boolean` mode's first draw, runs and its
+    /// samples count: its count kernel ends the rendering before the mode's query begins. After a
+    /// draw of a mode, whose query then counts, it is `DrawKind::VisibilityResultInterrupt`,
+    /// counted, and the encoder draws on.
+    #[test]
+    fn every_device_runs_a_held_range_first_in_a_visibility_mode_and_refuses_it_after_a_draw() {
+        let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
+            return;
+        };
+        each_device("icb_visibility", |name, _, device| {
+            let Some(commands) = commands(name, &device, &descriptor(3, 1), N) else {
+                return;
+            };
+            let state = flagged(
+                name,
+                &device,
+                &indexed,
+                ("icb_indexed_vertex", "icb_indexed_fragment"),
+            );
+            let kernel = kernel(name, &device, &indexed, "icb_indexed_16");
+            let mut buffers = Buffers::new(&device);
+            let s = Scene::new(&device, &mut buffers, &commands);
+            let at = (&s, &s.xy, 0);
+            encode(name, &device, &kernel, &commands, at, N);
+            let range = buffers.of(&device, &words(&[0, N]));
+            let visibility = buffers.of(&device, &[0xaa; 16]);
+            let counters = device.counters();
+            let before = counters.metrics().visibility_interrupts_refused;
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut d = pass(&color, None);
+            d.visibility_result_buffer = Some(visibility.clone());
+            let mut e = ok(name, command_buffer.render_command_encoder(&d));
+            ok(name, e.set_render_pipeline_state(&state));
+            e.set_cull_mode(CullMode::None);
+            let boolean = VisibilityResultMode::Boolean;
+            ok(name, e.set_visibility_result_mode(boolean, 0));
+            ok(
+                name,
+                e.execute_commands_in_buffer_with_range(&commands, &range, 0),
+            );
+            ok(name, e.set_visibility_result_mode(boolean, 8));
+            direct(name, &mut e, at, 0, 0);
+            let refused = e.execute_commands_in_buffer_with_range(&commands, &range, 0);
+            assert!(
+                matches!(
+                    refused,
+                    Err(Error::Unsupported(Gap::Draw {
+                        kind: DrawKind::VisibilityResultInterrupt
+                    }))
+                ),
+                "{name}: an execution while the query counts: {refused:?}"
+            );
+            direct(name, &mut e, at, 1, 4);
+            e.end_encoding();
+            run(name, &command_buffer);
+            let refusals = counters.metrics().visibility_interrupts_refused - before;
+            assert_eq!(refusals, 1, "{name}: the refusal counted");
+            let contents = visibility.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds 16 bytes, which the finished command buffer wrote and whose
+            // writes reach the host.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 16) };
+            let counts: Vec<u64> = (bytes.chunks(8))
+                .map(|word| u64::from_le_bytes(word.try_into().expect("a word")))
+                .collect();
+            // Each command draws a band of 16 pixels: the execution's four, the two direct draws'.
+            assert_eq!(counts, [64, 32], "{name}: each mode's samples");
+            println!(
+                "{name}: an execution over a held range as a Boolean mode's first draw counted 64 \
+                 samples; after a draw of the next mode it was refused and counted"
             );
         });
     }
@@ -1060,6 +1177,65 @@ mod on_device {
         });
     }
 
+    /// The part's bound, checked on the device: at the widest layout the device can take (as many
+    /// 8-byte slot words as its tokens allow, at most the push bytes less the word of the sequence
+    /// index and the part's first command), the part of an execution of the most commands the
+    /// device takes has queried preprocess bytes at or under `PART_BYTES`.
+    #[test]
+    fn every_device_keeps_the_part_of_its_widest_layout_under_the_bound() {
+        let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
+            return;
+        };
+        each_device("icb_part_bytes", |name, _, device| {
+            let Some(_commands) = commands(name, &device, &descriptor(3, 1), 1) else {
+                return;
+            };
+            let state = flagged(
+                name,
+                &device,
+                &indexed,
+                ("icb_indexed_vertex", "icb_indexed_fragment"),
+            );
+            let core = device.core();
+            let indirect = (core.indirect.as_ref()).expect("the extension");
+            let pipeline = ok(
+                name,
+                (state.inner.compiled)
+                    .pipeline(vk::PrimitiveTopology::TRIANGLE_LIST, Raster::default()),
+            );
+            let layout = IndirectDrawLayout::new(31, 31).expect("a layout");
+            let room = crate::pipeline::PUSH_BYTES / 8 - 1;
+            let words = room.min(indirect.limits.tokens.saturating_sub(3));
+            let slots = (0..31)
+                .map(|slot| layout.vertex_slot(slot))
+                .chain((0..31).map(|slot| layout.fragment_slot(slot)));
+            let tokens = Tokens {
+                layout,
+                pushes: slots
+                    .take(words as usize)
+                    .zip((0..).map(|w| 8 * w))
+                    .collect(),
+                sequence: 8 * room,
+                base: 8 * room + 4,
+            };
+            let commands = ok(name, indirect.layout(core, &tokens));
+            let most = indirect.limits.sequences;
+            let (part, need) = indirect.part(core, &commands, pipeline, most);
+            assert!(
+                part >= 1 && need.size <= PART_BYTES,
+                "{name}: {} tokens: a part of {part} commands takes {} preprocess bytes",
+                tokens.count(),
+                need.size
+            );
+            println!(
+                "{name}: {} tokens: a part of {part} of the most {most} commands takes {} \
+                 preprocess bytes, at most {PART_BYTES}",
+                tokens.count(),
+                need.size
+            );
+        });
+    }
+
     #[test]
     fn every_device_bounds_its_preprocess_pool_and_drops_it() {
         let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
@@ -1096,20 +1272,13 @@ mod on_device {
                         ),
                     )
                 };
-                // A capacity whose region is between 4 and 16 MiB, so a few dozen pass the bound.
-                let mut capacity = 1024;
-                while shape(capacity).preprocess_size() > 16 << 20 && capacity > 1 {
-                    capacity /= 2;
-                }
-                while shape(capacity).preprocess_size() < 4 << 20
-                    && 2 * capacity <= indirect.limits.sequences
-                {
-                    capacity *= 2;
-                }
-                let shape = shape(capacity);
+                // Regions of about 8 MiB, so a few dozen pass the bound: parts of a shape of 1024
+                // commands, each at most `PART_BYTES`.
+                let shape = shape(1024);
+                let parts = ((8 << 20) / shape.part_stride().max(1)).max(1) as u32;
                 let mut held = Vec::new();
                 while counters.gauges().preprocess_used_bytes <= IDLE_BYTES {
-                    held.push(ok(name, indirect.executed(core, &shape, 1)).0);
+                    held.push(ok(name, indirect.executed(core, &shape, parts)).0);
                 }
                 let regions = held.len();
                 drop(held);
@@ -1138,7 +1307,7 @@ mod on_device {
                 );
                 let before = counters.metrics().preprocess_regions_remade;
                 let again: Vec<_> = (0..regions)
-                    .map(|_| ok(name, indirect.executed(core, &shape, 1)).0)
+                    .map(|_| ok(name, indirect.executed(core, &shape, parts)).0)
                     .collect();
                 let remade = counters.metrics().preprocess_regions_remade - before;
                 assert!(remade > 0, "{name}: regions made again past the bound");
@@ -1147,7 +1316,7 @@ mod on_device {
                 let rest = settled(&|idle| idle == 0);
                 assert_eq!(rest, 0, "{name}: the pool at rest");
                 println!(
-                    "{name}: {regions} regions of {capacity} commands held past {IDLE_BYTES} bytes \
+                    "{name}: {regions} regions of {parts} parts held past {IDLE_BYTES} bytes \
                      went back, {kept} bytes kept idle; {remade} made again past the bound; idle \
                      bytes 0 {} ms after the last went back",
                     since.elapsed().as_millis()

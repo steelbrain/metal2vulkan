@@ -312,6 +312,9 @@ surface! {
         const GRID_TILE_THREADS;
         const DEEP_THREADGROUP;
         const COMPILED_STAGE_WEIGHT;
+        fn own_kernel;
+        struct ExecutionCounts E;
+        enum OwnKernel N;
         struct ComputePipeline N;
         struct ComputePipelineMetalInfo N;
         struct CompileReport N;

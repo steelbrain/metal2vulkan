@@ -46,21 +46,25 @@ pub(crate) const LAYOUTS: usize = 64;
 /// The most execution shapes (a content, a raster state, a record layout and a command count)
 /// whose layout and preprocess requirements a device keeps ([`Shape`]).
 pub(crate) const SHAPES: usize = 256;
-/// The most commands one `vkCmdExecuteGeneratedCommandsEXT` runs: an execution of more is one of
-/// each part of `PART` commands in order, the last the rest, each its own preprocess in the
-/// execution's region, its sequences counted from the part's first command
-/// (`PushField::IndirectBase`). One form on every device; its cost is a known gap (README).
-pub(crate) const PART: u32 = 64;
+/// The most preprocess bytes one `vkCmdExecuteGeneratedCommandsEXT` takes, as
+/// `vkGetGeneratedCommandsMemoryRequirementsEXT` answers for its commands: an execution of more is
+/// one of each part of the most commands that stay at or under it ([`Shape::part`]), in order, the
+/// last the rest, each its own preprocess in the execution's region, its sequences counted from the
+/// part's first command (`PushField::IndirectBase`). Half of about 4 MiB, past which a driver was
+/// measured to draw nothing of an execution or to lose the device (README). One rule on every
+/// device; the bytes a command are the device's own answer.
+pub(crate) const PART_BYTES: u64 = 2 << 20;
 /// The most bytes of preprocess regions no execution holds that a device keeps for the next ones:
 /// the regions of one frame of Apple's published rendering sample's 45,024 commands, which a
 /// completed frame gives back for a later one to take (in a steady run only one frame's regions
-/// are idle; those of the frames in flight are in use): its 11 executions' 710 parts at the most a
-/// part takes (151,808 bytes, NVIDIA's for 17 tokens), about 108 MB, with room for the regions'
-/// rounding. A region made within a second of one freed past it is counted
+/// are idle; those of the frames in flight are in use): its 11 executions' parts hold the commands'
+/// own preprocess bytes (about 27 MB at the 592 bytes a command of 17 tokens measured on one
+/// device) and at most one part of [`PART_BYTES`] more an execution (22 MB), with room for the
+/// regions' rounding. A region made within a second of one freed past it is counted
 /// ([`Metrics::preprocess_regions_remade`](crate::Metrics::preprocess_regions_remade)), and every
 /// idle region goes once it has been idle for the runtime's idle age
 /// ([`memory::IDLE_AGE_NANOS`]): at rest the pool holds nothing.
-pub(crate) const IDLE_BYTES: u64 = 128 << 20;
+pub(crate) const IDLE_BYTES: u64 = 64 << 20;
 /// The granule a preprocess region's bytes are rounded up to.
 const REGION_GRANULE: u64 = 64 << 10;
 /// The bounds of a buffer slot a command holds, which an execution pushes for it: its offset
@@ -263,17 +267,20 @@ impl Drop for CommandsLayout {
     }
 }
 
-/// An execution shape's layout and preprocess requirements, with the inherited pipeline.
+/// An execution shape's layout, its part and a part's preprocess requirements, with the inherited
+/// pipeline.
 #[derive(Clone)]
 pub(crate) struct Shape {
     pub(crate) layout: Arc<CommandsLayout>,
     /// The push offset of the part's first command ([`Tokens::base`]).
     pub(crate) base: u32,
+    /// The commands of a part: the most whose preprocess bytes stay at or under [`PART_BYTES`].
+    pub(crate) part: u32,
     preprocess: vk::MemoryRequirements,
 }
 
 impl Shape {
-    /// The preprocess bytes an execution of the shape takes.
+    /// The preprocess bytes a part of the shape takes.
     pub(crate) fn preprocess_size(&self) -> u64 {
         self.preprocess.size
     }
@@ -366,10 +373,11 @@ impl Indirect {
         }
     }
 
-    /// The shape of an execution of `capacity` commands of `layout` with `compiled`'s
+    /// The shape of an execution of at most `capacity` commands of `layout` with `compiled`'s
     /// `pipeline`, made under `raster`: the device's, or one made now, its layout the device's for
-    /// its tokens ([`tokens`]) or one made now, and its preprocess requirements queried with the
-    /// pipeline, which an execution with another of the content's pipelines does not reuse.
+    /// its tokens ([`tokens`]) or one made now, and its part and a part's preprocess requirements
+    /// queried with the pipeline ([`part`](Self::part)), which an execution with another of the
+    /// content's pipelines does not reuse.
     ///
     /// Err: [`Gap::IndirectCommandBuffers`] where [`tokens`] answers a kind, and of
     /// [`IndirectCommandsKind::Tokens`] for more tokens than the device takes; [`Error::Vulkan`]
@@ -391,26 +399,80 @@ impl Indirect {
             return Err(refuse(IndirectCommandsKind::Tokens));
         }
         let commands = self.layout(core, &tokens)?;
-        let info = dgc::PipelineInfo::new(pipeline);
-        let asked = dgc::MemoryInfo::new(&info, commands.handle, capacity);
-        let mut requirements: vk::MemoryRequirements2<'static> = vk::MemoryRequirements2::default();
-        // SAFETY: the layout and the pipeline are the device's, and the structures are valid for
-        // the call.
-        unsafe { (self.dgc.memory_requirements)(core.device.handle(), &asked, &mut requirements) };
+        let (part, preprocess) = self.part(core, &commands, pipeline, capacity);
         let shape = Shape {
             layout: commands,
             base: tokens.base,
-            preprocess: requirements.memory_requirements,
+            part,
+            preprocess,
         };
         let (kept, gone) = lock(&self.shapes).keep(key, shape);
         drop(gone);
         Ok(kept)
     }
 
+    /// The commands of a part of an execution of at most `capacity` commands of `commands` with
+    /// `pipeline`, and a part's preprocess requirements: every command where the device's
+    /// preprocess bytes for them (`vkGetGeneratedCommandsMemoryRequirementsEXT`) stay at or under
+    /// [`PART_BYTES`], else about the most that do. The device is asked from one command up,
+    /// doubling while the answer stays at or under the bound, so no answer for far more commands
+    /// than a part takes is trusted (one driver's answer grows with the square of the count and
+    /// wraps at 32 bits); past the last count that stayed under it, the device is asked again at
+    /// fewer, in proportion to the last answer's bytes, until the answer is at or under it.
+    pub(crate) fn part(
+        &self,
+        core: &Core,
+        commands: &CommandsLayout,
+        pipeline: vk::Pipeline,
+        capacity: u32,
+    ) -> (u32, vk::MemoryRequirements) {
+        let info = dgc::PipelineInfo::new(pipeline);
+        let ask = |sequences: u32| {
+            let asked = dgc::MemoryInfo::new(&info, commands.handle, sequences);
+            let mut requirements: vk::MemoryRequirements2<'static> =
+                vk::MemoryRequirements2::default();
+            // SAFETY: the layout and the pipeline are the device's, and the structures are valid
+            // for the call.
+            unsafe {
+                (self.dgc.memory_requirements)(core.device.handle(), &asked, &mut requirements)
+            };
+            requirements.memory_requirements
+        };
+        let (mut part, mut need) = (1, ask(1));
+        while part < capacity {
+            let next = part.saturating_mul(2).min(capacity);
+            let more = ask(next);
+            if more.size <= PART_BYTES {
+                (part, need) = (next, more);
+                continue;
+            }
+            let (mut over, mut bytes) = (next, more.size);
+            loop {
+                let fewer = u128::from(PART_BYTES) * u128::from(over) / u128::from(bytes);
+                let count = u32::try_from(fewer).map_or(over - 1, |fewer| fewer.min(over - 1));
+                if count <= part {
+                    break;
+                }
+                let asked = ask(count);
+                if asked.size <= PART_BYTES {
+                    (part, need) = (count, asked);
+                    break;
+                }
+                (over, bytes) = (count, asked.size);
+            }
+            break;
+        }
+        (part, need)
+    }
+
     /// The command layout of `tokens`: the device's, or one made now, through the device's
     /// pipeline layout, for vertex and fragment stages, its push tokens' ranges of
     /// [`PUSH_STAGES`], the layout's one push range's stages.
-    fn layout(&self, core: &Core, tokens: &Tokens) -> Result<Arc<CommandsLayout>, Error> {
+    pub(crate) fn layout(
+        &self,
+        core: &Core,
+        tokens: &Tokens,
+    ) -> Result<Arc<CommandsLayout>, Error> {
         if let Some(layout) = lock(&self.layouts).get(tokens) {
             return Ok(layout);
         }

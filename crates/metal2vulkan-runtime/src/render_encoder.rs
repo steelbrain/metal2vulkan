@@ -93,7 +93,7 @@ use crate::encoder::{
 use crate::error::{DrawKind, Error, Gap, IndirectCommandsKind, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
 use crate::hazard::Access;
-use crate::indirect::{IndirectCommandBuffer, PART, UNCHECKED_BOUNDS};
+use crate::indirect::{IndirectCommandBuffer, UNCHECKED_BOUNDS};
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached};
@@ -539,12 +539,14 @@ enum Call<'a> {
     /// An execution of `sequences` commands of an indirect command buffer from command `first`
     /// (`crate::indirect`), each a sequence of triangles: over the range the CPU gave, or, where
     /// `range` holds a buffer and an offset, over the range that buffer holds there, from command
-    /// 0 through every command.
+    /// 0 through every command, each part running as many as its count at `counts` (part `p`'s
+    /// at `counts + 4 * p`, which the count kernel wrote; 0 for a range the CPU gave).
     Commands {
         buffer: &'a IndirectCommandBuffer,
         first: u32,
         sequences: u32,
         range: Option<(&'a Buffer, u64)>,
+        counts: u64,
     },
 }
 
@@ -2392,9 +2394,9 @@ impl RenderCommandEncoder {
                     &self.core,
                     (compiled, self.raster, pipeline),
                     buffer.layout(),
-                    PART,
+                    buffer.size(),
                 )?;
-                let parts = sequences.div_ceil(PART);
+                let parts = sequences.div_ceil(shape.part);
                 let (executed, preprocess) =
                     indirect.executed(building.device.core(), &shape, parts)?;
                 Some((shape, executed, preprocess))
@@ -2616,6 +2618,7 @@ impl RenderCommandEncoder {
                         buffer,
                         first,
                         sequences,
+                        counts,
                         ..
                     },
                     _,
@@ -2624,12 +2627,18 @@ impl RenderCommandEncoder {
                         (&core.indirect, &execution)
                     {
                         // One execution of each part, in order, each part's first command pushed
-                        // at the base field; the first part's push is the draw's own.
+                        // at the base field; the first part's push is the draw's own. Over a
+                        // range a buffer holds, each part runs as many as its count says.
                         let layout = buffer.layout();
                         let info = crate::dgc::PipelineInfo::new(pipeline);
                         let base = shape.base as usize;
-                        for (part, from) in (0..sequences).step_by(PART as usize).enumerate() {
-                            let count = (sequences - from).min(PART);
+                        for (part, from) in (0..sequences).step_by(shape.part as usize).enumerate()
+                        {
+                            let count = (sequences - from).min(shape.part);
+                            let counted = match counts {
+                                0 => 0,
+                                counts => counts + 4 * part as u64,
+                            };
                             if part > 0 {
                                 let command_index = first + from;
                                 self.push[base..base + 4]
@@ -2651,7 +2660,7 @@ impl RenderCommandEncoder {
                                 shape.layout.handle(),
                                 (stream, size),
                                 (at, shape.preprocess_size()),
-                                count,
+                                (count, counted),
                             );
                             (indirect.dgc.execute)(command, vk::FALSE, &generated);
                         }
@@ -2674,11 +2683,12 @@ impl RenderCommandEncoder {
     /// `executeCommandsInBuffer:withRange:`: commands `range` of `buffer`, drawn as triangles with
     /// the encoder's pipeline state and every render state it set, each command with the buffers
     /// its encoding bound (the command buffer keeps `buffer`'s records until it retires): one
-    /// `vkCmdExecuteGeneratedCommandsEXT` for each part of 64 commands from the range's first, in
-    /// order, each command a sequence of the content's command layout ([`IndirectCommandBuffer`]),
-    /// each part its own preprocess in the execution's region and its first command pushed before
-    /// it. Metal runs one execution; the parts cost GPU and recording time (the README's known
-    /// gaps). A command's buffers are read through its vertex and fragment
+    /// `vkCmdExecuteGeneratedCommandsEXT` for each part from the range's first, in order, a part
+    /// the most commands whose preprocess bytes (`vkGetGeneratedCommandsMemoryRequirementsEXT`)
+    /// stay at or under 2 MiB, each command a sequence of the content's command layout
+    /// ([`IndirectCommandBuffer`]), each part its own preprocess in the execution's region and its
+    /// first command pushed before it. Metal runs one execution; each part past the first costs
+    /// GPU and recording time (the README's known gaps). A command's buffers are read through its vertex and fragment
     /// slots unchecked: an access of one reads and writes at the address the kernel's encoding
     /// wrote plus its offset, as an access through a pointer loaded from memory does
     /// (`docs/API.md`, section 5). An execution leaves the encoder's state as it was: the next
@@ -2708,6 +2718,7 @@ impl RenderCommandEncoder {
             first: range.start,
             sequences: range.end - range.start,
             range: None,
+            counts: 0,
         };
         self.draw(primitives(PrimitiveType::Triangle), call, Some([1, 0]))
     }
@@ -2715,14 +2726,23 @@ impl RenderCommandEncoder {
     /// `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`: the commands of `buffer` in
     /// the range (`MTLIndirectCommandBufferExecutionRange`: a `u32` location, then a `u32`
     /// length) `range_buffer` holds at `offset` when the command runs, as
-    /// [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) draws them. The execution
-    /// runs every command of the buffer, and the vertex function of each command outside the
-    /// range returns before its body, drawing nothing; a command past the buffer's is none. The
-    /// range buffer counts as a read, and the command buffer keeps it until it retires.
+    /// [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) draws them. The rendering
+    /// ends, the device's count kernel (`metal2vulkan::pipeline::OwnKernel::ExecutionCounts`)
+    /// reads the range and writes each part's count, one global barrier follows, and the
+    /// rendering begins again, loading what it stored. The execution's parts from command 0 then
+    /// each run their commands through the range's last, and none past it or wholly before its
+    /// location; in the part that holds the location, the vertex function of each command before
+    /// it returns before its body, drawing nothing. A range past the buffer's commands is clamped
+    /// to them. The range buffer counts as a read, and the command buffer keeps it until it
+    /// retires.
     ///
     /// Err: as [`execute_commands_in_buffer`](Self::execute_commands_in_buffer);
     /// [`Refusal::OtherDevice`] for another device's range buffer; [`Refusal::CommandRange`]
-    /// for an offset that is not a multiple of 4 or a range whose 8 bytes leave the buffer.
+    /// for an offset that is not a multiple of 4 or a range whose 8 bytes leave the buffer;
+    /// [`Gap::Draw`] of [`DrawKind::VisibilityResultInterrupt`], counted, while a visibility
+    /// result's query counts the draws (after a draw of a `Boolean` or `Counting` mode: the
+    /// count kernel would end the rendering inside the query); [`Error::Translation`] or
+    /// [`Error::Vulkan`] where the count kernel cannot be made.
     pub fn execute_commands_in_buffer_with_range(
         &mut self,
         buffer: &IndirectCommandBuffer,
@@ -2740,13 +2760,92 @@ impl RenderCommandEncoder {
         {
             return Err(Error::Refused(Refusal::CommandRange));
         }
+        // The count kernel runs outside the rendering, which nothing may end while a visibility
+        // result's query counts the draws.
+        if self.results.counting() {
+            return Err(self.interrupt_refused());
+        }
+        let part = self.execution_part(buffer)?;
+        let range = range_buffer.gpu_address().wrapping_add(offset);
+        let counts = self.execution_counts(range, buffer.size(), part)?;
         let call = Call::Commands {
             buffer,
             first: 0,
             sequences: buffer.size(),
             range: Some((range_buffer, offset)),
+            counts,
         };
         self.draw(primitives(PrimitiveType::Triangle), call, Some([1, 0]))
+    }
+
+    /// The part of an execution of `buffer`'s commands with the encoder's pipeline state
+    /// ([`Shape::part`](crate::indirect::Shape)), as [`draw`](Self::draw) takes it.
+    ///
+    /// Err: as [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) for the state.
+    pub(crate) fn execution_part(&self, buffer: &IndirectCommandBuffer) -> Result<u32, Error> {
+        let Some(state) = &self.pipeline else {
+            return Err(Error::Refused(Refusal::NoPipeline));
+        };
+        let compiled = &state.inner.compiled;
+        if compiled.draws.patches {
+            return Err(Error::Refused(Refusal::PatchDraw));
+        }
+        let Some(indirect) = &self.core.indirect else {
+            return Err(Error::Unsupported(Gap::IndirectCommandBuffers {
+                kind: IndirectCommandsKind::Extension,
+            }));
+        };
+        let (topology, _) = primitives(PrimitiveType::Triangle);
+        let pipeline = compiled.pipeline(topology, self.raster)?;
+        let made = (compiled, self.raster, pipeline);
+        let shape = indirect.shape(&self.core, made, buffer.layout(), buffer.size())?;
+        Ok(shape.part)
+    }
+
+    /// Ends the rendering, runs the device's count kernel over the range at device address
+    /// `range` for an execution of `capacity` commands in parts of `part`, records one global
+    /// barrier and begins the rendering again, loading what it stored: where the parts' counts
+    /// lie, part `p`'s at the address returned plus `4 * p`, in the command buffer's ring.
+    ///
+    /// Err: [`Error::Translation`] or [`Error::Vulkan`] where the kernel cannot be made;
+    /// [`Error::Vulkan`] where the command buffer cannot record.
+    fn execution_counts(&mut self, range: u64, capacity: u32, part: u32) -> Result<u64, Error> {
+        use metal2vulkan::pipeline::{ExecutionCounts, OwnKernel};
+        let pipeline = (self.core.own).pipeline(&self.core, OwnKernel::ExecutionCounts)?;
+        let parts = capacity.div_ceil(part);
+        let mut block = vec![0; ExecutionCounts::COUNTS_AT as usize + 4 * parts as usize];
+        let at = |field: u32| field as usize;
+        block[at(ExecutionCounts::RANGE_AT)..][..8].copy_from_slice(&range.to_le_bytes());
+        block[at(ExecutionCounts::CAPACITY_AT)..][..4].copy_from_slice(&capacity.to_le_bytes());
+        block[at(ExecutionCounts::PART_AT)..][..4].copy_from_slice(&part.to_le_bytes());
+        (self.drew, self.owed) = (false, false);
+        let mut counts = 0;
+        self.interrupt(|building, core| {
+            let placed = building.write_ring_placed(&block)?;
+            counts = placed.address + u64::from(ExecutionCounts::COUNTS_AT);
+            let command = building.ordered_command()?;
+            let push = placed.address.to_le_bytes();
+            // SAFETY: the command buffer records outside any rendering; the pipeline and the
+            // layout are the device's, the kernel's push field lies in the layout's one push
+            // range, of `PUSH_STAGES`, and its block in the ring, which the command buffer keeps
+            // until it retires.
+            unsafe {
+                if building.bind(pipeline) {
+                    (core.device).cmd_bind_pipeline(
+                        command,
+                        vk::PipelineBindPoint::COMPUTE,
+                        pipeline,
+                    );
+                }
+                if building.push_needed(&push) {
+                    (core.device).cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &push);
+                }
+                core.device.cmd_dispatch(command, parts, 1, 1);
+            }
+            building.barrier(command, Reach::Commands);
+            Ok(())
+        })?;
+        Ok(counts)
     }
 
     /// What a draw of `draws` reads of its pass's attachments through textures. A texture whose

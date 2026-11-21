@@ -373,6 +373,8 @@ pub(crate) struct Core {
     pub(crate) caches: Caches,
     /// The compiled kernels by content, which every compute pipeline state of a content shares.
     pub(crate) kernels: KernelMap,
+    /// The runtime's own kernels made so far (`crate::own`).
+    pub(crate) own: crate::own::OwnKernels,
     /// The translator's decodes and specialized entries of the functions the device's pipeline
     /// states lowered, which every creation reads, so a module is decoded and a stage
     /// specialized once for the device rather than once a state. Bounded by the translator: the
@@ -810,6 +812,7 @@ impl Device {
             translator,
             caches,
             kernels: KernelMap::new(),
+            own: crate::own::OwnKernels::default(),
             entries: metal2vulkan::pipeline::StageEntries::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
@@ -1684,6 +1687,8 @@ impl Drop for Core {
         self.imports.destroy(&self.device);
         self.stamps.destroy(&self.device, &self.counters);
         self.occlusion.destroy(&self.device, &self.counters);
+        // SAFETY: the device is idle, and nothing records any more.
+        unsafe { self.own.destroy(self) };
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };
         let filler = self.filler.take();
