@@ -2024,8 +2024,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `maxComputeWorkGroupCount` does. Each piece is ordered after the commands before it by a
   barrier, but the first in a block the dispatch took new, which nothing reached before; a
   dispatch of a kernel without an arena takes no such barrier.
-  `Metrics::private_arena_dispatches`, `private_arena_pieces` and `private_arena_blocks` count
-  them, and `private_arena_allocations` the blocks' takes. An indirect dispatch of such a kernel
+  `Metrics::private_arena_dispatches` and `private_arena_pieces` count them, and
+  `private_arena_allocations` the blocks' takes. An indirect dispatch of such a kernel
   is `Gap::IndirectPrivateArena`: the GPU reads its counts, so the runtime can neither size its
   arena nor split it.
 - `use_heap` is `useHeap:`, for the block a heap's memory is: the command buffer keeps the block

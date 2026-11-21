@@ -206,7 +206,8 @@ entry:
                     );
                     // The first dispatch takes a block where none a command buffer keeps holds its
                     // slots; the second reaches the first's.
-                    let taken = after.private_arena_blocks - before.private_arena_blocks;
+                    let taken = after.private_arena_allocations.count
+                        - before.private_arena_allocations.count;
                     assert!(taken <= 1, "{what}: {taken} blocks");
                     let ordered = 2 * pieces - taken;
                     assert_eq!(barriers, one + ordered, "{what}: barriers");

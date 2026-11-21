@@ -197,8 +197,6 @@ pub(crate) enum Metric {
     PrivateArenaDispatches,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
-    /// [`Metrics::private_arena_blocks`].
-    PrivateArenaBlocks,
     /// [`Metrics::translations`].
     Translations,
     /// [`Metrics::translations_loaded`].
@@ -266,7 +264,6 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::DispatchesWithoutEffects,
     Metric::PrivateArenaDispatches,
     Metric::PrivateArenaPieces,
-    Metric::PrivateArenaBlocks,
     Metric::Translations,
     Metric::TranslationsLoaded,
     Metric::RenderRecordsRead,
@@ -307,15 +304,23 @@ const _: () = {
 /// What a command buffer's recording counts as its encoders record, added to the device's
 /// counters once an encoder ends ([`Counters::add`]): no command an encoder records writes a
 /// counter the device's threads share.
-#[derive(Default)]
 pub(crate) struct Tally {
     counts: [u64; METRICS],
     /// The metrics counted since the tally was last added, a bit each at its index.
-    counted: u32,
+    counted: u64,
 }
 
 // Each metric has its bit in a tally's `counted`.
-const _: () = assert!(METRICS <= u32::BITS as usize);
+const _: () = assert!(METRICS <= u64::BITS as usize);
+
+impl Default for Tally {
+    fn default() -> Self {
+        Tally {
+            counts: [0; METRICS],
+            counted: 0,
+        }
+    }
+}
 
 impl Tally {
     /// Counts one more of `metric`.
@@ -577,7 +582,6 @@ struct Atomics {
     dispatches_without_effects: AtomicU64,
     private_arena_dispatches: AtomicU64,
     private_arena_pieces: AtomicU64,
-    private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
     private_long_reuses: AtomicU64,
     allocations_mapped: AtomicU64,
@@ -751,7 +755,6 @@ impl Counters {
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::PrivateArenaDispatches => &a.private_arena_dispatches,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
-            Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::RenderRecordsRead => &a.render_records_read,
@@ -1509,7 +1512,6 @@ impl Counters {
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             private_arena_dispatches: a.private_arena_dispatches.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
-            private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             render_records_read: a.render_records_read.load(Relaxed),
@@ -1974,7 +1976,9 @@ pub struct Metrics {
     /// [`texture_block_allocations`](Self::texture_block_allocations).
     pub private_take_allocations: SiteAllocations,
     /// As [`private_take_allocations`](Self::private_take_allocations), of the takes of the
-    /// private arena's blocks (`crate::arena`), on the thread of the dispatch that needed one.
+    /// private arena's blocks (`crate::arena`), on the thread of the dispatch that needed one: one
+    /// for the first dispatch of a kernel whose private memory is in the arena, and one more each
+    /// time such a dispatch needed more than the last block held, or no command buffer kept it.
     pub private_arena_allocations: SiteAllocations,
     /// Calls that waited for the block-maker thread's make of one of the runtime's fixed-size
     /// internals they need, which it makes off every caller's thread: the zero source, a
@@ -2025,9 +2029,6 @@ pub struct Metrics {
     /// The `vkCmdDispatch`es those recorded: one each, and one more for each piece past the first
     /// of a dispatch whose slots passed the arena's budget.
     pub private_arena_pieces: u64,
-    /// The arena's blocks taken from the pool: one for the first such dispatch, and one more each
-    /// time a dispatch needed more than the last block held, or no command buffer kept it.
-    pub private_arena_blocks: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
     /// partition and two for one that does; of a render content, one for each of its functions

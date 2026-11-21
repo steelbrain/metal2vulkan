@@ -273,7 +273,7 @@ fn a_kernel_past_the_floor_keeps_its_private_memory_in_the_runtimes_memory_under
                 compile_kept(&bitcode, "words", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert!(plan.families.access.local.private_device, "{what}");
-            assert_eq!(plan.memory.private_bytes, 0, "{what}");
+            assert_eq!(plan.private_bytes, 0, "{what}");
             assert!(
                 plan.facts
                     .contains(&RuntimeFact::PrivateArena { slot_bytes: 4 * n }),
