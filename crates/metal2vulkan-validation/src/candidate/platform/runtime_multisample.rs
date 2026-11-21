@@ -63,7 +63,7 @@ pub(super) fn filled(
     let written = device.new_depth_stencil_state(&always);
     let made = fills
         .iter()
-        .map(|fill| Filling::make(device, &library, fill, error))
+        .map(|fill| Filling::make(device, &library, fill))
         .collect::<Result<Vec<_>, ExecutorError>>()?;
     let fail = |what: &'static str| move |e: rt::Error| error(what, e);
     runtime::submitted(
@@ -126,12 +126,7 @@ struct Filling {
 }
 
 impl Filling {
-    fn make(
-        device: &rt::Device,
-        library: &Library,
-        fill: &Fill,
-        error: &impl Fn(&str, rt::Error) -> ExecutorError,
-    ) -> Result<Filling, ExecutorError> {
+    fn make(device: &rt::Device, library: &Library, fill: &Fill) -> Result<Filling, ExecutorError> {
         let made = fill.texture.descriptor();
         let samples = made.sample_count;
         let shape = Placed::new(
