@@ -30,18 +30,12 @@
 //! - a tessellation-factor write binds the draw's factor buffer over exactly the plan's range;
 //! - an input-attachment write views the draw's color attachment of its index in `GENERAL`, the
 //!   layout the render pass keeps a framebuffer-fetch attachment in;
-//! - the imageblock write views the pass's imageblock storage, one `R32Uint` 2D-array image of
-//!   the draw's cells (`engine::imageblock`), every layer, in `GENERAL`: uploaded before the
-//!   draw and read back after it like a bound texture;
-//! - a tile-attachment write views the tile pass's color attachment of its index, or the draw's
-//!   color attachment its fragment function reads in the interlocked storage form, one 2D image of
+//! - a tile-attachment write views the tile pass's color attachment of its index, one 2D image of
 //!   the attachment's format, extent, and contents, as a storage image in `GENERAL`: uploaded
-//!   before the work and read back after it like a bound texture;
-//! - the shadow-stencil write views the draw's shadow of its stencil attachment, a single-sample
-//!   `R8Uint` storage image in `GENERAL` that the render executor keeps and copies
-//!   (`render::shadow`).
+//!   before the work and read back after it like a bound texture.
 //!
-//! Inline bytes are typed `NotImplemented`. Descriptor sets come from one
+//! The run keeps no imageblock storage: an imageblock write fails. Inline bytes are typed
+//! `NotImplemented`. Descriptor sets come from one
 //! pool sized from the layout's bindings, update-after-bind when the layout has the heap's set
 //! ([`PlanResources::write_sets`]).
 
@@ -63,7 +57,6 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse};
-use metal2vulkan::pipeline::StorageAttachmentView;
 use metal2vulkan::pipeline::{SlotRef, Stage};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -72,26 +65,17 @@ use std::sync::Arc;
 /// Bytes of a neutral texel buffer: one texel of any format the core declares.
 const NEUTRAL_TEXEL_BYTES: usize = 16;
 
-/// The view of the pass's fragment imageblock storage: a coherent `R32Uint` storage image in
-/// `GENERAL` for the whole pass.
-const IMAGEBLOCK_VIEW: ViewUse = ViewUse {
-    layout: vk::ImageLayout::GENERAL,
-    format: vk::Format::R32_UINT,
-};
-
 fn not_implemented(what: impl Into<String>) -> ExecutorError {
     NotSupported::NotImplemented(format!("engine candidate: {}", what.into())).into()
 }
 
 /// A texture a plan write views: the texture bound at a slot, the used texture with a consumer
-/// token (a heap member; an argument-buffer texture), the render pass's fragment imageblock
-/// storage, or the color attachment of an index that a tile pass stages or a draw's fragment
-/// function reads in the interlocked storage form.
+/// token (a heap member; an argument-buffer texture), or the color attachment of an index that a
+/// tile pass stages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum TextureKey {
     Slot(SlotRef),
     Used(u32),
-    Imageblock,
     TileAttachment(u32),
 }
 
@@ -109,7 +93,6 @@ impl TextureKey {
         match self {
             TextureKey::Slot(slot) => format!("texture {}", slot.index),
             TextureKey::Used(token) => format!("used texture {token}"),
-            TextureKey::Imageblock => "the imageblock storage".into(),
             TextureKey::TileAttachment(index) => format!("storage attachment {index}"),
         }
     }
@@ -141,22 +124,11 @@ pub(super) struct Guest<'a> {
     /// The encoder's tessellation factor buffer of a patch draw.
     pub(super) tessellation_factors: Option<vk::Buffer>,
     /// Each color target's view of a draw's pass, by Metal index: what an input-attachment write
-    /// reads (framebuffer fetch), and, for a multisampled pass's storage-form attachment, what its
-    /// tile-attachment write views, in `GENERAL`. A dispatch has none.
+    /// reads (framebuffer fetch), in `GENERAL`. A dispatch has none.
     pub(super) attachments: &'a BTreeMap<u32, vk::ImageView>,
-    /// The render pass's fragment imageblock storage with its initial cells: an `R32Uint`
-    /// 2D-array texture of one layer per cell word, what the imageblock write views. A dispatch,
-    /// and a draw whose pipeline has no fragment imageblock, have none.
-    pub(super) imageblock: Option<&'a LiteralTexture>,
-    /// A tile pass's color attachments, or the storage-form ones of a draw's pass of one sample,
-    /// with their initial contents, by color index: 2D textures the tile-attachment writes view. A
-    /// dispatch of no tile function, a draw without the storage form, and a multisampled pass
-    /// (whose storage-form attachments are among `attachments`) have none.
+    /// A tile pass's color attachments with their initial contents, by color index: 2D textures
+    /// the tile-attachment writes view. A draw, and a dispatch of no tile function, have none.
     pub(super) tile_attachments: &'a BTreeMap<u32, LiteralTexture>,
-    /// The storage view of a draw's shadow of its stencil attachment, for a pipeline whose
-    /// fragment function tests the stencil itself. A dispatch, and a draw without the shader-side
-    /// stencil, have none.
-    pub(super) shadow_stencil: Option<vk::ImageView>,
     /// The run's `ExecutionStatus` buffer, which a stage binds on a device that does not address
     /// buffers (`WriteSource::ExecutionStatus`). A device replay, which needs the addresses,
     /// has none.
@@ -335,32 +307,14 @@ impl<'a> PlanResources<'a> {
                 WriteSource::HeapEntry { source, view, .. } => {
                     (TextureKey::of_heap(*source)?, ViewUse::from(view))
                 }
-                WriteSource::Imageblock => (TextureKey::Imageblock, IMAGEBLOCK_VIEW),
-                // A multisampled pass's storage-form attachment is the draw's target, or its
-                // sample planes.
-                WriteSource::TileAttachment { color_index, .. }
-                    if guest.attachments.contains_key(color_index) =>
-                {
-                    continue
-                }
-                // In its view's format: the attachment's own, or the pipeline's alias of it
-                // (`StorageAttachmentUse::view_alias`), which makes the image mutable to it.
+                // In the plan's view format, which makes the image mutable to it.
                 WriteSource::TileAttachment {
                     color_index,
                     format,
-                    view: StorageAttachmentView::Attachment,
-                    view_alias,
                 } => (
                     TextureKey::TileAttachment(*color_index),
-                    tile_attachment_view(guest, *color_index, view_alias.unwrap_or(*format))?,
+                    tile_attachment_view(guest, *color_index, *format)?,
                 ),
-                WriteSource::TileAttachment { color_index, .. } => {
-                    return Err(format!(
-                        "color attachment {color_index}'s sample planes, which the draw does not \
-                         keep"
-                    )
-                    .into())
-                }
                 _ => continue,
             };
             let entry = uses.entry(key).or_default();
@@ -384,7 +338,6 @@ impl<'a> PlanResources<'a> {
             let texture: &LiteralTexture = match key {
                 TextureKey::Slot(slot) => guest.textures.get(&slot).copied(),
                 TextureKey::Used(token) => guest.used_textures.get(&token).copied(),
-                TextureKey::Imageblock => guest.imageblock,
                 TextureKey::TileAttachment(index) => guest.tile_attachments.get(&index),
             }
             .ok_or_else(|| format!("the plan views {} that is not bound", key.label()))?;
@@ -707,51 +660,18 @@ impl<'a> PlanResources<'a> {
                 self.structures
                     .top_level(context, *slot, *level, guest.structures.get(slot))?,
             ),
-            // The pass's imageblock storage: every layer of its image, in `GENERAL`.
             WriteSource::Imageblock => {
-                let (image, layout) = self.image(TextureKey::Imageblock)?;
-                let info = vk::ImageViewCreateInfo::default()
-                    .image(image)
-                    .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
-                    .format(IMAGEBLOCK_VIEW.format)
-                    .subresource_range(self::range(
-                        vk::ImageAspectFlags::COLOR,
-                        vk::REMAINING_ARRAY_LAYERS,
-                    ));
-                // SAFETY: `info` names a live image of this run.
-                let view = unsafe { context.device.create_image_view(&info, None) }
-                    .map_err(|error| format!("create the imageblock storage view: {error}"))?;
-                self.views.push(view);
-                Info::Image(
-                    vk::DescriptorImageInfo::default()
-                        .image_view(view)
-                        .image_layout(layout),
-                )
+                return Err("the plan binds an imageblock storage the run does not keep".into())
             }
-            // A multisampled pass's storage-form attachment: the draw's target of the pass's
-            // samples, or its sample planes' 2D-array view, in its own format (the plan's), in
+            // A tile pass's color attachment, a storage image in the plan's view format in
             // `GENERAL`.
-            WriteSource::TileAttachment { color_index, .. }
-                if guest.attachments.contains_key(color_index) =>
-            {
-                Info::Image(
-                    vk::DescriptorImageInfo::default()
-                        .image_view(guest.attachments[color_index])
-                        .image_layout(vk::ImageLayout::GENERAL),
-                )
-            }
-            // A tile pass's color attachment, or a draw's storage-form one in a pass of one sample,
-            // a storage image in the plan's view format in `GENERAL`.
             WriteSource::TileAttachment {
                 color_index,
                 format,
-                view: StorageAttachmentView::Attachment,
-                view_alias,
             } => {
                 let key = TextureKey::TileAttachment(*color_index);
                 let (image, layout) = self.image(key)?;
-                let format = view_alias.unwrap_or(*format);
-                let format = tile_attachment_view(guest, *color_index, format)?.format;
+                let format = tile_attachment_view(guest, *color_index, *format)?.format;
                 let info = vk::ImageViewCreateInfo::default()
                     .image(image)
                     .view_type(vk::ImageViewType::TYPE_2D)
@@ -765,18 +685,6 @@ impl<'a> PlanResources<'a> {
                     vk::DescriptorImageInfo::default()
                         .image_view(view)
                         .image_layout(layout),
-                )
-            }
-            // The shader-side stencil's shadow: the draw's image, which the render executor copies
-            // the stencil into before the pass and out of after it.
-            WriteSource::ShadowStencil => {
-                let view = guest
-                    .shadow_stencil
-                    .ok_or("the plan binds a shadow stencil the draw does not keep")?;
-                Info::Image(
-                    vk::DescriptorImageInfo::default()
-                        .image_view(view)
-                        .image_layout(vk::ImageLayout::GENERAL),
                 )
             }
             // A sparse texture's tile map: the map of the case's mappings, as the consumer keeps
@@ -1271,7 +1179,7 @@ impl<'a> PlanResources<'a> {
     ) -> Result<LiteralTexture, String> {
         let texel_buffer = match key {
             TextureKey::Slot(slot) => self.texel_buffers.get(&slot),
-            TextureKey::Used(_) | TextureKey::Imageblock | TextureKey::TileAttachment(_) => None,
+            TextureKey::Used(_) | TextureKey::TileAttachment(_) => None,
         };
         let bytes = if let Some(image) = self.images.get(&key) {
             let readback = image
@@ -1374,11 +1282,9 @@ impl<'a> PlanResources<'a> {
     }
 }
 
-/// The view of color attachment `index` of a tile pass or of a draw's storage form in the plan's
-/// `format`, in `GENERAL`: for a tile pass the attachment's own format for an integer one and the
-/// unsigned-integer format of the same channels for a float one, which [`create_slot_image`] makes
-/// the image `MUTABLE_FORMAT` for; for a draw the attachment's own format, or the pipeline's alias
-/// of it (`StorageAttachmentUse::view_alias`), which it makes the image mutable to likewise.
+/// The view of color attachment `index` of a tile pass in the plan's `format`, in `GENERAL`: the
+/// attachment's own format for an integer one and the unsigned-integer format of the same channels
+/// for a float one, which [`create_slot_image`] makes the image `MUTABLE_FORMAT` for.
 fn tile_attachment_view(
     guest: &Guest<'_>,
     index: u32,

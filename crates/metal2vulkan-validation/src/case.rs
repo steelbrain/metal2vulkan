@@ -441,7 +441,7 @@ pub(crate) fn narrow_implicit_imageblock_test_case(
     }
 }
 
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, target_os = "macos", m2v_gpu))]
 pub(crate) fn fragment_imageblock_test_case(air_sha256: String, entry: String) -> AuthoredCase {
     let initial_half = base64::engine::general_purpose::STANDARD.encode([0x00, 0x3c]);
     AuthoredCase {

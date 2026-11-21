@@ -3,11 +3,8 @@
 //! its own sample of the color attachment and writes the color back, with and without early
 //! fragment tests.
 //!
-//! MoltenVK on an Apple GPU was measured to lose every storage-image write of an early-tests
-//! fragment shader at more than one sample, so the storage form of framebuffer fetch cannot serve a
-//! fetch-and-write fragment that declares early tests at 4 samples beside a depth or stencil
-//! attachment. An input attachment over the color attachment keeps the color in the render target
-//! and the tests in the hardware. Vulkan leaves such a read unordered against the same draw's
+//! An input attachment over the color attachment keeps the color in the render target and the
+//! tests in the hardware. Vulkan leaves such a read unordered against the same draw's
 //! earlier writes without `VK_EXT_rasterization_order_attachment_access`; Metal orders its own
 //! framebuffer fetch (`[[color(n)]]`). This step measures what the device answers, for comparison
 //! with plain Metal's answer to the same draw (our probe's `fetch` mode): byte for

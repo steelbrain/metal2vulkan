@@ -156,8 +156,6 @@ impl UlpTable {
 /// - `DeviceSampleLevel`: unbounded: another level or filter near a boundary reads other texels,
 ///   which differ from Metal's by up to the texture's range, and an LOD query answers the device's
 ///   level.
-/// - `UnmeasuredFetchBlend`: unbounded until Metal readings bound its blend arithmetic for the
-///   format: the shader's `float` blend is not Metal's, whose arithmetic for it is not measured.
 /// - `Fp8Value`: unbounded until a Metal device that implements 8-bit float conversions reads
 ///   them: Metal on Apple M3 returns the carrier byte's integer extension, which differs from the
 ///   format's value by any amount.
@@ -281,7 +279,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::TessellationTriangleOrder
         | N::UnmeasuredGroupSpeculation
         | N::DeviceSampleLevel
-        | N::UnmeasuredFetchBlend
         | N::Fp8Value
         | N::MultisamplePosition
         | N::RasterizationRateMap

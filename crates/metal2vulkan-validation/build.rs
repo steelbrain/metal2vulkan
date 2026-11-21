@@ -121,8 +121,7 @@ fn main() {
     // tile maps, function tables; the rate map's and function table's words are the AIR front end's
     // `metal2vulkan-air/src/canon` formats), root tables, handles and the threadgroup regions'
     // alignment (`src/memory`), the dispatch-region encoding (`src/lower/dispatch.rs`, and the
-    // used-parameter walk it reads, `src/lower/users.rs`), the shader-side stencil's shadow format
-    // and state word (`src/lower/fragment/stencil.rs`), a patch's factor bytes
+    // used-parameter walk it reads, `src/lower/users.rs`), a patch's factor bytes
     // (`src/lower/tessellation/factors.rs`),
     // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
     // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), and
@@ -161,7 +160,6 @@ fn main() {
         "metal2vulkan/src/indirect_commands/host.rs",
         "metal2vulkan/src/lower/dispatch.rs",
         "metal2vulkan/src/lower/users.rs",
-        "metal2vulkan/src/lower/fragment/stencil.rs",
         "metal2vulkan/src/lower/arith/exact_division.rs",
         "metal2vulkan/src/lower/arith/pack.rs",
         "metal2vulkan/src/lower/arith/srgb.rs",

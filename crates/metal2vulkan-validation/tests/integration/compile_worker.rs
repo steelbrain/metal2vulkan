@@ -153,7 +153,7 @@ fn a_logged_draw_compiles_in_the_worker_as_in_process() {
         panic!("a draw came back as another kind");
     };
     assert_eq!(pipeline.stages.len(), 2);
-    assert_eq!(pipeline, *expected);
+    assert_eq!(*pipeline, *expected);
     assert!(measured.is_some());
 }
 
@@ -199,7 +199,7 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
         let RowPipeline::Render { pipeline, .. } = *pipeline else {
             panic!("{entry} came back as another kind");
         };
-        assert_eq!(pipeline, *expected);
+        assert_eq!(*pipeline, *expected);
         assert_eq!(pipeline.stages.len(), stages);
         assert!(measured.unwrap().elapsed < DEADLINE);
     }

@@ -735,12 +735,10 @@ fn execute(
             descriptor_ranges: &commands.descriptor_ranges,
             descriptor_bytes: &commands.descriptor_bytes,
             structures: &structures,
-            // A dispatch draws no patches and has no attachments or fragment imageblock.
+            // A dispatch draws no patches and has no attachments.
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            imageblock: None,
             tile_attachments,
-            shadow_stencil: None,
             status: Some(status.buffer.buffer),
         },
         observed,

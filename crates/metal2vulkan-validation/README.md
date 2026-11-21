@@ -157,8 +157,8 @@ Custom fragment imageblocks use the distinct `fragment_imageblock` resource. Eac
 member is identified by its AIR `user(...)` semantic and carries an exact tightly packed `half`,
 `half4`, `uchar4`, or `ushort` plane; scalar `half` is the backward-compatible default format.
 `output.kind: fragment_imageblock` reads a selected plane region. The Metal runner uses same-pass
-initializer/resolver fragments, while Vulkan binds the matching reflected storage format under
-ordered fragment interlock.
+initializer/resolver fragments. On Vulkan the product refuses a fragment function that reads or
+writes an imageblock (`Unsupported{Imageblocks, NotImplemented}`), which is the case's answer.
 
 Textures nested in an `air.indirect_buffer` are authored through
 `argument_buffer_textures`, keyed by owning buffer binding plus field byte offset. Product

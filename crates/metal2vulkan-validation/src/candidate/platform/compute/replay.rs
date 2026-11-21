@@ -357,7 +357,6 @@ fn submit_child(
             // A replayed command declares no out-of-bounds target.
             texel_guards: &BTreeMap::new(),
             tile_attachments: &BTreeMap::new(),
-            shadow_stencil: None,
             status: Some(status.buffer.buffer),
             used_textures: &BTreeMap::new(),
             samplers: &BTreeMap::new(),
@@ -368,7 +367,6 @@ fn submit_child(
             structures: &BTreeMap::new(),
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            imageblock: None,
         },
         None,
     )?;

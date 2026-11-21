@@ -746,8 +746,8 @@ pub fn unsupported_source_requirements(
 /// A post-tessellation vertex function is none of them: the candidate draws its patches as the
 /// oracle does (`tessellation`); nor is a fragment function's color input, whose render target the
 /// candidate attaches as the input attachment the plan reads, nor its explicit imageblock, whose
-/// cells the candidate holds in the storage image the plan's imageblock write names, defined as the
-/// oracle's initializer defines them; nor is an argument-buffer member holding a compute or render
+/// cells the candidate holds as the oracle's initializer defines them and whose reads and writes
+/// the product refuses (`Feature::Imageblocks`), the case's answer; nor is an argument-buffer member holding a compute or render
 /// pipeline state, which the candidate writes into its owner as an opaque id that no translated
 /// pipeline reads; nor a kernel's implicit imageblock attachments, which the candidate runs as the
 /// oracle's tile pipeline over the render area's tiles. The engine's other gaps are a case's

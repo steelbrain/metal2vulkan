@@ -255,8 +255,8 @@ pub struct RenderCase {
     /// front face is [`RenderCase::depth_stencil_state`]'s winding.
     pub cull_mode: metal::CullMode,
     /// A fragment case's explicit imageblock: the pass's cells when the case's draw begins, as
-    /// the Metal oracle's initializer leaves them ([`Cells::initial`]). The render executor holds
-    /// them in the storage image the plan's `WriteSource::Imageblock` names.
+    /// the Metal oracle's initializer leaves them ([`Cells::initial`]). A draw leaves them so: the
+    /// product compiles no fragment function that reads or writes them.
     pub imageblock: Option<Cells>,
     pub output: RenderOutput,
     /// The generated stage that completes the case: `vertex` is its passthrough vertex function, or

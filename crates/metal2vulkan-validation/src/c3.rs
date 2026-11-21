@@ -700,7 +700,7 @@ pub struct SlotRow {
 /// - A half-float color channel under `textureWriteRoundingMode` 2 that blends with factors
 ///   other than one and zero (`BlendedWriteRounding`): the device's blend converts its result by
 ///   its own rounding where Metal rounds it to nearest even, and the stored half is ordinary data
-///   later words use. Open until the function blends under the pixel interlock.
+///   later words use. Open until the function blends over an ordered input attachment.
 /// - A pipeline that covers by alpha under `textureWriteRoundingMode` 2 whose function rounds
 ///   attachment 0's alpha (`CoverageReadsRoundedAlpha`): the coverage reads the rounded alpha
 ///   where Metal's reads it before rounding, so a fragment near a coverage threshold may cover
@@ -825,7 +825,7 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              other than one and zero stores the device's rounding of the blend's result, where \
              Metal rounds it to nearest even (MoltenVK's toward zero; under a constant factor \
              Metal's result is neither rule's on 2,376 of 580,508 RGBA16Float channels); \
-             exact path: the blend in the function under the pixel interlock"
+             exact path: the blend in the function over an ordered input attachment"
         }
         PrecisionNote::CoverageReadsRoundedAlpha => {
             "a pipeline covering by alpha under textureWriteRoundingMode 2 stores Metal's \

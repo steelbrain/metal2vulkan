@@ -209,7 +209,7 @@ struct Attachment {
 
 /// A multisampled attachment of `format` (its `aspect`) holding `bytes` (each pixel's samples in
 /// order, as `literal_format`), laid out as `layout`, read through a view of `fetched`, with
-/// `usage` beside an attachment's own (a fetched or storage-form color target's, [`Bound`]):
+/// `usage` beside an attachment's own (a fetched color target's, [`Bound`]):
 /// created, filled by the initializer, and given its readback words. Everything made is
 /// destroyed on failure.
 fn create_attachment(
@@ -315,11 +315,8 @@ fn create_attachment(
 }
 
 /// Color target `index` of `format` holding `authored`, of `samples` samples per pixel, used as
-/// `bound`: a color attachment, one a framebuffer-fetch input also reads (`INPUT_ATTACHMENT`
-/// usage), a storage-form attachment the fragment function reads and writes as a storage image
-/// of the pass's samples (`STORAGE` usage), each at the invocation's own sample, or one it reads
-/// and writes through its sample planes, which split and merge it (no usage beyond an attachment's,
-/// `super::planes`).
+/// `bound`: a color attachment, or one a framebuffer-fetch input also reads (`INPUT_ATTACHMENT`
+/// usage) at the invocation's own sample.
 pub(super) fn create_target(
     context: &VulkanContext,
     index: u32,
@@ -377,8 +374,8 @@ pub(super) fn create_target(
 /// The depth/stencil attachment of `format` holding each aspect `authored` gives, of `samples`
 /// samples per pixel: the depth aspect filled sample by sample by the initializer, the stencil
 /// aspect cleared to the one value its samples hold ([`clear_stencil`]), each read back sample by
-/// sample through a view of its aspect. The image is a transfer source and destination too where it
-/// holds a stencil, for the clear and for the shader-side stencil's copies (`super::shadow`).
+/// sample through a view of its aspect. The image is a transfer destination too where it holds a
+/// stencil, for the clear.
 /// Everything made is destroyed on failure.
 pub(super) fn create_depth_stencil(
     context: &VulkanContext,
@@ -460,7 +457,7 @@ pub(super) fn create_depth_stencil(
         )?;
     }
     let transfers = if stencil.is_some() {
-        vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST
+        vk::ImageUsageFlags::TRANSFER_DST
     } else {
         vk::ImageUsageFlags::empty()
     };

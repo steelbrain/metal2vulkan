@@ -63,13 +63,8 @@ fn a_rate_mapped_pass_draws_once_per_region() {
     );
 }
 
-/// A multisampled pass draws a framebuffer fetch in either form, each target bound for its form: a
-/// fetched color attachment is also an input attachment, kept in `GENERAL` and read by the fragment
-/// shader; a storage-form one (a target only in a multisampled pass) is a storage image the
-/// fragment shader reads and writes in `GENERAL`, no attachment of the subpass; a plain color
-/// attachment is neither. One read through its sample planes is no storage image: it stays in
-/// `GENERAL` for the split's compute reads before the pass and the merge's color-attachment writes
-/// after it.
+/// A fetched color attachment is also an input attachment, kept in `GENERAL` and read by the
+/// fragment shader; a plain color attachment is neither.
 #[test]
 fn a_target_is_bound_for_its_fetch_form() {
     // `ash`'s types compare and print nothing: compare their raw values.
@@ -79,8 +74,6 @@ fn a_target_is_bound_for_its_fetch_form() {
         usage(Bound::Fetched),
         vk::ImageUsageFlags::INPUT_ATTACHMENT.as_raw()
     );
-    assert_eq!(usage(Bound::Storage), vk::ImageUsageFlags::STORAGE.as_raw());
-    assert_eq!(usage(Bound::Planes), 0);
     let raw = |bound: Bound| {
         let (layout, access, stages) = bound.attachment_use();
         (layout.as_raw(), access, stages)
@@ -95,17 +88,6 @@ fn a_target_is_bound_for_its_fetch_form() {
         vk::AccessFlags::INPUT_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
     ));
     assert!(stages.contains(vk::PipelineStageFlags::FRAGMENT_SHADER));
-    let (layout, access, stages) = raw(Bound::Storage);
-    assert_eq!(layout, vk::ImageLayout::GENERAL.as_raw());
-    assert!(access == vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-    assert!(stages == vk::PipelineStageFlags::FRAGMENT_SHADER);
-    let (layout, access, stages) = raw(Bound::Planes);
-    assert_eq!(layout, vk::ImageLayout::GENERAL.as_raw());
-    assert!(access.contains(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE));
-    assert!(!access.contains(vk::AccessFlags::SHADER_WRITE));
-    assert!(stages.contains(
-        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-    ));
 }
 
 /// Every state a linked render pipeline makes dynamic has a record, so the pipeline's creation

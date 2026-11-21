@@ -201,16 +201,14 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
     );
 }
 
-/// A fragment case's `[[stencil]]` output plans its shader-side stencil where the device has no
-/// stencil export: on nvidia-rtx50-linux the pipeline keeps a shadow, the plan binds it once, and
-/// the bind state carries the draw's descriptor, the one the Metal oracle sets. On lavapipe, which
-/// has the extension, the pipeline keeps none. A state whose stencil write could depend on the
-/// depth test is refused at the draw as needing the extension.
+/// A fragment case's `[[stencil]]` output plans through stencil export: on lavapipe, which has
+/// the extension, the pipeline requires it and the bind state carries the draw's descriptor, the
+/// one the Metal oracle sets. On nvidia-rtx50-linux, which lacks it, the compile refuses naming
+/// the extension.
 #[test]
-fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
-    use metal2vulkan::bind::WriteSource;
+fn a_stencil_output_case_plans_through_stencil_export() {
     use metal2vulkan::device::VkExtension;
-    use metal2vulkan::error::{BindError, Capability, Feature, Needs};
+    use metal2vulkan::error::{Capability, Feature, Needs};
     let Some(bitcode) = assembled(&fixtures_dir().join("fragment_depth_stencil.ll")) else {
         return;
     };
@@ -249,19 +247,10 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
         fragment: Some(&bitcode),
     };
     let (pipeline, _, _) = planned_draw(&device("lavapipe"), &render, libraries).unwrap();
-    assert!(pipeline.graphics.shadow_stencil.is_none());
-
-    let nvidia = device("nvidia-rtx50-linux");
-    let (pipeline, plan, _) = planned_draw(&nvidia, &render, libraries).unwrap();
-    let shadow = pipeline.graphics.shadow_stencil.expect("the shadow");
-    assert_eq!(shadow.format, vk::Format::R8_UINT);
-    assert_eq!(
-        plan.descriptors
-            .iter()
-            .filter(|write| matches!(write.source, WriteSource::ShadowStencil))
-            .count(),
-        1
-    );
+    assert!(pipeline
+        .requirements
+        .extensions
+        .contains(&VkExtension::ExtShaderStencilExport));
     let state = bind_state(
         &render,
         &BTreeMap::new(),
@@ -271,22 +260,8 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
     .unwrap();
     assert_eq!(state.depth_stencil, render.depth_stencil_state.descriptor);
 
-    // A depth test that can fail, under a face whose depth-failure operation (`Keep`) is not its
-    // pass operation (`Replace`).
-    let mut dependent = render.clone();
-    dependent
-        .depth_stencil_state
-        .descriptor
-        .depth_compare_function = metal2vulkan::metal::CompareFunction::Less;
-    let state = bind_state(
-        &dependent,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    match plan.instantiate_draw(&state, &dependent.draw) {
-        Err(BindError::Unsupported(u)) => assert_eq!(
+    match planned_draw(&device("nvidia-rtx50-linux"), &render, libraries) {
+        Err(Error::Unsupported(u)) => assert_eq!(
             (u.feature, u.needs),
             (
                 Feature::StencilExport,
@@ -295,83 +270,18 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
                 )]])
             )
         ),
-        other => panic!("a depth-dependent stencil write: {:?}", other.map(|_| ())),
+        other => panic!("a stencil output without export: {:?}", other.map(|_| ())),
     }
-}
-
-/// A multisampled pass's `[[stencil]]` output plans a multisampled shadow on nvidia-rtx50-linux:
-/// the pipeline keeps a shadow of the pass's 4 samples, requires `maintenance8` (its copies are
-/// image to image) and multisampled storage images of 4 samples, and does not run the stencil-only
-/// function per sample. The case's stencil, whose samples hold one value, is cleared to it by both
-/// executors.
-#[test]
-fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
-    use metal2vulkan::device::{VkFeature, VkProperty};
-    let Some(bitcode) = assembled(&fixtures_dir().join("fragment_depth_stencil.ll")) else {
-        return;
-    };
-    let mut authored = crate::companion::tests::case(
-        Stage::Fragment,
-        "fragment_depth_stencil",
-        TextureFormat::Rgba32Float,
-    );
-    authored.render_targets.clear();
-    authored.raster_sample_count = Some(4);
-    authored.depth_stencil = Some(crate::case::DepthStencilResource {
-        dimensions: [1, 1],
-        initial_depth_b64: None,
-        initial_stencil_b64: Some(b64(&[0xab; 4])),
-        state: None,
-    });
-    authored.output = OutputSelection::Stencil {
-        origin: [0, 0],
-        dimensions: [1, 1],
-    };
-    let (interface, companion) = checked_companion(&authored, &bitcode);
-    let mut render = render_case(
-        &authored,
-        &interface,
-        WITHOUT_SLICE,
-        companion.as_ref(),
-        None,
-    )
-    .unwrap();
-    // Both aspects are the runtime's limit (`SeparateDepthStencil`), which stops such a case
-    // before the engine plans it; the plan below is the translator's for both, so the case maps
-    // with its stencil and takes its depth after.
-    render.depth_stencil.as_mut().unwrap().depth = Some([1.0f32.to_le_bytes(); 4].concat());
-    assert_eq!(
-        render.attachment_transfer(),
-        AttachmentTransfer::PerSample { samples: 4 }
-    );
-    let companion_bitcode = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
-    let libraries = RenderLibraries {
-        vertex: &companion_bitcode,
-        fragment: Some(&bitcode),
-    };
-    let (pipeline, _, _) = planned_draw(&device("nvidia-rtx50-linux"), &render, libraries).unwrap();
-    let shadow = pipeline.graphics.shadow_stencil.expect("the shadow");
-    assert_eq!((shadow.format, shadow.samples), (vk::Format::R8_UINT, 4));
-    let requirements = &pipeline.requirements;
-    assert!(requirements.features.contains(&VkFeature::Maintenance8));
-    assert!(requirements
-        .features
-        .contains(&VkFeature::ShaderStorageImageMultisample));
-    assert!(requirements
-        .properties
-        .contains(&VkProperty::StorageImageSampleCount(4)));
 }
 
 /// A fragment case that reads its color attachment maps like any fragment case (its render target
 /// is the attachment it reads; no requirement stops the engine's candidate) and plans on
 /// lavapipe, whose `rasterizationOrderColorAttachmentAccess` orders the read: the plan reads color
 /// attachment 0 through an input-attachment write, and the pipeline states rasterization-order
-/// access and requires the feature. On moltenvk-m3, which lacks the feature but has the pixel
-/// interlock, it plans the interlocked storage form: one storage write of the attachment, which is
-/// no color attachment of the subpass. Without the interlock too, it plans the input attachment
-/// with no rasterization-order access, which the consumer orders between draws alone (its
-/// barriers, `platform::graphics_pipeline::fetch_between_draws`), the fragment stage noting
-/// `PrecisionNote::UnorderedFetchWithinDraw`, and requires neither ordered form.
+/// access and requires the feature. On moltenvk-m3, which lacks the feature, it plans the input
+/// attachment with no rasterization-order access, which the consumer orders between draws alone
+/// (its barriers, `platform::graphics_pipeline::fetch_between_draws`), the fragment stage noting
+/// `PrecisionNote::UnorderedFetchWithinDraw`, and requires no ordered form.
 #[test]
 fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
     use metal2vulkan::bind::WriteSource;
@@ -417,60 +327,18 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
             .count(),
         1
     );
-    // Moltenvk-m3 orders the read through the pixel interlock, as a storage image of the attachment
-    // the function reads and writes.
+    // Moltenvk-m3: the input attachment ordered between draws alone, noted.
     let (pipeline, plan, _) = planned_draw(&device("moltenvk-m3"), &render, libraries).unwrap();
-    assert!(pipeline.graphics.input_attachments.is_empty());
-    assert_eq!(pipeline.graphics.color_attachments, [None]);
-    assert_eq!(
-        pipeline
-            .graphics
-            .storage_attachments
-            .iter()
-            .map(|a| (a.color_index, a.writes))
-            .collect::<Vec<_>>(),
-        [(0, true)]
-    );
-    assert!(pipeline
-        .requirements
-        .features
-        .contains(&VkFeature::FragmentShaderPixelInterlock));
-    assert_eq!(
-        plan.descriptors
-            .iter()
-            .filter(|write| matches!(
-                write.source,
-                WriteSource::TileAttachment { color_index: 0, .. }
-            ))
-            .count(),
-        1
-    );
-    // Without the interlock either, the input attachment ordered between draws alone, noted.
-    let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
-    let mut description =
-        DeviceDescription::from_khronos_json(&std::fs::read_to_string(path).unwrap(), None)
-            .unwrap();
-    description
-        .features
-        .remove(&VkFeature::FragmentShaderPixelInterlock);
-    let unordered = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
-    let (pipeline, plan, _) = planned_draw(&unordered, &render, libraries).unwrap();
     let read: Vec<u32> = (pipeline.graphics.input_attachments.iter())
         .map(|input| input.color_index)
         .collect();
     assert_eq!(read, [0]);
     assert!(!pipeline.graphics.rasterization_order_attachment_access);
-    assert!(pipeline.graphics.storage_attachments.is_empty());
     assert!(pipeline.graphics.color_attachments[0].is_some());
-    for ordered in [
-        VkFeature::RasterizationOrderColorAttachmentAccess,
-        VkFeature::FragmentShaderPixelInterlock,
-    ] {
-        assert!(
-            !pipeline.requirements.features.contains(&ordered),
-            "{ordered:?}"
-        );
-    }
+    assert!(!pipeline
+        .requirements
+        .features
+        .contains(&VkFeature::RasterizationOrderColorAttachmentAccess));
     assert_eq!(
         plan.descriptors
             .iter()
@@ -1868,43 +1736,36 @@ fn public_tessellation_cases_plan_their_patch_draws() {
     );
 }
 
-/// The committed profiles whose descriptions have `fragmentShaderPixelInterlock` but not
-/// `rasterizationOrderColorAttachmentAccess`: the devices that order a fetch only through the
-/// pixel interlock, read from what each states rather than from its name.
-fn interlock_only() -> Vec<String> {
+/// The committed profiles whose descriptions lack `rasterizationOrderColorAttachmentAccess`: the
+/// devices that order a fetch between draws alone, read from what each states rather than from its
+/// name.
+fn unordered_profiles() -> Vec<String> {
     use metal2vulkan::device::VkFeature;
     let stems = crate::engine::committed_profiles().unwrap();
     let stems = stems
         .into_iter()
         .filter(|stem| {
             let description = crate::engine::load_description(stem).unwrap();
-            description.has(VkFeature::FragmentShaderPixelInterlock)
-                && !description.has(VkFeature::RasterizationOrderColorAttachmentAccess)
+            !description.has(VkFeature::RasterizationOrderColorAttachmentAccess)
         })
         .collect::<Vec<_>>();
     assert!(
         !stems.is_empty(),
-        "a committed profile orders fetch only by the interlock"
+        "a committed profile orders fetch between draws alone"
     );
     stems
 }
 
 /// Every installed public framebuffer-fetch case maps onto its fullscreen triangle drawn as its
 /// instances, with each read render target attached, and plans on lavapipe (one input-attachment
-/// write per color input, rasterization-order access, the feature required). On each committed
-/// device that orders fetch only through the pixel interlock ([`interlock_only`]), it plans one
-/// storage write per color input (no input attachment), or, where its state blocks that form,
-/// refuses its fetch, typed; at least one case plans the storage form. Every case carries no
-/// requirement, at least one of them drawing more than one instance (overlapping fragments). The
-/// lavapipe pipeline masks every write to a color attachment the function reads but has no output
-/// for, which at least one case does. A case of a multisampled pass, which at least one is, reads
-/// its colors at each invocation's own sample (sample-rate shading, the pipeline's sample count):
-/// on lavapipe as input attachments, on each of those devices with multisampled storage images as
-/// storage attachments of the pipeline's samples (`shaderStorageImageMultisample`, the count's
-/// `storageImageSampleCounts` bit), and on each without them as planes, single-sample layers of one
-/// sample each, which need neither; or it is refused, typed: the pixel's coverage read beside it
-/// (`[[sample_mask]]` in, on no device), or a sample count the device's attachments lack. At least
-/// one plans in each of the three forms.
+/// write per color input, rasterization-order access, the feature required). Every case carries
+/// no requirement, at least one of them drawing more than one instance (overlapping fragments).
+/// The lavapipe pipeline masks every write to a color attachment the function reads but has no
+/// output for, which at least one case does. A case of a multisampled pass, which at least one
+/// is, reads its colors as input attachments at each invocation's own sample (sample-rate
+/// shading, the pipeline's sample count), at least one so; or it is refused, typed: the pixel's
+/// coverage read beside it (`[[sample_mask]]` in, on no device), or a sample count the device's
+/// attachments lack.
 #[test]
 fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
     use std::collections::BTreeSet;
@@ -1912,17 +1773,14 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
     use crate::air::reflect::ResourceKind;
     use metal2vulkan::bind::WriteSource;
     use metal2vulkan::device::VkFeature;
-    use metal2vulkan::pipeline::StorageAttachmentView;
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let mut planned = 0;
     let mut overlapping = 0;
     let mut unwritten = 0;
-    let mut stored_form = 0;
     let mut multisampled = 0;
-    let mut per_sample: BTreeSet<&str> = BTreeSet::new();
-    let interlocked = interlock_only();
+    let mut per_sample = 0;
     for shard in 0..64 {
         for case in store.read_case_shard(shard).unwrap() {
             let Some(row) = sources
@@ -1976,83 +1834,32 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
                 vertex: &companion,
                 fragment: Some(&bitcode),
             };
-            // Each invocation reads its own sample, in the form the device orders.
+            // Each invocation reads its own sample.
             if let Some(samples) = case.raster_sample_count {
                 let mut expected = colors.clone();
                 expected.sort_unstable();
-                let interlocked = interlocked.iter().map(String::as_str);
-                for stem in std::iter::once("lavapipe").chain(interlocked) {
-                    let described = |feature| {
-                        let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
-                        let text = std::fs::read_to_string(path).unwrap();
-                        DeviceDescription::from_khronos_json(&text, None)
-                            .unwrap()
-                            .features
-                            .contains(&feature)
-                    };
-                    match planned_draw(&device(stem), &render, libraries) {
-                        Ok((pipeline, _, _)) => {
-                            let g = &pipeline.graphics;
-                            assert_eq!(g.rasterization_samples.as_raw(), samples, "{stem}");
-                            let required = &pipeline.requirements;
-                            assert!(required.features.contains(&VkFeature::SampleRateShading));
-                            let sample_count =
-                                metal2vulkan::device::VkProperty::StorageImageSampleCount(samples);
-                            let mut fetched: Vec<u32> = if stem == "lavapipe" {
-                                assert!(g.storage_attachments.is_empty(), "{}", case.name);
-                                assert!(g.rasterization_order_attachment_access);
-                                per_sample.insert("input attachments");
-                                g.input_attachments.iter().map(|a| a.color_index).collect()
-                            } else {
-                                assert!(g.input_attachments.is_empty(), "{}", case.name);
-                                let image = described(VkFeature::ShaderStorageImageMultisample);
-                                let view = if image {
-                                    StorageAttachmentView::Attachment
-                                } else {
-                                    StorageAttachmentView::SamplePlanes { layers: samples }
-                                };
-                                assert!(
-                                    g.storage_attachments.iter().all(|a| a.view == view),
-                                    "{stem} {}",
-                                    case.name
-                                );
-                                assert_eq!(
-                                    required
-                                        .features
-                                        .contains(&VkFeature::ShaderStorageImageMultisample),
-                                    image,
-                                    "{stem} {}",
-                                    case.name
-                                );
-                                assert_eq!(
-                                    required.properties.contains(&sample_count),
-                                    image,
-                                    "{stem} {}",
-                                    case.name
-                                );
-                                per_sample.insert(if image {
-                                    "multisampled storage"
-                                } else {
-                                    "planes"
-                                });
-                                g.storage_attachments
-                                    .iter()
-                                    .map(|a| a.color_index)
-                                    .collect()
-                            };
-                            fetched.sort_unstable();
-                            assert_eq!(fetched, expected, "{stem} {}", case.name);
-                        }
-                        Err(Error::Unsupported(refusal)) => {
-                            use metal2vulkan::error::{Feature, Needs};
-                            match (&refusal.feature, &refusal.needs) {
-                                (Feature::PixelCoverageAtSampleRate, Needs::NotRepresentable)
-                                | (Feature::RasterSampleCount, Needs::AnyOf(_)) => {}
-                                _ => panic!("{stem} {}: {refusal:?}", case.name),
-                            }
-                        }
-                        Err(other) => panic!("{stem} {}: {other:?}", case.name),
+                match planned_draw(&device("lavapipe"), &render, libraries) {
+                    Ok((pipeline, _, _)) => {
+                        let g = &pipeline.graphics;
+                        assert_eq!(g.rasterization_samples.as_raw(), samples, "{}", case.name);
+                        let required = &pipeline.requirements;
+                        assert!(required.features.contains(&VkFeature::SampleRateShading));
+                        assert!(g.rasterization_order_attachment_access);
+                        let mut fetched: Vec<u32> =
+                            g.input_attachments.iter().map(|a| a.color_index).collect();
+                        fetched.sort_unstable();
+                        assert_eq!(fetched, expected, "{}", case.name);
+                        per_sample += 1;
                     }
+                    Err(Error::Unsupported(refusal)) => {
+                        use metal2vulkan::error::{Feature, Needs};
+                        match (&refusal.feature, &refusal.needs) {
+                            (Feature::PixelCoverageAtSampleRate, Needs::NotRepresentable)
+                            | (Feature::RasterSampleCount, Needs::AnyOf(_)) => {}
+                            _ => panic!("lavapipe {}: {refusal:?}", case.name),
+                        }
+                    }
+                    Err(other) => panic!("lavapipe {}: {other:?}", case.name),
                 }
                 multisampled += 1;
                 continue;
@@ -2112,70 +1919,10 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
                 "{}",
                 case.name
             );
-            // A device that orders fetch only through the pixel interlock reads (and writes) each
-            // color the case reads as a storage image of its own attachment inside the interlock,
-            // where the case's state lets that be exact: no input attachment, no color attachment
-            // state for it, and a storage write of it in the plan. Where the state blocks that
-            // form, the resident-table domains refuse the fetch, typed.
-            for stem in interlocked.iter().map(String::as_str) {
-                match planned_draw(&device(stem), &render, libraries) {
-                    Ok((pipeline, plan, _)) => {
-                        let mut stored: Vec<u32> = pipeline
-                            .graphics
-                            .storage_attachments
-                            .iter()
-                            .map(|a| a.color_index)
-                            .collect();
-                        stored.sort_unstable();
-                        assert_eq!(stored, expected, "{stem} {}", case.name);
-                        assert!(
-                            pipeline.graphics.input_attachments.is_empty(),
-                            "{stem} {}",
-                            case.name
-                        );
-                        assert!(!pipeline.graphics.rasterization_order_attachment_access);
-                        for &color in &expected {
-                            assert!(
-                                pipeline
-                                    .graphics
-                                    .color_attachments
-                                    .get(color as usize)
-                                    .is_none_or(Option::is_none),
-                                "{stem} {} attachment {color}",
-                                case.name
-                            );
-                        }
-                        let mut written: Vec<u32> = plan
-                            .descriptors
-                            .iter()
-                            .filter_map(|write| match write.source {
-                                WriteSource::TileAttachment { color_index, .. } => {
-                                    Some(color_index)
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        written.sort_unstable();
-                        assert_eq!(written, expected, "{stem} {}", case.name);
-                        stored_form += 1;
-                    }
-                    Err(Error::Unsupported(refusal)) => assert_eq!(
-                        refusal.feature,
-                        metal2vulkan::error::Feature::FramebufferFetch,
-                        "{stem} {}",
-                        case.name
-                    ),
-                    Err(other) => panic!("{stem} {}: {other:?}", case.name),
-                }
-            }
             planned += 1;
         }
     }
     assert!(planned > 0, "no public framebuffer-fetch case planned");
-    assert!(
-        stored_form > 0,
-        "no public framebuffer-fetch case planned in the storage form"
-    );
     assert!(
         overlapping > 0,
         "no public framebuffer-fetch case overlaps its fragments"
@@ -2188,16 +1935,15 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
         multisampled > 0,
         "no public framebuffer-fetch case draws a multisampled pass"
     );
-    assert_eq!(
-        per_sample,
-        BTreeSet::from(["input attachments", "multisampled storage", "planes"]),
-        "a multisampled case plans in each per-sample form"
+    assert!(
+        per_sample > 0,
+        "no multisampled public framebuffer-fetch case plans"
     );
 }
 
-/// On `lunarg-desktop-baseline-2023` and `vk12-floor`, which offer no ordered form of framebuffer
-/// fetch (neither rasterization-order attachment access nor the pixel interlock), every installed
-/// public framebuffer-fetch case plans its color inputs as input attachments with no
+/// On every committed profile without rasterization-order color attachment access
+/// ([`unordered_profiles`]), every installed public framebuffer-fetch case plans its color inputs
+/// as input attachments with no
 /// rasterization-order access, which the consumer orders between draws alone, and its fragment
 /// stage notes `PrecisionNote::UnorderedFetchWithinDraw`; or, a multisampled pass, is refused as on
 /// every device (the coverage read beside it, or a sample count the attachments lack), or for the
@@ -2208,7 +1954,8 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
-    for stem in ["runtime-floor"] {
+    for stem in unordered_profiles() {
+        let stem = stem.as_str();
         let unordered = device(stem);
         let mut fetches = 0;
         for shard in 0..64 {
@@ -2403,24 +2150,19 @@ fn the_cells_follow_the_reflected_master() {
     assert_eq!(two.cell_bytes, 16);
 }
 
-/// Every committed public fragment imageblock case maps onto a draw whose pipeline reaches the
-/// pass's imageblock storage, and it plans on the committed profiles with pixel interlock: one
-/// storage-image write of the imageblock, the pipeline's words within the case's cell, the
-/// interlock required, and fragment stores required exactly when the case writes a member (a member
-/// whose role is not `input`). A profile without interlock refuses it typed
-/// (`Unsupported{Imageblocks}` naming the feature), the product's refusal, not the executor's.
+/// Every committed public fragment imageblock case maps onto a draw, its cells the initializer's,
+/// and the product refuses its pipeline typed on every device (`NotImplemented(Imageblocks)`): the
+/// product's refusal, not the executor's.
 #[test]
-fn public_fragment_imageblock_cases_plan_their_storage_image() {
-    use metal2vulkan::bind::WriteSource;
-    use metal2vulkan::device::VkFeature;
+fn public_fragment_imageblock_cases_are_refused_typed() {
+    use metal2vulkan::error::{Feature, Needs};
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let sources = public_sources().unwrap();
-    let mut planned = 0;
-    let mut writers = 0;
+    let mut refused = 0;
     for case in CorpusStore::new(&root).read_all_cases().unwrap() {
-        let Some(authored) = case.fragment_imageblock.as_ref() else {
+        if case.fragment_imageblock.is_none() {
             continue;
-        };
+        }
         let Some(row) = sources
             .iter()
             .find(|row| row.air_sha256 == case.air_sha256 && row.entry == case.entry)
@@ -2444,147 +2186,27 @@ fn public_fragment_imageblock_cases_plan_their_storage_image() {
             checked.primary.reflection.fragment_imageblock.as_ref(),
         )
         .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        let cells = render.imageblock.as_ref().expect("the case's cells");
+        assert!(render.imageblock.is_some(), "{name}: no cells");
         let companion = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
         let libraries = RenderLibraries {
             vertex: &companion,
             fragment: Some(&bitcode),
         };
-        let writes_members = authored
-            .members
-            .iter()
-            .any(|member| member.role != crate::case::ResourceRole::Input);
-        writers += usize::from(writes_members);
-        for stem in ["lavapipe", "moltenvk-m3"] {
-            let (pipeline, plan, _) = planned_draw(&device(stem), &render, libraries)
-                .unwrap_or_else(|error| panic!("{name} on {stem}: {error}"));
-            let state = pipeline
-                .graphics
-                .fragment_imageblock
-                .unwrap_or_else(|| panic!("{name} on {stem}: no imageblock state"));
-            assert!(
-                (1..=cells.words()).contains(&state.words),
-                "{name} on {stem}: {} words",
-                state.words
-            );
-            let features = &pipeline.requirements.features;
-            assert!(
-                features.contains(&VkFeature::FragmentShaderPixelInterlock),
-                "{name} on {stem}"
-            );
-            assert_eq!(
-                features.contains(&VkFeature::FragmentStoresAndAtomics),
-                writes_members,
-                "{name} on {stem}"
-            );
-            let writes: Vec<_> = plan
-                .descriptors
-                .iter()
-                .filter(|write| write.source == WriteSource::Imageblock)
-                .collect();
-            assert_eq!(writes.len(), 1, "{name} on {stem}");
-            assert_eq!(
-                writes[0].ty,
-                vk::DescriptorType::STORAGE_IMAGE,
-                "{name} on {stem}"
-            );
-            planned += 1;
-        }
-        match plan_render(&device("runtime-floor"), &render, libraries) {
-            Err(Error::Unsupported(refusal)) => {
-                assert_eq!(refusal.feature, metal2vulkan::error::Feature::Imageblocks)
+        for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
+            match plan_render(&device(stem), &render, libraries) {
+                Err(Error::Unsupported(refusal)) => assert_eq!(
+                    (refusal.feature, refusal.needs),
+                    (Feature::Imageblocks, Needs::NotImplemented),
+                    "{name} on {stem}"
+                ),
+                other => panic!("{name} on {stem}: {:?}", other.map(|_| ())),
             }
-            other => panic!("{name}: swiftshader ran an imageblock without interlock: {other:?}"),
         }
+        refused += 1;
     }
-    // fragment-custom-imageblock-depth, the ten cases, nine of which write a member, the
-    // imageblock_transition case (a float member read, three written), the two splat cases (two
-    // uint members read and written), and the six cases on `rfs_imageblock_cover` (a masked writer
-    // and views of two masters, each writing a member).
-    assert_eq!((planned, writers), (40, 19));
-}
-
-/// A draw whose imageblock the product does not model reaches the render executor's plan as the
-/// product's typed refusal, never as a draw: a layered pass (the binder, the per-layer imageblock).
-/// A depth attachment behind a writer that does not declare early fragment tests links and plans:
-/// the write runs after the depth test (the writer under early tests, or its draws testing first).
-#[test]
-fn imageblock_draws_the_product_does_not_model_are_refused_typed() {
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let case = CorpusStore::new(&root)
-        .read_all_cases()
-        .unwrap()
-        .into_iter()
-        .find(|case| case.name == "fragment-custom-imageblock-depth")
-        .expect("the committed public case");
-    let row = public_sources()
-        .unwrap()
-        .into_iter()
-        .find(|row| row.air_sha256 == case.air_sha256 && row.entry == case.entry)
-        .expect("its public source");
-    let scratch = crate::ScratchDir::new("refused-imageblock-draw").unwrap();
-    let ll = scratch.path().join("case.ll");
-    std::fs::write(&ll, &row.air_ll).unwrap();
-    let Some(bitcode) = assembled(&ll) else {
-        return;
-    };
-    let checked = crate::check::check_case_against_source(&root, case.clone(), &row)
-        .unwrap_or_else(|errors| panic!("{errors:?}"));
-    let render = render_case(
-        &case,
-        &checked.primary.interface,
-        &row.air_ll,
-        checked.primary.companion.as_ref(),
-        checked.primary.reflection.fragment_imageblock.as_ref(),
-    )
-    .unwrap();
-    let companion = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
-    let libraries = RenderLibraries {
-        vertex: &companion,
-        fragment: Some(&bitcode),
-    };
-    let lavapipe = device("lavapipe");
-    plan_render(&lavapipe, &render, libraries).expect("the case itself plans");
-    let imageblocks = |what: &str, refusal: Option<&metal2vulkan::error::Unsupported>| {
-        let refusal = refusal.unwrap_or_else(|| panic!("{what}: no typed refusal"));
-        assert_eq!(
-            refusal.feature,
-            metal2vulkan::error::Feature::Imageblocks,
-            "{what}"
-        )
-    };
-    // The binder: the pipeline links, and its plan for a pass of two layers is refused.
-    let layered = RenderCase {
-        render_target_array_length: 2,
-        ..render.clone()
-    };
-    let shape = render_shape(&layered, true, BufferRanges::default()).unwrap();
-    let pipeline = compile_in_process(&lavapipe, &layered, libraries, &shape)
-        .unwrap_or_else(|error| panic!("a layered pass links: {error}"));
-    let refused = pipeline.plan(&lavapipe, &shape).err();
-    imageblocks(
-        "a layered pass",
-        match &refused {
-            Some(metal2vulkan::error::BindError::Unsupported(refusal)) => Some(refusal),
-            _ => None,
-        },
-    );
-    // Link: a depth attachment behind the writer, which declares no early fragment tests.
-    let late_depth = RenderCase {
-        depth_stencil: Some(crate::literal::LiteralDepthStencil {
-            dimensions: [1, 1],
-            samples: 1,
-            depth: Some(1.0f32.to_le_bytes().to_vec()),
-            stencil: None,
-        }),
-        ..render.clone()
-    };
-    let shape = render_shape(&late_depth, true, BufferRanges::default()).unwrap();
-    let pipeline = compile_in_process(&lavapipe, &late_depth, libraries, &shape)
-        .unwrap_or_else(|error| panic!("a late depth test links: {error}"));
-    pipeline
-        .plan(&lavapipe, &shape)
-        .unwrap_or_else(|error| panic!("a late depth test plans: {error}"));
+    // fragment-custom-imageblock-depth, the ten cases, the imageblock_transition case, the two
+    // splat cases, and the six cases on `rfs_imageblock_cover`.
+    assert_eq!(refused, 20);
 }
 
 /// The graphics state of the public fixture `fragment_rate_map_position` drawn by its generated

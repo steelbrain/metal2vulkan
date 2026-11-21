@@ -38,32 +38,14 @@
 //!   rasterization-order color access, so each fetch sees the earlier fragments of the draw that
 //!   cover its pixel, as in Metal (in a multisampled pass the attachment of the pass's samples,
 //!   which a function running once per sample reads at its own sample);
-//! - a color attachment the fragment function reads in the interlocked storage form
-//!   (`GraphicsState::storage_attachments`) is no attachment of the subpass (an unused reference)
-//!   but a single-sample 2D storage image of its own format holding its authored contents, kept in
-//!   `GENERAL` from its upload through the draw to its readback and bound where the plan's
-//!   `WriteSource::TileAttachment` names it; the function reads and writes it inside the pixel
-//!   interlock, and a render-target output of it is that image's readback. In a multisampled pass
-//!   it is a target of the pass's samples with `STORAGE` usage, filled and read back sample by
-//!   sample as the attachments are and kept in `GENERAL` through the draw, which a function running
-//!   once per sample reads and writes at its own sample;
-//! - a fragment function that tests and writes the stencil itself (the shader-side stencil,
-//!   `GraphicsState::shadow_stencil`) runs as `ShadowStencilUse` asks of a consumer ([`shadow`]):
-//!   the pipeline's stencil test is off, the bind state carries the case's depth/stencil
-//!   descriptor, and the attachment's stencil is copied into a single-sample storage image before
-//!   the render pass and back after it, outside the pass, the image bound in `GENERAL` where the
-//!   plan's `WriteSource::ShadowStencil` names it;
 //! - a patch draw binds its factor buffer where the plan's `WriteSource::TessellationFactors` names
 //!   it, over the draw's range, and draws a patch list: the tessellation pipeline's synthesized
 //!   vertex and control stages bind nothing of Metal's, and its evaluation stage binds the vertex
 //!   function's resources;
-//! - a fragment case's explicit imageblock is the pass's storage image: one coherent `R32Uint`
-//!   2D-array image of the pass's extent with a layer per cell word (at least the pipeline's
-//!   `words`), holding the cells the Metal oracle's initializer defines, created with `STORAGE`
-//!   usage, kept in `GENERAL` from its upload through the draw to its readback, and bound where the
-//!   plan's `WriteSource::Imageblock` names it. The pass has the one pipeline, so one master. A
-//!   pipeline that reaches no imageblock (the product dropped every view) leaves the cells as the
-//!   initializer left them, as Metal's pass does.
+//! - a fragment case's explicit imageblock holds the cells the Metal oracle's initializer
+//!   defines. The product compiles no fragment function that reads or writes an imageblock
+//!   (`Feature::Imageblocks`), so a pipeline that draws reaches none (the function dropped every
+//!   view) and leaves the cells as the initializer left them, as Metal's pass does.
 //!
 //! The run obeys the compute executor's rules (status before output, the validation layer); a
 //! pipeline whose modules loop draws once, as compiled, like any other.
@@ -91,7 +73,6 @@ use crate::candidate::engine::{
 };
 use crate::candidate::engine::{index_padding_agrees, ChildCommand, CompiledChild};
 use crate::case::out_of_bounds::OutOfBoundsResource;
-use crate::case::{ResourceRole, TextureFormat, TextureType};
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::executor_contract::multisample::AttachmentTransfer;
 use crate::executor_contract::out_of_bounds::OutOfBoundsRun;
@@ -107,9 +88,7 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::device::VkFeature;
-use metal2vulkan::pipeline::{
-    GraphicsState, RenderPipeline, RuntimeFact, StageModule, StorageAttachmentView,
-};
+use metal2vulkan::pipeline::{GraphicsState, RenderPipeline, RuntimeFact, StageModule};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -534,8 +513,6 @@ fn execute(
             constant_blobs.insert(stage, blob.clone());
         }
     }
-    // A pass of one sample's storage-form attachments: the plan's textures.
-    let storage_attachments = storage_attachments(&pipeline.graphics, case)?;
     let observed = match case.output {
         RenderOutput::Texture { stage, binding, .. } => {
             Some(TextureKey::Slot(slot(stage, SlotClass::Texture, binding)))
@@ -549,44 +526,22 @@ fn execute(
             .get(&(stage, owner, field_offset))
             .copied()
             .map(TextureKey::Used),
-        RenderOutput::Imageblock { .. } => Some(TextureKey::Imageblock),
-        // A color attachment the fragment function reads in the interlocked storage form in a
-        // pass of one sample is the storage texture the plan views; a multisampled pass's is a
-        // target, read back as the others are.
-        RenderOutput::RenderTarget { index, .. } if storage_attachments.contains_key(&index) => {
-            Some(TextureKey::TileAttachment(index))
-        }
         RenderOutput::None
         | RenderOutput::Buffer { .. }
         | RenderOutput::ArgumentBufferBuffer { .. }
         | RenderOutput::RenderTarget { .. }
         | RenderOutput::Depth { .. }
-        | RenderOutput::Stencil { .. } => None,
+        | RenderOutput::Stencil { .. }
+        | RenderOutput::Imageblock { .. } => None,
     };
     // The attachments first: a framebuffer-fetch input's descriptor views its color attachment.
     let targets = Targets::create(context, &pipeline.graphics, case)?;
     let readers = multisampled::SampleReaders::create(context, &targets)?;
-    let imageblock = imageblock_storage(&pipeline.graphics, case, targets.extent)?;
-    // The shader-side stencil's shadow of the stencil attachment.
-    let shadow = match (&pipeline.graphics.shadow_stencil, &targets.depth_stencil) {
-        (Some(used), Some(target)) => Some(shadow::ShadowStencil::create(context, used, target)?),
-        (Some(_), None) => {
-            return Err(ExecutorError::Failed(
-                "the pipeline keeps a shadow of a stencil attachment the draw lacks".into(),
-            ))
-        }
-        (None, _) => None,
-    };
-    // The sample planes of each storage-form attachment the plan views through them.
-    let planes = sample_planes(context, &pipeline.graphics, case, &targets)?;
-    // Every target's view: a color attachment's, which an input-attachment write reads, and a
-    // multisampled pass's storage-form attachment's, which a tile-attachment write views, or its
-    // planes' 2D-array view where the plan views those.
+    // Every color target's view, which an input-attachment write reads.
     let attachments: BTreeMap<u32, vk::ImageView> = targets
         .targets
         .iter()
         .map(|(&index, target)| (index, target.view))
-        .chain(planes.iter().map(|p| (p.color_index, p.view)))
         .collect();
     let mut resources = PlanResources::create(
         context,
@@ -608,9 +563,7 @@ fn execute(
             structures: &BTreeMap::new(),
             tessellation_factors: factors.as_ref().map(|factors| factors.buffer.buffer),
             attachments: &attachments,
-            imageblock: imageblock.as_ref(),
-            tile_attachments: &storage_attachments,
-            shadow_stencil: shadow.as_ref().map(|shadow| shadow.view),
+            tile_attachments: &BTreeMap::new(),
             status: Some(status.buffer.buffer),
         },
         observed,
@@ -645,7 +598,7 @@ fn execute(
     // for patches), and the depth-stencil state the oracle sets.
     let (topology, primitive_restart) = graphics::assembly_input(&case.assembly);
     let topology: vk::PrimitiveTopology = topology.into();
-    let encoder = EncoderState::of(case, &pipeline.graphics)?;
+    let encoder = EncoderState::of(case)?;
     create_pipeline(
         context,
         &mut objects,
@@ -696,7 +649,6 @@ fn execute(
             resources: &resources,
             targets: &targets,
             readers: readers.as_ref(),
-            planes: &planes,
             draws: &draws,
             sets: &sets,
             push: &push,
@@ -711,7 +663,6 @@ fn execute(
             rasterizer_discard: pipeline.graphics.rasterizer_discard,
             graphics: &pipeline.graphics,
             draw: &commands,
-            shadow: shadow.as_ref(),
             replayed: None,
         },
     )?;
@@ -885,50 +836,21 @@ fn execute(
         _ => {}
     }
     if let RenderOutput::RenderTarget { index, .. } = case.output {
-        let target = match storage_attachments.get(&index) {
-            // The storage image's readback, or its authored bytes where no write of the plan
-            // reaches it.
-            Some(attachment) => {
-                // SAFETY: as for the status buffer.
-                let texture = unsafe {
-                    resources.final_texture(TextureKey::TileAttachment(index), attachment)?
-                };
-                let authored = case
-                    .color_targets
-                    .get(&index)
-                    .ok_or_else(|| format!("render target {index} is not authored"))?;
-                ColorTarget {
-                    bytes: texture.bytes,
-                    ..authored.clone()
-                }
-            }
-            // SAFETY: as for the status buffer.
-            None => unsafe { targets.final_target(index, case)? },
-        };
+        // SAFETY: as for the status buffer.
+        let target = unsafe { targets.final_target(index, case)? };
         finals.targets.insert(index, target);
     }
     // SAFETY: as for the status buffer.
     finals.depth_stencil = unsafe { targets.final_depth_stencil()? };
+    // No write reaches the imageblock: the cells are the initializer's.
     if let (RenderOutput::Imageblock { .. }, Some(cells)) = (case.output, &case.imageblock) {
-        finals.imageblock = Some(match &imageblock {
-            Some(storage) => {
-                // SAFETY: as for the status buffer.
-                let image = unsafe { resources.final_texture(TextureKey::Imageblock, storage)? };
-                cells
-                    .from_image(storage.dimensions[2], &image.bytes)
-                    .map_err(ExecutorError::Failed)?
-            }
-            // No write reaches the storage: the cells are the initializer's.
-            None => cells.clone(),
-        });
+        finals.imageblock = Some(cells.clone());
     }
     let output =
         graphics::select_render_output(case.output, &finals).map_err(ExecutorError::Failed)?;
     drop(objects);
     drop(readers);
     drop(resources);
-    drop(shadow);
-    drop(planes);
     drop(targets);
     Ok(Drawn {
         output,
@@ -1122,9 +1044,7 @@ fn draw_child(
             structures: &BTreeMap::new(),
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            imageblock: None,
             tile_attachments: &BTreeMap::new(),
-            shadow_stencil: None,
             status: Some(status.buffer.buffer),
         },
         None,
@@ -1154,7 +1074,7 @@ fn draw_child(
     create_render_pass(context, &mut objects, &pipeline.graphics, &targets)?;
     let (topology, primitive_restart) = graphics::input_assembly(primitive);
     let topology: vk::PrimitiveTopology = topology.into();
-    let encoder = EncoderState::of(case, &pipeline.graphics)?;
+    let encoder = EncoderState::of(case)?;
     create_pipeline(
         context,
         &mut objects,
@@ -1171,9 +1091,6 @@ fn draw_child(
             resources: &resources,
             targets: &targets,
             readers: readers.as_ref(),
-            // A replayed draw's template is a vertex case with rasterization disabled: no
-            // framebuffer fetch.
-            planes: &[],
             // A replayed draw's pass is its template's, which has no rate map.
             draws: &draws(targets.extent, None),
             sets: &sets,
@@ -1187,7 +1104,6 @@ fn draw_child(
             rasterizer_discard: pipeline.graphics.rasterizer_discard,
             graphics: &pipeline.graphics,
             draw: commands,
-            shadow: None,
             replayed,
         },
     )?;
@@ -1196,122 +1112,6 @@ fn draw_child(
     drop(targets);
     drop(resources);
     Ok(())
-}
-
-/// The color attachments `graphics` reads in the interlocked storage form in a pass of one sample,
-/// by index, as the storage textures the plan's `WriteSource::TileAttachment` writes view: each a
-/// single-sample 2D texture of the case's authored target, holding its authored bytes, which
-/// Metal's `MTLLoadActionLoad` loads. The pass leaves them out of the subpass (an unused reference,
-/// `graphics_pipeline::create_render_pass`); their extent is the pass's ([`Targets::create`]). A
-/// multisampled pass has none: its storage-form attachments are targets of its samples
-/// ([`Bound::Storage`], or [`Bound::Planes`]), which the plan views through the draw's attachment
-/// views (a target's own, or its planes').
-fn storage_attachments(
-    graphics: &GraphicsState,
-    case: &RenderCase,
-) -> Result<BTreeMap<u32, LiteralTexture>, ExecutorError> {
-    let mut out = BTreeMap::new();
-    if let AttachmentTransfer::PerSample { .. } = case.attachment_transfer() {
-        return Ok(out);
-    }
-    for a in &graphics.storage_attachments {
-        let authored = case.color_targets.get(&a.color_index).ok_or_else(|| {
-            format!(
-                "storage attachment {} has no authored target",
-                a.color_index
-            )
-        })?;
-        let [width, height] = authored.dimensions;
-        out.insert(
-            a.color_index,
-            LiteralTexture {
-                binding: a.color_index,
-                role: ResourceRole::InOut,
-                texture_type: TextureType::D2,
-                format: authored.format,
-                dimensions: [width, height, 1],
-                sample_count: 1,
-                bytes: authored.bytes.clone(),
-                sparse: None,
-                mip_levels: 1,
-            },
-        );
-    }
-    Ok(out)
-}
-
-/// The sample planes of each storage-form attachment of `graphics` the plan views through them
-/// (`StorageAttachmentView::SamplePlanes`), over its target in `targets` (a multisampled pass's,
-/// [`Bound::Planes`]), holding the case's authored target.
-fn sample_planes<'a>(
-    context: &'a VulkanContext,
-    graphics: &GraphicsState,
-    case: &RenderCase,
-    targets: &Targets<'_>,
-) -> Result<Vec<planes::SamplePlanes<'a>>, ExecutorError> {
-    let mut out = Vec::new();
-    for used in &graphics.storage_attachments {
-        if used.view == StorageAttachmentView::Attachment {
-            continue;
-        }
-        let index = used.color_index;
-        let target = targets
-            .targets
-            .get(&index)
-            .ok_or_else(|| format!("storage attachment {index} has no target"))?;
-        let authored = case
-            .color_targets
-            .get(&index)
-            .ok_or_else(|| format!("storage attachment {index} has no authored target"))?;
-        out.push(planes::SamplePlanes::create(
-            context,
-            used,
-            (target, authored),
-            targets.extent,
-            targets.samples,
-        )?);
-    }
-    Ok(out)
-}
-
-/// The pass's fragment imageblock storage for a draw of `graphics` over a framebuffer of `extent`,
-/// as a texture the plan's `WriteSource::Imageblock` views: an `R32Uint` 2D array of the pass's
-/// extent with a layer per word of the case's cells, which must be at least the pipeline's `words`
-/// (`imageblock::Cells::storage_layers`), holding the cells the Metal oracle's initializer defines
-/// (`imageblock::Cells::image_bytes`). `None` when the pipeline has no fragment imageblock. The
-/// case's imageblock covers the pass: the checker requires its extent to be the attachments' (the
-/// oracle's 1x1 pass without any).
-fn imageblock_storage(
-    graphics: &GraphicsState,
-    case: &RenderCase,
-    extent: vk::Extent2D,
-) -> Result<Option<LiteralTexture>, ExecutorError> {
-    let Some(state) = &graphics.fragment_imageblock else {
-        return Ok(None);
-    };
-    let cells = case
-        .imageblock
-        .as_ref()
-        .ok_or("the pipeline reaches a fragment imageblock the case does not author")?;
-    let [width, height] = cells.dimensions;
-    if (width, height) != (extent.width, extent.height) {
-        return Err(not_implemented(format!(
-            "a {width}x{height} imageblock in a {}x{} pass",
-            extent.width, extent.height
-        )));
-    }
-    let layers = cells.storage_layers(state.words).map_err(not_implemented)?;
-    Ok(Some(LiteralTexture {
-        binding: 0,
-        role: ResourceRole::InOut,
-        texture_type: TextureType::D2Array,
-        format: TextureFormat::R32Uint,
-        dimensions: [width, height, layers],
-        sample_count: 1,
-        bytes: cells.image_bytes(layers),
-        sparse: None,
-        mip_levels: 1,
-    }))
 }
 
 /// Each stage's push-constant writes with the consumer's holes filled: the address `filled` gives
@@ -1391,30 +1191,15 @@ enum Bound {
     /// `GENERAL` through the subpass, as the render pass describes it
     /// (`graphics_pipeline::create_render_pass`).
     Fetched,
-    /// A multisampled pass's attachment the fragment function reads and writes in the
-    /// interlocked storage form: no attachment of the subpass (the framebuffer attaches only the
-    /// state's color attachments), but a storage image of the pass's samples the plan's
-    /// `WriteSource::TileAttachment` views, in `GENERAL`. A pass of one sample keeps its
-    /// storage-form attachments as the plan's textures ([`storage_attachments`]).
-    Storage,
-    /// A multisampled pass's attachment the fragment function reads and writes through its sample
-    /// planes ([`planes`]): no attachment of the subpass, and no image the draw binds (the plan's
-    /// `WriteSource::TileAttachment` views the planes), but split into the planes by a compute
-    /// fetch of its samples before the pass and merged back after it by a sample-rate pass that
-    /// writes it as a color attachment, in `GENERAL` throughout.
-    Planes,
 }
 
 impl Bound {
     /// The image usage the subpass adds to a color target's own: input-attachment reads of a
-    /// fetched one, storage reads and writes of a storage-form one.
+    /// fetched one.
     fn usage(self) -> vk::ImageUsageFlags {
         match self {
             Bound::Color => vk::ImageUsageFlags::empty(),
             Bound::Fetched => vk::ImageUsageFlags::INPUT_ATTACHMENT,
-            Bound::Storage => vk::ImageUsageFlags::STORAGE,
-            // The split fetches it as every readback does; the merge attaches it.
-            Bound::Planes => vk::ImageUsageFlags::empty(),
         }
     }
 }
@@ -1498,9 +1283,7 @@ impl Target {
 impl Bound {
     /// The layout the render pass keeps a target of this use in, the access its subpass makes of
     /// it, and the stages that access it: color output, and the fragment shader's
-    /// input-attachment reads of a fetched one, or its storage reads and writes of a storage-form
-    /// one; for one read through its sample planes, the split's compute reads before the pass
-    /// and the merge's color-attachment accesses after it.
+    /// input-attachment reads of a fetched one.
     fn attachment_use(self) -> (vk::ImageLayout, vk::AccessFlags, vk::PipelineStageFlags) {
         let color =
             vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE;
@@ -1515,17 +1298,6 @@ impl Bound {
                 color | vk::AccessFlags::INPUT_ATTACHMENT_READ,
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
                     | vk::PipelineStageFlags::FRAGMENT_SHADER,
-            ),
-            Bound::Storage => (
-                vk::ImageLayout::GENERAL,
-                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-            ),
-            Bound::Planes => (
-                vk::ImageLayout::GENERAL,
-                color | vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::COMPUTE_SHADER,
             ),
         }
     }
@@ -1597,12 +1369,7 @@ impl<'a> Targets<'a> {
     /// one depth/stencil attachment of the pass (`graphics_pipeline::depth_stencil_format`)
     /// holding each aspect the case authors. A pass of one sample uploads and reads them by
     /// copies; a multisampled one ([`RenderCase::attachment_transfer`]) fills and reads them sample
-    /// by sample ([`multisampled`]). A storage-form attachment is no attachment of the subpass, but
-    /// its extent is the pass's: in a pass of one sample it is the plan's storage texture
-    /// ([`storage_attachments`]); in a multisampled one a target of the pass's samples, filled and
-    /// read sample by sample as the attachments are, which a fragment function running once per
-    /// sample reads and writes at its own sample: itself ([`Bound::Storage`]), or through its
-    /// sample planes ([`Bound::Planes`], [`planes`]).
+    /// by sample ([`multisampled`]).
     fn create(
         context: &'a VulkanContext,
         graphics: &GraphicsState,
@@ -1630,41 +1397,6 @@ impl<'a> Targets<'a> {
             samples,
         };
         let mut extent = None;
-        // A storage-form attachment is no attachment of the subpass, but its image is one of the
-        // pass's targets: the framebuffer's extent is its extent too. In a multisampled pass it is
-        // a target of the pass's samples.
-        for a in &graphics.storage_attachments {
-            let authored = case.color_targets.get(&a.color_index).ok_or_else(|| {
-                format!(
-                    "storage attachment {} has no authored target",
-                    a.color_index
-                )
-            })?;
-            if *extent.get_or_insert(authored.dimensions) != authored.dimensions {
-                return Err(not_implemented("color targets of different extents"));
-            }
-            if let AttachmentTransfer::PerSample { samples } = transfer {
-                let bound = match a.view {
-                    StorageAttachmentView::Attachment => Bound::Storage,
-                    StorageAttachmentView::SamplePlanes { .. } => Bound::Planes,
-                };
-                // The draw views a multisampled target in its own format alone.
-                if bound == Bound::Storage && a.view_alias.is_some() {
-                    return Err(not_implemented(
-                        "a multisampled storage-form attachment viewed in another format",
-                    ));
-                }
-                let target = multisampled::create_target(
-                    context,
-                    a.color_index,
-                    a.format.into(),
-                    authored,
-                    samples,
-                    bound,
-                )?;
-                targets.targets.insert(a.color_index, target);
-            }
-        }
         for (index, state) in graphics.color_attachments.iter().enumerate() {
             let Some(state) = state else { continue };
             let index = index as u32;
@@ -1726,7 +1458,7 @@ impl<'a> Targets<'a> {
         if let Some([width, height]) = extent {
             targets.extent = vk::Extent2D { width, height };
         }
-        // A multisampled subpass without attachments (storage-form ones are none).
+        // A multisampled subpass without attachments.
         let attached = graphics.color_attachments.iter().any(Option::is_some)
             || targets.depth_stencil.is_some();
         if let (AttachmentTransfer::PerSample { samples }, false) = (transfer, attached) {
@@ -1796,8 +1528,7 @@ impl<'a> Targets<'a> {
 }
 
 /// Color attachment `index` of a pass of one sample, of `format` holding `authored`, used as
-/// `bound`: a color attachment, or one a framebuffer-fetch input reads (never a storage-form
-/// one, which a pass of one sample keeps as the plan's texture, [`storage_attachments`]).
+/// `bound`: a color attachment, or one a framebuffer-fetch input reads.
 fn create_target(
     context: &VulkanContext,
     index: u32,
@@ -2253,15 +1984,10 @@ struct EncoderState {
 }
 
 impl EncoderState {
-    /// The encoder state of `case`'s draw through a pipeline of `graphics`: the stencil test is
-    /// off where the fragment function tests the stencil itself (`graphics.shadow_stencil`), which
-    /// takes the descriptor's stencil state from the bind state instead.
-    fn of(case: &RenderCase, graphics: &GraphicsState) -> Result<EncoderState, ExecutorError> {
-        let depth_stencil = graphics_pipeline::metal_depth_stencil(&case.depth_stencil_state);
+    /// The encoder state of `case`'s draw.
+    fn of(case: &RenderCase) -> Result<EncoderState, ExecutorError> {
         Ok(EncoderState {
-            depth_stencil: depth_stencil.stencil_test_enable(
-                depth_stencil.stencil_test_enable == vk::TRUE && graphics.shadow_stencil.is_none(),
-            ),
+            depth_stencil: graphics_pipeline::metal_depth_stencil(&case.depth_stencil_state),
             cull_mode: graphics::cull_mode_flags(case.cull_mode)
                 .map_err(not_implemented)?
                 .into(),
@@ -2276,8 +2002,6 @@ struct Recording<'r> {
     /// The per-sample fill and readback of a multisampled pass's attachments; `None` for one
     /// sample, whose attachments `targets` copies.
     readers: Option<&'r multisampled::SampleReaders<'r>>,
-    /// The sample planes split before the pass and merged after it.
-    planes: &'r [planes::SamplePlanes<'r>],
     /// The draw's viewport and scissor, once per recording of it ([`draws`]).
     draws: &'r [(vk::Viewport, vk::Rect2D)],
     sets: &'r [vk::DescriptorSet],
@@ -2300,8 +2024,6 @@ struct Recording<'r> {
     /// The pipeline's graphics state, whose render pass the draws record in.
     graphics: &'r GraphicsState,
     draw: &'r DrawCommands,
-    /// The shader-side stencil's shadow, copied in before the render pass and out after it.
-    shadow: Option<&'r shadow::ShadowStencil<'r>>,
     /// A draw replay's passes before the render pass and draws in place of `draw`'s own, which is
     /// then one indirect draw.
     replayed: Option<&'r ReplayedDraws<'r>>,
@@ -2658,12 +2380,6 @@ fn record_and_submit(
         if let Some(readers) = recording.readers {
             readers.record_initialized(command, attachment_stages);
         }
-        for planes in recording.planes {
-            planes.record_split(command);
-        }
-        if let (Some(shadow), Some(target)) = (recording.shadow, depth_stencil) {
-            shadow.record_copy_in(command, target);
-        }
         if let Some(replayed) = recording.replayed {
             device.cmd_pipeline_barrier(
                 command,
@@ -2889,12 +2605,6 @@ fn record_and_submit(
                 &[],
             );
         }
-        if let (Some(shadow), Some(target)) = (recording.shadow, depth_stencil) {
-            shadow.record_copy_out(command, target);
-        }
-        for planes in recording.planes {
-            planes.record_merge(command);
-        }
         if !to_source.is_empty() {
             device.cmd_pipeline_barrier(
                 command,
@@ -2960,7 +2670,5 @@ fn record_and_submit(
 }
 
 mod multisampled;
-mod planes;
-mod shadow;
 #[cfg(test)]
 mod tests;

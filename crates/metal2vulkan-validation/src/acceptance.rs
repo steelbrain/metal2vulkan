@@ -122,11 +122,11 @@ pub struct CompiledRequest {
 #[derive(Clone, Debug)]
 pub enum RowPipeline {
     Compute {
-        pipeline: ComputePipeline,
+        pipeline: Box<ComputePipeline>,
         creation: ComputeCreation,
     },
     Render {
-        pipeline: RenderPipeline,
+        pipeline: Box<RenderPipeline>,
         row: RowStage,
     },
 }
@@ -142,13 +142,10 @@ impl RowPipeline {
         Ok(match pipeline {
             AcceptancePipeline::Compute(pipeline) => {
                 let creation = dispatch::plan_compute_row(device, &pipeline)?;
-                RowPipeline::Compute {
-                    pipeline: *pipeline,
-                    creation,
-                }
+                RowPipeline::Compute { pipeline, creation }
             }
             AcceptancePipeline::Render(pipeline) => RowPipeline::Render {
-                pipeline: *pipeline,
+                pipeline,
                 row: stage,
             },
         })

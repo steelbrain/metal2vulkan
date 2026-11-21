@@ -588,7 +588,6 @@ impl Prepared {
                 textures: &BTreeMap::new(),
                 texel_guards: &BTreeMap::new(),
                 tile_attachments: &BTreeMap::new(),
-                shadow_stencil: None,
                 status: None,
                 used_textures: &BTreeMap::new(),
                 samplers: &BTreeMap::new(),
@@ -601,7 +600,6 @@ impl Prepared {
                 structures: &BTreeMap::new(),
                 tessellation_factors: None,
                 attachments: &BTreeMap::new(),
-                imageblock: None,
             },
             None,
         )

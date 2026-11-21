@@ -8,17 +8,12 @@
 //! (`metal::platform::imageblocks`). So a case observes only cells the oracle defined, and never
 //! a byte the pass left undefined.
 //!
-//! The render executor holds the same cells in the product's representation
-//! (`ImageblockMechanism::StorageImageInterlock`): one `R32Uint` 2D-array storage image per pass,
-//! layer `w` holding word `w` of every pixel's cell at the pixel's texel, each word the cell's
-//! bytes `4w..4w + 4` in little-endian order (the leaves). The cells follow the master of the
-//! checked reflection ([`layout`]), the one the checker validates the planes against and the
-//! oracle's initializer and resolver use, so they hold the bytes the oracle's pass holds whichever
-//! master the product plans its views by. [`Cells::initial`] lays the authored planes out at their
-//! master members' offsets, [`Cells::image_bytes`] is the image's contents layer by layer,
-//! [`Cells::from_image`] reads the cells back from it, and [`Cells::select`] is the oracle
-//! resolver's plane of one member. Bytes no member covers are zero; no view reaches them (a view
-//! field no member covers is refused), so no observation depends on them.
+//! The render executor holds the same cells. The product compiles no fragment function that reads
+//! or writes an imageblock (`Feature::Imageblocks`), so a draw leaves them as the initializer left
+//! them. The cells follow the master of the checked reflection ([`layout`]), the one the checker
+//! validates the planes against and the oracle's initializer and resolver use. [`Cells::initial`]
+//! lays the authored planes out at their master members' offsets, and [`Cells::select`] is the
+//! oracle resolver's plane of one member. Bytes no member covers are zero.
 
 use crate::air::reflect::FragmentImageblock;
 use crate::literal::LiteralFragmentImageblock;
@@ -143,74 +138,6 @@ impl Cells {
         })
     }
 
-    fn pixels(&self) -> usize {
-        self.dimensions[0] as usize * self.dimensions[1] as usize
-    }
-
-    /// The 32-bit words of one cell.
-    pub fn words(&self) -> u32 {
-        self.cell_bytes / 4
-    }
-
-    /// The layers of the pass's storage image for a pipeline whose imageblock spans
-    /// `pipeline_words` words (at least that many): these cells' words. A pipeline whose words
-    /// exceed them plans its views by a larger master than the reflected one the cells follow,
-    /// which this executor does not model.
-    pub fn storage_layers(&self, pipeline_words: u32) -> Result<u32, String> {
-        if pipeline_words > self.words() {
-            return Err(format!(
-                "a pipeline imageblock of {pipeline_words} words over {}-word reflected cells",
-                self.words()
-            ));
-        }
-        Ok(self.words())
-    }
-
-    /// The contents of a `layers`-layer `R32Uint` image of these cells, tightly packed layer by
-    /// layer (the copy a `VkBufferImageCopy` of every layer reads): layer `w` holds word `w` of
-    /// each pixel's cell, and a layer beyond the cell's words zero.
-    pub fn image_bytes(&self, layers: u32) -> Vec<u8> {
-        let pixels = self.pixels();
-        let cell = self.cell_bytes as usize;
-        let mut image = vec![0; layers as usize * pixels * 4];
-        for word in 0..(layers.min(self.words()) as usize) {
-            for pixel in 0..pixels {
-                let texel = (word * pixels + pixel) * 4;
-                let from = pixel * cell + word * 4;
-                image[texel..texel + 4].copy_from_slice(&self.bytes[from..from + 4]);
-            }
-        }
-        image
-    }
-
-    /// The cells a `layers`-layer image of [`Cells::image_bytes`]'s layout holds: these cells'
-    /// extent and cell size, each word read from its layer.
-    pub fn from_image(&self, layers: u32, image: &[u8]) -> Result<Cells, String> {
-        let pixels = self.pixels();
-        if layers < self.words() || image.len() != layers as usize * pixels * 4 {
-            return Err(format!(
-                "an imageblock image of {} bytes in {layers} layers does not hold {pixels} cells \
-                 of {} words",
-                image.len(),
-                self.words()
-            ));
-        }
-        let cell = self.cell_bytes as usize;
-        let mut bytes = vec![0; pixels * cell];
-        for word in 0..self.words() as usize {
-            for pixel in 0..pixels {
-                let texel = (word * pixels + pixel) * 4;
-                let to = pixel * cell + word * 4;
-                bytes[to..to + 4].copy_from_slice(&image[texel..texel + 4]);
-            }
-        }
-        Ok(Cells {
-            dimensions: self.dimensions,
-            cell_bytes: self.cell_bytes,
-            bytes,
-        })
-    }
-
     /// The `(origin, dimensions)` region of `member`'s plane, rows in order, tightly packed: what
     /// the Metal oracle's resolver writes and its readback selects.
     pub fn select(
@@ -270,11 +197,9 @@ mod tests {
     }
 
     /// Each plane lands at its member's offset in every cell, little-endian within the words, an
-    /// unauthored member and the padding are zero, layer `w` of the image is word `w` of each
-    /// pixel's cell (a layer past the cell zero), the image reads back to the same cells, and a
-    /// member's plane selects exactly its bytes.
+    /// unauthored member and the padding are zero, and a member's plane selects exactly its bytes.
     #[test]
-    fn cells_lay_planes_out_at_master_offsets_one_word_per_layer() {
+    fn cells_lay_planes_out_at_master_offsets() {
         use FragmentImageblockFormat as F;
         let authored = LiteralFragmentImageblock {
             dimensions: [2, 1],
@@ -285,7 +210,6 @@ mod tests {
             ],
         };
         let cells = Cells::initial(&master(), &authored).unwrap();
-        assert_eq!(cells.words(), 3);
         assert_eq!(
             cells.bytes,
             [
@@ -294,19 +218,6 @@ mod tests {
             ]
             .concat()
         );
-        let image = cells.image_bytes(4);
-        assert_eq!(
-            image,
-            [
-                [0, 0, 0x11, 0x22, 0, 0, 0x33, 0x44],
-                [1, 2, 3, 4, 5, 6, 7, 8],
-                [0xaa, 0xbb, 0, 0, 0xcc, 0xdd, 0, 0],
-                [0; 8],
-            ]
-            .concat()
-        );
-        assert_eq!(cells.from_image(4, &image).unwrap(), cells);
-        assert!(cells.from_image(2, &image[..16]).is_err());
         assert_eq!(
             cells
                 .select(Member { offset: 2, size: 2 }, [0, 0], [2, 1])
@@ -334,22 +245,9 @@ mod tests {
             .is_err());
     }
 
-    /// The storage image has the cells' words, which must cover the pipeline's; a pipeline spanning
-    /// more words than the reflected cells plans its views by another master and is refused. Cells
-    /// past the resource cap are refused before they are allocated.
+    /// Cells past the resource cap are refused before they are allocated.
     #[test]
-    fn the_storage_has_the_cells_words_and_the_cells_are_capped() {
-        let cells = Cells::initial(
-            &master(),
-            &LiteralFragmentImageblock {
-                dimensions: [2, 1],
-                members: vec![],
-            },
-        )
-        .unwrap();
-        assert_eq!(cells.storage_layers(1), Ok(3));
-        assert_eq!(cells.storage_layers(3), Ok(3));
-        assert!(cells.storage_layers(4).unwrap_err().contains("4 words"));
+    fn the_cells_are_capped() {
         let huge = Layout {
             members: BTreeMap::new(),
             cell_bytes: 1 << 12,

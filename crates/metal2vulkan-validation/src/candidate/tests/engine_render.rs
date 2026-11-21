@@ -6,8 +6,7 @@
 
 use super::*;
 use crate::candidate::engine::graphics::tests::{
-    checked_companion, draw_request, reflected_imageblock, two_stage_case, RenderLibraries,
-    WITHOUT_SLICE,
+    checked_companion, draw_request, two_stage_case, RenderLibraries, WITHOUT_SLICE,
 };
 use crate::candidate::engine::graphics::{
     render_case, ColorTarget, RenderCase, RenderOutput, VertexBuffer,
@@ -334,8 +333,10 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
 /// under `fragment_no_writes` (the oracle's always-pass stencil test replaces the authored 0xab with
 /// the state's reference). An attachment of both aspects is the oracle's two textures, which the
 /// runtime renders into in no one pass, so `render_case` refuses it as the runtime's limit
-/// (`SeparateDepthStencil`); and a fragment function's stencil output, `fragment_depth_stencil`'s,
-/// the runtime refuses at creation (its README's known gaps of render pipeline states).
+/// (`SeparateDepthStencil`). A fragment function's stencil output, `fragment_depth_stencil`'s 7,
+/// is the fragment's stencil reference on a device that lists `VK_EXT_shader_stencil_export`
+/// (lavapipe lists it), where the runtime stores what the executor's own context stores, 7; on
+/// one that does not, the runtime refuses the state at creation naming `StencilExport`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
@@ -423,11 +424,22 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             &authored, &case
         ));
         match run_on_runtime(&case, &fragment, Some(&companion)) {
+            Ok(through) => {
+                let drawn = run(
+                    &case,
+                    RenderLibraries {
+                        vertex: &companion,
+                        fragment: Some(&fragment),
+                    },
+                )
+                .unwrap();
+                assert_eq!(through.output, drawn.output, "fragment_depth_stencil");
+                assert_eq!(through.output, [7], "fragment_depth_stencil");
+            }
             Err(error @ ExecutorError::NotSupported(_)) => {
                 assert!(error.to_string().contains("StencilExport"), "{error}")
             }
             Err(error) => panic!("{error}"),
-            Ok(run) => panic!("a stencil output ran through the runtime: {:?}", run.output),
         }
     }
 }
@@ -659,10 +671,8 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
 /// Framebuffer fetch: `fetch_scalar` writes half of the color it reads, its attachment loaded with
 /// the authored contents, and the fullscreen triangle drawn as `n` instances covers every pixel `n`
 /// times in order, so under rasterization-order access each instance reads what the one before it
-/// wrote and the attachment ends at `2^-n` of its contents. A device without that access but with
-/// the pixel interlock (MoltenVK, RADV, ANV) reads and writes the attachment as a storage image
-/// inside the interlock, in the same order, to the same result. A device with neither reads it as
-/// an input attachment with no rasterization-order access, after a barrier between draws
+/// wrote and the attachment ends at `2^-n` of its contents. A device without that access reads it
+/// as an input attachment with no rasterization-order access, after a barrier between draws
 /// (`platform::graphics_pipeline::fetch_between_draws`), and its fragment module notes
 /// `PrecisionNote::UnorderedFetchWithinDraw`: one instance halves the attachment exactly, and
 /// three, one draw, leave each texel some order's `2^-k` of its contents, `k` in 1 to 3.
@@ -722,87 +732,6 @@ fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
                     Some(metal2vulkan::bind::StatusReport::default())
                 );
             }
-            Err(other) => panic!("{instances} instance(s): {other}"),
-        }
-    }
-}
-
-/// `fragment_custom_imageblock` adds one to its imageblock's `user(depth)` member (a half at byte 2
-/// of an 8-byte cell of four halves). Drawn as 1 and 3 overlapping instances of the fullscreen
-/// triangle over a 2x2 pass whose cells hold four authored depths, each pixel's depth gains exactly
-/// one per instance: every instance reads the cell after the previous one wrote it, inside the
-/// pixel interlock, through the storage image the render executor binds where the plan's imageblock
-/// write names it. A device without the interlock refuses typed, as the product refuses
-/// (`Imageblocks` needs the feature).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn an_imageblock_member_gains_one_per_overlapping_instance() {
-    use crate::check::admission::NotSupported;
-    use crate::engine::Outcome;
-    let fragment = public("fragment_custom_imageblock.ll");
-    let reflected = reflected_imageblock(
-        &std::fs::read_to_string(fixtures_dir().join("fragment_custom_imageblock.ll")).unwrap(),
-        "fragment_custom_imageblock",
-    );
-    let mut authored = crate::case::fragment_imageblock_test_case(
-        String::new(),
-        "fragment_custom_imageblock".into(),
-    );
-    let halves = |bits: [u16; 4]| bits.iter().flat_map(|bits| bits.to_le_bytes()).collect();
-    // 1.0, -2.0, 0.5, 96.0, and each plus one and plus three.
-    let depths: Vec<u8> = halves([0x3c00, 0xc000, 0x3800, 0x5600]);
-    let plus = [
-        (1u32, halves([0x4000, 0xbc00, 0x3e00, 0x5610])),
-        (3, halves([0x4400, 0x3c00, 0x4300, 0x5630])),
-    ];
-    let imageblock = authored.fragment_imageblock.as_mut().unwrap();
-    imageblock.dimensions = [2, 2];
-    imageblock.members[0].initial_bytes_b64 = Some(b64(&depths));
-    authored.render_targets[0].dimensions = [2, 2];
-    authored.render_targets[0].initial_bytes_b64 = b64(&[0; 32]);
-    authored.output = OutputSelection::FragmentImageblock {
-        semantic: "user(depth)".into(),
-        origin: [0, 0],
-        dimensions: [2, 2],
-    };
-    for (instances, expected) in plus {
-        authored
-            .draw
-            .as_mut()
-            .expect("the fullscreen triangle")
-            .instance_count = instances;
-        // The checked reflection's master, which the cells follow.
-        let (interface, companion) = checked_companion(&authored, &fragment);
-        let case = render_case(
-            &authored,
-            &interface,
-            WITHOUT_SLICE,
-            companion.as_ref(),
-            reflected.as_ref(),
-        )
-        .unwrap();
-        let companion = companion
-            .expect("a passthrough vertex")
-            .opaque_bitcode()
-            .unwrap();
-        match run(
-            &case,
-            RenderLibraries {
-                vertex: &companion,
-                fragment: Some(&fragment),
-            },
-        ) {
-            Ok(run) => {
-                assert_eq!(run.output, expected, "{instances} instance(s)");
-                assert_eq!(
-                    run.status,
-                    Some(metal2vulkan::bind::StatusReport::default())
-                );
-            }
-            Err(ExecutorError::NotSupported(NotSupported::Product {
-                outcome: Outcome::DeviceCapabilityMissing { feature, .. },
-                ..
-            })) => assert!(feature.contains("Imageblocks"), "{feature}"),
             Err(other) => panic!("{instances} instance(s): {other}"),
         }
     }

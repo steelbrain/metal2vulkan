@@ -583,7 +583,7 @@ pub(super) fn initialize_multisample_image(
 
 /// The initializer's shader for a texel of `format`'s class: a full-screen triangle whose
 /// fragment, run per sample, fetches layer `SampleId` of a 2D-array source at its pixel and writes
-/// it to its sample (also the sample planes' merge, `render::planes`).
+/// it to its sample.
 pub(super) fn multisample_initializer_spvasm(format: crate::case::TextureFormat) -> String {
     use crate::case::TextureFormat as F;
     let (component, four, output_pointer, output) = match format {

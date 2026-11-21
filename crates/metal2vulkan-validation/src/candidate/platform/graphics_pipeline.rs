@@ -300,9 +300,9 @@ pub(super) const FETCH_SELF_DEPENDENCY: (vk::PipelineStageFlags, vk::AccessFlags
     ),
 );
 
-/// Whether `graphics` reads input attachments ordered between draws alone: on a device with
-/// neither rasterization-order color attachment access nor the pixel interlock, which states no
-/// rasterization-order access (`GraphicsState::rasterization_order_attachment_access`). The
+/// Whether `graphics` reads input attachments ordered between draws alone: on a device without
+/// rasterization-order color attachment access, which states none
+/// (`GraphicsState::rasterization_order_attachment_access`). The
 /// contract has the consumer order each draw of it after the color writes of the draws before,
 /// and each draw that writes a color after their reads, by a barrier of the subpass's dependency
 /// on itself; the executor records one before each of its draws ([`fetch_between_draws`]), after
