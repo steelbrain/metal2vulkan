@@ -1239,7 +1239,7 @@ impl Ser<'_> {
                         self.decorate(w, self.val(r)?, Decoration::NoContraction, &[])?;
                     }
                     // A value carrying a non-uniform descriptor element to its consumer
-                    // (VUID-RuntimeSpirv-NonUniform-06274).
+                    // (VUID-RuntimeSpirv-None-10148 and VUID-RuntimeSpirv-subgroupSize-10149).
                     if m.non_uniform.contains(&r) && non_uniform.insert(self.val(r)?) {
                         self.decorate(w, self.val(r)?, Decoration::NonUniform, &[])?;
                     }

@@ -221,8 +221,6 @@ pub(crate) fn bound_value(
             .unwrap_or(u64::from(metal::sampler::NEUTRAL_BORDER_TEXELS)),
         SpecKey::BicubicTexels(slot) => resources.bicubic_texels(slot)?,
         SpecKey::TexelFormat(slot) => resources.texel_format(slot),
-        SpecKey::UnmeasuredTexels(slot) => resources.unmeasured_texels(slot),
-        SpecKey::PlainHalfTexels(slot) => resources.plain_half_texels(slot),
         SpecKey::TextureSwizzle(slot) => resources.texture_swizzle(slot),
         SpecKey::SparseTexture(slot) => sparse_texture(shape, slot),
         SpecKey::ConstantLanes(slot) => constant_lanes(shape, slot),
@@ -266,10 +264,9 @@ pub(crate) fn record_specialized(
 }
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that
-/// no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
-/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures`,
-/// `SpecKey::HeapRawTextures` and `SpecKey::HeapNanFamilies`, through `reach`, the stages a used resource's render stages reach,
-/// as for the heap's members; `SpecKey::FilteringArgumentSampler`), which
+/// no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`), or what the
+/// command's handles can name (`SpecKey::HeapRawTextures` and `SpecKey::HeapNanFamilies`, through
+/// `reach`, the stages a used resource's render stages reach, as for the heap's members), which
 /// `BindingPlan::specialized_value` gives the runtime at
 /// each draw or dispatch, where it reads such a note (`StageModule::precision_notes_bound`). Nothing
 /// pushes it: instantiation writes only the keys its push fields name.
@@ -289,10 +286,8 @@ pub(crate) fn record_noted<'a>(
             matches!(
                 key,
                 SpecKey::BoundSamplerWord(_)
-                    | SpecKey::HeapYCbCrTextures(_)
                     | SpecKey::HeapRawTextures(_)
                     | SpecKey::HeapNanFamilies(_)
-                    | SpecKey::FilteringArgumentSampler
             )
         })
         .collect();
@@ -306,14 +301,8 @@ pub(crate) fn record_noted<'a>(
             continue;
         }
         let value = match key {
-            SpecKey::HeapYCbCrTextures(stage) => u64::from(heap_ycbcr(shape, stage, reach)),
             SpecKey::HeapRawTextures(stage) => u64::from(heap_raw(shape, stage, reach)),
             SpecKey::HeapNanFamilies(stage) => u64::from(heap_nan_families(shape, stage, reach)),
-            // A sampler state of any listed shape may be the one an argument buffer names.
-            SpecKey::FilteringArgumentSampler => u64::from(
-                (shape.argument_samplers.shapes.iter())
-                    .any(|s| s.linear || s.anisotropic || s.cubic),
-            ),
             key => bound_value(key, shape, resources)?.ok_or_else(|| {
                 internal(format!("a noted {key:?}, which no bound resource decides"))
             })?,
@@ -325,30 +314,14 @@ pub(crate) fn record_noted<'a>(
     Ok(())
 }
 
-/// Whether a heap member of `shape` that reaches `stage` (`bind::heap`'s members: a texture the
-/// command makes resident, its render stages through `reach`, or binds at a texture slot of the
-/// stage) is of a two-plane YCbCr class (`TexelFormat::two_plane_ycbcr`).
-fn heap_ycbcr(
-    shape: &BindShape,
-    stage: Stage,
-    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
-) -> bool {
-    crate::bind::heap::members(shape, &[stage], reach)
-        .iter()
-        .any(|m| match m.shape {
-            TextureShape::Texture { pixel_format, .. } => {
-                crate::metal::texel_format::texel_format(pixel_format).two_plane_ycbcr()
-            }
-            _ => false,
-        })
-}
-
 /// The `SpecKey::HeapRawTextures` of `stage` for `shape`: of the heap members of `shape` that reach
-/// `stage` (as for [`heap_ycbcr`]), the bit `bind::heap::HELD` where one is a texture a heap holds
-/// by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float` read, sample or
-/// gather decodes by the device's arithmetic, and the bit `bind::heap::FILTERED` where one such is
-/// of a form whose sample the function filters (not a bfloat one). Both the notes' value and the
-/// stage's constant, whose `HELD` bit gates its raw arms (`lower::texture::heap_raw_form`).
+/// `stage` (`bind::heap`'s members: a texture the command makes resident, its render stages through
+/// `reach`, or binds at a texture slot of the stage), the bit `bind::heap::HELD` where one is a
+/// texture a heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's
+/// `float` read, sample or gather decodes by the device's arithmetic, and the bit
+/// `bind::heap::FILTERED` where one such is of a form whose sample the function filters (not a
+/// bfloat one). Both the notes' value and the stage's constant, whose `HELD` bit gates its raw arms
+/// (`lower::texture::heap_raw_form`).
 pub(crate) fn heap_raw(
     shape: &BindShape,
     stage: Stage,
@@ -373,7 +346,7 @@ pub(crate) fn heap_raw(
 
 /// The `SpecKey::HeapNanFamilies` of `stage` for `shape`: the bit of each family
 /// (`bind::heap::nan_family`) of the heap members of `shape` that reach `stage` (as for
-/// [`heap_ycbcr`]), whose texels a stage's `half` or `float` write may store a NaN in.
+/// [`heap_raw`]), whose texels a stage's `half` or `float` write may store a NaN in.
 fn heap_nan_families(
     shape: &BindShape,
     stage: Stage,

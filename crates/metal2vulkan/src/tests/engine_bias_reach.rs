@@ -311,11 +311,9 @@ impl Shape {
 }
 
 /// Through a sampler without a bias of its own every fragment bias is the `Bias` operand alone, the
-/// device's sampler's: on MoltenVK (`VkProperty::MetalSampler`) the device hands it to Metal whole,
-/// so Metal applies its own rule (the bias rounded to `half`, floored onto `1/64` and clamped into
-/// `[-32, 31.984375]`); elsewhere the device clamps it into `±maxSamplerLodBias`
-/// (`VkProperty::DeviceSampling`). A dynamic bias and a constant past the limit alike take no
-/// derivatives and no branch, record no `PrecisionNote::GradFromBias`, and require the property.
+/// device's sampler's, which clamps it into `±maxSamplerLodBias` (`VkProperty::DeviceSampling`). A
+/// dynamic bias and a constant past the limit alike take no derivatives and no branch, record no
+/// `PrecisionNote::GradFromBias`, and require the property.
 #[test]
 fn a_bias_without_the_samplers_own_is_the_bias_operand() {
     use crate::device::requirements::VkProperty;
@@ -333,15 +331,7 @@ fn a_bias_without_the_samplers_own_is_the_bias_operand() {
     }
     for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
         let prof = p(stem);
-        let property = match prof
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler)
-        {
-            true => VkProperty::MetalSampler,
-            false => VkProperty::DeviceSampling,
-        };
+        let property = VkProperty::DeviceSampling;
         for (what, bc, entry) in &fixtures {
             let what = format!("{stem}, {what}");
             let a = ok(bc, entry, &prof);
@@ -425,10 +415,9 @@ fn a_constant_bias_is_decided_at_compile_time_with_the_samplers_own() {
 
 /// The hoisted derivatives (`fragment_mixed_samplers`, a sampler selected per fragment,
 /// `bias(0.5)`) are scaled by the whole bias through the same finite scaling: no clamp of the bias
-/// to `maxSamplerLodBias` (formerly `FClamp(bias, ±max)` before `Exp2`). Off Metal's own sampler,
-/// the runtime slot among the candidates takes them into Metal's anisotropic filter, emulated where
-/// its word states anisotropy on a device without `samplerAnisotropy` (the runtime's floor without
-/// it, below that floor).
+/// to `maxSamplerLodBias` (formerly `FClamp(bias, ±max)` before `Exp2`). The runtime slot among the
+/// candidates takes them into Metal's anisotropic filter, emulated where its word states anisotropy
+/// on a device without `samplerAnisotropy` (the runtime's floor without it, below that floor).
 #[test]
 fn hoisted_derivatives_take_the_whole_bias() {
     let Some(bc) = assemble_file("sampling_completion.ll") else {

@@ -1,45 +1,29 @@
 //! What the device-sampled filters share with the emulated ones the device has no form for
 //! (`extended`, `heap_raw`, `in_place`, `bicubic`): the census words of a filter's footprint and
-//! of a runtime sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), the samplers
-//! that read one texel of one level ([`unfiltered`]), and the note of a filtered
-//! sample that Metal's own sampler answers otherwise than Metal filters the format bound there
-//! ([`filter_note`]).
+//! of a runtime sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), and
+//! the samplers that read one texel of one level ([`unfiltered`]).
 //!
-//! Every filtered sample of a format the device samples is the device's: Metal's own filter on a
-//! device that samples through Metal's own sampler (`VkProperty::MetalSampler`, MoltenVK), and the
-//! device's own elsewhere (`VkProperty::DeviceSampling`, recorded as
-//! `PrecisionNote::DeviceSampling`).
+//! Every filtered sample of a format the device samples is the device's own
+//! (`VkProperty::DeviceSampling`, recorded as `PrecisionNote::DeviceSampling`).
 //!
 //! **Two-plane YCbCr textures** (`YCBCR8_420_2P` and its kin). A format's view holds each channel
 //! of the converted color as Metal reads it, a step `k / D` (alpha 1) on its field's grid: `2048`
 //! (`PackedTexels::YCbCr2048`), `8192` (`PackedTexels::YCbCr8192`), or `8192` signed within
 //! `[-2, 2]` (`PackedTexels::YCbCrExtended8192`). Metal's 2D linear sample sums the steps on the
-//! grid, each term truncated; Metal's own sampler filters the view's texels as an `RGBA16Float` or
-//! `RGBA32Float` texture's, within one step of the grid, so a filtered sample of such a slot there
-//! records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter` where the bound
-//! format is two-plane YCbCr ([`metal_filtered_ycbcr`]), through a runtime sampler slot only where
-//! the bound sampler filters ([`filtering_word`]). A heap's texture (an argument buffer's) is held
-//! by the same view and sampled by the same sampler, so its filtered sample records the note where
-//! a texture its handles can name is two-plane YCbCr, and through an argument buffer's sampler
-//! where a sampler state an argument buffer can name filters. A device whose memory is the host's
-//! reads a slot's planes in place, Metal's filter exactly (`in_place`).
+//! grid, each term truncated; the device's sampler filters the view's texels its own way
+//! (`PrecisionNote::DeviceSampling`). A device whose memory is the host's reads a slot's planes in
+//! place, Metal's filter exactly (`in_place`).
 
 use crate::air::abi::{Filter, MipFilter, SamplerState};
-use crate::error::Error;
-use crate::lower::select::{any_of, NoteClause, NoteOn, NoteTest, SelectCx};
-use crate::lower::texture::{ImageRef, TexelConv, TexelForm};
+use crate::lower::select::{NoteOn, NoteTest};
 use crate::metal::sampler::SamplerWord;
-use crate::metal::texel_format::{PackedTexels, TexelFormat};
 use crate::metal::SamplerMipFilter;
-use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::sym::SamplerRef;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
 use crate::spirv::ir::BinOp;
 
 use super::bicubic::{scalar, value, Tap, Tys};
-use super::SampleOp;
 
 /// The census words a runtime sampler's emulation adds once per sample: the word's filter test and
 /// each axis's mode test (`reaches_word`), each axis's mode and the coordinates' extraction, the
@@ -53,62 +37,6 @@ pub(super) const WORD_TAP_WORDS: u32 = 160;
 
 /// The census words of a linear 2D sample's emulation.
 pub(super) const PLANE_WORDS: u32 = 576;
-
-/// The note of sample `op` of `image` through `sampler` (`None`: an argument buffer's) with
-/// texel form `form` where Metal's own sampler (`VkProperty::MetalSampler`) filters it otherwise
-/// than Metal filters the format bound there, with the clauses under which it holds
-/// ([`metal_filtered_ycbcr`]): `PrecisionNote::HalfSampleFilter` for a `half` result,
-/// `PrecisionNote::FloatSampleFilter` for a `float` one (a depth texture's and a comparison's
-/// included); `None` for a sample that is not filtered (a constexpr sampler that reads one texel
-/// of one level, [`unfiltered`]), one of another result, a heap texture's, and every sample on a
-/// device that samples natively, whose module records `PrecisionNote::DeviceSampling` instead.
-/// Through a runtime sampler slot each clause also tests the word of the sampler bound there
-/// ([`filtering_word`]), which the runtime reads at each draw or dispatch: a bound sampler that
-/// reads one texel of one level takes the texel the view holds, Metal's read, and holds none.
-/// An argument buffer's sampler is the state whose ID its memory holds, which no plan reads: its
-/// clauses test that a sampler state an argument buffer can name filters
-/// (`NoteOn::ArgumentSamplers`, every live state), so a program whose live states all read one
-/// texel of one level holds none.
-pub(super) fn filter_note(
-    cx: &SelectCx<'_>,
-    op: &SampleOp,
-    form: Option<TexelForm>,
-    (sampler, image): (Option<SamplerRef>, ImageRef),
-) -> Result<Option<(PrecisionNote, Vec<NoteClause>)>, Error> {
-    if !matches!(op, SampleOp::Sample { .. }) {
-        return Ok(None);
-    }
-    let note = match form.map(|f| f.conv) {
-        Some(TexelConv::F16) => PrecisionNote::HalfSampleFilter,
-        Some(TexelConv::F32) => PrecisionNote::FloatSampleFilter,
-        _ => return Ok(None),
-    };
-    let filters = match sampler {
-        Some(SamplerRef::Constexpr(words)) => match unfiltered(&super::state_of(words)?) {
-            true => return Ok(None),
-            false => None,
-        },
-        Some(SamplerRef::Slot(n)) => Some(filtering_word(n).to_vec()),
-        None => Some(vec![NoteTest::equal(NoteOn::ArgumentSamplers, 1, 1)]),
-    };
-    let Some(formats) = metal_filtered_ycbcr(cx, image) else {
-        return Ok(None);
-    };
-    let when = match filters {
-        None => formats,
-        Some(words) => formats
-            .iter()
-            .flat_map(|format| {
-                words.iter().map(move |&word| {
-                    let mut clause = format.clone();
-                    clause.insert(word);
-                    clause
-                })
-            })
-            .collect(),
-    };
-    Ok(Some((note, when)))
-}
 
 /// The tests of the word of the sampler bound at runtime sampler slot `n` (`NoteOn::BoundSampler`,
 /// `SamplerWord`) of which one holds exactly where a sample through it filters, [`unfiltered`]'s
@@ -125,41 +53,6 @@ pub(super) fn filtering_word(n: u32) -> [NoteTest; 2] {
         NoteTest::differ(on, filters, 0),
         NoteTest::equal(on, SamplerWord::MIP_FILTER, linear_mip),
     ]
-}
-
-/// On a device that samples through Metal's own sampler (`VkProperty::MetalSampler`), the clauses
-/// under which a
-/// filtered sample of texture slot `image` is not Metal's filter of the format bound there: where
-/// that format is two-plane YCbCr (its class's `TexelFormat::PACKED` field one of
-/// [`PackedTexels::YCbCr2048`], [`PackedTexels::YCbCr8192`] and
-/// [`PackedTexels::YCbCrExtended8192`]), whose view holds Metal's reads exactly but which Metal's
-/// sampler then filters as an `RGBA16Float` or `RGBA32Float` texture's texels, not on the format's
-/// own grid. A consumer reads it under the bound format (`SpecKey::BoundTexelFormat`,
-/// `StageModule::precision_notes_bound`; [`filter_note`] adds a runtime sampler slot's word). A heap's
-/// texture, which a handle names at run time, holds one clause: a texture the stage's handles can
-/// name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`, which the plan gives from the command's
-/// heap members). `None` on any other device.
-pub(super) fn metal_filtered_ycbcr(cx: &SelectCx<'_>, image: ImageRef) -> Option<Vec<NoteClause>> {
-    let metal = cx
-        .profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    if !metal {
-        return None;
-    }
-    Some(match image {
-        ImageRef::Slot(index) => any_of(
-            [
-                PackedTexels::YCbCr2048,
-                PackedTexels::YCbCr8192,
-                PackedTexels::YCbCrExtended8192,
-            ]
-            .map(|p| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, p.class().0)),
-        ),
-        ImageRef::Heap { .. } => any_of([NoteTest::equal(NoteOn::HeapYCbCr(cx.stage), 1, 1)]),
-    })
 }
 
 /// Whether a sample through sampler `s` reads one texel of one level, its value unfiltered:

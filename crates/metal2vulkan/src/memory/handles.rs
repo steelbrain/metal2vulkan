@@ -409,14 +409,13 @@ pub const FLAG_OUT_OF_BOUNDS_ALPHA_ONE: u32 = 1 << 1;
 /// (`bind::heap::storage_conversions`). A handle carries it beside its class
 /// ([`HANDLE_RED_BLUE`]).
 pub const FLAG_RED_BLUE: u32 = 1 << 2;
-/// The field of a texture entry's flags holding the index of its texel class in
-/// `metal::texel_format::heap_classes`: the class a slot bound to the texture would state in its
-/// `TexelFormat` specialization, `OTHER` (index 0) for a swizzled texture, by which a function
-/// converts or reads the texture's texels where the module reads it (a `half` conversion on Metal's
-/// own sampler, a fetched gather, a NaN texel's rule, a raw-held form's emulation). A heap handle
-/// carries it in place, in a module whose search carries it ([`Lookup::Flagged`]'s `class`), so
-/// [`HANDLE_TEXEL_CLASS`] is this field. Its 12 bits hold every index
-/// (`metal::texel_format::heap_classes` has fewer than 4096 classes, which a test checks).
+/// The field of a texture entry's flags holding the index of its texel class in the heap's layout
+/// (`metal::texel_format::heap_class_index`): the class a slot bound to the texture would state in
+/// its `TexelFormat` specialization, `OTHER` (index 0) for a swizzled texture, by which a function
+/// converts or reads the texture's texels where the module reads it (a fetched gather, a NaN
+/// texel's rule, a raw-held form's emulation). A heap handle carries it in place, in a module whose
+/// search carries it ([`Lookup::Flagged`]'s `class`), so [`HANDLE_TEXEL_CLASS`] is this field. Its
+/// 12 bits hold every index `metal::texel_format::heap_class_index` gives, which a test checks.
 pub const FLAG_TEXEL_CLASS: u32 = 0xfff << 16;
 /// The flag of a texture entry whose view in the heap's storage arrays (`bind::heap`) a device
 /// that reads storage without a format by the formats' own bits alone cannot read so: the view's
@@ -2047,8 +2046,6 @@ mod tests {
     #[test]
     fn every_texel_class_index_fits_its_field() {
         let field = FLAG_TEXEL_CLASS >> FLAG_TEXEL_CLASS.trailing_zeros();
-        let classes = crate::metal::texel_format::heap_classes().len();
-        assert!(classes <= field as usize + 1, "{classes} classes");
         for &pf in crate::metal::PixelFormat::ALL {
             let index = crate::metal::texel_format::heap_class_index(
                 pf,

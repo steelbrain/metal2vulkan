@@ -3318,14 +3318,8 @@ fn lower_bounded<K>(
         precision.push(PrecisionNote::LinkedSamplerNumbering);
         precision.sort_unstable();
     }
-    // A sample left to the sampler of a device that samples natively: the device's answer.
-    let sampled = plan.families.sampler.metal_sampler || plan.families.sampler.device_sampling;
-    if sampled
-        && p.fields()
-            .enabled
-            .properties
-            .contains(&crate::device::requirements::VkProperty::DeviceSampling)
-        && !precision.contains(&PrecisionNote::DeviceSampling)
+    // A sample left to the device's sampler: the device's answer.
+    if plan.families.sampler.device_sampling && !precision.contains(&PrecisionNote::DeviceSampling)
     {
         precision.push(PrecisionNote::DeviceSampling);
         precision.sort_unstable();
@@ -3363,21 +3357,12 @@ fn lower_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::SimdgroupLockstep);
     }
-    // Every sample, gather and comparison is the device's sampler's: Metal's own on a device
-    // that samples through it, whose answers the stage claims as Metal's, else the device's own,
-    // which the stage records. The module requires whichever it is.
-    let sampling = &plan.families.sampler;
-    if sampling.metal_sampler || sampling.device_sampling {
-        use crate::device::requirements::VkProperty;
-        let native = p
-            .fields()
-            .enabled
+    // Every sample, gather and comparison is the device's own sampler's, which the stage records
+    // and requires.
+    if plan.families.sampler.device_sampling {
+        requirements
             .properties
-            .contains(&VkProperty::DeviceSampling);
-        requirements.properties.insert(match native {
-            true => VkProperty::DeviceSampling,
-            false => VkProperty::MetalSampler,
-        });
+            .insert(crate::device::requirements::VkProperty::DeviceSampling);
     }
     // A fragment's simdgroup lane read from its subgroup lane because the device's fragment
     // subgroups are Metal's simdgroups.

@@ -2009,9 +2009,6 @@ bound.
   no probe covers. The branch keeps the AIR's lanes, so that operation may answer over the lanes
   that take the arm where Metal's answers over the block's. A branch Metal was measured to
   speculate is speculated, and one it was measured to keep is kept, with no note.
-- `metal2vulkan-degrade-not-mipmapped-anisotropic-filter` (precision).
-  `PrecisionNote::NotMipmappedAnisotropicFilter`: Recorded by no device: its condition, a device
-  whose sampler is Metal's own (`DriverDeviation::MetalSampler`), is one no profile takes.
 - `metal2vulkan-degrade-device-sample-level` (precision). `PrecisionNote::DeviceSampleLevel`: An
   extended-range texture's (`BGR10_XR`, `BGRA10_XR` and their sRGB twins) fragment sample at an
   implicit level, or with explicit gradients, on every device: its texels are read in the shader, at

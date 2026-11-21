@@ -292,7 +292,7 @@ impl Case for BorderSwizzles {
     fn allowances(&self) -> Vec<Allowance> {
         // The sample goes to the device's own sampler and the texel's `float` value is the
         // device's conversion of its codes, which the runtime announces as `device-sampling` and
-        // `device-texel-conversion` off Metal's own texture unit: native notes the suite declares
+        // `device-texel-conversion`: native notes the suite declares
         // for every case, which loosen no word. A word the device's conversion moves is a
         // `known-gaps-rt.tsv` row of the venue.
         //

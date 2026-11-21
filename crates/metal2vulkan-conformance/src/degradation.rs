@@ -159,8 +159,6 @@ pub enum Degradation {
     TessellationTriangleOrder,
     /// `metal2vulkan-degrade-unmeasured-group-speculation`.
     UnmeasuredGroupSpeculation,
-    /// `metal2vulkan-degrade-not-mipmapped-anisotropic-filter`.
-    NotMipmappedAnisotropicFilter,
     /// `metal2vulkan-degrade-device-sample-level`.
     DeviceSampleLevel,
     /// `metal2vulkan-degrade-coverage-reads-rounded-alpha`.
@@ -262,7 +260,6 @@ impl Degradation {
         Degradation::DevicePackConversion,
         Degradation::TessellationTriangleOrder,
         Degradation::UnmeasuredGroupSpeculation,
-        Degradation::NotMipmappedAnisotropicFilter,
         Degradation::DeviceSampleLevel,
         Degradation::CoverageReadsRoundedAlpha,
         Degradation::DeviceAlphaCoverage,
@@ -389,9 +386,6 @@ impl Degradation {
             Degradation::UnmeasuredGroupSpeculation => {
                 "metal2vulkan-degrade-unmeasured-group-speculation"
             }
-            Degradation::NotMipmappedAnisotropicFilter => {
-                "metal2vulkan-degrade-not-mipmapped-anisotropic-filter"
-            }
             Degradation::DeviceSampleLevel => "metal2vulkan-degrade-device-sample-level",
             Degradation::CoverageReadsRoundedAlpha => {
                 "metal2vulkan-degrade-coverage-reads-rounded-alpha"
@@ -486,9 +480,6 @@ impl Degradation {
             PrecisionNote::DevicePackConversion => Degradation::DevicePackConversion,
             PrecisionNote::TessellationTriangleOrder => Degradation::TessellationTriangleOrder,
             PrecisionNote::UnmeasuredGroupSpeculation => Degradation::UnmeasuredGroupSpeculation,
-            PrecisionNote::NotMipmappedAnisotropicFilter => {
-                Degradation::NotMipmappedAnisotropicFilter
-            }
             PrecisionNote::DeviceSampleLevel => Degradation::DeviceSampleLevel,
             PrecisionNote::CoverageReadsRoundedAlpha => Degradation::CoverageReadsRoundedAlpha,
             PrecisionNote::DeviceAlphaCoverage => Degradation::DeviceAlphaCoverage,

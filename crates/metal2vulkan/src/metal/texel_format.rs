@@ -109,8 +109,7 @@
 //! EOTF to the codes before filtering, within the device's precision), and that is the only form
 //! wherever the device samples the format: a texture slot's reads, samples, gathers and bicubic
 //! taps take it, recording `PrecisionNote::SrgbTexelDecode` where the bound format's class has
-//! [`SRGB`](BicubicTexels::SRGB) on a device that does not decode through Metal's own texture
-//! unit (`VkProperty::MetalSampler`, whose decode is Metal's). The class is
+//! [`SRGB`](BicubicTexels::SRGB). The class is
 //! [`UNORM`](BicubicTexels::UNORM) and [`SRGB`](BicubicTexels::SRGB) with its channels, never
 //! [`EXACT`](BicubicTexels::EXACT): a `half` result rounds the device's `float` value, and a
 //! bicubic sample sums the device's decoded taps. The formats ([`srgb_coded`]) are
@@ -184,42 +183,6 @@ impl TexelFormat {
     /// The [`PACKED`](Self::PACKED) field's mask, in place.
     pub const PACKED_MASK: u32 = 0xF << TexelFormat::PACKED;
 
-    /// The [`PACKED`](Self::PACKED) field's top bit, set in exactly the fields of the grid `8192`
-    /// ([`PackedTexels::YCbCr8192`], [`PackedTexels::YCbCrExtended8192`] and
-    /// [`PackedTexels::Rgb10A2Srgb`]), whose one texel's `half` rounds with ties away from zero: what the `half` routine of a device that
-    /// samples through Metal's own texture unit reads of the field (`lower::texture::half`), so
-    /// that every other field's class specializes as a slot bound to nothing does.
-    pub const YCBCR_8192: u32 = 8 << TexelFormat::PACKED;
-
-    /// The bits of a class whose `half` conversion is measured on a device that samples through
-    /// Metal's own texture unit: a measured family ([`BicubicTexels::LINEAR`],
-    /// [`BicubicTexels::HALF`], [`BicubicTexels::EXACT`]), an 8-bit sRGB format's
-    /// ([`BicubicTexels::SRGB`]) or a packed field. A class with none of them
-    /// ([`unmeasured_on_metal_sampler`](Self::unmeasured_on_metal_sampler)) converts by the
-    /// `OTHER` arm, whose rounding of Metal's `float` texel Metal's `half` may not be.
-    pub const MEASURED_ON_METAL_SAMPLER: u32 = BicubicTexels::LINEAR
-        | BicubicTexels::HALF
-        | BicubicTexels::EXACT
-        | BicubicTexels::SRGB
-        | TexelFormat::PACKED_MASK;
-
-    /// Whether the class has none of [`MEASURED_ON_METAL_SAMPLER`](Self::MEASURED_ON_METAL_SAMPLER)'s
-    /// bits: a format outside the measured families, or a swizzled packed normalized format
-    /// ([`swizzled`](Self::swizzled)), whose `half` conversion the module notes on such a device
-    /// (`SpecKey::UnmeasuredTexels`).
-    pub fn unmeasured_on_metal_sampler(self) -> bool {
-        self.0 & TexelFormat::MEASURED_ON_METAL_SAMPLER == 0
-    }
-
-    /// Whether, on a device that samples through Metal's own texture unit, every access's `half`
-    /// result of the class is the device's `float` texel rounded to nearest even
-    /// (`SpecKey::PlainHalfTexels`): the class has no YCbCr field on the grid `8192`
-    /// ([`TexelFormat::YCBCR_8192`], ties away), the routine's one arm other than its rounding to
-    /// nearest even (`lower::texture::half`).
-    pub fn plain_on_metal_sampler(self) -> bool {
-        self.0 & TexelFormat::YCBCR_8192 == 0
-    }
-
     /// The families whose texels decode to no NaN: normalized channels, signed or not
     /// ([`BicubicTexels::UNORM`], [`BicubicTexels::SNORM`]), 8-bit sRGB codes
     /// ([`BicubicTexels::SRGB`]) and Apple's extended-range codes ([`BicubicTexels::EXTENDED`]).
@@ -231,15 +194,6 @@ impl TexelFormat {
     /// float or `RG11B10Float` texel; `RGB9E5Float` decodes its every code to a finite value.
     pub const NAN_FREE: u32 =
         BicubicTexels::UNORM | BicubicTexels::SNORM | BicubicTexels::SRGB | BicubicTexels::EXTENDED;
-
-    /// Whether the class's [`PACKED`](Self::PACKED) field is a two-plane YCbCr format's
-    /// ([`PackedTexels::ycbcr`]): a texture Metal's own sampler filters as a float texture's
-    /// texels, not on the field's grid (`lower::sampler::linear`).
-    pub(crate) fn two_plane_ycbcr(self) -> bool {
-        PackedTexels::ALL
-            .iter()
-            .any(|p| p.ycbcr() && self.0 & TexelFormat::PACKED_MASK == p.class().0)
-    }
 
     /// Whether the class states channels ([`BicubicTexels::PRESENT`]): a measured family's does,
     /// a [`CubeCorner`] alone does not, so the binder states no border texel for it.
@@ -658,7 +612,7 @@ pub fn with_border(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> TexelFor
 /// The class a heap texture of pixel format `pf` made with `swizzle` carries in its handle-table
 /// entry: a texture without a swizzle takes its slot's class ([`with_border`]); a swizzled one
 /// takes [`TexelFormat::OTHER`], whose texels the function leaves to the device, so the classes a
-/// heap names are [`heap_classes`]' few.
+/// heap names are few.
 pub fn heap_class(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> TexelFormat {
     match reads_unswizzled(pf, swizzle) {
         true => with_border(pf, swizzle),
@@ -686,30 +640,22 @@ pub fn reads_unswizzled(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> boo
     (0..4).all(|c| sources[c] == own[c] || (!present[c] && sources[c] == lacking[c]))
 }
 
-/// Every class a heap texture can carry ([`heap_class`] of each pixel format without a swizzle),
-/// sorted and without repeats, so [`TexelFormat::OTHER`] (0) is first: a texture's handle-table
-/// entry names its class by its index here ([`heap_class_index`]), which a function reading the
-/// class looks up in its own copy of this table. The binder and the function come from one build,
-/// whose `SEMANTICS_VERSION` changes with any class.
+/// The heap's class layout. First every class a heap texture can carry ([`heap_class`] of each
+/// pixel format without a swizzle), sorted and without repeats, so [`TexelFormat::OTHER`] (0) is
+/// first: a texture's handle-table entry names its class by its index here ([`heap_class_index`]).
+/// The binder and the function come from one build, whose `SEMANTICS_VERSION` changes with any
+/// class.
 ///
 /// After them, from [`heap_extended_base`], one [`TexelFormat::OTHER`] per form of
 /// `ExtendedRange::HEAP_READ` in its order: the index of a heap texture of that form, whose texels
-/// a function decodes from its raw codes where the index names it, and which every routine that
-/// reads the class takes as `OTHER`.
+/// a function decodes from its raw codes where the index names it.
 ///
 /// After those, from [`heap_numeric_base`], two more `OTHER` entries: the index of a heap texture
 /// of a signed and of an unsigned integer color format ([`heap_numeric`]), which a read of another
 /// numeric class tests to read the texture in its own class; then, from the own-only base, the
 /// classes of the formats such a read does not take ([`crosses_classes`]: depth, stencil,
-/// extended-range and two-plane formats), sorted, `OTHER` first, each the class of its own: a float
-/// read's routine takes it as the class of the same value among the own ones, and only a crossing
-/// float format's texture names an own class.
-pub fn heap_classes() -> &'static [u32] {
-    &heap_layout().classes
-}
-
-/// [`heap_classes`] and the indices where its parts start: the forms a heap reads, the numeric
-/// markers, and the classes of the formats no read of another class takes.
+/// extended-range and two-plane formats), sorted, `OTHER` first, each the class of its own, so only
+/// a crossing float format's texture names an own class.
 struct HeapLayout {
     classes: Vec<u32>,
     extended: u32,
@@ -717,7 +663,7 @@ struct HeapLayout {
     own_only: u32,
 }
 
-/// The heap's classes ([`heap_classes`]), built once.
+/// The heap's class layout ([`HeapLayout`]), built once.
 fn heap_layout() -> &'static HeapLayout {
     static LAYOUT: std::sync::OnceLock<HeapLayout> = std::sync::OnceLock::new();
     LAYOUT.get_or_init(|| {
@@ -757,14 +703,14 @@ fn heap_layout() -> &'static HeapLayout {
     })
 }
 
-/// The index in [`heap_classes`] of the first form of `ExtendedRange::HEAP_READ`: a heap texture's
-/// class index at or past it names the form `index - base` of that list.
+/// The heap class index ([`heap_class_index`]) of the first form of `ExtendedRange::HEAP_READ`: a
+/// heap texture's class index at or past it names the form `index - base` of that list.
 pub fn heap_extended_base() -> u32 {
     heap_layout().extended
 }
 
-/// The index in [`heap_classes`] of a heap texture of a signed integer color format; the next one
-/// is an unsigned integer color format's ([`heap_numeric`]).
+/// The heap class index ([`heap_class_index`]) of a texture of a signed integer color format; the
+/// next one is an unsigned integer color format's ([`heap_numeric`]).
 pub fn heap_numeric_base() -> u32 {
     heap_layout().numeric
 }
@@ -796,12 +742,12 @@ pub fn heap_numeric(pf: PixelFormat) -> Option<crate::pipeline::sym::SampledType
     }
 }
 
-/// The index in [`heap_classes`] of `A8Unorm`'s class, which no other format's texture carries:
-/// a storage read or write through a heap handle carrying it converts the member's texels where
-/// the device holds such a texture's alpha in red (`metal::format::alpha_in_red`), which a heap's
-/// storage array views without a component mapping. A swizzled `A8Unorm` texture that reads as
-/// none carries it too; another swizzle's class is `OTHER`, which a heap's storage array does not
-/// hold there (`bind::heap`'s storage elements).
+/// The heap class index ([`heap_class_index`]) of `A8Unorm`'s class, which no other format's
+/// texture carries: a storage read or write through a heap handle carrying it converts the member's
+/// texels where the device holds such a texture's alpha in red (`metal::format::alpha_in_red`),
+/// which a heap's storage array views without a component mapping. A swizzled `A8Unorm` texture
+/// that reads as none carries it too; another swizzle's class is `OTHER`, which a heap's storage
+/// array does not hold there (`bind::heap`'s storage elements).
 pub fn heap_alpha_in_red_index() -> u32 {
     heap_class_index(PixelFormat::A8Unorm, TextureSwizzleChannels::DEFAULT)
 }
@@ -823,11 +769,11 @@ pub fn mode_two_rounds(pf: PixelFormat, halves: bool) -> bool {
         || (halves && half_channels(pf))
 }
 
-/// The index in [`heap_classes`] of the class a heap texture of pixel format `pf` made with
+/// The index among the heap's classes of the class a heap texture of pixel format `pf` made with
 /// `swizzle` carries ([`heap_class`]); for an unswizzled texture of a form of
 /// `ExtendedRange::HEAP_READ`, that form's index past [`heap_extended_base`]; for an integer color
 /// format, its numeric marker ([`heap_numeric_base`]), and for a format a read of another class
-/// does not take, its class among those past the own-only base ([`heap_classes`]).
+/// does not take, its class among those past the own-only base.
 pub fn heap_class_index(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> u32 {
     let layout = heap_layout();
     match heap_numeric(pf) {
@@ -1278,7 +1224,7 @@ mod tests {
     fn a_heap_texture_names_its_class_by_index() {
         use crate::memory::handles::FLAG_TEXEL_CLASS;
         use crate::metal::format::ExtendedRange;
-        let classes = heap_classes();
+        let classes = &heap_layout().classes;
         let base = heap_extended_base() as usize;
         assert_eq!(classes.first(), Some(&TexelFormat::OTHER.0));
         assert!(classes[..base].windows(2).all(|w| w[0] < w[1]));
@@ -1363,7 +1309,7 @@ mod tests {
     fn the_alpha_in_red_heap_class_is_a8_unorms_alone() {
         use crate::metal::TextureSwizzle as S;
         let a8 = heap_alpha_in_red_index();
-        assert_ne!(heap_classes()[a8 as usize], TexelFormat::OTHER.0);
+        assert_ne!(heap_layout().classes[a8 as usize], TexelFormat::OTHER.0);
         let swizzles = [
             TextureSwizzleChannels::DEFAULT,
             TextureSwizzleChannels::new(S::Blue, S::Green, S::Red, S::Alpha),
@@ -1390,7 +1336,8 @@ mod tests {
     #[test]
     fn a_heap_write_finds_the_half_formats_by_index() {
         use crate::metal::bicubic::BicubicTexels;
-        let half: Vec<u32> = heap_classes()
+        let half: Vec<u32> = heap_layout()
+            .classes
             .iter()
             .enumerate()
             .filter(|(_, &c)| {
@@ -1409,99 +1356,5 @@ mod tests {
             let i = heap_class_index(pf, TextureSwizzleChannels::DEFAULT);
             assert_eq!(half.contains(&i), wanted.contains(&pf), "{pf:?}");
         }
-    }
-
-    /// The bits of a class the `half` routine of a device that samples through Metal's own
-    /// texture unit reads (`lower::texture::half`).
-    const READ_ON_METAL_SAMPLER: u32 = T::LINEAR | T::SNORM | T::WIDE16 | TexelFormat::YCBCR_8192;
-
-    /// [`TexelFormat::YCBCR_8192`] is set in exactly the fields of the grid `8192`, the packed
-    /// fields whose one texel's `half` rounds with ties away from zero.
-    #[test]
-    fn the_ycbcr_8192_bit_names_exactly_the_grid_8192_fields() {
-        for p in PackedTexels::ALL {
-            let field = (p as u32) << TexelFormat::PACKED;
-            assert_eq!(field & TexelFormat::PACKED_MASK, field, "{p:?}");
-            assert_eq!(
-                field & TexelFormat::YCBCR_8192 != 0,
-                matches!(
-                    p,
-                    PackedTexels::YCbCr8192
-                        | PackedTexels::YCbCrExtended8192
-                        | PackedTexels::Rgb10A2Srgb
-                ),
-                "{p:?}"
-            );
-            assert_eq!(
-                field & TexelFormat::YCBCR_8192 != 0,
-                p.ties_away() && p != PackedTexels::YCbCr2048,
-                "{p:?}"
-            );
-        }
-    }
-
-    /// A 16-bit grid's class (`WIDE16`) is an exact family's with no packed field, so the Metal
-    /// sampler's routine, which reads the grid's bit and not the packed field, selects its grid
-    /// for nothing else.
-    #[test]
-    fn a_wide16_class_is_exact_and_unpacked() {
-        for &pf in PixelFormat::ALL {
-            let c = texel_format(pf).0;
-            if c & T::WIDE16 != 0 {
-                assert_ne!(c & T::EXACT, 0, "{pf:?}");
-                assert_eq!(c & TexelFormat::PACKED_MASK, 0, "{pf:?}");
-                assert_eq!(c & T::LINEAR, 0, "{pf:?}");
-            }
-        }
-    }
-
-    /// On a device that samples through Metal's own texture unit the 8-bit unsigned normalized,
-    /// half-float, sRGB, packed, small float and YCbCr-2048 formats' classes, swizzled or not,
-    /// read as a slot bound to nothing does, and are measured; the 32-bit float and 16-bit grids',
-    /// an 8-bit signed format's, and a YCbCr-8192 field's do not; a compressed format's class is
-    /// unmeasured.
-    #[test]
-    fn the_metal_sampler_s_read_bits_fold_the_measured_families() {
-        let folded = [
-            PixelFormat::RGBA8Unorm,
-            PixelFormat::BGRA8Unorm,
-            PixelFormat::R8Unorm,
-            PixelFormat::RG8Unorm,
-            PixelFormat::A8Unorm,
-            PixelFormat::RGBA8UnormSRGB,
-            PixelFormat::R16Float,
-            PixelFormat::RGBA16Float,
-            PixelFormat::B5G6R5Unorm,
-            PixelFormat::RGB10A2Unorm,
-            PixelFormat::RG11B10Float,
-            PixelFormat::RGB9E5Float,
-        ];
-        for pf in folded {
-            let c = texel_format(pf);
-            assert_eq!(c.0 & READ_ON_METAL_SAMPLER, 0, "{pf:?}");
-            assert!(!c.unmeasured_on_metal_sampler(), "{pf:?}");
-            assert_eq!(c.swizzled().0 & READ_ON_METAL_SAMPLER, 0, "{pf:?}");
-        }
-        for pf in [
-            PixelFormat::RGBA8Snorm,
-            PixelFormat::R16Unorm,
-            PixelFormat::RGBA16Snorm,
-            PixelFormat::RGBA32Float,
-        ] {
-            let c = texel_format(pf);
-            assert_ne!(c.0 & READ_ON_METAL_SAMPLER, 0, "{pf:?}");
-            assert!(!c.unmeasured_on_metal_sampler(), "{pf:?}");
-        }
-        for p in [PackedTexels::YCbCr8192, PackedTexels::YCbCrExtended8192] {
-            let c = TexelFormat((p as u32) << TexelFormat::PACKED);
-            assert_ne!(c.0 & READ_ON_METAL_SAMPLER, 0, "{p:?}");
-            assert!(!c.unmeasured_on_metal_sampler(), "{p:?}");
-        }
-        let ycbcr = TexelFormat((PackedTexels::YCbCr2048 as u32) << TexelFormat::PACKED);
-        assert_eq!(ycbcr.0 & READ_ON_METAL_SAMPLER, 0);
-        assert!(!ycbcr.unmeasured_on_metal_sampler());
-        assert!(texel_format(PixelFormat::BC7RGBAUnorm).unmeasured_on_metal_sampler());
-        assert!(!texel_format(PixelFormat::BC1RGBA).unmeasured_on_metal_sampler());
-        assert!(TexelFormat(0).unmeasured_on_metal_sampler());
     }
 }

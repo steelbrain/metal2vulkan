@@ -450,15 +450,12 @@ pub(crate) fn vk_filtering(
 /// (`DeviceProperties::supports_sampler_reduction_mode`).
 ///
 /// Without a mip filter it reads the base level, and its clamp keeps Metal's choice between the
-/// two filters (`not_mipmapped_lods`); through Metal's own sampler with anisotropy and equal
-/// filters its clamp is `[0, 0]`, where that sampler reads Metal's `NotMipmapped`. With filters
-/// that differ there, no clamp reads Metal's answer.
+/// two filters (`not_mipmapped_lods`).
 ///
 /// Its level clamp is the descriptor's, its lower bound at least 0: the device clamps its own level
-/// into it and selects and blends levels at its own precision (`PrecisionNote::DeviceSampling` off
-/// Metal's own sampler). Metal truncates the clamped level's fraction onto sixty-fourths and reads
-/// a nearest mip filter's next level past one half; MoltenVK hands the clamp to Metal's sampler,
-/// which does so itself.
+/// into it and selects and blends levels at its own precision (`PrecisionNote::DeviceSampling`).
+/// Metal truncates the clamped level's fraction onto sixty-fourths and reads a nearest mip filter's
+/// next level past one half; MoltenVK hands the clamp to Metal's sampler, which does so itself.
 ///
 /// Its `mipLodBias` follows the GPU the device presents ([`SamplerUse::lod_bias`]). Vulkan adds
 /// `mipLodBias` to every sample's level, an explicit one's included (the specification's
@@ -528,25 +525,8 @@ pub fn vk_sampler(
     } else {
         vk::SamplerMipmapMode::LINEAR
     };
-    // Metal's own sampler (MoltenVK) handed anisotropy reads a sampler without a mip filter whose
-    // filters agree as Metal's `NotMipmapped` at the clamp `[0, 0]`, whatever the descriptor's
-    // clamps, and otherwise at none it takes: a bound of a sixty-fourth or more (`0.25` included)
-    // changes Metal's anisotropic footprint (an Apple M3 Max on macOS 27.0.1, the anisotropic
-    // lane's 1268 footprints at `maxAnisotropy` 2, 8 and 16, gradients scaled by 1 to 1/32,
-    // linear and nearest filters, clamps from `[0, 0.25]` to `[3, 8]`: every channel Metal's).
-    // Equal filters leave the device's level no filter to choose.
-    let own_anisotropic = max_anisotropy.is_some()
-        && desc.min_filter == desc.mag_filter
-        && profile
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
     let (mipmap_mode, min_lod, max_lod) = match desc.mip_filter {
         _ if use_.unnormalized => (vk::SamplerMipmapMode::NEAREST, 0.0, 0.0),
-        SamplerMipFilter::NotMipmapped if own_anisotropic => {
-            (vk::SamplerMipmapMode::NEAREST, 0.0, 0.0)
-        }
         SamplerMipFilter::NotMipmapped => {
             let (min_lod, max_lod) = not_mipmapped_lods(lo, hi);
             (vk::SamplerMipmapMode::NEAREST, min_lod, max_lod)
@@ -675,10 +655,9 @@ pub fn check_border_swizzle(
 /// missing red, green or blue 0 and a missing alpha 1, then the swizzle (`border_texel`). Vulkan
 /// replaces a border texel in the view format's channels, opaque black's alpha 1 in every format,
 /// `A8_UNORM`'s included, and the view's mapping (the swizzle composed on `mapping`'s,
-/// [`TextureSwizzleChannels::compose`]) applies to it as to any texel; a device that samples
-/// through Metal's own sampler (`VkProperty::MetalSampler`, MoltenVK) replaces it by Metal's
-/// rule. Transparent-black and opaque-white borders are defined through any mapping and read
-/// Metal's texel. An **opaque-black** border is exact only when:
+/// [`TextureSwizzleChannels::compose`]) applies to it as to any texel. Transparent-black and
+/// opaque-white borders are defined through any mapping and read Metal's texel. An **opaque-black**
+/// border is exact only when:
 ///
 /// - the device's texel through the view is Metal's. `A8Unorm` through `A8_UNORM` reads alpha 1
 ///   where Metal reads 0 (measured on RADV, ANV, NVIDIA and lavapipe); there Metal's opaque-black
@@ -690,8 +669,7 @@ pub fn check_border_swizzle(
 ///   otherwise an implementation may swap alpha with red or blue for the built-in border colors,
 ///   as Apple GPUs do through their channel-reordered hardware format (Vulkan spec "Texel
 ///   Replacement"). A custom border color would not swap; the binder creates none (handed back);
-/// - read through a mapping other than the identity, the device samples through Metal's sampler
-///   (measured exact through six swizzles), or `borderColorSwizzle` and
+/// - read through a mapping other than the identity, `borderColorSwizzle` and
 ///   `borderColorSwizzleFromImage` are enabled (the binder chains no
 ///   `VkSamplerBorderColorComponentMappingCreateInfoEXT`, whose mapping would have to match every
 ///   view the sampler meets). Without them Vulkan leaves the texel undefined: NVIDIA, which lacks
@@ -762,7 +740,6 @@ fn border_read(
     mapped: bool,
 ) -> Result<OpaqueBlackBorder, Error> {
     let f = profile.fields();
-    let metal_sampler = f.enabled.properties.contains(&VkProperty::MetalSampler);
     let swapped = matches!(
         mapping.format,
         vk::Format::R4G4B4A4_UNORM_PACK16 | vk::Format::B4G4R4A4_UNORM_PACK16
@@ -773,11 +750,11 @@ fn border_read(
     let rgba4 = swapped.then_some(Capability::Property(VkProperty::Rgba4OpaqueBlackSwizzled));
     let metal = black_texel(pf, swizzle, BORDER_COLORS[1]);
     let view = swizzle.compose(mapping.components);
-    if device_opaque_black(mapping.format, view, metal_sampler) != metal {
+    if device_opaque_black(view) != metal {
         let unswizzled = swizzle.compose(vk::ComponentMapping::IDENTITY);
-        let Some(direct) = direct_format(pf).filter(|&d| {
-            d != mapping.format && device_opaque_black(d, unswizzled, metal_sampler) == metal
-        }) else {
+        let Some(direct) = direct_format(pf)
+            .filter(|&d| d != mapping.format && device_opaque_black(unswizzled) == metal)
+        else {
             return Err(Unsupported::not_implemented(Feature::SamplerBorderColor).into());
         };
         let need = format_exposure_gap(direct, f.api_version, &f.enabled.extensions)
@@ -793,7 +770,6 @@ fn border_read(
     // Through another mapping Vulkan defines the texel only with the border-swizzle features:
     // the view's own (`FromImage`), or the sampler's (`Mapped`).
     let read = if is_identity(view)
-        || metal_sampler
         || (has(&VkFeature::BorderColorSwizzle) && has(&VkFeature::BorderColorSwizzleFromImage))
     {
         OpaqueBlackBorder::Stated
@@ -845,15 +821,9 @@ fn black_texel(pf: PixelFormat, swizzle: TextureSwizzleChannels, color: [bool; 4
 
 /// The device's opaque-black border texel through a view of `format` with mapping `view`: Vulkan
 /// replaces the texel in `format`'s channels with `(0, 0, 0, 1)`, a missing alpha 1 and
-/// `A8_UNORM`'s alpha 1 too (measured); a device sampling through Metal's sampler (`metal_sampler`)
-/// reads `A8_UNORM`'s alpha from the color's red, 0. Then the mapping.
-pub(crate) fn device_opaque_black(
-    format: vk::Format,
-    view: vk::ComponentMapping,
-    metal_sampler: bool,
-) -> [bool; 4] {
-    let alpha = !(metal_sampler && format == vk::Format::A8_UNORM);
-    through(view, [false, false, false, alpha])
+/// `A8_UNORM`'s alpha 1 too (measured). Then the mapping.
+pub(crate) fn device_opaque_black(view: vk::ComponentMapping) -> [bool; 4] {
+    through(view, [false, false, false, true])
 }
 
 /// `texel` (`[r, g, b, a]`, each 0 or 1) read through mapping `m`.
@@ -1694,10 +1664,8 @@ mod tests {
         }
     }
 
-    /// Through Metal's own sampler, an anisotropic sampler without a mip filter whose filters
-    /// agree is clamped to `[0, 0]` whatever its clamps, where that sampler reads Metal's
-    /// `NotMipmapped`; one whose filters differ, an isotropic one, and every sampler off Metal's
-    /// sampler keep the clamp that chooses Metal's filter.
+    /// A comparison sampler takes the descriptor's filters, mip mode, clamps and compare op; the
+    /// same descriptor without comparison takes no compare op; a NaN or inverted clamp is refused.
     #[test]
     fn filters_lods_and_compare() {
         let dev = device(&[], &[]);
@@ -1789,8 +1757,8 @@ mod tests {
         }
     }
 
-    /// A sampler with a nearest min or mag filter is handed its degree, through Metal's sampler and
-    /// natively alike, as one with linear filters is.
+    /// A sampler with a nearest min or mag filter is handed its degree, as one with linear filters
+    /// is.
     #[test]
     fn a_nearest_filter_is_handed_its_anisotropy() {
         use SamplerMinMagFilter::{Linear, Nearest};
@@ -2376,15 +2344,14 @@ mod tests {
             a: S::A,
         };
         let black = BORDER_COLORS[1];
-        let rgba = vk::Format::R8G8B8A8_UNORM;
-        assert!(is_identity(own) && device_opaque_black(rgba, own, false) == black);
+        assert!(is_identity(own) && device_opaque_black(own) == black);
         let splat = vk::ComponentMapping {
             r: S::A,
             g: S::A,
             b: S::A,
             a: S::A,
         };
-        assert!(!is_identity(splat) && device_opaque_black(rgba, splat, false) == [true; 4]);
+        assert!(!is_identity(splat) && device_opaque_black(splat) == [true; 4]);
     }
 
     /// A sampler's word holds each descriptor field's raw Metal value at its own bits, so

@@ -479,10 +479,11 @@ impl ExtendedRange {
         )
     }
 
-    /// The forms an argument buffer's texture is read in (a heap element), in the order their
-    /// classes follow `metal::texel_format::heap_classes`' own: a function decodes such a texture's
-    /// raw texels, read through the heap's unsigned integer array. A heap holds no `_sRGB` form
-    /// (their heap classes are not built) and no two-plane form, which is held in two planes.
+    /// The forms an argument buffer's texture is read in (a heap element), in the order their heap
+    /// class indices follow (`metal::texel_format::heap_extended_base`): a function decodes such a
+    /// texture's raw texels, read through the heap's unsigned integer array. A heap holds no
+    /// `_sRGB` form (their heap classes are not built) and no two-plane form, which is held in two
+    /// planes.
     pub const HEAP_READ: [ExtendedRange; 7] = [
         ExtendedRange::Bgr10 { srgb: false },
         ExtendedRange::Bgra10 { srgb: false },

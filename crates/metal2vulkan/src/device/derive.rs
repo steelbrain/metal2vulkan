@@ -15,9 +15,9 @@ use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::DevicePolicy;
 use crate::device::profile::{
-    BufferAccess, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile, EnabledCaps,
-    FormatTable, FragmentCaps, FunctionStorage, HandleDomain, ImageCaps, Independence, LeafCaps,
-    PointerDomain, ProfileFields, Robustness,
+    BufferAccess, DescriptorCaps, DeviceProfile, EnabledCaps, FormatTable, FragmentCaps,
+    FunctionStorage, HandleDomain, ImageCaps, Independence, LeafCaps, PointerDomain, ProfileFields,
+    Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -336,10 +336,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         // The floor: no Vulkan query states how much a thread holds.
         function_storage: FunctionStorage::Assumed(function_storage::FLOOR),
         // Vulkan's rule, the device's own reading of the gradients handed to it.
-        cube_gradients: CubeGradients {
-            graphics: CubeGradientRoute::Vulkan,
-            compute: CubeGradientRoute::Vulkan,
-        },
     }
 }
 

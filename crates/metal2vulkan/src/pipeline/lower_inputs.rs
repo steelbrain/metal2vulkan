@@ -564,9 +564,8 @@ pub struct LoweringInputs {
     /// holds raw codes: the function applies the swizzle to each texel it reads, samples or gathers
     /// there after decoding it, a border or out-of-bounds texel included, and a gather of a
     /// component gathers the component the swizzle names (a `Zero` or `One` 0 or 1 at every tap),
-    /// as plain Metal does. And on a device without Metal's own sampler each sampled slot bound to
-    /// a swizzled packed normalized texture: the function swizzles the texels its class converts,
-    /// likewise.
+    /// as plain Metal does. And each sampled slot bound to a swizzled packed normalized texture:
+    /// the function swizzles the texels its class converts, likewise.
     #[cfg_attr(feature = "serde", serde(default))]
     pub swizzled_storage: BTreeSet<SlotRef>,
     /// The function reads every visible-function table it reads by resource id through the

@@ -684,19 +684,13 @@ fn short_texels_sign_extend_and_half_reads_round() {
     assert!(ran > 0);
 }
 
-/// A `half` read rounds its `f32` texel to nearest even, half denormals kept, on every profile: on
-/// one with Metal's own sampler (`VkProperty::MetalSampler`) whatever the bound format's class,
-/// the slot's `TexelFormat` specialization, a 16-bit normalized texel's `f32` value of `65455 /
-/// 65535` and `65519 / 65535` too, which rounds twice there (one `half` unit in the last place
-/// above Metal's correctly rounded `c / 65535`, noted under the bound format); on any other
-/// profile with no class. Both record `PrecisionNote::HalfTexelConversion`. On a profile without `shaderFloat16` the rounding is the
-/// device's quantize alone (`PrecisionNote::NativeHalfQuantize`), whose result below the smallest
-/// normal half the interpreter gives as the zero of its sign.
+/// A `half` read rounds its `f32` texel to nearest even, half denormals kept, on every profile,
+/// with no class of the bound format, and records `PrecisionNote::HalfTexelConversion`. On a
+/// profile without `shaderFloat16` the rounding is the device's quantize alone
+/// (`PrecisionNote::NativeHalfQuantize`), whose result below the smallest normal half the
+/// interpreter gives as the zero of its sign.
 #[test]
-fn half_reads_convert_by_the_bound_format() {
-    use crate::device::requirements::VkProperty;
-    use crate::metal::texel_format::texel_format;
-    use crate::metal::PixelFormat;
+fn half_reads_round_their_texel_to_nearest_even() {
     use crate::pipeline::artifact::PrecisionNote;
     use crate::pipeline::facts::RuntimeFact;
     use crate::pipeline::sym::{SlotClass, SlotRef};
@@ -708,73 +702,38 @@ fn half_reads_convert_by_the_bound_format() {
         class: SlotClass::Texture,
         index: 2,
     };
-    let unorm16 = |c: u32| (f64::from(c) / 65535.0) as f32;
-    let float = [2f32.powi(-20), 65520.0, 1.0 + 1.0 / 4096.0, 3.0];
-    let cases: [(Option<u32>, [f32; 4], [u16; 4]); 3] = [
-        (None, float, [0x0010, 0x7C00, 0x3C00, 0x4200]),
-        (
-            Some(texel_format(PixelFormat::RGBA32Float).0),
-            float,
-            [0x0010, 0x7C00, 0x3C00, 0x4200],
-        ),
-        (
-            Some(texel_format(PixelFormat::RGBA16Unorm).0),
-            [unorm16(65455), unorm16(65519), unorm16(1), unorm16(65535)],
-            [0x3BFE, 0x3C00, 0x0100, 0x3C00],
-        ),
-    ];
+    let texel = [2f32.powi(-20), 65520.0, 1.0 + 1.0 / 4096.0, 3.0];
+    let want: [u16; 4] = [0x0010, 0x7C00, 0x3C00, 0x4200];
     let mut ran = 0;
     for (stem, p) in profiles() {
         let Some((plan, m)) = module(&bc, "short_texels", &stem, &p) else {
             continue;
         };
-        let metal = p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
-        assert_eq!(
-            plan.facts.contains(&RuntimeFact::TexelFormat { slot }),
-            metal,
+        assert!(
+            !plan.facts.contains(&RuntimeFact::TexelFormat { slot }),
             "{stem}"
         );
         assert!(
             plan.precision.contains(&PrecisionNote::HalfTexelConversion),
             "{stem}"
         );
-        for (class, texel, want) in cases {
-            if class.is_some() && !metal {
-                continue;
-            }
-            let s = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
-            let d = Image::new(texture(1), [2, 2, 1], 1, 1, 1);
-            let mut h = Image::new(texture(2), [4, 4, 2], 1, 2, 1);
-            for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let at = h.index(1, 0, 0, [x, y, 0]).expect("texel");
-                h.texels[at] = texel.map(fl);
-            }
-            let mut res = resources(&plan, &[vec![0; 8]]);
-            if let Some(c) = class {
-                res.spec.insert(SpecKey::TexelFormat(slot), u64::from(c));
-                res.spec.insert(
-                    SpecKey::PlainHalfTexels(slot),
-                    u64::from(crate::metal::texel_format::TexelFormat(c).plain_on_metal_sampler()),
-                );
-            }
-            let (bufs, _) = run_both(&m, &res, &[s, d, h], [2, 2, 1])
-                .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-            let halves: Vec<u16> = bufs[0]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            assert_eq!(
-                halves,
-                want.map(|h| quantized(&p, h)),
-                "{stem} class {class:?}"
-            );
+        let s = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
+        let d = Image::new(texture(1), [2, 2, 1], 1, 1, 1);
+        let mut h = Image::new(texture(2), [4, 4, 2], 1, 2, 1);
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let at = h.index(1, 0, 0, [x, y, 0]).expect("texel");
+            h.texels[at] = texel.map(fl);
         }
+        let res = resources(&plan, &[vec![0; 8]]);
+        let (bufs, _) =
+            run_both(&m, &res, &[s, d, h], [2, 2, 1]).unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        let halves: Vec<u16> = bufs[0]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(halves, want.map(|h| quantized(&p, h)), "{stem}");
         ran += 1;
     }
     assert!(ran > 0);

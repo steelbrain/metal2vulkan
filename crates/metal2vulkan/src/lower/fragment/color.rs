@@ -50,13 +50,11 @@
 //!
 //! **An 8-bit sRGB attachment** (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB` and the rest) reads through
 //! its input attachment the device's decode of its bytes, Vulkan's sRGB EOTF within the device's
-//! precision, where Metal decodes a color byte to its twelve-bit step over 4095. On a device that
-//! decodes through Metal's own texture unit (`VkProperty::MetalSampler`) that is Metal's decode,
-//! and the module requires the property; elsewhere the interface records each `float` color it
-//! reads so (`StageIo::decoded_fetches`), and a render pipeline whose attachment there has such a
-//! format records `PrecisionNote::SrgbTexelDecode` (`color_writes::pipeline_writes`). The
-//! interlocked storage form reads the attachment's bytes, no sRGB view of them, and decodes them
-//! by Metal's table itself (`fetch`).
+//! precision, where Metal decodes a color byte to its twelve-bit step over 4095. The interface
+//! records each `float` color it reads so (`StageIo::decoded_fetches`), and a render pipeline whose
+//! attachment there has such a format records `PrecisionNote::SrgbTexelDecode`
+//! (`color_writes::pipeline_writes`). The interlocked storage form reads the attachment's bytes, no
+//! sRGB view of them, and decodes them by Metal's table itself (`fetch`).
 //!
 //! **An `A8Unorm` attachment whose image holds Metal's alpha in red** (`R8_UNORM` on a device
 //! without `A8_UNORM`, `LoweringInputs::alpha_in_red_colors`) reads `(r, 0, 0, 1)` through its
@@ -289,22 +287,10 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
             .insert(color, e);
     }
     // A `float` color the device's input attachment decodes, an 8-bit sRGB format's through its
-    // sRGB EOTF: Metal's decode on a device that decodes through Metal's own texture unit, which
-    // the module then requires; elsewhere the interface records the color, whose pipeline notes the
-    // decode where the attachment is such a format (`color_writes::pipeline_writes`).
+    // sRGB EOTF: the interface records the color, whose pipeline notes the decode where the
+    // attachment is such a format (`color_writes::pipeline_writes`).
     if form.is_float() && extended.is_none() && !input.alpha_red {
-        let metal = cx
-            .profile
-            .fields()
-            .enabled
-            .properties
-            .contains(&crate::device::requirements::VkProperty::MetalSampler);
-        match metal {
-            true => cx.families.sampler.metal_sampler = true,
-            false => {
-                cx.families.stage_io.interface.decoded_fetches.insert(color);
-            }
-        }
+        cx.families.stage_io.interface.decoded_fetches.insert(color);
     }
     // An attachment whose image holds Metal's alpha in red reads the red as Metal's alpha: a float
     // (an integer read is Metal's pipeline error). The interface records the attachment, which

@@ -2519,9 +2519,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
     invocations): the translator test
     `an_argument_buffer_textures_sample_in_a_form_not_lowered_is_refused_naming_it` asserts the
     text;
-  - a sample or gather of an argument buffer's color texture with a `half` result on a device
-    that samples through Metal's own sampler (`VkProperty::MetalSampler`), which no device's
-    derivation states: no test;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;

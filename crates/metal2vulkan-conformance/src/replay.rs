@@ -461,8 +461,8 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 ///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
 /// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
-///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
-///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`);
+///   generated mipmap chain (`device-filtered-mipmaps`), and Vulkan's Y′CbCr model filtering a
+///   two-plane texture's planes read in place (`half-sample-filter`, `float-sample-filter`);
 /// - **blending**: the device's arithmetic of the blend a function computes into an extended-range
 ///   attachment, whose raw codes no blend unit reads (`extended-range-blend-source`,
 ///   `extended-range-float-blend-source`: `S·Fs op D·Fd` in `float`, where Metal's compiler rounds

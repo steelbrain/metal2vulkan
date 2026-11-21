@@ -221,11 +221,9 @@ pub struct StageIo {
     #[cfg_attr(feature = "serde", serde(default))]
     pub word_colors: BTreeMap<u32, crate::metal::format::WordAttachment>,
     /// The input attachments the fragment function reads as `float` texels through the device's
-    /// decode, on a device that does not decode through Metal's own texture unit (without
-    /// `VkProperty::MetalSampler`): a render pipeline whose attachment there has an 8-bit sRGB
-    /// format records `PrecisionNote::SrgbTexelDecode` for the stage
-    /// (`color_writes::pipeline_writes`), the device's sRGB decode standing for Metal's
-    /// twelve-bit table.
+    /// decode: a render pipeline whose attachment there has an 8-bit sRGB format records
+    /// `PrecisionNote::SrgbTexelDecode` for the stage (`color_writes::pipeline_writes`), the
+    /// device's sRGB decode standing for Metal's twelve-bit table.
     #[cfg_attr(feature = "serde", serde(default))]
     pub decoded_fetches: std::collections::BTreeSet<u32>,
     /// The attachments held with their channels rotated (`LoweringInputs::rotated_colors`) that

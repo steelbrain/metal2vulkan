@@ -10,13 +10,12 @@ use crate::pipeline::sym::Stage;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec, Merged};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{ConstId, FuncId, TypeId, Value as SValue};
+use crate::spirv::ids::{ConstId, TypeId, Value as SValue};
 use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, Dim, GlslOp, ImageOperands, ImageQuery, ImageUsage,
     MemAccess, MemoryOrder, Scope, Semantics, TexelMemory, Type as SType, UnOp,
 };
 
-use super::half::{TexelLanes, TexelOrigin};
 use super::slice::Slice;
 use super::slot::Parts;
 use super::{
@@ -1105,15 +1104,13 @@ fn srgb_codes(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResu
 }
 
 /// The held AIR texel of image texel `x` (a `vec4` of the image's sampled type), read as one
-/// texel: a `half` one converted by the bound format's class (`half`), a `float` one where the
-/// read takes `float`; an 8-bit sRGB format's codes decoded by the device's transfer
-/// (`SrgbEncode`, [`srgb_texel`]).
+/// texel: a `half` one rounded to nearest even, a `float` one where the read takes `float`; an
+/// 8-bit sRGB format's codes decoded by the device's transfer (`SrgbEncode`, [`srgb_texel`]).
 fn from_image(
     fb: &mut FunctionBuilder<'_>,
     decl: &ImageDecl,
     form: TexelForm,
     x: SValue,
-    half: Option<HalfClass>,
 ) -> BResult<SValue> {
     if r64(decl) {
         return ulong_texel(fb, x);
@@ -1144,24 +1141,12 @@ fn from_image(
         true => x_channel_read(fb, decl, x)?,
         false => x,
     };
-    // A `half` texel of a slot that converts by the bound format's class: a read's lanes are one
-    // texel's.
-    let x = match half {
-        Some(h) => {
-            let lanes = TexelLanes::Texel.value(fb)?;
-            h.convert(fb, x, lanes, TexelOrigin::Image)?
-        }
-        None => x,
-    };
     let x = if form.lanes == 1 {
         fb.composite_extract(x, &[0])?
     } else {
         x
     };
-    match half {
-        Some(_) => Ok(x),
-        None => held_texel(fb, decl.held_class(), form, x),
-    }
+    held_texel(fb, decl.held_class(), form, x)
 }
 
 /// The held texel (`form`, a `half` or `float` result) of texel `x` (a `vec4` of `f32`) of an
@@ -1219,113 +1204,6 @@ pub(crate) const SRGB_TEXEL: [bool; 4] = [true, true, true, false];
 /// the lane's extraction (`the_srgb_estimate_bounds_its_emission`).
 pub(crate) const SRGB_DECODE_WORDS: u32 =
     crate::lower::arith::pack::SRGB_DECODE_TEXEL_WORDS + 64 + 4 * 4 + 8;
-
-/// The conversion of a slot's `half` texels by the bound format's class: the module's routine and
-/// the slot's `TexelFormat` specialization constant; or of a heap color texture's by the class its
-/// handle carries, read from the handle.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct HalfClass {
-    routine: FuncId,
-    class: ClassOf,
-    /// The slot's `PlainHalfTexels` specialization, where it declares one.
-    plain: Option<SValue>,
-}
-
-/// Where a [`HalfClass`]'s class comes from.
-#[derive(Clone, Copy, Debug)]
-enum ClassOf {
-    /// A slot's `TexelFormat` specialization constant.
-    Slot(ConstId),
-    /// A heap texture's class, read from its handle (`heap_texel_class`).
-    Heap(SValue),
-}
-
-impl HalfClass {
-    /// The held `half` texel of image texel `x` (a `vec4` of `f32`) of lanes `lanes`
-    /// (`half::TexelLanes::code`). An image instruction's texel (`origin`) of a slot that declares
-    /// `PlainHalfTexels` converts by the plain arm where the specialization holds and by the
-    /// routine where it does not, one selection construct on it, so specialization keeps one of
-    /// them (`half` module docs).
-    pub(crate) fn convert(
-        self,
-        fb: &mut FunctionBuilder<'_>,
-        x: SValue,
-        lanes: SValue,
-        origin: TexelOrigin,
-    ) -> BResult<SValue> {
-        let class = match self.class {
-            ClassOf::Slot(c) => fb.module().const_value(c)?,
-            ClassOf::Heap(v) => v,
-        };
-        use crate::lower::arith::legal::{FloatFmt, Form, Held};
-        use crate::spirv::error::{BuildError, OperandRule};
-        let routine = self.routine;
-        let plain = match (origin, self.plain) {
-            (TexelOrigin::Image, Some(plain)) => plain,
-            _ => return super::half::convert(fb, routine, x, class, lanes),
-        };
-        let half = Form {
-            held: Held::Float(FloatFmt::Half),
-            lanes: 4,
-        };
-        let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            let v = narrow::round_texel(fb, half, x)?;
-            Ok(ArmEnd::FallThrough(vec![v]))
-        });
-        let other: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            let v = super::half::convert(fb, routine, x, class, lanes)?;
-            Ok(ArmEnd::FallThrough(vec![v]))
-        });
-        let Merged(merged) = fb.if_(&mut (), plain, then, Some(other))?;
-        merged.first().copied().ok_or(BuildError::Operand {
-            op: crate::spv::Op::Phi,
-            rule: OperandRule::Arity,
-        })
-    }
-}
-
-/// How the `half` texels of a read, gather, or sample of `image` in form `texel` convert: by the
-/// bound format's class where the slot takes its `TexelFormat` specialization, else (any other
-/// result, a heap element, a depth texture) through [`held_texel`].
-pub(crate) fn half_class(cx: &EmitCx<'_>, image: &ImageRef, texel: TexelForm) -> Option<HalfClass> {
-    if texel.conv != TexelConv::F16 {
-        return None;
-    }
-    let ImageRef::Slot(index) = *image else {
-        return None;
-    };
-    let t = &cx.decl.families.texture;
-    Some(HalfClass {
-        routine: t.half_routine?,
-        class: ClassOf::Slot(t.half_format.get(&index).copied()?),
-        plain: t.plain_half.get(&index).copied(),
-    })
-}
-
-/// How the `half` texels of a sample or gather of the heap color texture of handle `handle`
-/// convert, in form `texel`: by the class the handle carries, read from it, where the module
-/// defines the routine and the class table (`TexturePlan::heap_half`), else `None`.
-pub(crate) fn heap_half_class(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    handle: ValueId,
-    texel: TexelForm,
-) -> BResult<Option<HalfClass>> {
-    let t = &cx.decl.families.texture;
-    let (true, Some(routine), Some(_)) =
-        (texel.conv == TexelConv::F16, t.half_routine, t.heap_classes)
-    else {
-        return Ok(None);
-    };
-    let h = cx.operand(fb, handle)?;
-    let flags = heap_flags(cx, fb, h)?;
-    let class = super::heap_texel_class(cx, fb, flags)?;
-    Ok(Some(HalfClass {
-        routine,
-        class: ClassOf::Heap(class),
-        plain: None,
-    }))
-}
 
 /// The held AIR texel of `x`, `form.lanes` components of an image of sampled type `texel`: a
 /// `half` rounded exactly, half subnormals and the decoded NaN kept (`narrow::round_texel`), a
@@ -2784,10 +2662,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
     // the device's transfer.
     let texel = match r.raw {
         true => srgb_texel(fb, r.texel, texel, SRGB_TEXEL)?,
-        false => {
-            let half = half_class(cx, &r.image, r.texel);
-            from_image(fb, &decl, r.texel, texel, half)?
-        }
+        false => from_image(fb, &decl, r.texel, texel)?,
     };
     // A swizzled texture's swizzle at a storage slot, on the converted texel.
     let texel = match (r.storage_swizzle, r.image) {

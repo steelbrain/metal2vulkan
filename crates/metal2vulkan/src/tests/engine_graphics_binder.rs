@@ -1323,7 +1323,7 @@ fn opaque_black_borders_read_exactly_through_their_views() {
 /// with the view's mapping with `borderColorSwizzle` alone; without it the pair is refused.
 #[test]
 fn opaque_black_borders_follow_metal_s_texel_through_the_swizzle() {
-    use crate::device::requirements::{VkFeature, VkProperty};
+    use crate::device::requirements::VkFeature;
     use crate::metal::sampler::OpaqueBlackBorder as B;
     use metal::TextureSwizzle as T;
     let Some(bc) = fixture("sampling") else {
@@ -1369,8 +1369,8 @@ fn opaque_black_borders_follow_metal_s_texel_through_the_swizzle() {
         assert_eq!(border(&rgba), B::Stated, "{stem}");
         let f = dev.profile().fields();
         let has = |feature| f.enabled.features.contains(&feature);
-        let exact = f.enabled.properties.contains(&VkProperty::MetalSampler)
-            || (has(VkFeature::BorderColorSwizzle) && has(VkFeature::BorderColorSwizzleFromImage));
+        let exact =
+            has(VkFeature::BorderColorSwizzle) && has(VkFeature::BorderColorSwizzleFromImage);
         match plan(PixelFormat::RGBA8Unorm, argb) {
             Ok(plan) if exact => {
                 assert_eq!(border(&plan), B::Stated, "{stem}");

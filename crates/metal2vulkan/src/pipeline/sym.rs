@@ -763,24 +763,6 @@ pub enum SpecKey {
     /// that constant is 1. A slot bound to a texture that is not sparse (`MTLTexture.isSparse`),
     /// or to none, takes 0.
     ConstantLanes(SlotRef),
-    /// Boolean: the texture bound to the slot is in a format whose conversion to `half` is not
-    /// measured on a device that samples through Metal's own texture unit (default false; its
-    /// class, as `TexelFormat` states it, has no measured family, no 8-bit sRGB bit and no packed
-    /// field: `metal::texel_format::TexelFormat::unmeasured_on_metal_sampler`). A slot bound to
-    /// nothing takes false: its zero texel converts alike under every class. On such a device a
-    /// function notes its `half` conversion of the slot where it holds
-    /// (`PrecisionNote::HalfTexelConversion`), so the `TexelFormat` bits that only that note read
-    /// leave the pipeline's key.
-    UnmeasuredTexels(SlotRef),
-    /// Boolean: on a device that samples through Metal's own texture unit, the texture bound to
-    /// the slot converts every texel an image instruction hands back to a `half` result as that
-    /// `float` texel rounded to nearest even (default true): its class has no YCbCr field on the
-    /// grid `8192` (`metal::texel_format::TexelFormat::plain_on_metal_sampler`). A slot bound
-    /// to nothing takes true: its zero texel converts alike under every class. Where it holds, such
-    /// an access converts the instruction's own texel by the device's conversion, which Metal's
-    /// compiler may fold into the image instruction (`lower::texture::half`), and specialization
-    /// drops the class's routine; the class itself stays push data (`SpecKey::TexelFormat`).
-    PlainHalfTexels(SlotRef),
     /// The class of the format of the texture bound to the slot (`u32`, as `TexelFormat` states
     /// it: `metal::texel_format::texel_format`), read by a specialized note's test alone
     /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
@@ -832,46 +814,33 @@ pub enum SpecKey {
     /// not known, such a test
     /// holds. A slot bound to no sampler takes 0.
     BoundSamplerWord(SlotRef),
-    /// Boolean: a texture the stage's handles can name is of a two-plane YCbCr class (its
-    /// `metal::texel_format::TexelFormat::PACKED` field `YCbCr2048`, `YCbCr8192` or
-    /// `YCbCrExtended8192`): a heap member of the command reaching the stage, one it makes
-    /// resident (`BindShape::used`) or binds at a texture slot of the stage
-    /// (`bind::heap`'s members). Read by a specialized note's test alone
-    /// ([`SpecTest`](crate::pipeline::SpecTest)), as [`BoundSamplerWord`](Self::BoundSamplerWord)
-    /// is: a plan gives it (`BindingPlan::specialized_value`), and where it is not known such a
-    /// test holds. A texture the command neither names nor makes resident, which a handle loaded
-    /// from memory may still reach and whose read Metal leaves undefined, is not counted.
-    HeapYCbCrTextures(Stage),
     /// Two bits: 1 where a texture the stage's handles can name is one a heap holds by its raw
     /// texels alone (`bind::heap::heap_raw_form`: an unswizzled, not sparse texture of one sample
-    /// of a form of `ExtendedRange::HEAP_READ`, whose texels the function's `float` read, sample
-    /// or gather decodes by the device's arithmetic, `PrecisionNote::DevicePackConversion`), and 2
+    /// of a form of `ExtendedRange::HEAP_READ`, whose texels the function's `float` read, sample or
+    /// gather decodes by the device's arithmetic, `PrecisionNote::DevicePackConversion`), and 2
     /// where one such is of a form whose linear sample the function filters by the device's
     /// arithmetic (not a bfloat form, whose sample reads the nearest texel under either filter,
     /// `PrecisionNote::BicubicFilterArithmetic`): of the heap members of the command reaching the
-    /// stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and given by a plan, as that
-    /// is. A stage whose `float` read, sample, gather or query of a heap may meet such a texture
-    /// declares it as a constant (default 3), whose bit 1 gates the raw arms
-    /// (`lower::texture::heap_raw_form`): where it is 0 they are dead code at pipeline creation,
-    /// exactly, since no handle the command names then carries a raw form's class. A pipeline's
-    /// key carries it there, and a specialized note's test reads it from the key; elsewhere such a
-    /// test reads the plan's value, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures).
+    /// stage, a member it makes resident (`BindShape::used`) or binds at a texture slot of the
+    /// stage (`bind::heap`'s members), and given by a plan (`BindingPlan::specialized_value`). A
+    /// texture the command neither names nor makes resident, which a handle loaded from memory may
+    /// still reach and whose read Metal leaves undefined, is not counted. A stage whose `float`
+    /// read, sample, gather or query of a heap may meet such a texture declares it as a constant
+    /// (default 3), whose bit 1 gates the raw arms (`lower::texture::heap_raw_form`): where it is 0
+    /// they are dead code at pipeline creation, exactly, since no handle the command names then
+    /// carries a raw form's class. A pipeline's key carries it there, and a specialized note's test
+    /// reads it from the key; elsewhere such a test reads the plan's value, and where it is not
+    /// known such a test holds.
     HeapRawTextures(Stage),
     /// Four bits: the families of the float textures the stage's handles can name whose texel may
     /// hold a NaN a `half` write stores (`lower::texture::half_write_nans`), each a bit of
     /// `bind::heap::nan_family`: 1 a 16-bit float format, 2 a 32-bit float one, 4 a packed
     /// small float one (`RG11B10Float`, `RGB9E5Float`), 8 a float format of none of those and
     /// none whose texels hold no NaN (normalized, sRGB, extended-range); of the heap members of
-    /// the command reaching the stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and
-    /// read by a specialized note's test alone, given by a plan, as that is.
+    /// the command reaching the stage, as for [`HeapRawTextures`](Self::HeapRawTextures), and
+    /// read by a specialized note's test alone ([`SpecTest`](crate::pipeline::SpecTest)), given
+    /// by a plan, as [`BoundSamplerWord`](Self::BoundSamplerWord) is.
     HeapNanFamilies(Stage),
-    /// Boolean: a sampler state an argument buffer's sampler handle can name filters: one of the
-    /// bind state's argument samplers (`BindState::argument_samplers`, every live state, its
-    /// shape in `BindShape`) has a linear minification, magnification or mip filter, anisotropy,
-    /// or a cubic filter. Which state an argument buffer holds is in its memory, which no plan
-    /// reads. Read by a specialized note's test alone, given by a plan, as
-    /// [`HeapYCbCrTextures`](Self::HeapYCbCrTextures) is.
-    FilteringArgumentSampler,
     /// Boolean: an element that a kernel's `[[stage_in]]` fetch of a thread-position step reads
     /// in this dispatch region may lie past the first `2^32` bytes from its bind offset (default
     /// true). Each such element is the region's origin plus the thread's position over the step

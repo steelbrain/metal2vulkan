@@ -36,7 +36,7 @@ fn keys(families: &FamilyPlans) -> BTreeSet<SpecKey> {
         .texture
         .slots
         .values()
-        .filter(|s| s.declares_texel_format())
+        .filter(|s| s.texel_format)
         .map(|s| SpecKey::TexelFormat(s.slot))
         .collect()
 }

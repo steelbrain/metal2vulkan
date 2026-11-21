@@ -248,34 +248,13 @@ const MINIFIED_ZERO: f32 = 1.0 / 4096.0;
 /// nearest.
 const MINIFIED_NEAREST: f32 = 0.25;
 
-/// Whether constexpr sampler `words` used as `use_` is one that Metal's own sampler on `profile`
-/// (`DriverDeviation::MetalSampler`) filters anisotropically other than as Metal's `NotMipmapped`:
-/// handed anisotropy, without a mip filter, its two filters different on the device. Vulkan has no
-/// sampler without mipmapping, and no level clamp the device's sampler takes reads Metal's
-/// `NotMipmapped` footprint at `maxAnisotropy` 2 to 16 where the filters differ
-/// (`metal::sampler::vk_sampler`).
-fn own_not_mipmapped(
-    words: [u64; 2],
-    use_: SamplerUse,
-    profile: &crate::device::DeviceProfile,
-) -> Result<bool, Error> {
-    if !profile.takes_driver_deviation(crate::error::DriverDeviation::MetalSampler) {
-        return Ok(false);
-    }
-    let state = super::constexpr::state_of(words)?;
-    let device = super::constexpr::constexpr_desc(words, use_, profile)?;
-    Ok(state.mip_filter == MipFilter::None
-        && device.max_anisotropy.is_some()
-        && device.min_filter != device.mag_filter)
-}
-
 /// Whether sample `op` of a texture of `shape` (`image`) through static sampler `sampler` (`None`
 /// for an argument buffer's) takes Metal's anisotropic filter emulated (the module's reach), with
 /// its note recorded: `AnisotropicFilter` where it does, `DeviceAnisotropicFilter` where the
 /// sampler's anisotropy is known and the sample, filtered at an implicit level or with
 /// gradients, is out of reach; a runtime sampler slot's under its word's anisotropy alone. A
-/// device whose own sampler answers the sample, anisotropy included, takes neither: one that
-/// samples natively or through Metal's own sampler, with `samplerAnisotropy`.
+/// device whose own sampler answers the sample, anisotropy included, takes neither: one with
+/// `samplerAnisotropy`.
 /// `integer`: the texel class is an integer one (never filtered); `observed`: the function
 /// reads the sample's residency; `other_class`: the slot's variant binds a texture of another
 /// class (`LoweringInputs::cross_class`); `swizzled`: the slot swizzles its converted texels
@@ -307,12 +286,6 @@ pub(super) fn select(
     let cube = matches!(lod, Lod::CubeGrad(..));
     if anisotropy {
         cx.families.sampler.device_sampling = true;
-        if let Some(SamplerRef::Constexpr(words)) = sampler {
-            if own_not_mipmapped(words, use_, cx.profile)? {
-                cx.precision
-                    .insert(PrecisionNote::NotMipmappedAnisotropicFilter);
-            }
-        }
         return Ok(None);
     }
     let (degree, mip, device) = match sampler {
@@ -349,8 +322,8 @@ pub(super) fn select(
         && !other_class
         && !swizzled
         && matches!(image, ImageRef::Slot(_));
-    // Out of reach on Metal's own sampler, the device's filter is Metal's, at the footprint the
-    // cube's form hands it (`PrecisionNote::CubeGradientFootprint`).
+    // Out of reach, the device's filter, at the footprint the cube's form hands it
+    // (`PrecisionNote::CubeGradientFootprint`).
     if anisotropy && !reached {
         return Ok(None);
     }
@@ -486,14 +459,7 @@ pub(super) fn sample(
     match a.degree {
         Degree::Const(_) => {
             let x = filter(cx, fb, s, (key, a), &site, offset)?;
-            super::emit::texel_value(
-                cx,
-                fb,
-                s,
-                image,
-                (x, crate::lower::texture::half::TexelOrigin::Computed),
-                None,
-            )
+            super::emit::texel_value(cx, fb, s, image, x, None)
         }
         Degree::Slot(n) => {
             // The plain sample where the bound sampler's word states no anisotropy.
@@ -505,14 +471,7 @@ pub(super) fn sample(
             };
             let emulation: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
                 let x = filter(cx, fb, s, (key, a), &site, offset)?;
-                let x = super::emit::texel_value(
-                    cx,
-                    fb,
-                    s,
-                    image,
-                    (x, crate::lower::texture::half::TexelOrigin::Computed),
-                    None,
-                )?;
+                let x = super::emit::texel_value(cx, fb, s, image, x, None)?;
                 Ok(ArmEnd::FallThrough(vec![x]))
             });
             let device: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {

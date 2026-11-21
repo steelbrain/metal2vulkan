@@ -600,15 +600,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. A kernel whose threadgroup accesses only that lockstep orders,
     /// at a place no subgroup barrier may stand, requires it rather than emulated simdgroups.
     SimdgroupLockstep,
-    /// The device samples, filters, and converts texels through Metal's own sampler on Apple's
-    /// GPU (the driver's measured deviation
-    /// [`DriverDeviation::MetalSampler`](crate::error::DriverDeviation::MetalSampler)), so a
-    /// sample's footprint, weights, rounding, and sRGB decode are Metal's. No Vulkan query reports
-    /// it. A module that leaves a sample, gather or comparison to the device's sampler, or an
-    /// 8-bit sRGB texel to the device's decode, requires it on such a device, as a module on
-    /// another requires [`VkProperty::DeviceSampling`] and records
-    /// `PrecisionNote::DeviceSampling` (and `PrecisionNote::SrgbTexelDecode` for the decode).
-    MetalSampler,
     /// `storageImageSampleCounts` has this sample count: a multisampled shadow of the stencil.
     StorageImageSampleCount(u32),
     /// `supportedDepthResolveModes` (`VkPhysicalDeviceDepthStencilResolveProperties`, Vulkan 1.2)
@@ -693,10 +684,8 @@ pub enum VkProperty {
     /// format requires it; without it, the module records `PrecisionNote::DeviceColorConversion`.
     MetalNormStorageWrites,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
-    /// device's own sampler as a device that samples through Metal's
-    /// ([`VkProperty::MetalSampler`]) would, on a device that does not. No Vulkan query reports
-    /// it: the profile takes it wherever it lacks `VkProperty::MetalSampler`. A module that
-    /// leaves a sample to the device's sampler there requires it and records
+    /// device's own sampler. No Vulkan query reports it: every profile takes it. A module that
+    /// leaves a sample to the device's sampler requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,
     /// The device stores every unbiased depth a draw writes to a `Depth16Unorm` attachment as

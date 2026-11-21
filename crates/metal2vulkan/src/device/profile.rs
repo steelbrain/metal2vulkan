@@ -216,19 +216,10 @@ impl DeviceProfile {
     pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool {
         let f = &self.fields;
         match deviation {
-            DriverDeviation::CubeGradientRoute => {
-                f.cube_gradients.compute == CubeGradientRoute::Metal
-            }
-            DriverDeviation::GraphicsCubeGradientTangents => {
-                f.cube_gradients.graphics == CubeGradientRoute::AppleProjected
-            }
             DriverDeviation::SimdgroupLockstep => f
                 .enabled
                 .properties
                 .contains(&VkProperty::SimdgroupLockstep),
-            DriverDeviation::MetalSampler => {
-                f.enabled.properties.contains(&VkProperty::MetalSampler)
-            }
             DriverDeviation::MetalCenterVaryings => f
                 .enabled
                 .properties
@@ -462,61 +453,6 @@ pub struct ProfileFields {
     /// (`VkLimit::FunctionStorageBytesPerThread`), and a vertex or fragment function on a device
     /// not measured more ([`FunctionStorage::Assumed`]).
     pub function_storage: FunctionStorage,
-    /// How the driver hands a cube sample's explicit gradients to the GPU, in a graphics and in
-    /// a compute pipeline: Vulkan's cube derivative rule unless the driver is measured with
-    /// another (`DriverDeviation::CubeGradientRoute` and `GraphicsCubeGradientTangents`).
-    pub cube_gradients: CubeGradients,
-}
-
-/// How a driver hands a cube sample's explicit gradients to the GPU
-/// ([`ProfileFields::cube_gradients`]), per pipeline kind, each decided by the driver's measured
-/// deviations (`DriverDeviation::GraphicsCubeGradientTangents` and
-/// `DriverDeviation::CubeGradientRoute`); without them, Vulkan's rule, the device's own reading,
-/// on every driver.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CubeGradients {
-    /// A vertex or fragment function's.
-    pub graphics: CubeGradientRoute,
-    /// A kernel's.
-    pub compute: CubeGradientRoute,
-}
-
-/// The route of a cube sample's explicit gradients to the GPU ([`CubeGradients`]). Metal's
-/// footprint is the one the Apple M3 Max reads under macOS 27 (`lower::sampler::CubeFootprint`):
-/// each gradient's two tangent components on the face, its normal component dropped.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum CubeGradientRoute {
-    /// Vulkan's rule ("Cube Map Derivative Transformation") reads the footprint from them: the
-    /// function hands an isotropic sample Metal's length of the two tangent components on one
-    /// tangent, and an anisotropic one Metal's face gradients without their normal component
-    /// (`lower::sampler::CubeFootprint::Length` and `Face`); the level and the anisotropic filter
-    /// are the device's (`PrecisionNote::CubeGradientFootprint`). Also the route of a driver no
-    /// measurement covers (a MoltenVK release or GPU without the deviations), whose reading of
-    /// the form is its own.
-    Vulkan,
-    /// SPIRV-Cross's `spvGradientCube` (its `agx_manual_cube_grad_fixup`) projects each onto the
-    /// face as Vulkan's rule does and swizzles the two values, then hands them to Metal's
-    /// `gradientcube`, whose macOS 27 reading takes the face's two tangents of what it is handed: an `x` or `z` face's gradient without its normal component reaches Metal as its
-    /// own, exactly; on a `y` face the fixup writes the face's `x` tangent on both, so the function
-    /// hands Metal's length there, which keeps an isotropic sample's footprint and lays an
-    /// anisotropic one's ellipse on the diagonal (`lower::sampler::CubeFootprint::Projected`,
-    /// `PrecisionNote::CubeGradientFootprint`).
-    AppleProjected,
-    /// They reach Metal's `gradientcube` as given, which the GPU reads by Metal's own rule, so
-    /// the function hands Metal's own (`lower::sampler::CubeFootprint::Metal`).
-    Metal,
-}
-
-impl CubeGradients {
-    /// The route of a function of `stage`: a kernel's is the compute pipeline's.
-    pub fn route(self, stage: crate::pipeline::sym::Stage) -> CubeGradientRoute {
-        match stage {
-            crate::pipeline::sym::Stage::Kernel => self.compute,
-            _ => self.graphics,
-        }
-    }
 }
 
 /// The Function storage a thread holds correctly ([`DeviceProfile::function_storage`]), in bytes:

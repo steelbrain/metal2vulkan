@@ -802,12 +802,9 @@ pub struct AccessPlan {
     /// the ids as this states, and the heap's function-table array, or, on a device without the
     /// array's features, the stage's function-table snapshot, one more again.
     pub function_tables: Option<function_table::TableReads>,
-    /// A heap texture's access reads its texel class: the handle-table search carries the class's index
-    /// (`memory::handles::Lookup::Flagged`), so every heap handle carries it beside its element.
-    pub heap_class: bool,
     /// A heap texture's float write the function makes tests its texel class's index
-    /// (`lower::texture::emit`): the handle-table search carries the index, as under
-    /// [`heap_class`](Self::heap_class), but the module needs no table of the classes.
+    /// (`lower::texture::emit`): the handle-table search carries the index
+    /// (`memory::handles::Lookup::Flagged`), so every heap handle carries it beside its element.
     pub heap_class_index: bool,
     /// A heap storage access the function makes converts a member by its texel class and its
     /// red-blue order (`lower::texture::heap_storage_conversions`): the handle-table search
@@ -836,7 +833,7 @@ pub struct AccessPlan {
 impl AccessPlan {
     /// Whether the handle-table search carries each heap handle's texel class index.
     pub fn carries_class(&self) -> bool {
-        self.heap_class || self.heap_class_index
+        self.heap_class_index
     }
 
     /// What the function's handle-table search yields.

@@ -2329,9 +2329,8 @@ fn a_heap_texture_samples_through_a_runtime_sampler() {
 /// A cube's explicit gradients through a sampler loaded from an argument buffer: the sample takes
 /// Metal's footprint as a slot's does (`PrecisionNote::CubeGradientFootprint`), the isotropic or
 /// the anisotropic form by its table entry's word, through the set-1 sampler array of its own use,
-/// and the plan takes an anisotropic listed sampler for it (`engine_heap_binder`). On a driver that
-/// hands a compute pipeline's cube gradients to Metal's `gradientcube` (`CubeGradientRoute::Metal`)
-/// the kernel hands Metal's own, exactly, through any sampler: no note. Every profile with the
+/// and the plan takes an anisotropic listed sampler for it (`engine_heap_binder`). Every profile
+/// with the
 /// sampled heap compiles it and passes L3; it was `ArgumentBufferTextures NotImplemented` before.
 #[test]
 fn a_cube_gradient_through_an_argument_buffer_sampler_reads_its_own_sampler_array() {
@@ -2393,8 +2392,6 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
                 _ => None,
             })
             .collect();
-        let metal =
-            p.fields().cube_gradients.compute == crate::device::profile::CubeGradientRoute::Metal;
         assert_eq!(
             classes,
             vec![HandleClass::Sampler {
@@ -2403,9 +2400,8 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
             }],
             "{stem}"
         );
-        assert_eq!(
+        assert!(
             a.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            !metal,
             "{stem}"
         );
         compiled += 1;
@@ -2706,14 +2702,6 @@ const OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD: u16 = 90;
 const OP_IMAGE_GATHER: u16 = 96;
 const OP_IMAGE_DREF_GATHER: u16 = 97;
 
-/// Whether `p`'s device samples through Metal's own sampler, whose comparison is Metal's.
-fn metal_sampler(p: &DeviceProfile) -> bool {
-    p.fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler)
-}
-
 /// What [`heap_compare_kernel`] compares through, and [`heap_linear_kernel`] samples through: a
 /// constexpr sampler of these words, runtime sampler slot 0, or the sampler its argument buffer
 /// holds beside the texture.
@@ -3008,15 +2996,12 @@ define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out{param}, i32 %gid) {{
 
 /// A heap texture's linear sample, through a constexpr sampler of linear filters (2D and 3D), a
 /// runtime sampler slot, or the sampler its argument buffer holds, is the device's sample; the
-/// census names the sample by its source, and the module states no `TexelFormat`
-/// specialization. On a profile that samples through Metal's own sampler a 2D sample records the
-/// filter note only under what the command's handles can name (a two-plane YCbCr texture,
-/// `SpecKey::HeapYCbCrTextures`), never outright; a 3D one, whose class holds no two-plane
-/// texture, records none. A 2D sample through a constexpr or runtime sampler also emulates a raw-held
-/// texture's, in a branch on the class the handle carries (the search's flagged form, whose masks
-/// and table the census counts under `HEAP_CLASS_CENSUS`). Each validates; a profile without the
-/// sampled heap refuses each. (The interpreter models no sample; the runtime lane
-/// `argument_linear_samples` reads the values on each device.)
+/// census names the sample by its source, and the module states no `TexelFormat` specialization and
+/// records no `FloatSampleFilter`, outright or specialized. A 2D sample through a constexpr or
+/// runtime sampler also emulates a raw-held texture's, in a branch on the class the handle carries
+/// (the search's flagged form, whose masks and table the census counts under `HEAP_CLASS_CENSUS`).
+/// Each validates; a profile without the sampled heap refuses each. (The interpreter models no
+/// sample; the runtime lane `argument_linear_samples` reads the values on each device.)
 #[test]
 fn heap_linear_samples_are_the_device_s() {
     use crate::lower::texture::HEAP_CLASS_CENSUS;
@@ -3071,20 +3056,8 @@ fn heap_linear_samples_are_the_device_s() {
                 "{what}"
             );
             let filter = PrecisionNote::FloatSampleFilter;
-            assert_eq!(
-                a.precision.contains(&filter),
-                !three && metal_sampler(&p),
-                "{what}"
-            );
-            let clauses: Vec<_> = (a.specialized.iter())
-                .filter(|s| s.note == filter)
-                .flat_map(|s| &s.when)
-                .collect();
-            assert_eq!(clauses.is_empty(), three || !metal_sampler(&p), "{what}");
-            for c in clauses {
-                let heap = SpecKey::HeapYCbCrTextures(crate::pipeline::sym::Stage::Kernel);
-                assert!(c.all.iter().any(|t| t.key == heap), "{what}: {c:?}");
-            }
+            assert!(!a.precision.contains(&filter), "{what}");
+            assert!(!a.specialized.iter().any(|s| s.note == filter), "{what}");
             assert!(
                 !a.interface
                     .read_keys()
@@ -3152,15 +3125,12 @@ fn heap_plain_half_kernel(through: CompareThrough, gather: bool) -> String {
     out
 }
 
-/// A heap color texture's sample or gather with a `half` result converts the device's texel (or the
-/// fetched one) by the class its handle carries, as a slot's converts by its bound format's, on a
-/// profile that samples through Metal's own sampler (`VkProperty::MetalSampler`, whose `float`
-/// result the class's rule rounds as Metal does): the module calls the `half` routine once, with
-/// the class read from the handle's table, where the same access with a `float` result calls no
-/// routine. On any other profile the `half` texel is the device's conversion: no routine. The note
-/// stays: the class may be one whose conversion is not measured.
+/// A heap color texture's sample or gather with a `half` result is the device's texel (or the
+/// fetched one) rounded to nearest even, on every profile: the module calls no routine the same
+/// access with a `float` result does not, but the raw-held emulation's twin, and records
+/// `PrecisionNote::HalfTexelConversion`.
 #[test]
-fn heap_half_texels_convert_by_the_handle_s_class() {
+fn heap_half_texels_round_the_device_s_texel() {
     let cases = [
         (CompareThrough::Constexpr(NEAREST_EDGE), false),
         (CompareThrough::Constexpr(NEAREST_EDGE), true),
@@ -3189,11 +3159,10 @@ fn heap_half_texels_convert_by_the_handle_s_class() {
             // nearest tap both ways for a `half` result (a bfloat form's toward zero, another's
             // rounded): one call more than the `float` result's.
             let twin = usize::from(!gather && !matches!(through, CompareThrough::Argument));
-            let routine = usize::from(metal_sampler(&p));
             assert_eq!(
                 count(&a, OP_FUNCTION_CALL),
-                count(&f, OP_FUNCTION_CALL) + routine + twin,
-                "{what}: the half routine is called once, the float one where it converts"
+                count(&f, OP_FUNCTION_CALL) + twin,
+                "{what}: the float routine's calls, and the twin's"
             );
             let notes = &a.precision;
             assert!(

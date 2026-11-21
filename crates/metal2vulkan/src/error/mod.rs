@@ -490,33 +490,10 @@ pub enum Needs {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DriverDeviation {
-    /// How the driver hands a kernel's cube sample's explicit gradients to the GPU
-    /// (`ProfileFields::cube_gradients`'s compute route, `CubeGradientRoute::Metal`): as given, to
-    /// Metal's own reading. Unmeasured, the route is Vulkan's rule (`CubeGradientRoute::Vulkan`):
-    /// the function hands Metal's footprint in the form that rule reads, and the device's reading
-    /// of it is recorded as `PrecisionNote::CubeGradientFootprint`. A vertex or fragment
-    /// function's route is [`DriverDeviation::GraphicsCubeGradientTangents`].
-    CubeGradientRoute,
     /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as
     /// an Apple GPU runs a Metal simdgroup (`VkProperty::SimdgroupLockstep`). Unmeasured, a kernel
     /// that needs that order takes emulated simdgroups, exact.
     SimdgroupLockstep,
-    /// The device samples, filters and converts texels through Metal's own sampler
-    /// (`VkProperty::MetalSampler`), an 8-bit sRGB texel's decode included. Unmeasured, every
-    /// sample, gather, comparison and level query is the device's own sampler's all the same
-    /// (`VkProperty::DeviceSampling`), recorded as `PrecisionNote::DeviceSampling`, and every
-    /// read, sample, gather and input-attachment read of an sRGB texel the device's own decode,
-    /// recorded as `PrecisionNote::SrgbTexelDecode`. A `half` result is the device's `float`
-    /// texel rounded to nearest even either way; where the profile takes it the module records
-    /// `PrecisionNote::HalfTexelConversion` only for a class whose Metal `half` is not that
-    /// `float` rounded so.
-    MetalSampler,
-    /// How the driver hands a vertex or fragment function's cube sample's explicit gradients to
-    /// the GPU under macOS 27 (the graphics route, `CubeGradientRoute::AppleProjected`): through
-    /// SPIRV-Cross's `spvGradientCube`, whose result Metal reads by its macOS 27 rule, the face's
-    /// two tangents: an `x` or `z` face's gradient reaches it as Metal's own, a `y` face's `z`
-    /// tangent is lost. Unmeasured, as [`DriverDeviation::CubeGradientRoute`].
-    GraphicsCubeGradientTangents,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
     /// invocation, a sample-rate one's included, as Metal reads it

@@ -2036,12 +2036,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 .to_owned(),
         );
     }
-    if t.heap_half {
-        return Some(
-            "a sample or gather of an argument buffer's color texture with a half result"
-                .to_owned(),
-        );
-    }
     if let Some(s) = t.slots.values().find(|s| !s.identity_lowered()) {
         return Some(format!(
             "texture argument {:?}: a type the identity arrays hold no element of, or state of \
@@ -2124,25 +2118,20 @@ fn walk_construct_words(
 }
 
 /// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word or its
-/// `NearestPixelSampler` boolean, by the function's slot index, or a texture slot's
-/// `UnmeasuredTexels` boolean, or the class of the format bound at a texture slot, which no
-/// constant carries (`SpecKey::BoundTexelFormat`), or the whole word of the sampler bound at a
-/// sampler slot, which none carries either (`SpecKey::BoundSamplerWord`), or whether a texture a
-/// stage's handles can name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`) or held by its raw
-/// texels alone (`SpecKey::HeapRawTextures`), or the families of such textures whose texels may
-/// hold a NaN (`SpecKey::HeapNanFamilies`), or whether a sampler state an argument buffer can
-/// name filters (`SpecKey::FilteringArgumentSampler`), which the plan gives.
+/// `NearestPixelSampler` boolean, by the function's slot index, or the class of the format bound
+/// at a texture slot, which no constant carries (`SpecKey::BoundTexelFormat`), or the whole word
+/// of the sampler bound at a sampler slot, which none carries either (`SpecKey::BoundSamplerWord`),
+/// or whether a texture a stage's handles can name is held by its raw texels alone
+/// (`SpecKey::HeapRawTextures`), or the families of such textures whose texels may hold a NaN
+/// (`SpecKey::HeapNanFamilies`), which the plan gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NoteOn {
     Sampler(u32),
     NearestPixel(u32),
-    Unmeasured(u32),
     Bound(u32),
     BoundSampler(u32),
-    HeapYCbCr(Stage),
     HeapRaw(Stage),
     HeapNan(Stage),
-    ArgumentSamplers,
 }
 
 /// A test of one slot's specialization constant `v`: it holds where `(v & mask == bits) == equal`,
@@ -2208,10 +2197,6 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
         return None;
     }
     let key = match t.on {
-        NoteOn::Unmeasured(index) => {
-            let s = families.texture.slots.get(&index)?;
-            s.unmeasured.then_some(SpecKey::UnmeasuredTexels(s.slot))?
-        }
         // Read from the bound texture by the runtime, never a constant: every slot has one.
         NoteOn::Bound(index) => SpecKey::BoundTexelFormat(families.texture.slots.get(&index)?.slot),
         // Given by the plan from the bound sampler, never a constant: every runtime slot has one.
@@ -2219,10 +2204,8 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
             SpecKey::BoundSamplerWord(families.sampler.slots.get(&index)?.slot)
         }
         // Given by the plan from what the command's handles can name, never a constant.
-        NoteOn::HeapYCbCr(stage) => SpecKey::HeapYCbCrTextures(stage),
         NoteOn::HeapRaw(stage) => SpecKey::HeapRawTextures(stage),
         NoteOn::HeapNan(stage) => SpecKey::HeapNanFamilies(stage),
-        NoteOn::ArgumentSamplers => SpecKey::FilteringArgumentSampler,
         NoteOn::Sampler(index) => {
             let r = families.sampler.slots.get(&index)?;
             let fields = r.fields();

@@ -23,13 +23,14 @@ impl FunctionBuilder<'_> {
     /// kind's non-uniform indexing capability and feature. `base` must point to a `UniformConstant`
     /// array of images (not subpass data) or samplers, or a `StorageBuffer` array of blocks. The
     /// serializer decorates `NonUniform` the result and every value that carries the element to the
-    /// instruction consuming it (VUID-RuntimeSpirv-NonUniform-06274): a load of an image or sampler
-    /// element, an image texel pointer to it, a sampled image of a loaded element, the image of
-    /// such a sampled image, and a further access chain into a block element, which a load, a
-    /// store, an atomic, or `OpArrayLength` then reads through. The builder refuses every other use
-    /// of those values that would carry the element on (a phi, select, copy, store, composite part,
-    /// or call argument), and an image or sampler element is not indexable further. A value loaded
-    /// from a block element is data, which carries no element.
+    /// instruction consuming it (VUID-RuntimeSpirv-None-10148 and
+    /// VUID-RuntimeSpirv-subgroupSize-10149): a load of an image or sampler element, an image texel
+    /// pointer to it, a sampled image of a loaded element, the image of such a sampled image, and a
+    /// further access chain into a block element, which a load, a store, an atomic, or
+    /// `OpArrayLength` then reads through. The builder refuses every other use of those values that
+    /// would carry the element on (a phi, select, copy, store, composite part, or call argument),
+    /// and an image or sampler element is not indexable further. A value loaded from a block
+    /// element is data, which carries no element.
     pub fn access_chain_non_uniform(&mut self, base: Value, index: Value) -> BResult<Value> {
         const OP: crate::spv::Op = crate::spv::Op::AccessChain;
         let (class, pointee, f) = self.pointer(OP, base)?;

@@ -7,10 +7,8 @@
 //!   Vulkan's face orientation, `s` and `t` the axes of the face's `s_c` and `t_c` and `σ` their
 //!   signs, with `dPdx`'s `t` component and `dPdy`'s `s` component times `ρ = σ_s σ_t` through an
 //!   anisotropic sampler. Vulkan's cube derivative rule must read that from the `Face` form over
-//!   `2 |m_a|`, and nothing on the normal; the `Length` form must hand Metal's length of the two on
-//!   one tangent; and Metal's own reading must take an `x` or `z` face's gradients from what
-//!   MoltenVK's swizzle (SPIRV-Cross's `spvGradientCube`) makes of the `Projected` form, and a `y`
-//!   face's Metal length.
+//!   `2 |m_a|`, and nothing on the normal; and the `Length` form must hand Metal's length of the
+//!   two on one tangent.
 //!
 //! Through a runtime sampler `emit::word_footprint` hands one of those forms or the isotropic one
 //! by the sampler's word (`emit::by_anisotropy`).
@@ -62,25 +60,6 @@ fn metal_reading(g: [f32; 3], d: [f32; 3], is_dx: bool) -> [f32; 2] {
 fn metal_length(x: f32, y: f32) -> f32 {
     let (big, small) = (x.abs().max(y.abs()), x.abs().min(y.abs()));
     (big + small * 0.1875).max(big * 0.765_625 + small * 0.656_25)
-}
-
-/// SPIRV-Cross's `spvGradientCube` (MoltenVK's cube-gradient swizzle on an Apple GPU) of
-/// gradient `g` at direction `p`: the vector Apple's hardware is handed.
-fn swizzled(p: [f32; 3], g: [f32; 3]) -> [f32; 3] {
-    let a = p.map(f32::abs);
-    let x_major = a[0] >= a[1].max(a[2]);
-    let y_major = a[1] >= a[2];
-    let permute = |v: [f32; 3]| match (x_major, y_major) {
-        (true, _) => [v[1], v[2], v[0]],
-        (false, true) => [v[0], v[2], v[1]],
-        (false, false) => v,
-    };
-    let (q, dq) = (permute(p), permute(g));
-    let d = [dq[0] - q[0] / q[2] * dq[2], dq[1] - q[1] / q[2] * dq[2]];
-    match x_major {
-        true => [d[0], d[0], d[1]],
-        false => [d[0], d[1], d[0]],
-    }
 }
 
 /// Directions on each of the six faces, at the face's center and off it.
@@ -179,43 +158,6 @@ fn a_length_footprint_hands_metals_length_on_one_tangent() {
                 want.map(f32::to_bits),
                 "{d:?} {g:?}: handed {h:?}"
             );
-        }
-    }
-}
-
-/// Through MoltenVK's swizzle, Metal's macOS 27 reading (the face's two tangents of what it is
-/// handed) takes an `x` or `z` face's tangents of the `Projected` form as the gradient's own, and
-/// on a `y` face reads the same value on both tangents, whose Metal length is the gradient's
-/// within the five roundings between (`64/91`, its product, and the length's two products and
-/// sum).
-#[test]
-fn a_projected_footprint_reaches_metals_reading_through_the_fixup() {
-    let lanes = directions();
-    for g in GRADIENTS {
-        for is_dx in [true, false] {
-            for (d, h) in lanes
-                .iter()
-                .zip(handed_as(CubeFootprint::Projected, g, &lanes, is_dx))
-            {
-                let (a, (s, _), (t, _)) = face_of(*d);
-                assert_eq!(h[a], 0.0, "{d:?} {g:?}: the normal's component {h:?}");
-                let fixed = swizzled(*d, h);
-                if a == 1 {
-                    assert_eq!(fixed[s], fixed[t], "{d:?} {g:?}: handed {h:?}");
-                    let want = metal_length(g[s], g[t]);
-                    let got = metal_length(fixed[s], fixed[t]);
-                    assert!(
-                        (got - want).abs() <= 4.0 * want * f32::EPSILON,
-                        "{d:?} {g:?}: {got} for {want}"
-                    );
-                } else {
-                    assert_eq!(
-                        [fixed[s], fixed[t]],
-                        [g[s], g[t]],
-                        "{d:?} {g:?}: handed {h:?}"
-                    );
-                }
-            }
         }
     }
 }

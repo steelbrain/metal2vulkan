@@ -159,7 +159,6 @@ mod alpha;
 mod atomic;
 mod cooperative;
 mod emit;
-pub mod half;
 pub(crate) mod heap_raw;
 mod slice;
 mod slot;
@@ -169,11 +168,10 @@ pub(crate) use absent::absent_arm;
 pub use absent::ABSENT_ARM;
 pub use atomic::TexAtomic;
 pub(crate) use emit::{
-    constant_lanes, dispatch, half_class, heap_element, heap_flags, heap_half_class, heap_raw_form,
-    heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word, slot_image,
-    sparse_spec, srgb_raw_tap, srgb_texel, swizzled_float, swizzled_gather, swizzled_held,
-    tile_map, tiled_word, with_word, HeapFlags, NullLeaf, TileLevel, RGB9E5_WORDS,
-    SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
+    constant_lanes, dispatch, heap_element, heap_flags, heap_raw_form, heap_raw_image,
+    live_or_zero, reinterpret, resident_access, rgb9e5_word, slot_image, sparse_spec, srgb_raw_tap,
+    srgb_texel, swizzled_float, swizzled_gather, swizzled_held, tile_map, tiled_word, with_word,
+    NullLeaf, TileLevel, RGB9E5_WORDS, SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
 };
 pub use emit::{emit, held_texel, to_image};
 pub(crate) use slot::depth_comparison;
@@ -210,8 +208,8 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{SampledType, SlotClass, SlotRef};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{ConstId, DemoteTy, FuncId, GlobalId, TypeId, Value as SValue};
-use crate::spirv::ir::{BinOp, ConstBits, ExecMode, GlslOp, MemAccess, Type as SType};
+use crate::spirv::ids::{DemoteTy, FuncId, GlobalId, TypeId, Value as SValue};
+use crate::spirv::ir::{ConstBits, ExecMode, Type as SType};
 
 fn refuse() -> Error {
     Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture)).into()
@@ -397,8 +395,8 @@ pub(crate) const HEAP_UNREADABLE_WORDS: u32 = 24 + crate::memory::handles::INDEX
 /// the word's select outside the image, with its own in-bounds test where the shader has none; a
 /// read through a sampler's addressing ([`Through::words`]), and a heap element's border texels
 /// and the flags its uses then read from its handle-table entry
-/// (`memory::handles::INDEXED_FLAGS_WORDS`); a `half` texel's call of the conversion routine or
-/// exact rounding, or an sRGB texel's raw decode; the lanes Metal reads as constants; the
+/// (`memory::handles::INDEXED_FLAGS_WORDS`); a `half` texel's exact rounding, or an sRGB texel's
+/// raw decode; the lanes Metal reads as constants; the
 /// reinterpretation of another class's words; and each sibling of a heap read with its class test
 /// and branch, and a `half` read's merge of its arms' bits.
 fn read_words(r: &Read) -> u32 {
@@ -440,8 +438,6 @@ fn read_words(r: &Read) -> u32 {
             SRGB_DECODE_WORDS
         } else if r.extended.is_some() {
             crate::lower::arith::extended_range::DECODE_WORDS + r.texel.read_words()
-        } else if r.texel.conv == TexelConv::F16 {
-            half::CALL_WORDS.max(r.texel.read_words())
         } else {
             r.texel.read_words()
         };
@@ -988,9 +984,6 @@ pub struct TexturePlan {
     pub heap_groups: Option<HeapGroups>,
     /// Every heap group an operation uses, by group.
     pub heap: BTreeMap<u32, HeapPlan>,
-    /// Some heap color texture's sample or gather has a `half` result, which converts by the
-    /// class its handle carries (`emit::heap_half_class`): the module defines the `half` routine.
-    pub heap_half: bool,
     /// The results of the heap reads that decode a member of a form a heap reads
     /// (`ExtendedRange::HEAP_READ`): `false` a `float` one, `true` a `half` one. The module
     /// defines that decode's routine for each ([`heap_raw::define`]).
@@ -1071,24 +1064,11 @@ pub struct Declared {
     /// The tile map of each slot with a tile-map arm: a word view of its `ResourceKind::TileMap`
     /// binding.
     pub tile_maps: BTreeMap<u32, crate::memory::views::View>,
-    /// The `TexelFormat` specialization constant of each slot whose texels a read, gather, or
-    /// sample converts to a `half` result by the bound format's class.
-    pub half_format: BTreeMap<u32, ConstId>,
-    /// The module's routine of that conversion ([`half::define`]), defined once where a slot
-    /// takes it.
-    pub half_routine: Option<FuncId>,
-    /// The `PlainHalfTexels` specialization constant of each of those slots: whether the bound
-    /// class converts by the plain arm (`half` module docs).
-    pub plain_half: BTreeMap<u32, SValue>,
     /// The `TextureSwizzle` specialization constant of each texture buffer slot whose reads
     /// apply the bound texture buffer's swizzle, and of each storage slot of
     /// `LoweringInputs::swizzled_storage` whose reads and writes apply the bound texture's, or
     /// extended-range sampled slot of it whose reads, samples and gathers do.
     pub swizzle: BTreeMap<u32, SValue>,
-    /// The module's table of heap texel classes (`metal::texel_format::heap_classes`), a `Private`
-    /// `uint[]`, where a heap handle carries its class's index (`AccessPlan::heap_class`):
-    /// [`heap_texel_class`] reads it.
-    pub heap_classes: Option<GlobalId>,
     /// The module's routine decoding a heap member of a form a heap reads, for a `float` result
     /// (`false`) and a `half` one (`true`), each where a read takes it ([`heap_raw::define`]).
     pub heap_raw: BTreeMap<bool, FuncId>,
@@ -1336,37 +1316,16 @@ pub fn declare(
                 crate::memory::views::declare_at(mb, sym, crate::memory::views::ViewKind::Storage)?;
             d.tile_maps.insert(*index, view);
         }
-        if s.declares_texel_format() {
+        if s.texel_format {
             let u32_ = mb.ty(SType::Int {
                 width: 32,
                 signed: false,
             })?;
-            let c = mb.spec(
+            mb.spec(
                 crate::pipeline::sym::SpecKey::TexelFormat(s.slot),
                 u32_,
                 ConstBits(u64::from(crate::metal::texel_format::TexelFormat::OTHER.0)),
             )?;
-            d.half_format.insert(*index, c);
-        }
-        if s.unmeasured {
-            let b = mb.ty(SType::Bool)?;
-            mb.spec(
-                crate::pipeline::sym::SpecKey::UnmeasuredTexels(s.slot),
-                b,
-                ConstBits(0),
-            )?;
-        }
-        if s.half_format && d.half_routine.is_none() {
-            d.half_routine = Some(half::define(mb)?);
-        }
-        if s.half_format {
-            let b = mb.ty(SType::Bool)?;
-            let c = mb.spec(
-                crate::pipeline::sym::SpecKey::PlainHalfTexels(s.slot),
-                b,
-                ConstBits(1),
-            )?;
-            d.plain_half.insert(*index, mb.const_value(c)?);
         }
         if s.swizzle {
             let u32_ = mb.ty(SType::Int {
@@ -1431,96 +1390,7 @@ pub fn declare(
     for &half in &plan.families.texture.heap_raw {
         d.heap_raw.insert(half, heap_raw::define(mb, half)?);
     }
-    if plan.families.access.heap_class {
-        d.heap_classes = Some(declare_heap_classes(mb)?);
-    }
-    if plan.families.texture.heap_half && d.half_routine.is_none() {
-        d.half_routine = Some(half::define(mb)?);
-    }
     Ok(d)
-}
-
-/// Declare the module's table of heap texel classes: a `Private` `uint[N]` initialized with
-/// `metal::texel_format::heap_classes`, whose element `i` is the class index `i` names.
-fn declare_heap_classes(mb: &mut ModuleBuilder) -> BResult<GlobalId> {
-    let classes = crate::metal::texel_format::heap_classes();
-    let u32_ = mb.ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let len = mb.constant(crate::spirv::ir::Constant::Scalar {
-        ty: u32_,
-        bits: ConstBits(classes.len() as u64),
-    })?;
-    let arr = mb.ty(SType::Array {
-        elem: u32_,
-        len,
-        stride: None,
-    })?;
-    let mut parts = Vec::with_capacity(classes.len());
-    for &class in classes {
-        parts.push(mb.constant(crate::spirv::ir::Constant::Scalar {
-            ty: u32_,
-            bits: ConstBits(u64::from(class)),
-        })?);
-    }
-    let init = mb.constant(crate::spirv::ir::Constant::Composite {
-        ty: arr,
-        parts: parts.into(),
-    })?;
-    mb.plain_global(crate::spirv::ir::StorageClass::Private, arr, Some(init))
-}
-
-/// The words [`heap_texel_class`] emits, at most: the field's shift and mask, the clamp into the
-/// table, the access chain and the load, with their constants.
-pub(crate) const HEAP_CLASS_WORDS: u32 = 48;
-
-/// The words of the module's table of heap texel classes, counted once: a constant per class, the
-/// composite, the array type, and the variable.
-pub(crate) fn heap_classes_words() -> u64 {
-    16 + 4 * crate::metal::texel_format::heap_classes().len() as u64
-}
-
-/// The texel class (`metal::texel_format::TexelFormat`'s bits, a `u32`) of the heap texture
-/// whose handle's flags are `h` ([`heap_flags`]), of a module whose search carries the class's
-/// index ([`HANDLE_TEXEL_CLASS`](crate::memory::handles::HANDLE_TEXEL_CLASS)): the module's
-/// table's element at that index, clamped into the table. A null handle's, or a missed id's, is
-/// index 0, `TexelFormat::OTHER`.
-pub(crate) fn heap_texel_class(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    HeapFlags(h): HeapFlags,
-) -> BResult<SValue> {
-    use crate::memory::handles::HANDLE_TEXEL_CLASS;
-    let Some(table) = cx.decl.families.texture.heap_classes else {
-        return Err(cx.fail("a heap texel class without the module's table"));
-    };
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let k = |fb: &mut FunctionBuilder<'_>, v: u32| -> BResult<SValue> {
-        let c = fb.module().constant(crate::spirv::ir::Constant::Scalar {
-            ty: u32_,
-            bits: ConstBits(u64::from(v)),
-        })?;
-        fb.module().const_value(c)
-    };
-    let shift = k(fb, HANDLE_TEXEL_CLASS.trailing_zeros())?;
-    let mask = k(
-        fb,
-        HANDLE_TEXEL_CLASS >> HANDLE_TEXEL_CLASS.trailing_zeros(),
-    )?;
-    let last = crate::metal::texel_format::heap_classes()
-        .len()
-        .saturating_sub(1);
-    let last = k(fb, u32::try_from(last).unwrap_or(0))?;
-    let index = fb.binary(BinOp::ShiftRightLogical, h, shift)?;
-    let index = fb.binary(BinOp::BitwiseAnd, index, mask)?;
-    let index = fb.glsl(GlslOp::UMin, &[index, last])?;
-    let base = fb.module().global_value(table)?;
-    let at = fb.access_chain(base, &[index])?;
-    fb.load(at, MemAccess::default())
 }
 
 /// The set-1 runtime array of heap class `class`, of `decl`'s image type, for stage `stage`.
@@ -1639,85 +1509,6 @@ pub(crate) fn residency(cx: &mut SelectCx<'_>, at: InstId, image: ImageRef) -> R
     }
 }
 
-/// Whether an access with a `float` or `half` result reads one texel of one level, its value a
-/// texel's channels the device converted from their codes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum OneTexel {
-    /// Always: a read, a 2D gather, a pixel fetch, or a sample through a constexpr sampler that
-    /// reads one texel of one level (`lower::sampler::linear::unfiltered`).
-    Always,
-    /// Never: a sample through a constexpr sampler that filters, a bicubic sample, or a cube
-    /// gather (whose corner texels are made up).
-    Never,
-    /// Where runtime sampler slot `n`'s word states a sampler that reads one texel of one level
-    /// (its `SamplerState` specialization's filter fields, `SamplerWord::LINEAR_FILTER`).
-    Word(u32),
-    /// Where an argument buffer's sampler's word, its table entry's flags for handle `h`, states
-    /// one; no specialization decides it.
-    Heap(ValueId),
-    /// Where the word of the constexpr sampler at the element of a constexpr sampler array (of
-    /// this many elements) that the sampling's sampler handle names
-    /// (`lower::sampler::Source::HeapArray`, `ConstexprArray::words`) states one.
-    Table(u32),
-}
-
-/// A read, gather, or sample of `image`, of shape `shape`, with a `half` result, a sample where
-/// `sample` (a sample's and a pixel fetch's form: not a read's or a gather's). Its `half` is the
-/// device's `f32` texel rounded to nearest even (`narrow::round_texel`) on every device, recorded
-/// as `PrecisionNote::HalfTexelConversion` where Metal's `half` result may differ from it.
-///
-/// Where the device's texel is its own (`device`, [`device_texels`]: off Metal's own texture unit)
-/// the access records the note outright, a heap element's and a depth texture's too. On a device
-/// that samples through Metal's own texture unit (MoltenVK on Apple's GPU, whose `f32` texel is
-/// Metal's `float` result), a slot's color texture converts through the module's routine (`half`),
-/// which keeps a YCbCr field's ties away from zero on the grid `8192`, by the bound format's class
-/// (its `TexelFormat` specialization, `RuntimeFact::TexelFormat`); a heap color texture's sample or
-/// gather by the class its handle carries (its caller asks the routine). The note holds there
-/// where the bound class's `half` is not that `float` rounded to nearest even: a class measured in
-/// none of the families (the slot's `UnmeasuredTexels` specialization), a 16-bit normalized grid
-/// (`BicubicTexels::WIDE16`: three steps of each round twice), and a sample of a 32-bit float
-/// texel (`BicubicTexels::LINEAR`: Metal rounds toward zero, saturating), tests of the bound
-/// format the runtime announces at a draw or dispatch binding such a texture. A heap color
-/// texture's and a depth texture's access records it outright.
-pub(crate) fn half_texels(
-    cx: &mut SelectCx<'_>,
-    image: ImageRef,
-    shape: ImageShape,
-    sample: bool,
-    device: bool,
-    m: &mut Meter,
-) -> Result<(), Error> {
-    use crate::metal::bicubic::BicubicTexels as B;
-    let index = match image {
-        ImageRef::Slot(index) if !shape.depth && !device => index,
-        _ => {
-            cx.precision.insert(PrecisionNote::HalfTexelConversion);
-            return Ok(());
-        }
-    };
-    // The module requires the device's sampler to be Metal's.
-    cx.families.sampler.metal_sampler = true;
-    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-        s.unmeasured = true;
-    }
-    let mut when = vec![
-        [NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into(),
-        [NoteTest::differ(NoteOn::Bound(index), B::WIDE16, 0)].into(),
-    ];
-    // A sample of a 32-bit float texel.
-    if sample {
-        when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into());
-    }
-    cx.note_when(PrecisionNote::HalfTexelConversion, when, m)?;
-    let slot = slot_of(cx, index)?.slot;
-    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-        s.half_format = true;
-    }
-    cx.facts
-        .insert(crate::pipeline::facts::RuntimeFact::TexelFormat { slot });
-    Ok(())
-}
-
 /// Record that a `half` read, sample or gather of `image`, of shape `shape`, hands back the
 /// device's decode of a NaN texel: `PrecisionNote::DeviceNanEncoding`. Of a color texture slot,
 /// only where the class of the format bound there may hold a NaN (none of `TexelFormat::NAN_FREE`'s
@@ -1750,17 +1541,16 @@ pub(crate) fn half_texel_nans(
 }
 
 /// Record what a read, gather, or sample of `image`, of shape `shape`, with a `float` result that
-/// may read one texel (`one` not [`OneTexel::Never`]) answers on a profile without Metal's own
-/// sampler (`VkProperty::MetalSampler`, whose device value is Metal's): the device's conversion of
-/// the texel's codes, `PrecisionNote::DeviceTexelConversion`; of a heap's texture buffer, which no
-/// class reaches, a half-float texel's NaN the device's decode, `PrecisionNote::DeviceNanEncoding`.
+/// may read one texel (`one`) answers: the device's conversion of the texel's codes,
+/// `PrecisionNote::DeviceTexelConversion`; of a heap's texture buffer, which no class reaches, a
+/// half-float texel's NaN the device's decode, `PrecisionNote::DeviceNanEncoding`.
 pub(crate) fn float_texel_notes(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
-    one: OneTexel,
+    one: bool,
 ) {
-    if one == OneTexel::Never || !device_texels(cx) {
+    if !one {
         return;
     }
     let note = match image.heap() && shape.dim == ImageDim::Buffer {
@@ -1768,18 +1558,6 @@ pub(crate) fn float_texel_notes(
         false => PrecisionNote::DeviceTexelConversion,
     };
     cx.precision.insert(note);
-}
-
-/// Whether an access's `float` or `half` texel is the device's conversion: on a profile whose
-/// device does not sample through Metal's own texture unit (`VkProperty::MetalSampler`, whose value
-/// is Metal's and keeps the conversion). Every access of a kind agrees: the selection states a
-/// sample's `half` conversion on the access (`Sampling::half_texel`), which the emission follows.
-pub(crate) fn device_texels(cx: &SelectCx<'_>) -> bool {
-    !cx.profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler)
 }
 
 /// The address-mode map constexpr sampler `words` samples texture slot `index` under: the map
@@ -1819,9 +1597,7 @@ pub(crate) fn constexpr_address_map(
 /// sRGB view: the module records `PrecisionNote::SrgbTexelDecode` where the bound format's class
 /// is an sRGB one (`BicubicTexels::SRGB`, a test of the bound format that the runtime announces at
 /// a draw or dispatch binding such a texture), and outright for a heap element, whose format is
-/// never known. On a device that decodes through Metal's own texture unit
-/// (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) the device's decode is Metal's, so the
-/// module requires the property there instead of the note.
+/// never known.
 pub(crate) fn srgb_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -1857,23 +1633,15 @@ pub(crate) fn srgb_texels(
 
 /// An access that reads the device's decode of a texture that may be bound in an 8-bit sRGB
 /// format ([`srgb_texels`]): `PrecisionNote::SrgbTexelDecode` where texture slot `index` is bound
-/// in such a format, or outright for a heap element (`None`); on a device that decodes through
-/// Metal's own texture unit, the requirement of `VkProperty::MetalSampler` instead.
+/// in such a format, or outright for a heap element (`None`).
 fn device_decode(cx: &mut SelectCx<'_>, index: Option<u32>, m: &mut Meter) -> Result<(), Error> {
     use crate::metal::bicubic::BicubicTexels as B;
-    let metal = cx
-        .profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    match (metal, index) {
-        (true, _) => cx.families.sampler.metal_sampler = true,
-        (false, Some(index)) => {
+    match index {
+        Some(index) => {
             let srgb = NoteTest::equal(NoteOn::Bound(index), B::SRGB, B::SRGB);
             cx.note_when(PrecisionNote::SrgbTexelDecode, vec![[srgb].into()], m)?;
         }
-        (false, None) => {
+        None => {
             cx.precision.insert(PrecisionNote::SrgbTexelDecode);
         }
     }
@@ -2154,10 +1922,7 @@ fn heap_group(cx: &mut SelectCx<'_>, tex: Value, m: &mut Meter) -> Result<u32, E
 /// heap operation masks its handle to its element (an `OpBitwiseAnd`), and a read that selects the
 /// out-of-bounds alpha also tests that flag (an `OpBitwiseAnd` and an `OpINotEqual`), with their
 /// constants once; the census's for the strategy that asks for them, `texture.read_clamped.heap`
-/// where the alpha is carried, else [`HEAP_CLASS_CENSUS`]; with the module's table of heap texel classes
-/// ([`heap_classes_words`]) under [`HEAP_CLASS_CENSUS`] where a sample reads it. And the words of
-/// the `half` conversion routine (`half`), the census's for [`half::CENSUS_NAME`], where a slot
-/// takes it.
+/// where the alpha is carried, else [`HEAP_CLASS_CENSUS`].
 pub fn routine_words(
     texture: &TexturePlan,
     access: &crate::lower::access::AccessPlan,
@@ -2170,15 +1935,6 @@ pub fn routine_words(
         };
         (name, words)
     });
-    let classes = access
-        .heap_class
-        .then(|| (HEAP_CLASS_CENSUS, heap_classes_words()));
-    // The `half` conversion routine, once per module that defines it.
-    let half = texture
-        .slots
-        .values()
-        .any(|s| s.half_format)
-        .then_some((half::CENSUS_NAME, half::ROUTINE_WORDS));
     // The heap's raw decode, once per result type.
     let raw = (!texture.heap_raw.is_empty()).then(|| {
         (
@@ -2186,11 +1942,11 @@ pub fn routine_words(
             heap_raw::ROUTINE_WORDS * texture.heap_raw.len() as u64,
         )
     });
-    flags.into_iter().chain(classes).chain(half).chain(raw)
+    flags.into_iter().chain(raw)
 }
 
-/// The census name of the words a heap texel class costs: the module's table of classes and, where
-/// no other flag is carried, the masks of the heap handles.
+/// The census name of the words a heap texel class costs: where no other flag is carried, the masks
+/// of the heap handles.
 pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 
 /// What a `float` write to texture `image` (of storage class `class`) relies on or records where it
@@ -2982,8 +2738,7 @@ pub(crate) fn mark_result(cx: &mut SelectCx<'_>, image: ImageRef, form: TexelFor
 /// bound to a swizzled texture: the function applies the swizzle to the texels it reads there
 /// and undoes it on those it writes; or an extended-range sampled slot bound to one, whose decoded
 /// texels the function's reads, samples and gathers swizzle; or a packed normalized sampled slot
-/// bound to one on a device without Metal's own sampler, whose converted texels they swizzle. A
-/// heap element never is.
+/// bound to one, whose converted texels they swizzle. A heap element never is.
 pub(crate) fn swizzled_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
     let ImageRef::Slot(index) = image else {
         return Ok(false);
@@ -3444,12 +3199,13 @@ fn select_read_as(
     // decoded exactly to `f32`, which a `half` result rounds to nearest even, as Metal answers. A
     // read is one texel.
     let decoded = raw || srgb_codes || words;
+    // A `half` texel is the device's `f32` texel rounded to nearest even.
     if texel.conv == TexelConv::F16 && !decoded && extended.is_none() {
-        half_texels(cx, image, shape, false, device_texels(cx), m)?;
+        cx.precision.insert(PrecisionNote::HalfTexelConversion);
         half_texel_nans(cx, image, shape, m)?;
     }
     if texel.conv == TexelConv::F32 && !decoded && extended.is_none() {
-        float_texel_notes(cx, image, shape, OneTexel::Always);
+        float_texel_notes(cx, image, shape, true);
     }
     // A float read of a sampled heap group of one sample decodes a member of a form a heap reads
     // where its handle names one, from the group's unsigned integer class.

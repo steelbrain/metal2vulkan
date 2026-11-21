@@ -260,9 +260,9 @@ pub enum Inst {
     Undef,
     // ---- Memory (builder/ops/memory.rs) ----
     /// `OpAccessChain`. `non_uniform` marks an element of a descriptor array chosen by an index
-    /// that may differ between invocations: the result and every value that carries the element
-    /// on ([`Inst::carries_non_uniform`]) are decorated `NonUniform`
-    /// (VUID-RuntimeSpirv-NonUniform-06274), and derivation requires the array kind's non-uniform
+    /// that may differ between invocations: the result and every value that carries the element on
+    /// ([`Inst::carries_non_uniform`]) are decorated `NonUniform` (VUID-RuntimeSpirv-None-10148 and
+    /// VUID-RuntimeSpirv-subgroupSize-10149), and derivation requires the array kind's non-uniform
     /// indexing capability instead of its dynamic one.
     AccessChain {
         base: Value,
@@ -444,9 +444,9 @@ impl Inst {
     /// sampler, or sampled image): a non-uniform access chain or a chain into a block element one
     /// reached, an opaque load of one (the image or sampler), a texel pointer into one (an image
     /// atomic's pointer), a sampled image of such an image or sampler, and the image of such a
-    /// sampled image. Each result is decorated `NonUniform` (VUID-RuntimeSpirv-NonUniform-06274);
-    /// the builder refuses the other uses that would carry the element on. Data loaded from a block
-    /// element carries none.
+    /// sampled image. Each result is decorated `NonUniform` (VUID-RuntimeSpirv-None-10148 and
+    /// VUID-RuntimeSpirv-subgroupSize-10149); the builder refuses the other uses that would carry
+    /// the element on. Data loaded from a block element carries none.
     pub fn carries_non_uniform(&self, marked: impl Fn(Value) -> bool, opaque: bool) -> bool {
         match self {
             Inst::AccessChain {

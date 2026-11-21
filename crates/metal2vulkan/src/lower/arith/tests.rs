@@ -436,15 +436,6 @@ fn is_nan(f: Form, b: u64) -> bool {
     }
 }
 
-/// Whether `f32` bits `got` are the device's quantize's answer for the `half` value `want` (`f32`
-/// bits) below the smallest normal half: its signed zero. SPIR-V lets `OpQuantizeToF16` answer a
-/// zero there, and the interpreter's does (as NIR's `fquantize2f16`), so a module rounding by
-/// [`QuantizeForm::Device`] may answer it (`PrecisionNote::NativeHalfQuantize`).
-fn quantize_flush_of(got: u64, want: u64) -> bool {
-    let w = f32::from_bits(want as u32);
-    w != 0.0 && w.abs() < 2f32.powi(-14) && got == want & 0x8000_0000
-}
-
 fn is_zero(f: Form, b: u64) -> bool {
     f.is_float() && (b << 1) & mask(f.bits()) == 0
 }
@@ -4100,7 +4091,6 @@ mod convert_suffix;
 mod divide;
 mod fast;
 mod fused;
-mod half_texel;
 mod libm;
 mod narrow;
 mod pack;

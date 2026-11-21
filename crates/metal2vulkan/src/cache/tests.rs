@@ -740,28 +740,6 @@ fn the_version_267_members_round_trip() {
     assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
 }
 
-/// The member format version 326 appends encodes and decodes as itself: whether a texture slot's
-/// bound format has no family Metal's `half` conversion is measured for on a device sampling
-/// through Metal's own texture unit.
-#[test]
-fn the_version_326_member_round_trips() {
-    use crate::pipeline::sym::SpecKey;
-    let key = SpecKey::UnmeasuredTexels(SlotRef {
-        stage: Stage::Fragment,
-        class: SlotClass::Texture,
-        index: 7,
-    });
-    assert_eq!(decode::<SpecKey>(&encode(&key)), Ok(key));
-    assert_ne!(
-        encode(&key),
-        encode(&SpecKey::ConstantLanes(SlotRef {
-            stage: Stage::Fragment,
-            class: SlotClass::Texture,
-            index: 7,
-        }))
-    );
-}
-
 /// The member format version 374 appends encodes and decodes as itself: the axes on which a texture
 /// slot's bound view's parent's base-level size, which Metal's texel-offset rule reads, is not a
 /// power of two where the view's own is.
@@ -838,14 +816,13 @@ fn the_version_535_member_round_trips() {
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
 /// `CombinedSampler`, `RuntimeFact::InterlockedFramebufferFetch` and
 /// `GraphicsState::storage_attachments`, `SpecKey::TexelFormat`, `RuntimeFact::TexelFormat` and
-/// `SrgbTexture`, `VkProperty::MetalSampler`, and `PrecisionNote::HalfTexelConversion`,
+/// `SrgbTexture`, and `PrecisionNote::HalfTexelConversion`,
 /// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
 /// `HandleClass::Sampler { compare, integer }` and
 /// `SyntheticBinding::SamplerTable`, and `RuntimeFact::UlongAtomicView`, each beside the others
 /// rather than only on its own side's fixtures.
 #[test]
 fn the_merged_members_round_trip_in_one_render_pipeline() {
-    use crate::device::requirements::VkProperty;
     use crate::pipeline::artifact::{PrecisionNote, RuntimeDependency, SpecConstant};
     use crate::pipeline::facts::{Mechanism, RuntimeFact};
     use crate::pipeline::graphics::StorageAttachmentUse;
@@ -891,7 +868,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         default: 0,
         unread_bits: 0,
     });
-    p.requirements.properties.insert(VkProperty::MetalSampler);
     let set = p.layout.sets.len() as u32;
     p.layout.sets.push(DescriptorSetLayout {
         set,
@@ -1011,10 +987,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         .constants
         .iter()
         .any(|c| c.key == SpecKey::TexelFormat(texture)));
-    assert!(sealed
-        .requirements
-        .properties
-        .contains(&VkProperty::MetalSampler));
     let bindings = sealed.layout.sets.last().map(|s| &s.bindings[..]);
     assert!(matches!(
         bindings.map(|b| &b[0].source),

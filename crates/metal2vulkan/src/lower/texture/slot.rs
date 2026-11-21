@@ -238,19 +238,9 @@ pub struct SlotPlan {
     /// function's writes to a sparse texture (`RuntimeFact::SparseTextureWrites`), set by
     /// [`finish`].
     pub sparse_writes: bool,
-    /// A read, gather, or sample converts the slot's texels to a `half` result by the bound
-    /// format's class, which the slot's `TexelFormat` specialization gives
-    /// (`RuntimeFact::TexelFormat`, `half`).
-    pub half_format: bool,
-    /// The slot declares its `TexelFormat` specialization without the conversion routine: a raw
-    /// linear sample reads the bound format's channels from it (`RuntimeFact::TexelFormat`).
-    /// Implied by `half_format`.
+    /// The slot declares its `TexelFormat` specialization: a raw linear sample reads the bound
+    /// format's channels from it (`RuntimeFact::TexelFormat`).
     pub texel_format: bool,
-    /// A `half` conversion of the slot on a device that samples through Metal's own texture unit
-    /// notes the bound format where its class is unmeasured there
-    /// (`TexelFormat::unmeasured_on_metal_sampler`): the slot declares its `UnmeasuredTexels`
-    /// specialization, which the note's clause tests.
-    pub unmeasured: bool,
     /// A read of the slot, a texture buffer, applies the bound texture buffer's swizzle, which
     /// the slot's `TextureSwizzle` specialization gives (`RuntimeFact::TextureSwizzle`); or the
     /// slot, a storage slot of `LoweringInputs::swizzled_storage`, applies the bound texture's to
@@ -298,9 +288,7 @@ impl SlotPlan {
             sparse_arm: false,
             tile_map: false,
             sparse_writes: false,
-            half_format: false,
             texel_format: false,
-            unmeasured: false,
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
@@ -309,12 +297,6 @@ impl SlotPlan {
             not_parts: false,
             decl: None,
         }
-    }
-
-    /// Whether the slot declares its `TexelFormat` specialization: a conversion by the bound
-    /// format's class takes it.
-    pub fn declares_texel_format(&self) -> bool {
-        self.half_format || self.texel_format
     }
 
     /// Whether the slot is a storage image or storage texel buffer.
@@ -1772,8 +1754,7 @@ impl SlotPlan {
         let state = self.sparse_arm
             || self.tile_map
             || self.sparse_writes
-            || self.declares_texel_format()
-            || self.unmeasured
+            || self.texel_format
             || self.swizzle
             || self.constant_lanes
             || self.offset_base;

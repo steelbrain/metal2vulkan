@@ -707,10 +707,10 @@ fn non_uniform_descriptor_array_elements() {
 }
 
 /// A non-uniform element reaches the instruction consuming it decorated through every value that
-/// carries it (VUID-RuntimeSpirv-NonUniform-06274): the chain, its loaded image, a sampled image
-/// of that image and the sampled image's `OpImage`, and an image texel pointer an atomic uses.
-/// The builder refuses the uses that would carry one undecorated (a call argument, a composite
-/// part).
+/// carries it (VUID-RuntimeSpirv-None-10148 and VUID-RuntimeSpirv-subgroupSize-10149): the chain,
+/// its loaded image, a sampled image of that image and the sampled image's `OpImage`, and an image
+/// texel pointer an atomic uses. The builder refuses the uses that would carry one undecorated (a
+/// call argument, a composite part).
 #[test]
 fn non_uniform_elements_are_decorated_through_what_carries_them() {
     use crate::pipeline::sym::{HandleClass, ImageAccess, ImageDim, ImageHandleClass};

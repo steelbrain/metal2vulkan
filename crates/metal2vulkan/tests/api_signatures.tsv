@@ -9353,7 +9353,6 @@ variant	metal2vulkan-runtime::PrecisionNote::NativeMinMax	NativeMinMax
 variant	metal2vulkan-runtime::PrecisionNote::NativeMix	NativeMix
 variant	metal2vulkan-runtime::PrecisionNote::NativeNanEncoding	NativeNanEncoding
 variant	metal2vulkan-runtime::PrecisionNote::NativeTranscendentals	NativeTranscendentals
-variant	metal2vulkan-runtime::PrecisionNote::NotMipmappedAnisotropicFilter	NotMipmappedAnisotropicFilter
 variant	metal2vulkan-runtime::PrecisionNote::PixelSamplerScaling	PixelSamplerScaling
 variant	metal2vulkan-runtime::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard
 variant	metal2vulkan-runtime::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
@@ -10272,7 +10271,6 @@ variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWri
 variant	metal2vulkan::device::VkProperty::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::device::VkProperty::MetalSampler	MetalSampler
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::device::VkProperty::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
@@ -10421,8 +10419,6 @@ variant	metal2vulkan::error::DescriptorError::VertexAmplificationCount	VertexAmp
 variant	metal2vulkan::error::DescriptorError::VertexAttribute	VertexAttribute { attribute: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexLayout	VertexLayout { layout: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { step_rate: u32 }
-variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
-variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
 variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::error::DriverDeviation::MetalDepth16BiasedStores	MetalDepth16BiasedStores
@@ -10436,7 +10432,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexe
 variant	metal2vulkan::error::DriverDeviation::MetalInterpolation	MetalInterpolation
 variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::error::DriverDeviation::MetalSampler	MetalSampler
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::error::DriverDeviation::SimdgroupLockstep	SimdgroupLockstep
@@ -10938,7 +10933,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::NativeMinMax	NativeMinMax
 variant	metal2vulkan::pipeline::PrecisionNote::NativeMix	NativeMix
 variant	metal2vulkan::pipeline::PrecisionNote::NativeNanEncoding	NativeNanEncoding
 variant	metal2vulkan::pipeline::PrecisionNote::NativeTranscendentals	NativeTranscendentals
-variant	metal2vulkan::pipeline::PrecisionNote::NotMipmappedAnisotropicFilter	NotMipmappedAnisotropicFilter
 variant	metal2vulkan::pipeline::PrecisionNote::PixelSamplerScaling	PixelSamplerScaling
 variant	metal2vulkan::pipeline::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard
 variant	metal2vulkan::pipeline::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
@@ -11178,11 +11172,9 @@ variant	metal2vulkan::pipeline::SpecKey::BoundSamplerWord	BoundSamplerWord(SlotR
 variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::DeepThreadgroup	DeepThreadgroup
-variant	metal2vulkan::pipeline::SpecKey::FilteringArgumentSampler	FilteringArgumentSampler
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
 variant	metal2vulkan::pipeline::SpecKey::HeapNanFamilies	HeapNanFamilies(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapRawTextures	HeapRawTextures(Stage)
-variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrTextures	HeapYCbCrTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight
 variant	metal2vulkan::pipeline::SpecKey::ImageblockWidth	ImageblockWidth
 variant	metal2vulkan::pipeline::SpecKey::LocalSize	LocalSize(Axis)
@@ -11193,7 +11185,6 @@ variant	metal2vulkan::pipeline::SpecKey::ObjectLocalSize	ObjectLocalSize(Axis)
 variant	metal2vulkan::pipeline::SpecKey::ObjectMultiRegion	ObjectMultiRegion
 variant	metal2vulkan::pipeline::SpecKey::OffsetBaseAxes	OffsetBaseAxes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::OutOfBoundsAlpha	OutOfBoundsAlpha(SlotRef)
-variant	metal2vulkan::pipeline::SpecKey::PlainHalfTexels	PlainHalfTexels(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::Presence	Presence(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::RangeAtBindOffset	RangeAtBindOffset(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::RenderAreaHeight	RenderAreaHeight
@@ -11210,7 +11201,6 @@ variant	metal2vulkan::pipeline::SpecKey::TgLength	TgLength(u32)
 variant	metal2vulkan::pipeline::SpecKey::TgOffset	TgOffset(u32)
 variant	metal2vulkan::pipeline::SpecKey::TileGridWidth	TileGridWidth
 variant	metal2vulkan::pipeline::SpecKey::TileThreadgroupLength	TileThreadgroupLength
-variant	metal2vulkan::pipeline::SpecKey::UnmeasuredTexels	UnmeasuredTexels(SlotRef)
 variant	metal2vulkan::pipeline::Stage::Fragment	Fragment
 variant	metal2vulkan::pipeline::Stage::Kernel	Kernel
 variant	metal2vulkan::pipeline::Stage::Mesh	Mesh

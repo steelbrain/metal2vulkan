@@ -299,12 +299,10 @@ fn an_srgb_swizzle_across_alpha_swizzles_in_the_function_on_a_twin() {
 /// class (an `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's). Under the
 /// variant every access decodes what the twin's view reads by the MSL transfer through the
 /// device's `Pow`, declaring no table, and notes `SrgbTexelDecode` outright, on both devices. No
-/// access records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter`, states
-/// `RuntimeFact::TexelFormat` or requires `VkProperty::MetalSampler`. Every form validates on both
-/// devices.
+/// access records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter` or
+/// states `RuntimeFact::TexelFormat`. Every form validates on both devices.
 #[test]
 fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
-    use crate::device::requirements::VkProperty;
     let nearest = sampler_words(0, 0, false);
     let linear = sampler_words(1, 0, false);
     let bicubic = sampler_words(2, 0, false);
@@ -391,12 +389,6 @@ fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
                 assert_eq!(
                     takes_pow(&a.module.words),
                     variant && name != "gather alpha half",
-                    "{what}"
-                );
-                assert!(
-                    !a.requirements
-                        .properties
-                        .contains(&VkProperty::MetalSampler),
                     "{what}"
                 );
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -865,11 +857,10 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
 
 /// A `half` sample the device decodes and filters (a linear one with a linear mip filter)
 /// rounds the device's `f32` texel to nearest even: on lavapipe and MoltenVK, whose decode and
-/// conversion are the device's, the pipeline requires no `VkProperty::MetalSampler` and records
-/// `PrecisionNote::HalfTexelConversion` outright, which holds under every bound format.
+/// conversion are the device's, the pipeline records `PrecisionNote::HalfTexelConversion`
+/// outright, which holds under every bound format.
 #[test]
 fn the_device_s_srgb_decode_converts_to_half_noted() {
-    use crate::device::requirements::VkProperty;
     let Some(bc) = assemble(
         "mip linear half",
         &kernel(Access::Sample(sampler_words(1, 2, false)), true),
@@ -883,12 +874,6 @@ fn the_device_s_srgb_decode_converts_to_half_noted() {
         }
         seen += 1;
         let p = pipeline(&dev, &bc, &inputs(false));
-        assert!(
-            !p.requirements
-                .properties
-                .contains(&VkProperty::MetalSampler),
-            "{stem}"
-        );
         for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::BGRA8UnormSRGB] {
             let plan = p.plan(&dev, &state(Some(pf)).shape()).expect("plan");
             assert!(plan.variant.srgb_textures.is_empty(), "{stem} {pf:?}");

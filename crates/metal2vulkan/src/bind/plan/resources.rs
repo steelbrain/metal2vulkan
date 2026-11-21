@@ -1358,14 +1358,13 @@ impl ResourcePlanner<'_> {
                 // move onto another channel's lane before the function converts it, so its
                 // class would drop the field and a read, gather or one-texel sample keep the
                 // device's widening of a 4-, 5- or 6-bit code (NVIDIA's and ANV's replicate its
-                // bits, where Metal answers `c / (2^b - 1)`): on a device
-                // that does not sample through Metal's own sampler, the function converts the
+                // bits, where Metal answers `c / (2^b - 1)`): the function converts the
                 // unswizzled texel by the format's whole class and swizzles it, under the same
                 // variant, and the view takes none.
                 let reads_packed = !storage
                     && extended.is_none()
                     && (t.access.read || t.access.sample)
-                    && swizzled_packed(self.profile, pixel_format, swizzle);
+                    && swizzled_packed(pixel_format, swizzle);
                 let decodes_srgb = !storage
                     && (t.access.read || t.access.sample)
                     && self.swizzles_decoded_srgb(slot, pixel_format, swizzle);
@@ -1841,7 +1840,7 @@ impl ResourcePlanner<'_> {
                     // variant (`texture_write`'s `reads_packed`): its sampler reads the
                     // unswizzled texture's border texel, which the function swizzles.
                     let shader_swizzle = !swizzle.is_default()
-                        && (swizzled_packed(self.profile, pixel_format, swizzle)
+                        && (swizzled_packed(pixel_format, swizzle)
                             || self.swizzles_decoded_srgb(texture, pixel_format, swizzle));
                     if shader_swizzle {
                         self.variant.swizzled_storage.insert(texture);
@@ -2077,36 +2076,6 @@ impl ResourcePlanner<'_> {
         u64::from(class)
     }
 
-    /// The `UnmeasuredTexels(slot)` specialization: 1 where a texture or texture buffer is bound
-    /// at `slot` and its class ([`texel_format`](Self::texel_format)) is unmeasured on a device
-    /// that samples through Metal's own texture unit
-    /// (`TexelFormat::unmeasured_on_metal_sampler`), else 0, a slot bound to nothing's among
-    /// them, and one bound to a placeholder format, which reads its neutral (its zero texel
-    /// converts alike under every class).
-    pub fn unmeasured_texels(&self, slot: SlotRef) -> u64 {
-        match self.texture_shape(slot) {
-            Some(shape) if shape.pixel_format() != crate::metal::PixelFormat::Invalid => {
-                u64::from(TexelFormat(self.texel_format(slot) as u32).unmeasured_on_metal_sampler())
-            }
-            _ => 0,
-        }
-    }
-
-    /// The `PlainHalfTexels(slot)` specialization: 1 where the class of the texture or texture
-    /// buffer bound at `slot` ([`texel_format`](Self::texel_format)) converts every texel to
-    /// `half` as its `float` value rounded to nearest even on a device that samples through
-    /// Metal's own texture unit (`TexelFormat::plain_on_metal_sampler`), else 0; 1 for a slot
-    /// bound to nothing and one bound to a placeholder format (its zero texel converts alike
-    /// under every class).
-    pub fn plain_half_texels(&self, slot: SlotRef) -> u64 {
-        match self.texture_shape(slot) {
-            Some(shape) if shape.pixel_format() != crate::metal::PixelFormat::Invalid => {
-                u64::from(TexelFormat(self.texel_format(slot) as u32).plain_on_metal_sampler())
-            }
-            _ => 1,
-        }
-    }
-
     /// The `TextureSwizzle(slot)` specialization: the swizzle of the texture buffer bound at
     /// `slot`, as its word, which the function applies to its reads, or of the texture bound at a
     /// storage slot of the plan's `VariantKey::swizzled_storage`, which it applies to its reads and
@@ -2136,20 +2105,9 @@ impl ResourcePlanner<'_> {
 /// (`VariantKey::swizzled_storage`) on `profile`'s device: a packed normalized format
 /// (`TexelFormat::packed_exact`), whose texel the function converts by each channel's own code
 /// scale, under a swizzle that reads some texel as no unswizzled texture does
-/// (`reads_unswizzled`), on a device that does not sample through Metal's own sampler (where the
-/// device's sample is Metal's, swizzle and all, `VkProperty::MetalSampler`).
-fn swizzled_packed(
-    profile: &DeviceProfile,
-    pf: PixelFormat,
-    swizzle: TextureSwizzleChannels,
-) -> bool {
-    !profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler)
-        && texel_format(pf).packed_exact()
-        && !reads_unswizzled(pf, swizzle)
+/// (`reads_unswizzled`).
+fn swizzled_packed(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> bool {
+    texel_format(pf).packed_exact() && !reads_unswizzled(pf, swizzle)
 }
 
 #[cfg(test)]

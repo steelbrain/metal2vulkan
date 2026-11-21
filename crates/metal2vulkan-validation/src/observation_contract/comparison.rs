@@ -153,8 +153,6 @@ impl UlpTable {
 ///   whole primitives, not lanes.
 /// - `UnmeasuredGroupSpeculation`: unbounded: a quad or simdgroup operation answering over other
 ///   lanes reads another lane's value, which differs from Metal's by any amount.
-/// - `NotMipmappedAnisotropicFilter`: unbounded: another anisotropic footprint reads other texels,
-///   which differ from Metal's by up to the texture's range.
 /// - `DeviceSampleLevel`: unbounded: another level or filter near a boundary reads other texels,
 ///   which differ from Metal's by up to the texture's range, and an LOD query answers the device's
 ///   level.
@@ -190,17 +188,15 @@ impl UlpTable {
 /// - `HalfTexelConversion`: unbounded: a format whose conversion to `half` is not measured keeps
 ///   the device's quantize of its `f32` texel, so a lane can differ from Metal's by any amount (an
 ///   sRGB texel's decode).
-/// - `HalfSampleFilter`: unbounded: a filtered `half` sample of a two-plane YCbCr texture through
-///   Metal's own sampler (MoltenVK) filters the converted texels as an `RGBA16Float` or
-///   `RGBA32Float` texture's, off the format's grid; one step of the grid was measured on one chip
-///   and format, which no tolerance is derived from.
+/// - `HalfSampleFilter`: unbounded: a filtered `half` sample of a two-plane YCbCr texture whose
+///   planes the function reads in place blends the codes by Vulkan's Y′CbCr model, off Metal's
+///   sum on the format's grid, which no tolerance is derived from.
 /// - `SrgbTexelDecode`: unbounded: an 8-bit sRGB texel the device decodes where Metal decodes its
 ///   raw code through a twelve-bit table; Vulkan bounds the device's decode only by its precision
 ///   rules, and Metal's `float` gathers of sRGB texels are not measured.
-/// - `FloatSampleFilter`: unbounded: a filtered `float` sample of a two-plane YCbCr texture through
-///   Metal's own sampler (MoltenVK) filters the converted texels as an `RGBA16Float` or
-///   `RGBA32Float` texture's, off the format's grid; one step of the grid was measured on one chip
-///   and format, which no tolerance is derived from.
+/// - `FloatSampleFilter`: unbounded: a filtered `float` sample of a two-plane YCbCr texture whose
+///   planes the function reads in place blends the codes by Vulkan's Y′CbCr model, off Metal's
+///   sum on the format's grid, which no tolerance is derived from.
 /// - `QuadsCountedBeforeDiscard`: unbounded: a non-quad simdgroup operation before a discard, in a
 ///   shape whose placement by Metal's compiler is not known, takes, among its lanes, the quads the
 ///   discard drops, which moves a count, a ballot, or a reduction by whole lanes.
@@ -284,7 +280,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::TessellationFractionalSpacing
         | N::TessellationTriangleOrder
         | N::UnmeasuredGroupSpeculation
-        | N::NotMipmappedAnisotropicFilter
         | N::DeviceSampleLevel
         | N::UnmeasuredFetchBlend
         | N::Fp8Value

@@ -1191,7 +1191,7 @@ fn swizzled_views_read_metal_s_opaque_black_border() {
                     | FormatEmulation::AlphaInRed
             )
         }) {
-            let device = crate::metal::sampler::device_opaque_black(c.format, c.components, false);
+            let device = crate::metal::sampler::device_opaque_black(c.components);
             // Metal's: alpha 1, the color's or a missing channel's, but `A8Unorm`'s, the red,
             // and `ARGB8Unorm`'s, whose border passes through its byte rotation: blue 1
             // (measured on the M3 Max, and an M4).

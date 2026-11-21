@@ -1,10 +1,9 @@
 //! Emission of the sampling strategies.
 
 use crate::lower::emit::EmitCx;
-use crate::lower::texture::half::TexelOrigin;
 use crate::lower::texture::{
-    half_class, heap_element, held_texel, live_or_zero, resident_access, sparse_spec, tile_map,
-    tiled_word, with_word, ImageRef,
+    heap_element, held_texel, live_or_zero, resident_access, sparse_spec, tile_map, tiled_word,
+    with_word,
 };
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, Merged};
 use crate::spirv::builder::ops::image::ArmedOffset;
@@ -459,29 +458,12 @@ fn scaled_axis_gradients(
 ///   component is zero as `∂s_c / (2 |m_a|)` and `∂t_c / (2 |m_a|)`, so the device reads Metal's
 ///   length whatever its approximation of a vector's (one component is nonzero); its level is its
 ///   own logarithm of it, where Metal's piecewise-linear one minifies only past a footprint of
-///   `1 + 3/2048` (`PrecisionNote::CubeGradientFootprint`). Every known route reads the one
-///   component alike, so a route not measured takes it too (but for a `y` face through
-///   [`CubeFootprint::Projected`]'s fixup, which reads it on both tangents).
+///   `1 + 3/2048` (`PrecisionNote::CubeGradientFootprint`).
 /// - [`CubeFootprint::Face`] (an anisotropic sampler): each gradient with its normal component
 ///   zeroed and Metal's mirroring applied, `(0, ρ g_y, g_z)` and `(0, g_y, ρ g_z)` on an `x` face,
 ///   `(g_x, 0, ρ g_z)` and `(ρ g_x, 0, g_z)` on a `y` face, `(g_x, ρ g_y, 0)` and `(ρ g_x, g_y, 0)`
 ///   on a `z` face (`dPdx`'s and `dPdy`'s), from which Vulkan's rule reads Metal's face gradients;
 ///   the device filters that ellipse by its own anisotropic rule.
-/// - [`CubeFootprint::Projected`] (MoltenVK's graphics route under macOS 27,
-///   `CubeGradientRoute::AppleProjected`): SPIRV-Cross's `spvGradientCube` (MoltenVK 1.4.1's
-///   `adec7acb`) projects each gradient onto the face and writes the two values where Apple's
-///   earlier reading took them: `(d_y, d_y, d_z)` on an `x` face, `(d_x, d_z, d_x)` on a `y` face
-///   and `(d_x, d_y, d_x)` on a `z` face. Metal under macOS 27 reads the tangents of those, so on
-///   an `x` or `z` face the gradient with its normal component zeroed reaches Metal as its own
-///   (the probe: every lane of every sampler equal), and is handed so. On a `y` face Metal reads
-///   `d_x` on both tangents, the `z` tangent lost: the function hands `(64/91 L, 0, 0)`, `L`
-///   Metal's length of `(g_x, g_z)`, whose length on both tangents is `L` again, so an isotropic
-///   sample keeps Metal's footprint up to that division's rounding (the probe: all 6,144 lanes of
-///   each of three isotropic samplers equal, every face); an anisotropic one's ellipse lies on the
-///   diagonal, 922 to 932 of a `y` face's 1,024 lanes differing
-///   (`PrecisionNote::CubeGradientFootprint`).
-/// - [`CubeFootprint::Metal`]: the gradients as the call states them, for a driver that hands them
-///   to Metal's own `gradientcube` unchanged (`CubeGradientRoute::Metal`): exact, no note.
 ///
 /// The major axis is `z` over `y` over `x` at equal magnitudes, which on a direction whose ties are
 /// broken as Metal breaks them (`face::metal_ties`) is Metal's, there being none left. A footprint
@@ -494,14 +476,12 @@ pub(super) fn cube_footprint(
     form: CubeFootprint,
 ) -> BResult<(SValue, SValue)> {
     match form {
-        CubeFootprint::Metal => Ok(grads),
         CubeFootprint::Word => Err(BuildError::Operand {
             op: crate::spv::Op::Select,
             rule: OperandRule::Arity,
         }),
         CubeFootprint::Face => face_gradients(fb, p, grads),
-        CubeFootprint::Length => tangent_length(fb, p, grads, false),
-        CubeFootprint::Projected => tangent_length(fb, p, grads, true),
+        CubeFootprint::Length => tangent_length(fb, p, grads),
     }
 }
 
@@ -577,20 +557,16 @@ fn face_gradients(
 }
 
 /// [`CubeFootprint::Length`]: each gradient's two tangent components' Metal length on the
-/// tangent `(a + 2) mod 3`; or, `projected` ([`CubeFootprint::Projected`]), an `x` or `z` face's
-/// gradient without its normal component and a `y` face's length times `64/91` on `x`.
+/// tangent `(a + 2) mod 3`.
 fn tangent_length(
     fb: &mut FunctionBuilder<'_>,
     p: SValue,
     (dx, dy): (SValue, SValue),
-    projected: bool,
 ) -> BResult<(SValue, SValue)> {
     let f = f32_ty(fb)?;
     let triple = vec(fb, f, 3)?;
     let m = Major::of(fb, p)?;
     let zero = f32_const(fb, 0)?;
-    // Metal's length of a pair of equal components `c` is `91/64 c`.
-    let diagonal = f32_const(fb, (64.0f32 / 91.0).to_bits())?;
     let one = |fb: &mut FunctionBuilder<'_>, g: SValue| -> BResult<SValue> {
         let [gx, gy, gz] = components(fb, g)?;
         // The face's two tangents: `y` and `z` on an `x` face, `x` and `z` on a `y` face, `x`
@@ -598,14 +574,6 @@ fn tangent_length(
         let first = fb.select(m.y_or_z, gx, gy)?;
         let second = fb.select(m.z, gy, gz)?;
         let length = super::anisotropic::metal_length(fb, first, second)?;
-        if projected {
-            let on_y_face = fb.binary(BinOp::FMul, length, diagonal)?;
-            let on_x = fb.select(m.y, on_y_face, gx)?;
-            let on_x = fb.select(m.y_or_z, on_x, zero)?;
-            let on_y = fb.select(m.y, zero, gy)?;
-            let on_z = fb.select(m.y_or_z, zero, gz)?;
-            return fb.composite_construct(triple, &[on_x, on_y, on_z]);
-        }
         // The tangent `(a + 2) mod 3`: `z` for an `x` face, `x` for a `y` face, `y` for a `z`
         // face.
         let on_x = fb.select(m.y, length, zero)?;
@@ -1069,7 +1037,7 @@ pub(super) fn sampled_value(
         let (x, word) = pixel_fetch(cx, fb, s, si, image, offset.as_ref(), arm)?;
         let x = unmapped_value(cx, fb, s, x, word)?;
         let x = live_or_zero(fb, live, x)?;
-        return texel_value(cx, fb, s, image, (x, TexelOrigin::Image), word);
+        return texel_value(cx, fb, s, image, x, word);
     }
     if let SampleOp::Bicubic(b) = &s.op {
         // No sparse form: the slot takes no sparse arm, and the word is 0. The routines return the
@@ -1231,7 +1199,7 @@ pub(super) fn sampled_value(
         None => word,
     };
     let texel = live_or_zero(fb, live, texel)?;
-    texel_value(cx, fb, s, image, (texel, TexelOrigin::Image), word)
+    texel_value(cx, fb, s, image, texel, word)
 }
 
 /// The plane coordinate of `s`, read from the AIR operand as given: the device's sampler, and an
@@ -2249,24 +2217,23 @@ pub(super) fn texel_value(
     fb: &mut FunctionBuilder<'_>,
     s: &Sampling,
     image: super::CombinedImage,
-    (texel, origin): (SValue, TexelOrigin),
+    texel: SValue,
     word: Option<SValue>,
 ) -> BResult<SValue> {
-    let held = held_value(cx, fb, s, image, (texel, origin))?;
+    let held = held_value(cx, fb, s, image, texel)?;
     let held = held_constants(cx, fb, s, held)?;
     with_word(cx, fb, &s.result, held, word)
 }
 
 /// The held texel of sampling `s`'s image texel `texel`: an 8-bit sRGB texel's raw code decoded
-/// by the device's transfer, a slot's `half` or `float` texel converted by the bound format's class,
-/// else the texel held as the result's type holds it; before the lanes Metal reads as constants
-/// are set ([`held_constants`]).
+/// by the device's transfer, else the texel held as the result's type holds it; before the lanes
+/// Metal reads as constants are set ([`held_constants`]).
 pub(super) fn held_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     s: &Sampling,
     image: super::CombinedImage,
-    (texel, origin): (SValue, TexelOrigin),
+    texel: SValue,
 ) -> BResult<SValue> {
     let Some(form) = s.texel else {
         return Err(cx.fail("a sample without a texel form"));
@@ -2280,78 +2247,7 @@ pub(super) fn held_value(
         };
         return crate::lower::texture::srgb_texel(fb, form, texel, color);
     }
-    // A `half` texel of a slot converts by the bound format's class: a gather's texel as a read's,
-    // a sample's (nearest, linear, or fetched) filtered value as a sample's, each with the access's
-    // lanes. Not where the sample's texel is the device's (`Sampling::half_texel`): it is held.
-    let half = match s.source {
-        Source::Combined(key) if !s.depth && s.half_texel => {
-            half_class(cx, &ImageRef::Slot(key.texture), form)
-        }
-        Source::Heap { handle, .. }
-        | Source::HeapSampler { handle, .. }
-        | Source::HeapArray { handle, .. }
-            if !s.depth && s.half_texel =>
-        {
-            crate::lower::texture::heap_half_class(cx, fb, handle, form)?
-        }
-        _ => None,
-    };
-    Ok(match half {
-        Some(h) => {
-            let lanes = sample_lanes(cx, fb, s)?;
-            h.convert(fb, texel, lanes, origin)?
-        }
-        None => held_texel(fb, image.texel, form, texel)?,
-    })
-}
-
-/// Whether sampler word `word` states a sampler that reads one texel of one level: nearest min and
-/// mag filters, no anisotropy, and no linear mip filter (a `bool`).
-fn word_reads_one(fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
-    let filters =
-        fb.u32_const(SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR | SamplerWord::ANISOTROPIC)?;
-    let filters = fb.module().const_value(filters)?;
-    let filters = fb.binary(BinOp::BitwiseAnd, word, filters)?;
-    let zero = fb.u32_const(0)?;
-    let zero = fb.module().const_value(zero)?;
-    let nearest = fb.binary(BinOp::IEqual, filters, zero)?;
-    let mip = fb.u32_const(SamplerWord::MIP_FILTER)?;
-    let mip = fb.module().const_value(mip)?;
-    let mip = fb.binary(BinOp::BitwiseAnd, word, mip)?;
-    let linear_mip = fb.u32_const(2 << SamplerWord::MIP_FILTER_SHIFT)?;
-    let linear_mip = fb.module().const_value(linear_mip)?;
-    let one_level = fb.binary(BinOp::INotEqual, mip, linear_mip)?;
-    fb.binary(BinOp::LogicalAnd, nearest, one_level)
-}
-
-/// The lanes of sampling `s`'s texel for the class's conversion (`half::TexelLanes::code`): a 2D
-/// gather's channel, one texel's lanes, or a value that may be filtered, as [`Sampling::one_texel`]
-/// says; where a runtime or argument buffer's sampler's word decides, one texel's where the word
-/// states nearest min and mag filters, no linear mip filter, and no anisotropy, else filtered.
-pub(super) fn sample_lanes(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    s: &Sampling,
-) -> BResult<SValue> {
-    use crate::lower::texture::half::TexelLanes;
-    use crate::lower::texture::OneTexel;
-    let word = match s.one_texel {
-        OneTexel::Always => {
-            let lanes = match s.op {
-                SampleOp::Gather { component, .. } => TexelLanes::Gathered(component),
-                _ => TexelLanes::Texel,
-            };
-            return lanes.value(fb);
-        }
-        OneTexel::Never => return TexelLanes::Filtered.value(fb),
-        OneTexel::Word(n) => sampler_word(cx, fb, Pixel::Spec(n))?,
-        OneTexel::Heap(h) => sampler_word(cx, fb, Pixel::Heap(h))?,
-        OneTexel::Table(_) => array_word(cx, fb, s)?,
-    };
-    let one = word_reads_one(fb, word)?;
-    let texel = TexelLanes::Texel.value(fb)?;
-    let filtered = TexelLanes::Filtered.value(fb)?;
-    fb.select(one, texel, filtered)
+    held_texel(fb, image.texel, form, texel)
 }
 
 #[cfg(test)]

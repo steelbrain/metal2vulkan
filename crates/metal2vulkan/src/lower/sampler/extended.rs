@@ -4,7 +4,7 @@
 //!
 //! **Why fetches on every device.** No Vulkan format holds these codes: the image holds the
 //! texels' bytes in an unsigned integer format, which no device filters, so the shader reads
-//! the taps and filters them itself, on a device that samples through Metal's own sampler too.
+//! the taps and filters them itself.
 //!
 //! **Metal's answers** (an Apple M3 Max on macOS 26.7 and an Apple M4 on macOS 27.0.1,
 //! byte-identical): a nearest sample is the read of the texel at Metal's position, decoded (its

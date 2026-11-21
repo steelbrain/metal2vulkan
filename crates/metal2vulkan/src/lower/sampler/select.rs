@@ -5,7 +5,6 @@ use crate::air::abi::{AddressMode, Coordinates, Filter, MipFilter};
 use crate::air::intrinsics::{ImageDim, ImageShape, LodMode, TexOp, TexRole, Texture};
 use crate::air::ir::{BinOp, Const, Inst, InstId, InstKind, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::CubeGradientRoute;
 use crate::device::requirements::{VkFeature, VkLimit};
 use crate::error::{
     Capability, Error, Feature, InternalError, InternalKind, LowerFamily, Unsupported,
@@ -114,10 +113,8 @@ fn own_bias(sampler: SamplerArg) -> Result<f32, Error> {
     })
 }
 
-/// Whether fragment bias sampled through `sampler` goes to the device's sampler whole (on
-/// MoltenVK, `VkProperty::MetalSampler`, the `Bias` operand reaches Metal's `bias()` as Metal
-/// applies it): the sampler has no bias of its own, whose sum with the operand's no measurement
-/// has read.
+/// Whether fragment bias sampled through `sampler` goes to the device's sampler whole: the
+/// sampler has no bias of its own, whose sum with the operand's no measurement has read.
 fn bias_to_metal(sampler: SamplerArg) -> Result<bool, Error> {
     Ok(own_bias(sampler)? == 0.0)
 }
@@ -436,11 +433,11 @@ fn prelude(
             ))
         })
     });
-    // The hoisted derivatives are the whole bias's, but Metal's own sample where the device samples
-    // through Metal's sampler and the sample takes no bias, which the module then requires.
+    // The hoisted derivatives are the whole bias's, but the device's own sample where the sample
+    // takes no bias, as Metal's sampler takes it.
     if let Some(h) = &hoist {
         if hoist_is_metals(cx, h, ops, samplers)? {
-            cx.families.sampler.metal_sampler = true;
+            cx.families.sampler.device_sampling = true;
         } else {
             cx.precision.insert(PrecisionNote::GradFromBias);
         }
@@ -554,13 +551,12 @@ fn select_heap_switch(
 /// `smp_handle`, as one sampling through an array of the candidates' samplers
 /// (`Source::HeapArray`): its element `smp_handle - first` is exactly the sampler of the candidate
 /// of that handle, and the raw emulation reads that element's state word
-/// (`heap_raw::State::Table`), as it states whether the sampling reads one texel where the
-/// candidates differ in that (`OneTexel::Table`). Where every candidate is a constexpr sampler,
+/// (`heap_raw::State::Table`). Where every candidate is a constexpr sampler,
 /// their handles consecutive (`first..first + n`); the device indexes an array of samplers by a
 /// value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which
 /// the heap's own image array already needs); the use is not tangled; and each candidate's
-/// sampling is the same but for its sampler, the state its raw emulation follows, and whether it
-/// reads one texel. `None` otherwise, and the switch over the candidates stays.
+/// sampling is the same but for its sampler and the state its raw emulation follows. `None`
+/// otherwise, and the switch over the candidates stays.
 fn select_heap_array(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
@@ -605,11 +601,9 @@ fn select_heap_array(
             _ => return Ok(None),
         }
     }
-    use crate::lower::texture::OneTexel;
     let elements = u32::try_from(arms.len())
         .map_err(|_| cx.invariant("constexpr sampler candidates past u32"))?;
-    // A candidate's sampling but for its sampler, its raw emulation's constant state, and whether
-    // it reads one texel, which the element's word then states (`OneTexel::Table`).
+    // A candidate's sampling but for its sampler and its raw emulation's constant state.
     let shape = |x: &Sampling| -> Option<Sampling> {
         let mut y = x.clone();
         let Source::Heap { handle, key } = y.source else {
@@ -627,9 +621,6 @@ fn select_heap_array(
                 return None;
             }
             raw.state = State::Table { elements };
-        }
-        if matches!(y.one_texel, OneTexel::Always | OneTexel::Never) {
-            y.one_texel = OneTexel::Table(elements);
         }
         Some(y)
     };
@@ -657,10 +648,6 @@ fn select_heap_array(
     for w in &samplers {
         words.push(super::constexpr::sampler_word(*w)?.0);
     }
-    let one_texel = match arms.first().map(|x| x.one_texel) {
-        Some(o) if arms.iter().all(|x| x.one_texel == o) => o,
-        _ => OneTexel::Table(elements),
-    };
     let array = super::ConstexprArray {
         first,
         samplers,
@@ -690,7 +677,6 @@ fn select_heap_array(
         sampler: smp_handle,
         key,
     };
-    x.one_texel = one_texel;
     cx.families.sampler.heap = before;
     cx.families.sampler.heap_arrays.insert(key);
     Ok(Some(TextureStrategy::Sampling(Box::new(x))))
@@ -2131,7 +2117,7 @@ fn select_one(
                             // forms from the `Bias` operand at any bias: the module requires the
                             // device.
                             if reach == BiasReach::Metal {
-                                cx.families.sampler.metal_sampler = true;
+                                cx.families.sampler.device_sampling = true;
                             }
                             (Some(id(cx, v)?), reach)
                         }
@@ -2211,15 +2197,12 @@ fn select_one(
                     }
                     SamplerArg::Static(SamplerRef::Slot(_), _) | SamplerArg::Heap(_) => None,
                 };
-                // A route the device's description does not state is Vulkan's rule: the device's
-                // own reading of the form handed to it (`PrecisionNote::CubeGradientFootprint`).
-                let route = cx.profile.fields().cube_gradients.route(cx.stage);
-                let form = match (route, anisotropic) {
-                    (CubeGradientRoute::Metal, _) => CubeFootprint::Metal,
-                    (CubeGradientRoute::AppleProjected, _) => CubeFootprint::Projected,
-                    (CubeGradientRoute::Vulkan, Some(false)) => CubeFootprint::Length,
-                    (CubeGradientRoute::Vulkan, Some(true)) => CubeFootprint::Face,
-                    (CubeGradientRoute::Vulkan, None) => CubeFootprint::Word,
+                // Vulkan's rule: the device's own reading of the form handed to it
+                // (`PrecisionNote::CubeGradientFootprint`).
+                let form = match anisotropic {
+                    Some(false) => CubeFootprint::Length,
+                    Some(true) => CubeFootprint::Face,
+                    None => CubeFootprint::Word,
                 };
                 Lod::CubeGrad(dx, dy, form)
             } else {
@@ -2482,10 +2465,9 @@ fn select_one(
         }
     }
     let residency = observed && !fetches;
-    // Every sample, gather and level query goes to the device's sampler: Metal's own on MoltenVK
-    // (`VkProperty::MetalSampler`), whose decode, filters, levels and comparisons are Metal's, and
-    // the device's own elsewhere (`VkProperty::DeviceSampling`), whose answers the module records
-    // (a level query's level clamped by the device into the sampler's clamp, the descriptor's).
+    // Every sample, gather and level query goes to the device's own sampler
+    // (`VkProperty::DeviceSampling`), whose answers the module records (a level query's level
+    // clamped by the device into the sampler's clamp, the descriptor's).
     if matches!(
         op,
         SampleOp::Sample { .. } | SampleOp::Gather { .. } | SampleOp::Lod { .. }
@@ -2503,24 +2485,6 @@ fn select_one(
         }
         _ => false,
     };
-    // A filtered sample's note, where Metal's own sampler filters the slot and a two-plane YCbCr
-    // format bound there takes another filter than Metal's: the clauses test the bound format,
-    // which the runtime reads at each draw, and through a runtime sampler slot the bound word's
-    // filter (`SpecKey::BoundSamplerWord`, which the plan gives: no key carries either); a heap
-    // texture's test what its handles and an argument buffer's sampler can name. A handle names a
-    // two-plane YCbCr texture (2D, one layer) only through a 2D color class.
-    let by = stat.map(|(r, _)| r);
-    let two_plane_reach = match image {
-        ImageRef::Slot(_) => true,
-        ImageRef::Heap { .. } => {
-            shape.dim == ImageDim::D2 && !shape.array && !shape.depth && !shape.ms
-        }
-    };
-    if two_plane_reach {
-        if let Some((note, when)) = super::linear::filter_note(cx, &op, form, (by, image))? {
-            cx.note_when(note, when, m)?;
-        }
-    }
     // A pixel sampler's coordinate reaches the device's sampler over the level-0 size, whose
     // texels at a texel edge or a filter step's edge are the device's arithmetic's on that
     // coordinate (`pixel_note`). An argument buffer's sampler records a note of its own, which the
@@ -2534,45 +2498,14 @@ fn select_one(
     if let SampleOp::Bicubic(b) = &mut op {
         b.raw = raw;
     }
-    // Whether the access reads one texel of one level, whose `half` or `float` texel a packed or
-    // normalized class converts from its codes; a runtime sampler's word decides it, which the
-    // slot's specialization then reads.
+    // Whether the access may read one texel of one level, whose `float` texel the device
+    // converts from its codes.
     let one_texel = one_texel(&op, sampler, shape.dim == ImageDim::Cube)?;
-    // On a device that samples through Metal's own texture unit, the `half` routine reads an
-    // access's lanes only for a YCbCr field's one texel (`texture::half`): no sampler word decides
-    // them. A slot's texture of a YCbCr format on the grid `8192` (`TexelFormat::YCBCR_8192`) then
-    // takes the device's rounding of a sample of its one texel (toward zero on MoltenVK over the
-    // M3 Max, measured; unmeasured on other Apple GPUs), where Metal rounds it with ties away,
-    // noted where it is bound.
-    let one_texel = match one_texel {
-        crate::lower::texture::OneTexel::Word(_)
-            if half && !raw && !crate::lower::texture::device_texels(cx) =>
-        {
-            if let ImageRef::Slot(index) = image {
-                use crate::metal::texel_format::TexelFormat;
-                let ties = NoteTest::equal(
-                    NoteOn::Bound(index),
-                    TexelFormat::YCBCR_8192,
-                    TexelFormat::YCBCR_8192,
-                );
-                cx.note_when(PrecisionNote::HalfTexelConversion, vec![[ties].into()], m)?;
-            }
-            crate::lower::texture::OneTexel::Never
-        }
-        other => other,
-    };
-    // A bicubic sample rounds its `half` result exactly, keeping denormals, and a raw texel's
-    // decode rounds its own; another `half` access converts its texel: the device's where the device's texel is
-    // the answer, else by the bound format's class (a heap color texture's by the class its
-    // handle carries: the module's routine, called with the class read from the handle).
-    let device = crate::lower::texture::device_texels(cx);
+    // Another `half` access's texel is the device's `float` texel rounded to nearest even: not a
+    // bicubic sample's, which rounds its `half` result exactly, nor a raw texel's, whose decode
+    // rounds its own.
     if !raw && half && !matches!(op, SampleOp::Bicubic(_)) {
-        if image.heap() && !shape.depth && !device {
-            cx.families.texture.heap_half = true;
-            cx.families.access.heap_class = true;
-        }
-        let sample = !matches!(op, SampleOp::Gather { .. });
-        crate::lower::texture::half_texels(cx, image, shape, sample, device, m)?
+        cx.precision.insert(PrecisionNote::HalfTexelConversion);
     }
     // A `float` texel that may be one texel's is the device's conversion of its codes: not an sRGB
     // raw texel's (decoded by the device's transfer, `SrgbTexelDecode`), a bicubic sample's, or an LOD query's; nor a depth
@@ -2590,18 +2523,6 @@ fn select_one(
         )
     {
         crate::lower::texture::float_texel_notes(cx, image, shape, one_texel);
-    }
-    // The conversion's lanes read a runtime sampler's filter fields where its word decides: a
-    // `half` texel's on every profile.
-    let half_converts = half && !raw && !matches!(op, SampleOp::Bicubic(_)) && !device;
-    if let (crate::lower::texture::OneTexel::Word(n), true, ImageRef::Slot(_)) =
-        (one_texel, half_converts, image)
-    {
-        if !shape.depth {
-            if let Some(s) = cx.families.sampler.slots.get_mut(&n) {
-                s.texels = true;
-            }
-        }
     }
     let source = match (image, sampler) {
         (ImageRef::Slot(texture), SamplerArg::Static(sampler, _)) => {
@@ -2662,8 +2583,8 @@ fn select_one(
         }
         _ => false,
     };
-    // A packed normalized sampled slot of the variant (`LoweringInputs::swizzled_storage`, on a
-    // device without Metal's own sampler), whose view takes no swizzle: the sampling swizzles
+    // A packed normalized sampled slot of the variant (`LoweringInputs::swizzled_storage`), whose
+    // view takes no swizzle: the sampling swizzles
     // the texel its class converts, and a gather of a component gathers the component the
     // swizzle names, as plain Metal does.
     let swizzle = match image {
@@ -2692,13 +2613,13 @@ fn select_one(
     // footprint's note, but where a constexpr sampler's emulation answers every word of the
     // sample (a runtime sampler's answers only the words its variant names).
     if let SampleOp::Sample {
-        lod: Lod::CubeGrad(_, _, form),
+        lod: Lod::CubeGrad(..),
         ..
     } = &op
     {
         let emulated =
             anisotropic.is_some_and(|a| matches!(a.degree, super::anisotropic::Degree::Const(_)));
-        if *form != CubeFootprint::Metal && !emulated {
+        if !emulated {
             cx.precision.insert(PrecisionNote::CubeGradientFootprint);
         }
     }
@@ -2732,8 +2653,6 @@ fn select_one(
         residency,
         footprint,
         cube,
-        one_texel,
-        half_texel: half_converts && !shape.depth,
         unmapped,
         heap_raw: None,
         declared,
@@ -2938,32 +2857,22 @@ fn pixel_position(
     })
 }
 
-/// Whether sampling `op` through `sampler` reads one texel of one level: a 2D gather and a pixel
-/// fetch always, a sample through a constexpr sampler whose state reads one (`linear::unfiltered`),
-/// a runtime or argument buffer's sampler's where its word states one; a cube gather (`cube`: its
-/// corner texels are made up), a bicubic sample, and an LOD query never.
-fn one_texel(
-    op: &SampleOp,
-    sampler: SamplerArg,
-    cube: bool,
-) -> Result<crate::lower::texture::OneTexel, Error> {
-    use crate::lower::texture::OneTexel;
+/// Whether sampling `op` through `sampler` may read one texel of one level: a 2D gather and a
+/// pixel fetch always, a sample through a constexpr sampler whose state reads one
+/// (`linear::unfiltered`), a runtime or argument buffer's sampler's wherever its word may state
+/// one; a cube gather (`cube`: its corner texels are made up), a bicubic sample, and an LOD query
+/// never.
+fn one_texel(op: &SampleOp, sampler: SamplerArg, cube: bool) -> Result<bool, Error> {
     Ok(match op {
-        SampleOp::Gather { .. } if cube => OneTexel::Never,
-        SampleOp::Gather { .. } | SampleOp::PixelFetch { .. } => OneTexel::Always,
+        SampleOp::Gather { .. } => !cube,
+        SampleOp::PixelFetch { .. } => true,
         SampleOp::Sample { .. } => match sampler {
             SamplerArg::Static(SamplerRef::Constexpr(words), _) => {
-                match super::linear::unfiltered(&super::state_of(words)?) {
-                    true => OneTexel::Always,
-                    false => OneTexel::Never,
-                }
+                super::linear::unfiltered(&super::state_of(words)?)
             }
-            SamplerArg::Static(SamplerRef::Slot(n), _) => OneTexel::Word(n),
-            SamplerArg::Heap(h) => OneTexel::Heap(h),
+            SamplerArg::Static(SamplerRef::Slot(_), _) | SamplerArg::Heap(_) => true,
         },
-        SampleOp::Bicubic(_) | SampleOp::Lod { .. } | SampleOp::QueryLevel { .. } => {
-            OneTexel::Never
-        }
+        SampleOp::Bicubic(_) | SampleOp::Lod { .. } | SampleOp::QueryLevel { .. } => false,
     })
 }
 

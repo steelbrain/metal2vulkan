@@ -25,7 +25,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::device::profile::{CubeGradientRoute, DeviceProfile};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::DevicePolicy;
 use crate::device::{Device, DeviceDescription};
@@ -405,7 +405,6 @@ fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
 /// `AnisotropicFilter`.
 #[test]
 fn a_cube_gradient_route_takes_the_devices_reading() {
-    use crate::device::profile::CubeGradients;
     let path = engine_dir().join("unk_cube_grad_lod.ll");
     let text = std::fs::read_to_string(&path).expect("fixture");
     let word: u64 = 34_901_797_601_019_977;
@@ -431,13 +430,6 @@ fn a_cube_gradient_route_takes_the_devices_reading() {
         .expect("device")
         .profile()
         .clone();
-    assert_eq!(
-        unmeasured.fields().cube_gradients,
-        CubeGradients {
-            graphics: CubeGradientRoute::Vulkan,
-            compute: CubeGradientRoute::Vulkan,
-        }
-    );
     for (bc, taps) in [(&iso, false), (&aniso, true)] {
         let what = if taps { "anisotropic" } else { "isotropic" };
         let u = artifact(bc, "unk_cube_grad_lod", "unmeasured", &unmeasured).expect(what);
@@ -500,7 +492,6 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
         let Some(a) = artifact(&bc, "runtime_cube_grad", &stem, &p) else {
             continue;
         };
-        let route = p.fields().cube_gradients.compute;
         let fields = a.interface.read_keys().into_iter().find_map(|k| match k {
             SpecKey::SamplerState { fields, .. } => Some(fields),
             _ => None,
@@ -508,7 +499,6 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
         let reads = fields.is_some_and(|f| f & SamplerWord::ANISOTROPIC != 0);
         let noted = a.precision.contains(&PrecisionNote::CubeGradientFootprint);
         let lengths = glsl(&a, GLSL_FMAX) >= 4 || glsl(&a, GLSL_LENGTH) >= 2;
-        assert_eq!(route, CubeGradientRoute::Vulkan, "{stem}");
         assert!(reads, "{stem}: {fields:?}");
         assert!(lengths, "{stem}");
         assert!(noted, "{stem}");

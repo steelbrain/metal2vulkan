@@ -50,7 +50,7 @@
 //! 515 texels -- and no finite, zero, denormal or infinite texel differs anywhere.
 //!
 //! **Where the payload goes.** Our `half` access reads the image as a `vec4` of `f32` and converts
-//! it (`lower::texture::half`, through `narrow::round_texel`), and this chip's decode of a 16-bit
+//! it (`narrow::round_texel`), and this chip's decode of a 16-bit
 //! float texel into `f32` canonicalizes the NaN, so the sign and the payload are gone before the
 //! conversion sees them -- which is why all twelve codes, of both signs, collapse onto one value,
 //! and why the `widened` column, where Metal canonicalizes too, is exact. Metal's `texture2d<half>`

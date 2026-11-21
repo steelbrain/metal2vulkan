@@ -288,7 +288,7 @@ const NAMES: [&str; 16] = [
 ];
 
 /// The site an argument buffer's pixel sampler answers at, and the site its normalized control
-/// answers at: the two a device without Metal's own sampler may differ at.
+/// answers at: the two a device's own sampler may differ at.
 const ARGUMENT_SITE: &str = "arg";
 const CONTROL_SITE: &str = "norm";
 

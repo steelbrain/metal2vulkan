@@ -2317,12 +2317,6 @@ fn a_cube_gradient_use_takes_an_anisotropic_argument_sampler_by_its_word() {
             assert_ne!(stem, "moltenvk-m3", "moltenvk-m3 compiles the use");
             continue;
         };
-        let route = dev.profile().fields().cube_gradients.compute;
-        assert_eq!(
-            route,
-            crate::device::profile::CubeGradientRoute::Vulkan,
-            "{stem}"
-        );
         let arrays: Vec<(u32, HandleClass)> = pipe.layout.sets[1]
             .bindings
             .iter()
