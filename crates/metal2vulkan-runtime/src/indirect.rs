@@ -50,8 +50,9 @@ pub(crate) const SHAPES: usize = 256;
 /// (`PushField::IndirectBase`). One form on every device; its cost is a known gap (README).
 pub(crate) const PART: u32 = 64;
 /// The most bytes of preprocess regions no execution holds that a device keeps for the next ones:
-/// three frames of Apple's published rendering sample's 45,024 commands at the most a command
-/// takes (592 bytes, NVIDIA's for 17 tokens), about 81 MB, with room for the regions' rounding.
+/// the regions of one frame of Apple's published rendering sample's 45,024 commands, which a
+/// completed frame gives back for a later one to take: 704 parts at the most a part takes (151,808
+/// bytes, NVIDIA's for 17 tokens), about 107 MB, with room for the regions' rounding.
 pub(crate) const IDLE_BYTES: u64 = 128 << 20;
 /// The granule a preprocess region's bytes are rounded up to.
 const REGION_GRANULE: u64 = 64 << 10;

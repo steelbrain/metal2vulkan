@@ -3570,20 +3570,23 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 - A state made with `supportIndirectCommandBuffers` pays one 8-byte load a vertex on its direct
   draws too: its vertex function reads the execution range.
 - An execution over a range a buffer holds takes a preprocess region for the buffer's whole
-  capacity, whatever the range: up to 592 bytes a command on NVIDIA's driver and 360 on RADV, held
-  until the command buffer completes.
-- Every execution runs in parts of 64 commands, on every device. One execution of more did not draw
-  every command in order where it was measured: on RADV (Mesa 26.2.6, a Radeon RX 7900 XTX) an
-  execution of N commands whose generated commands pass about 4 MiB (296 bytes a command, 14,170
-  commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's driver (620.70.06, an RTX 2080) one of
-  more than 64 commands ended out of order, a cause not yet found. The parts cost, at 14,000
-  commands against one execution: 62% more GPU time on the XTX and 61 times as much on the 2080,
-  and 25 to 34 times the recording time.
-- On Mesa's CPU device (lavapipe, Mesa 26.2.6) an indirect command buffer of 5,792 commands or more
-  overruns the driver's preprocess buffer: its `vkGetGeneratedCommandsMemoryRequirementsEXT` size
-  for a draw layout is quadratic in the command count and wraps at 2^32, while its preprocessing
-  writes linearly (16 + 100 bytes a command for an index-buffer and indexed-draw layout); a driver
-  bug. Below that count the size covers the writes but grows quadratically (134 MB at 1,024
+  capacity, whatever the range, held until the command buffer completes. A part of 64 commands of
+  17 tokens takes 151,808 bytes on NVIDIA's driver (an RTX 2080; 2,372 a command) and 39,680 on
+  RADV (a Radeon RX 7900 XTX; 620 a command).
+- Every execution runs in parts of 64 commands, on every device. One execution of more did not
+  draw every command in order where it was measured: on RADV (Mesa 26.2.6, a Radeon RX 7900 XTX)
+  an execution of N commands whose generated commands pass about 4 MiB (296 bytes a command,
+  14,170 commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's
+  driver (620.70.06, an RTX 2080) one of more than 64 commands ended out of order, a cause not yet
+  found. The parts cost, at 14,000 commands against one execution: 62% more GPU time on the XTX
+  and 61 times as much on the 2080, and 25 to 34 times the recording time. On the 2080 a command
+  of 17 tokens also takes four times the preprocess bytes (2,372 a command in a part, 592 in one
+  execution of 1,024 or more).
+- On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
+  `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
+  command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver
+  bug. Each part is sized at its 64 commands, which the wrap does not reach, but that size is
+  large: 557,568 bytes for commands of four buffers (8,712 a command; 134,750,208 bytes at 1,024
   commands).
 - On the Iris Xe (ANV, Mesa 26.2.6), which does not list `VK_EXT_device_generated_commands`, an
   indirect command buffer is refused (`Gap::IndirectCommandBuffers`,
