@@ -1892,21 +1892,27 @@ fn ulong_texture_slots_are_rg32_elements_their_resource_ids_name() {
             };
             push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
         }
-        // An `RG32` view's read outside the image under `robustImageAccess2`; without it the
-        // shader checks every access, and the images trap on one outside them.
-        let robust = p
-            .fields()
-            .images
-            .robust_image_access2
-            .then_some([0, 0, 0, 1]);
-        let image =
-            |slot, e: u32| texture(slot, e, [8, 2], |x, y| ulong_texel(e, y * 8 + x).0, robust);
+        // An `RG32` view's read outside the image is the device's under `robustImageAccess2`;
+        // without it the shader checks every read, and the read images trap on one outside them.
+        // A write outside the image is the device's to drop under `robustImageAccess` at either
+        // level (`contain::device_drops_texel_writes`), and the shader's to guard without it, so
+        // the written image traps on one only there.
+        let robustness = &p.fields().images;
+        let reads = robustness.robust_image_access2.then_some([0, 0, 0, 1]);
+        let writes = robustness.robust_image_access.then_some([0, 0, 0, 1]);
+        let image = |slot, e: u32, robust| {
+            texture(slot, e, [8, 2], |x, y| ulong_texel(e, y * 8 + x).0, robust)
+        };
         // An array's elements are bound from 0: those below the named ones, which no thread
         // reaches, hold one texel.
         let filler = |slot, e: u32| texture(slot, e, [1, 1], |_, _| [0xdead_beef; 4], None);
-        let mut images = vec![filler(sampled, 0), image(sampled, S), image(sampled, R)];
+        let mut images = vec![
+            filler(sampled, 0),
+            image(sampled, S, reads),
+            image(sampled, R, reads),
+        ];
         images.extend((0..W).map(|e| filler(storage, e)));
-        images.push(image(storage, W));
+        images.push(image(storage, W, writes));
         let written = images.len() - 1;
         let res = Resources {
             buffers: vec![Buffer {
