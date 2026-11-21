@@ -14,16 +14,18 @@
 //! for under the hang protocol, then read back.
 //!
 //! The row records what the runtime answers, as a kernel's does: the state's precision notes on
-//! the case's own stage, and the float reductions its AIR calls.
+//! the case's own stage, and the float reductions its AIR calls. An out-of-bounds case's facts are
+//! read before the state is made (`runtime_bounds::drawn`).
 
 use super::runtime::{self, runtime_error, Identity, Placed};
+use super::runtime_bounds;
 use super::runtime_textures::{self, Bound, Indices, Wanted};
 use crate::candidate::engine::graphics::{
     self, Assembly, ColorTarget, RenderCase, RenderFinals, RenderOutput,
 };
 use crate::candidate::engine::{product_refusal, resources, ComputeRun, RunAttempt, RuntimeDraw};
 use crate::case::Stage;
-use crate::check::admission::ExecutorError;
+use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::ModuleCensus;
 use crate::gpu::DeviceType;
 use metal2vulkan::bind::DrawCall;
@@ -76,6 +78,19 @@ fn run(
 ) -> Result<ComputeRun, ExecutorError> {
     let _grant = runtime::sampler_grant(device)?;
     let descriptor = descriptor(case, draw)?;
+    // How the state's vertex function contains each out-of-bounds target, decided before anything
+    // is made: a target the device leaves uncontained or checked nowhere refuses the draw. The
+    // routed targets are attribute buffers (`engine::runs_render_through_runtime`), which the
+    // draw places without guards, so a contained one is not drawn either.
+    let class = Some(runtime::execution_class(identity));
+    if runtime_bounds::drawn(device, case, &descriptor, class)?.is_some() {
+        return Err(NotSupported::NotImplemented(
+            "a draw through the runtime whose out-of-bounds targets are contained: it places \
+             its vertex buffers without guards"
+                .into(),
+        )
+        .into());
+    }
     let state = runtime::made_within(|numbered| {
         device.new_render_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;

@@ -2704,10 +2704,11 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
 /// The runtime draws a vertex or fragment case of one sample, its own stage's buffers, textures
 /// and samplers, static vertex strides, color targets, and one direct or indexed draw of
 /// primitives, observing a buffer, a texture, a color target or nothing; and a
-/// rasterization-disabled vertex case, which renders into the oracle's sink. A case with anything
-/// else (a depth/stencil attachment, more samples, layered rendering, a dynamic vertex stride, an
-/// argument-buffer member, an explicit imageblock, a depth observation, or a fragment pass with no
-/// color target, which the runtime makes no pass of) stays on the executor's own context.
+/// rasterization-disabled vertex case, which renders into the oracle's sink; and an attribute
+/// buffer's out-of-bounds target. A case with anything else (a depth/stencil attachment, more
+/// samples, layered rendering, a dynamic vertex stride, an argument-buffer member, an explicit
+/// imageblock, a depth observation, a fragment pass with no color target, which the runtime makes
+/// no pass of, or an index buffer's out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -2756,6 +2757,25 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         ..plain.clone()
     };
     assert!(runs_render_through_runtime(&authored, &unrasterized));
+    // An attribute buffer's out-of-bounds target draws through the runtime, whose facts refuse or
+    // run it (`runtime_bounds::drawn`); an index buffer's stays on the executor's own context.
+    use crate::case::out_of_bounds::ContainmentForm;
+    let bounded = |resource, form| RenderCase {
+        out_of_bounds: vec![OutOfBoundsTarget {
+            resource,
+            form,
+            reach_before: 0,
+            reach_after: 16,
+        }],
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(
+        &authored,
+        &bounded(
+            OutOfBoundsResource::AttributeBuffer { location: 0 },
+            ContainmentForm::VertexInput
+        )
+    ));
     let dynamic = VertexBuffer {
         location: 0,
         buffer_index: 30,
@@ -2823,6 +2843,10 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             output: RenderOutput::None,
             ..plain.clone()
         },
+        bounded(
+            OutOfBoundsResource::IndexBuffer,
+            ContainmentForm::IndexBuffer,
+        ),
     ];
     for other in &others {
         assert!(!runs_render_through_runtime(&authored, other), "{other:?}");

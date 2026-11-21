@@ -1,6 +1,6 @@
-//! The out-of-bounds facts of a kernel case's run through the runtime ([`super::runtime`]): how
-//! the modules the runtime's state may dispatch contain each of the case's targets, decided before
-//! anything is submitted.
+//! The out-of-bounds facts of a kernel case's run and a render case's draw through the runtime
+//! ([`super::runtime`], [`super::runtime_render`]): how the modules the runtime's state may
+//! dispatch or draw contain each of the case's targets, decided before anything is submitted.
 //!
 //! The runtime keeps its modules to itself, so the run lowers each variant the translator offers
 //! of the case's kernel on the device's own translator (`rt::Device::translator`), under
@@ -13,13 +13,23 @@
 //! variants give different ones, which module a dispatch runs would decide the case, so it is
 //! refused before it runs (`NotSupported::Uncontained`, naming the first variant whose facts
 //! differ from the first lowered one's).
+//!
+//! A render state's modules are the translator's compile of its descriptor
+//! (`Device::compile_render_pipeline`), whose stages' inputs are the ones the runtime lowers each
+//! stage under (`Device::render_pipeline_key`, of the variant key the runtime's state takes), read
+//! as the executor's own context reads its draw's (`engine::draw_out_of_bounds_run`).
 
-use crate::candidate::engine::{out_of_bounds_run, product_refusal, ComputeCase};
+use crate::candidate::engine::graphics::RenderCase;
+use crate::candidate::engine::{
+    draw_out_of_bounds_run, out_of_bounds_run, product_refusal, ComputeCase,
+};
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::ExecutionClass;
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun};
 use metal2vulkan::error::Error as TranslationError;
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, KernelVariant, StageEntries, StageSource};
+use metal2vulkan::pipeline::{
+    ComputePipelineDescriptor, KernelVariant, RenderPipelineDescriptor, StageEntries, StageSource,
+};
 use metal2vulkan::Budget;
 use metal2vulkan_runtime as rt;
 
@@ -91,4 +101,27 @@ pub(super) fn contained(
         .into());
     }
     first.clone()
+}
+
+/// The out-of-bounds facts of `case`'s draw of `descriptor` on `device`, executing as `class`, as
+/// the module documentation says: `None` for a case without targets.
+///
+/// Err: the translator's refusal of the descriptor, as the product's (`product_refusal`);
+/// `NotSupported::Uncontained` where `class` leaves a form uncontained or a target's accesses are
+/// checked nowhere; a target the vertex function's module does not reach as validation knows fails
+/// the draw.
+pub(super) fn drawn(
+    device: &rt::Device,
+    case: &RenderCase,
+    descriptor: &RenderPipelineDescriptor,
+    class: Option<ExecutionClass>,
+) -> Result<Option<OutOfBoundsRun>, ExecutorError> {
+    if case.out_of_bounds.is_empty() {
+        return Ok(None);
+    }
+    let translator = device.translator();
+    let pipeline = translator
+        .compile_render_pipeline(descriptor, &Budget::standard())
+        .map_err(|error| product_refusal(&error))?;
+    draw_out_of_bounds_run(class, translator, &pipeline, case)
 }

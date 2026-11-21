@@ -486,11 +486,15 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   generated companion, its vertex buffers at static strides, its color targets (Shared 2D
   textures, loaded and stored by the pass), the oracle's depth-stencil state, cull mode and
   winding, and one direct or indexed draw of primitives, observing a buffer, a texture, a color
-  target or nothing. A rasterization-disabled vertex case renders into the oracle's 1x1 `R8Unorm`
-  attachment. A depth/stencil attachment, more samples, layered rendering, a dynamic vertex
-  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map or a
-  fragment pass with no color target (the runtime makes no pass without an attachment) keeps the
-  case on the executor's own context. Its device worker enables the
+  target or nothing, its out-of-bounds targets, if any, attribute buffers. Their facts are read
+  before the state is made, from the translator's compile of the state's descriptor on the
+  runtime device's own translator: the runtime's floor enables no buffer robustness, so a
+  fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
+  `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
+  into the oracle's 1x1 `R8Unorm` attachment. A depth/stencil attachment, more samples, layered rendering, a dynamic vertex
+  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an
+  index buffer's out-of-bounds target or a fragment pass with no color target (the runtime makes
+  no pass without an attachment) keeps the case on the executor's own context. Its device worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
   Its row records the state's precision notes, the runtime's fingerprint and an out-of-bounds

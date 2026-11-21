@@ -22,10 +22,10 @@
 //!   the candidate does not run the case ([`Check::Unchecked`]), and a loaded resource id's index
 //!   is masked onto the descriptor arrays, whose elements no live texture owns are null
 //!   descriptors. An attribute buffer is fetched by fixed-function vertex input, left to the
-//!   device's buffer robustness, or pulled in the shader through the slot its fetch names,
-//!   contained as that slot is ([`Fetch`]); a direct indexed draw's index buffer is bounded by
-//!   `robustBufferAccess2` or the binder's clamp; and a top-level texture array's dynamic index is
-//!   clamped onto its elements in the shader.
+//!   device's buffer robustness (unchecked without it, [`Check::Unchecked`]), or pulled in the
+//!   shader through the slot its fetch names, contained as that slot is ([`Fetch`]); a direct
+//!   indexed draw's index buffer is bounded by `robustBufferAccess2` or the binder's clamp; and a
+//!   top-level texture array's dynamic index is clamped onto its elements in the shader.
 //! - **The read rule** ([`read_rule`]) says what an out-of-bounds read of the target may return:
 //!   zero under an in-shader check and under `robustBufferAccess2` (Vulkan's "Robust Buffer
 //!   Access 2": "reads ... outside of the checked range will return zero values"), anything for
@@ -119,9 +119,10 @@ pub enum Check {
     Padded,
     /// Nothing checks the access: neither the shader nor the device's robustness bounds it (a
     /// pointer loaded from memory under the identity pointer domain, `PointerDomain::Identity`,
-    /// is the device address it holds, used as given). A run would reach memory no binding gave
-    /// the case, so the candidate refuses the case before it makes the pipeline
-    /// (`NotSupported::Uncontained`).
+    /// is the device address it holds, used as given, and fixed-function vertex input on a device
+    /// without buffer robustness fetches past its buffer what the device gives). A run would reach
+    /// memory no binding gave the case, so the candidate refuses the case before it makes the
+    /// pipeline (`NotSupported::Uncontained`).
     Unchecked,
 }
 
@@ -621,16 +622,16 @@ pub fn containment(
             )
         }
         OutOfBoundsResource::AttributeBuffer { location } => {
-            // Fixed-function vertex input is left to the device's buffer robustness, and a pulled
-            // fetch reads its buffer's slot, contained as that slot is.
+            // Fixed-function vertex input is left to the device's buffer robustness, which a
+            // device without it leaves unchecked, and a pulled fetch reads its buffer's slot,
+            // contained as that slot is.
             match module.attributes.get(&location).copied() {
                 None => Err(format!(
                     "the compiled module fetches no attribute {location}"
                 )),
-                Some(Fetch::FixedFunction) if robust == Check::Shader => Err(format!(
-                    "attribute {location} is fixed-function vertex input on a device without \
-                     buffer robustness, which contains nothing"
-                )),
+                Some(Fetch::FixedFunction) if robust == Check::Shader => {
+                    made(target.form, Medium::VertexInput, Check::Unchecked, false)
+                }
                 Some(Fetch::FixedFunction) => made(target.form, Medium::VertexInput, robust, false),
                 Some(Fetch::Pulled { buffer_index }) => {
                     match slot(SlotClass::Buffer, buffer_index)? {

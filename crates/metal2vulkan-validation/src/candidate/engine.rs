@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v193";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v194";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1398,8 +1398,9 @@ pub struct RuntimeKernel<'a> {
 /// buffers at static strides, its color targets (a fragment case renders into at least one: the
 /// runtime makes no pass without an attachment, `Gap::RenderPass`), the encoder's depth-stencil
 /// state, cull mode and winding, and one direct or indexed draw of primitives, observing a buffer,
-/// a texture, a color target or nothing. Decided by the case's structure alone: every field the
-/// mapping fills is named here, so a new one is decided when it is added.
+/// a texture, a color target or nothing, whose out-of-bounds targets, if any, are attribute
+/// buffers (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
+/// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::RenderCase) -> bool {
     let graphics::RenderCase {
         vertex,
@@ -1449,7 +1450,9 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         && *render_target_array_length == 0
         && matches!(assembly, graphics::Assembly::Primitives(_))
         && matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. })
-        && out_of_bounds.is_empty()
+        && out_of_bounds
+            .iter()
+            .all(|target| matches!(target.resource, OutOfBoundsResource::AttributeBuffer { .. }))
         && imageblock.is_none()
         && matches!(
             output,

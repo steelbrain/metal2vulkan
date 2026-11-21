@@ -588,7 +588,7 @@ pub(super) fn ran(
 }
 
 /// The class of the device `identity` names.
-fn execution_class(identity: &Identity) -> ExecutionClass {
+pub(super) fn execution_class(identity: &Identity) -> ExecutionClass {
     match identity.device_type {
         vk::PhysicalDeviceType::CPU => ExecutionClass::CpuIcd,
         _ => ExecutionClass::Host(HostClass(metal2vulkan::vk::DriverId::from_raw(
