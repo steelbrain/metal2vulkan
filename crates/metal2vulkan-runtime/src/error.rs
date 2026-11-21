@@ -374,11 +374,12 @@ pub enum Refusal {
         /// The state's `maxTotalThreadsPerThreadgroup`.
         max: u32,
     },
-    /// An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer
-    /// than 12 bytes (three 32-bit counts) in the buffer.
+    /// An indirect dispatch's or draw's argument offset that is not a multiple of 4, or that leaves
+    /// fewer than the arguments' bytes in the buffer: 12 for a dispatch (three 32-bit counts), 20
+    /// for an indexed draw, 16 for another draw.
     ///
-    /// Basis: ours (`vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset
-    /// inside the buffer).
+    /// Basis: ours (`vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect`
+    /// read their 32-bit words at a 4-byte aligned offset inside the buffer).
     IndirectOffset {
         /// The offset asked for.
         offset: u64,
@@ -1498,7 +1499,8 @@ pub enum DrawKind {
     /// per instance at a rate above 1, on a device that does not report
     /// `supportsNonZeroFirstInstance`: Vulkan's divisor takes `firstInstance` 0 alone there
     /// (VUID-vkCmdDraw-pNext-09461). Metal counts the step from any base instance. The same
-    /// draw from base instance 0 runs.
+    /// draw from base instance 0 runs; an indirect draw through such a state, whose base instance
+    /// the GPU reads, is refused alike.
     DividedBaseInstance,
     /// A draw of patches through a patch index buffer (`drawPatches:`'s `patchIndexBuffer`), which
     /// no replay stream's patch draws name: the control stage takes each patch's index from its

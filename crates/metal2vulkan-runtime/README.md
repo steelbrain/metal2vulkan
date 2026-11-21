@@ -3128,6 +3128,26 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `Refusal::NoTessellationFactorBuffer`; factors at an odd byte
   `Refusal::TessellationFactorOffset` (an offset 2 past a multiple of 4, which Metal's validation
   refuses, is read at that byte, as plain Metal reads it).
+- `draw_primitives_indirect` is `drawPrimitives:indirectBuffer:indirectBufferOffset:`,
+  `draw_indexed_primitives_indirect` is
+  `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:`
+  and `draw_patches_indirect` is
+  `drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:`: one
+  `vkCmdDrawIndirect`, or `vkCmdDrawIndexedIndirect` for the indexed draw, on the buffer at its
+  offset, which the GPU reads as Vulkan's own command, as Metal's
+  `MTLDrawPrimitivesIndirectArguments`, `MTLDrawIndexedPrimitivesIndirectArguments` and
+  `MTLDrawPatchIndirectArguments` lie as `VkDrawIndirectCommand` and `VkDrawIndexedIndirectCommand`
+  do. A patch draw's patch count is the draw's vertex count unchanged, each patch one vertex as a
+  direct patch draw's. The base instance is the device's own under the floor's
+  `drawIndirectFirstInstance`. The arguments' buffer counts among the draw's reads as an index
+  buffer does, and the command buffer keeps it until it retires; the pass's first barrier, and the
+  encoder's memory barrier after a draw that wrote, make earlier writes visible to the GPU's read.
+  The runtime never reads the arguments, so a count of 0 is recorded and draws nothing. An offset
+  that is not a multiple of 4 or leaves fewer than the arguments' 16 bytes in the buffer (20 for an
+  indexed draw) is `Refusal::IndirectOffset`, as Metal's validation stops it; arguments at a byte of
+  the block's allocation that is not a multiple of 4 are `Refusal::ArgumentPlace`; an indexed draw's
+  index offset that is not a multiple of the index size or is at or past the buffer's end is
+  `Refusal::IndexBufferOffset`.
 - A viewport is Vulkan's with its height negated (from `y + height`): framebuffer rows, the
   fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
   front-facing winding is Vulkan's front face of the same name. A viewport of no width or height,
@@ -3209,6 +3229,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render encoders
 
+- An indexed indirect draw's index count is the GPU's to read, so a count that runs past the index
+  buffer is not refused, as a direct draw's is (`Refusal::IndexBufferOffset`, which Metal's
+  validation stops). The index buffer is bound from the indices to the end of the block's
+  `VkBuffer`, so such a draw reads the block's later bytes as indices, and a count past the block's
+  end is outside Vulkan's valid usage without `robustBufferAccess2`, which the floor does not
+  require (`VUID-vkCmdDrawIndexedIndirect-robustBufferAccess2-08798`).
 - Refused by `Gap::Draw`, naming its `DrawKind`: a triangle fill mode but `Fill`
   (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
   `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
@@ -3230,18 +3256,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `supportsNonZeroFirstInstance` (lavapipe and the UHD 630 among the lab's), a draw at a base
   instance other than 0 through a state that steps a layout per instance at a rate above 1
   (`DividedBaseInstance`: Vulkan's divisor takes `firstInstance` 0 alone there,
-  VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw, whose
-  base instance the CPU does not see, is not built. A patch draw through a patch index buffer is
-  `PatchIndexBuffer`: the control stage takes each patch's index from its position, and no replay
-  stream's patch draw names one. Every attachment the replay streams read through a texture is
-  a colour render target of `Private` storage, read from the fragment function; and
-  their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
-  A draw that reads its own target over a buffer in place, a linear image on the buffer's memory
-  that never leaves the general layout, is refused on every device (`AttachmentRead`): no play
-  of the replay streams met it. The forms ruled for it, should a stream meet it, are the read
-  through the image's shadow, the counted copy a device without the feedback loop takes, first,
-  and then, where the device has the feedback loop, unified image layouts and a `LINEAR` image
-  with the feedback usage, the loop on the attachment in the general layout.
+  VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw through
+  such a state, whose base instance the GPU reads, is refused alike. A patch draw through a patch
+  index buffer is `PatchIndexBuffer`: the control stage takes each patch's index from its position,
+  and no replay stream's patch draw names one. Every attachment the replay streams read through a
+  texture is a colour render target of `Private` storage, read from the fragment function; and their
+  stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0. A draw that reads
+  its own target over a buffer in place, a linear image on the buffer's memory that never leaves the
+  general layout, is refused on every device (`AttachmentRead`): no play of the replay streams met
+  it. The forms ruled for it, should a stream meet it, are the read through the image's shadow, the
+  counted copy a device without the feedback loop takes, first, and then, where the device has the
+  feedback loop, unified image layouts and a `LINEAR` image with the feedback usage, the loop on the
+  attachment in the general layout.
 - A fetch (`[[color(n)]]`) orders the fragments of earlier draws before it, not the fragments of its
   own draw that cover the same pixel, which Metal orders in primitive order: a fragment may read the
   texel from before an earlier fragment of its draw wrote it
@@ -3295,13 +3321,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   a declared write of a Shared buffer, or of a texture over one, reaches the host once the command
   buffer completes. A declared write of a texture with no storage element refuses the encoder's
   later draws that may reach one beyond their slots (the known gaps of textures).
-- Not built, and so not methods: indirect draws (of patches too), `useHeap:stages:`, the store
-  action options setters, tile functions, `setVertexBuffer:offset:attributeStride:atIndex:`,
-  `setTessellationFactorScale:` (read only by a state that enables the scale, which is refused) and
-  `drawIndexedPatches:` (whose control-point index buffer only a state of a control-point index type
-  reads, which is refused). Where a replay stream calls `useHeap:stages:` (`command-replay shapes`
-  counts a stream's calls of each selector), it is built in the compute encoder's form, `use_heap`:
-  the command buffer keeps the block and declares no access.
+- Not built, and so not methods: `useHeap:stages:`, the store action options setters, tile
+  functions, `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read
+  only by a state that enables the scale, which is refused) and `drawIndexedPatches:` (whose
+  control-point index buffer only a state of a control-point index type reads, which is refused).
+  Where a replay stream calls `useHeap:stages:` (`command-replay shapes` counts a stream's calls of
+  each selector), it is built in the compute encoder's form, `use_heap`: the command buffer keeps
+  the block and declares no access.
 - Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth and a stencil attachment
   that are not one texture's same level and slice (`DepthStencilViews`: Vulkan's rendering takes
   one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`
@@ -3596,6 +3622,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
 | `depthBiasClamp` | `VkPhysicalDeviceFeatures` | a depth bias's clamp (`set_depth_bias`), the device's own; Vulkan 1.4 and Roadmap 2022 require it |
+| `drawIndirectFirstInstance` | `VkPhysicalDeviceFeatures` | an indirect draw's base instance, which the GPU reads from Metal's arguments; Vulkan 1.4 requires it |
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |

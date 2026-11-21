@@ -439,6 +439,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // A depth bias's clamp (`setDepthBias:slopeScale:clamp:`), the device's own, set as dynamic
     // state. Vulkan 1.4 and Roadmap 2022 require it of every device.
     feature!(core.depth_bias_clamp),
+    // An indirect draw's base instance, which the GPU reads from Metal's arguments as Vulkan's
+    // `firstInstance`; without it Vulkan takes 0 alone there. Vulkan 1.4 requires it of every
+    // device.
+    feature!(core.draw_indirect_first_instance),
     // A vertex or post-tessellation vertex function's `[[clip_distance]]`, the device's own
     // clipping. Every floor driver reports it.
     feature!(core.shader_clip_distance => ShaderClipDistance),

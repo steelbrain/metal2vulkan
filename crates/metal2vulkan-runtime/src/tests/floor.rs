@@ -64,6 +64,7 @@ fn at_the_floor() -> Queried {
     features.core.logic_op = vk::TRUE;
     features.core.full_draw_index_uint32 = vk::TRUE;
     features.core.depth_bias_clamp = vk::TRUE;
+    features.core.draw_indirect_first_instance = vk::TRUE;
     features.core.shader_clip_distance = vk::TRUE;
     features.core.shader_tessellation_and_geometry_point_size = vk::TRUE;
     features.core.large_points = vk::TRUE;
@@ -370,7 +371,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 54] = [
+    let cases: [(Clear, Missing); 55] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -569,6 +570,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.depth_bias_clamp = vk::FALSE,
             feature(CORE, "depthBiasClamp"),
+        ),
+        (
+            |f| f.core.draw_indirect_first_instance = vk::FALSE,
+            feature(CORE, "drawIndirectFirstInstance"),
         ),
         (
             |f| f.core.shader_clip_distance = vk::FALSE,

@@ -6657,8 +6657,11 @@ method	metal2vulkan-runtime::PixelFormatInfo::describes_a_format	pub fn describe
 method	metal2vulkan-runtime::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-runtime::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_indexed_primitives	pub fn draw_indexed_primitives(&mut self, primitive_type: PrimitiveType, index_count: u32, indices: IndexBuffer<'_>, instance_count: u32, base_vertex: i32, base_instance: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::draw_indexed_primitives_indirect	pub fn draw_indexed_primitives_indirect(&mut self, primitive_type: PrimitiveType, indices: IndexBuffer<'_>, indirect_buffer: &Buffer, indirect_buffer_offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_patches	pub fn draw_patches(&mut self, number_of_patch_control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: Option<(&Buffer, u64)>, instance_count: u32, base_instance: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::draw_patches_indirect	pub fn draw_patches_indirect(&mut self, number_of_patch_control_points: u32, patch_index_buffer: Option<(&Buffer, u64)>, indirect_buffer: &Buffer, indirect_buffer_offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_primitives	pub fn draw_primitives(&mut self, primitive_type: PrimitiveType, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::draw_primitives_indirect	pub fn draw_primitives_indirect(&mut self, primitive_type: PrimitiveType, indirect_buffer: &Buffer, indirect_buffer_offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-runtime::RenderCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_alpha_test_reference_value	pub fn set_alpha_test_reference_value(&mut self, value: f32)

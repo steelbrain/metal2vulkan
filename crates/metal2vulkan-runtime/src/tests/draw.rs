@@ -2176,13 +2176,27 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         d
     }
 
-    /// Two instances of `state`'s triangle ([`marked`]), drawn from vertex 1 at `base_instance`
-    /// over the marks `0xA0` to `0xA3`: each texel's four words, or the draw's error.
+    /// How [`two_instances`] draws its instances. An indirect draw's arguments are copied into
+    /// place, 16 bytes into their buffer, by a blit earlier in its command buffer.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Drawn {
+        /// `draw_primitives` of two instances.
+        Direct,
+        /// `draw_primitives_indirect`, of `count` instances.
+        Indirect { count: u32 },
+        /// `draw_indexed_primitives_indirect` of two instances: index 1 on of 16-bit indices
+        /// `[7, 0, 1, 2]`, at base vertex 1.
+        IndexedIndirect,
+    }
+
+    /// Instances of `state`'s triangle ([`marked`]), drawn from vertex 1 at `base_instance` over
+    /// the marks `0xA0` to `0xA3`, as `drawn` says: each texel's four words, or the draw's error.
     fn two_instances(
         name: &str,
         device: &Device,
         state: &RenderPipelineState,
         base_instance: u32,
+        drawn: Drawn,
     ) -> Result<Vec<[u32; 4]>, Error> {
         // `ima_vertex` maps pixel positions to clip space by the frame's width and height and
         // moves instance `iid` down `iid` rows of the frame's row stride, 4. Vertices 1 to 3 are a
@@ -2211,14 +2225,44 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         let color = target(device, PixelFormat::RGBA32Uint, TextureUsage::RENDER_TARGET);
         let queue = device.new_command_queue(4).expect("a queue");
         let command_buffer = queue.command_buffer().expect("a command buffer");
+        let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The indirect arguments: Metal's words, written by the host into one buffer and copied
+        // by the GPU into another, which the draw reads.
+        let words: Vec<u32> = match drawn {
+            Drawn::Direct => Vec::new(),
+            Drawn::Indirect { count } => vec![3, count, 1, base_instance],
+            Drawn::IndexedIndirect => vec![3, 2, 1, 1, base_instance],
+        };
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let indices = buffers.of(device, &[7u16, 0, 1, 2].map(u16::to_le_bytes).concat());
+        let arguments = buffers.of(device, &[0xee; 40]);
+        if !bytes.is_empty() {
+            let source = buffers.of(device, &bytes);
+            let mut blit = (command_buffer.blit_command_encoder())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let size = bytes.len() as u64;
+            draw(blit.copy_from_buffer_to_buffer(&source, 0, &arguments, 16, size));
+            blit.end_encoding();
+        }
         let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
         draw(encoder.set_render_pipeline_state(state));
         draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
         draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
         draw(encoder.set_vertex_bytes(&frame, 2));
-        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, base_instance);
+        let triangle = PrimitiveType::Triangle;
+        let drawn = match drawn {
+            Drawn::Direct => encoder.draw_primitives(triangle, 1, 3, 2, base_instance),
+            Drawn::Indirect { .. } => encoder.draw_primitives_indirect(triangle, &arguments, 16),
+            Drawn::IndexedIndirect => {
+                let indices = IndexBuffer {
+                    buffer: &indices,
+                    offset: 0,
+                    index_type: IndexType::UInt16,
+                };
+                encoder.draw_indexed_primitives_indirect(triangle, indices, &arguments, 16)
+            }
+        };
         encoder.end_encoding();
         run(name, &command_buffer);
         drawn?;
@@ -2254,7 +2298,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         let d = marked(&library, VertexStepFunction::Constant, 0);
         each_device("draw_constant_step", |name, _, device| {
             let state = state(name, &device, &d);
-            let texels = two_instances(name, &device, &state, 1)
+            let texels = two_instances(name, &device, &state, 1, Drawn::Direct)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             for (at, words) in texels.iter().enumerate() {
                 assert_eq!(
@@ -2264,6 +2308,45 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 );
             }
             println!("{name}: the first mark at every vertex of instances 1 and 2");
+        });
+    }
+
+    /// An indirect draw reads Metal's arguments from its buffer as Vulkan's own command, after a
+    /// blit earlier in the command buffer wrote them: the constant-step triangle of
+    /// [`every_device_fetches_a_constant_step_attribute_for_every_vertex_and_instance`], drawn
+    /// from `MTLDrawPrimitivesIndirectArguments` of vertex start 1, two instances and base
+    /// instance 1, and from `MTLDrawIndexedPrimitivesIndirectArguments` of three indices from
+    /// index 1 (`[0, 1, 2]`), base vertex 1, two instances and base instance 1, fills every texel
+    /// as the direct draw does: the vertex ID 1, and the instance 1 in the upper half and 2 in
+    /// the lower, the base instance the device's own (`drawIndirectFirstInstance`). Arguments of
+    /// no instances draw nothing, every texel the clear.
+    #[test]
+    fn every_device_draws_from_indirect_arguments_a_blit_wrote() {
+        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
+            return;
+        };
+        let d = marked(&library, VertexStepFunction::Constant, 0);
+        each_device("draw_indirect", |name, _, device| {
+            let state = state(name, &device, &d);
+            for drawn in [Drawn::Indirect { count: 2 }, Drawn::IndexedIndirect] {
+                let texels = two_instances(name, &device, &state, 1, drawn)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                for (at, words) in texels.iter().enumerate() {
+                    let want = [0xA0, 1, upper_or_lower(at), 1];
+                    let indexed = drawn == Drawn::IndexedIndirect;
+                    assert_eq!(*words, want, "{name}: indexed {indexed}, texel {at}");
+                }
+            }
+            let none = two_instances(name, &device, &state, 1, Drawn::Indirect { count: 0 })
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                none.iter().all(|words| *words == [0, 0, 0, 1]),
+                "{name}: no instances"
+            );
+            println!(
+                "{name}: indirect and indexed indirect draws of instances 1 and 2 as the direct \
+                 draw's; no instances drew nothing"
+            );
         });
     }
 
@@ -2306,12 +2389,12 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                     Err(other) => panic!("{name}: {other}"),
                 };
             assert!(divides, "{name}: a step rate of 2 made a state");
-            let from_zero = two_instances(name, &device, &state, 0)
+            let from_zero = two_instances(name, &device, &state, 0, Drawn::Direct)
                 .unwrap_or_else(|error| panic!("{name}: from base instance 0: {error}"));
             for (at, words) in from_zero.iter().enumerate() {
                 assert_eq!(*words, [0xA0, 1, 1, 1], "{name}: from 0: texel {at}");
             }
-            match two_instances(name, &device, &state, 1) {
+            match two_instances(name, &device, &state, 1, Drawn::Direct) {
                 Ok(texels) => {
                     assert!(nonzero, "{name}: a base instance of 1 drew");
                     for (at, words) in texels.iter().enumerate() {

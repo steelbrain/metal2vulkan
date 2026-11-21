@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 598 | 27 |
-| missing | 1113 | 36 |
+| implemented | 601 | 27 |
+| missing | 1110 | 36 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 242; by the translator's values: 356. Missing by size: S 187, M 208, L 342, XL 376.
+Implemented by the runtime: 245; by the translator's values: 356. Missing by size: S 187, M 205, L 342, XL 376.
 
 ## Missing, in build order
 
@@ -33,7 +33,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
 | render pass descriptor fields | S/M/L | 9 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.imageblockSampleLength`, ... |
-| encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 32 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
+| encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 29 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
@@ -2092,15 +2092,15 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:` | method | implemented | `RenderCommandEncoder::draw_indexed_primitives` (runtime) |
 | `MTLRenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_primitives` (runtime) |
 | `MTLRenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_indexed_primitives` (runtime) |
-| `MTLRenderCommandEncoder.drawPrimitives:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
-| `MTLRenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
+| `MTLRenderCommandEncoder.drawPrimitives:indirectBuffer:indirectBufferOffset:` | method | implemented | `RenderCommandEncoder::draw_primitives_indirect` (runtime) |
+| `MTLRenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | implemented | `RenderCommandEncoder::draw_indexed_primitives_indirect` (runtime) |
 | `MTLRenderCommandEncoder.textureBarrier` (deprecated) | method | missing | S: deprecated; Metal states it as `memoryBarrierWithScope:` of textures from fragment to fragment, which the runtime has |
 | `MTLRenderCommandEncoder.updateFence:afterStages:` | method | implemented | `RenderCommandEncoder::update_fence` (runtime) |
 | `MTLRenderCommandEncoder.waitForFence:beforeStages:` | method | implemented | `RenderCommandEncoder::wait_for_fence` (runtime) |
 | `MTLRenderCommandEncoder.setTessellationFactorBuffer:offset:instanceStride:` | method | implemented | `RenderCommandEncoder::set_tessellation_factor_buffer` (runtime) |
 | `MTLRenderCommandEncoder.setTessellationFactorScale:` | method | missing | S: a tessellation factor scale; a state that enables one is refused (`RenderPipelineKind::Tessellation`) |
 | `MTLRenderCommandEncoder.drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_patches` (runtime) |
-| `MTLRenderCommandEncoder.drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
+| `MTLRenderCommandEncoder.drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | implemented | `RenderCommandEncoder::draw_patches_indirect` (runtime): without a patch index buffer |
 | `MTLRenderCommandEncoder.drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | method | missing | M: patches through a control-point index buffer |
 | `MTLRenderCommandEncoder.drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: patches through a control-point index buffer, drawn indirectly |
 | `MTLRenderCommandEncoder.tileWidth` | property | missing | L: tile render pipelines; metal2vulkan-runtime makes none |

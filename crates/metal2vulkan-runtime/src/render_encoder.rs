@@ -501,6 +501,25 @@ enum Call<'a> {
     },
     /// A draw of patches: each patch one vertex of a patch list, at its position.
     Patches { patch_start: u32, patch_count: u32 },
+    /// A draw whose counts and starts the GPU reads from `arguments` at `offset`, each Metal's
+    /// layout Vulkan's indirect command's too: `MTLDrawIndexedPrimitivesIndirectArguments` where it
+    /// has `indices`, `MTLDrawPatchIndirectArguments` where `patches` (each patch one vertex, as a
+    /// direct patch draw's), else `MTLDrawPrimitivesIndirectArguments`.
+    Indirect {
+        arguments: &'a Buffer,
+        offset: u64,
+        indices: Option<IndexBuffer<'a>>,
+        patches: bool,
+    },
+}
+
+/// The bytes of a draw's indirect arguments: `VkDrawIndexedIndirectCommand`'s 20 for an indexed
+/// draw, `VkDrawIndirectCommand`'s 16 for another.
+fn indirect_bytes(indexed: bool) -> u64 {
+    match indexed {
+        true => 20,
+        false => 16,
+    }
 }
 
 /// A render encoder's `use_resource` declarations.
@@ -533,16 +552,16 @@ struct Declarations {
 /// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
 /// stencil references, the blend color, the line width (lines drawn at 1 alone: a draw of lines
 /// at another width is [`DrawKind::LineWidth`]), the store actions an encoder sets for an
-/// attachment whose pass left them unknown, memory barriers, fences, direct draws of points, lines
-/// and triangles, indexed or not, direct draws of patches with a tessellation factor buffer, and the `Disabled`
-/// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
-/// built, and so not methods: indirect draws, several viewports or scissor rectangles, the
-/// triangle fill mode, the depth clip mode, `useResource:`, the store action options
-/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// attachment whose pass left them unknown, memory barriers, fences, draws of points, lines and
+/// triangles, indexed or not, draws of patches with a tessellation factor buffer, each direct or
+/// indirect, and the `Disabled` visibility result mode (`Boolean` and `Counting` are
+/// [`DrawKind::VisibilityResults`]). Not built, and so not methods: several viewports or scissor
+/// rectangles, the triangle fill mode, the depth clip mode, the store action options setters,
+/// tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
-/// type, which is refused). A draw of what the runtime does not
-/// build is [`Gap::Draw`], naming its [`DrawKind`].
+/// type, which is refused). A draw of what the runtime does not build is [`Gap::Draw`], naming
+/// its [`DrawKind`].
 ///
 /// Owned: one thread encodes at a time. Dropping it ends it, as
 /// [`end_encoding`](Self::end_encoding) does.
@@ -1737,12 +1756,31 @@ impl RenderCommandEncoder {
             vertex_start,
             vertex_count,
         };
-        self.draw(
-            primitives(primitive_type),
-            call,
-            instance_count,
-            base_instance,
-        )
+        let instances = Some([instance_count, base_instance]);
+        self.draw(primitives(primitive_type), call, instances)
+    }
+
+    /// `drawPrimitives:indirectBuffer:indirectBufferOffset:`: one `vkCmdDrawIndirect` on the
+    /// buffer at `indirect_buffer_offset`, whose `MTLDrawPrimitivesIndirectArguments` (vertex
+    /// count, instance count, vertex start, base instance) the GPU reads as Vulkan's own
+    /// command. The buffer counts as a read, and the command buffer keeps it until it retires. The
+    /// runtime never reads the counts: a draw of no vertices or no instances is recorded and draws
+    /// nothing.
+    ///
+    /// Err: as [`draw_primitives`](Self::draw_primitives); [`Refusal::OtherDevice`] for another
+    /// device's buffer; [`Refusal::IndirectOffset`] for an offset not a multiple of 4 or without
+    /// 16 bytes after it in the buffer; [`Refusal::ArgumentPlace`] for arguments at a byte of the
+    /// buffer's block's allocation that is not a multiple of 4; [`Gap::Draw`] of
+    /// [`DrawKind::DividedBaseInstance`] for a state whose base instance the device takes as 0
+    /// alone.
+    pub fn draw_primitives_indirect(
+        &mut self,
+        primitive_type: PrimitiveType,
+        indirect_buffer: &Buffer,
+        indirect_buffer_offset: u64,
+    ) -> Result<(), Error> {
+        let call = self.indirect(indirect_buffer, indirect_buffer_offset, None, false)?;
+        self.draw(primitives(primitive_type), call, None)
     }
 
     /// `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:`
@@ -1769,12 +1807,37 @@ impl RenderCommandEncoder {
             indices,
             base_vertex,
         };
-        self.draw(
-            primitives(primitive_type),
-            call,
-            instance_count,
-            base_instance,
-        )
+        let instances = Some([instance_count, base_instance]);
+        self.draw(primitives(primitive_type), call, instances)
+    }
+
+    /// `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:`,
+    /// its index buffer arguments in `indices`: one `vkCmdDrawIndexedIndirect` on the buffer at
+    /// `indirect_buffer_offset`, whose `MTLDrawIndexedPrimitivesIndirectArguments` (index count,
+    /// instance count, index start, base vertex, base instance) the GPU reads as Vulkan's own
+    /// command. Both buffers count as reads, and the command buffer keeps them until it retires.
+    /// A strip restarts at the all-ones index, as Metal's. The runtime never reads the counts: an
+    /// index count past the buffer's end reads what Vulkan's index fetch reads there.
+    ///
+    /// Err: as [`draw_primitives_indirect`](Self::draw_primitives_indirect), 20 bytes the
+    /// arguments; [`Refusal::OtherDevice`] for another device's index buffer;
+    /// [`Refusal::IndexBufferOffset`] for an offset not a multiple of the index size or at or
+    /// past the buffer's end; [`Refusal::ArgumentPlace`] for indices at a byte of the buffer's block's
+    /// allocation that is not a multiple of the index size.
+    pub fn draw_indexed_primitives_indirect(
+        &mut self,
+        primitive_type: PrimitiveType,
+        indices: IndexBuffer<'_>,
+        indirect_buffer: &Buffer,
+        indirect_buffer_offset: u64,
+    ) -> Result<(), Error> {
+        let call = self.indirect(
+            indirect_buffer,
+            indirect_buffer_offset,
+            Some(indices),
+            false,
+        )?;
+        self.draw(primitives(primitive_type), call, None)
     }
 
     /// `setTessellationFactorBuffer:offset:instanceStride:`. `None` unbinds it. A draw of
@@ -1851,16 +1914,76 @@ impl RenderCommandEncoder {
             patch_count,
         };
         let patches = (vk::PrimitiveTopology::PATCH_LIST, false);
-        self.draw(patches, call, instance_count, base_instance)
+        self.draw(patches, call, Some([instance_count, base_instance]))
     }
 
-    /// A draw of `call` at `topology`, with primitive restart or not.
+    /// `drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:`,
+    /// with a pipeline state whose vertex function is post-tessellation: one `vkCmdDrawIndirect`
+    /// on the buffer at `indirect_buffer_offset`, whose `MTLDrawPatchIndirectArguments` (patch
+    /// count, instance count, patch start, base instance) the GPU reads as Vulkan's own command,
+    /// each patch one vertex of the state's patch list as in
+    /// [`draw_patches`](Self::draw_patches), so Metal's patch count is the draw's vertex count
+    /// unchanged. The buffer counts as a read, and the command buffer keeps it until it retires.
+    ///
+    /// Err: as [`draw_patches`](Self::draw_patches) and
+    /// [`draw_primitives_indirect`](Self::draw_primitives_indirect).
+    pub fn draw_patches_indirect(
+        &mut self,
+        number_of_patch_control_points: u32,
+        patch_index_buffer: Option<(&Buffer, u64)>,
+        indirect_buffer: &Buffer,
+        indirect_buffer_offset: u64,
+    ) -> Result<(), Error> {
+        let _ = number_of_patch_control_points;
+        if patch_index_buffer.is_some() {
+            return Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::PatchIndexBuffer,
+            }));
+        }
+        let call = self.indirect(indirect_buffer, indirect_buffer_offset, None, true)?;
+        let patches = (vk::PrimitiveTopology::PATCH_LIST, false);
+        self.draw(patches, call, None)
+    }
+
+    /// An indirect draw's call: its arguments `offset` into `arguments`, checked as
+    /// [`draw_primitives_indirect`](Self::draw_primitives_indirect) says.
+    fn indirect<'a>(
+        &self,
+        arguments: &'a Buffer,
+        offset: u64,
+        indices: Option<IndexBuffer<'a>>,
+        patches: bool,
+    ) -> Result<Call<'a>, Error> {
+        if !arguments.is_of(&self.core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let bytes = indirect_bytes(indices.is_some());
+        let length = arguments.length();
+        if offset % 4 != 0 || offset.checked_add(bytes).is_none_or(|end| end > length) {
+            return Err(Error::Refused(Refusal::IndirectOffset { offset, length }));
+        }
+        let place = arguments.device_range().1 + offset;
+        if !place.is_multiple_of(4) {
+            return Err(Error::Refused(Refusal::ArgumentPlace {
+                place,
+                alignment: 4,
+            }));
+        }
+        Ok(Call::Indirect {
+            arguments,
+            offset,
+            indices,
+            patches,
+        })
+    }
+
+    /// A draw of `call` at `topology`, with primitive restart or not, of `instances` (the count
+    /// and the base instance) where the call is direct.
     fn draw(
         &mut self,
         (topology, restart): (vk::PrimitiveTopology, bool),
         call: Call<'_>,
-        instance_count: u32,
-        base_instance: u32,
+        instances: Option<[u32; 2]>,
     ) -> Result<(), Error> {
         let Some(state) = &self.pipeline else {
             return Err(Error::Refused(Refusal::NoPipeline));
@@ -1869,7 +1992,11 @@ impl RenderCommandEncoder {
         let draws = &compiled.draws;
         let gap = |kind| Err(Error::Unsupported(Gap::Draw { kind }));
         let patches = draws.patches;
-        if patches != matches!(call, Call::Patches { .. }) {
+        let patch_call = matches!(
+            call,
+            Call::Patches { .. } | Call::Indirect { patches: true, .. }
+        );
+        if patches != patch_call {
             return Err(Error::Refused(Refusal::PatchDraw));
         }
         if patches && self.factors.is_none() {
@@ -1881,19 +2008,28 @@ impl RenderCommandEncoder {
         if self.tests.stencil && self.pass.stencil.is_none() {
             return Err(Error::Refused(Refusal::StencilAttachment));
         }
-        // The index buffer: its `VkBuffer`, the offset there, and the index type.
-        let index = match call {
+        // The index buffer: its `VkBuffer`, the offset there, and the index type. An indirect
+        // draw's count is the GPU's, so its indices are checked to start inside the buffer: one
+        // index there.
+        let indexed = match call {
             Call::Direct { .. } | Call::Patches { .. } => None,
             Call::Indexed {
                 index_count,
-                indices:
-                    IndexBuffer {
-                        buffer,
-                        offset,
-                        index_type,
-                    },
+                indices,
                 ..
-            } => {
+            } => Some((indices, index_count)),
+            Call::Indirect { indices, .. } => indices.map(|indices| (indices, 1)),
+        };
+        let index = match indexed {
+            None => None,
+            Some((
+                IndexBuffer {
+                    buffer,
+                    offset,
+                    index_type,
+                },
+                index_count,
+            )) => {
                 if !buffer.is_of(&self.core) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
@@ -1967,14 +2103,17 @@ impl RenderCommandEncoder {
             self.facts.held = true;
         }
         let count = match call {
-            Call::Direct { vertex_count, .. } => vertex_count,
-            Call::Indexed { index_count, .. } => index_count,
-            Call::Patches { patch_count, .. } => patch_count,
+            Call::Direct { vertex_count, .. } => Some(vertex_count),
+            Call::Indexed { index_count, .. } => Some(index_count),
+            Call::Patches { patch_count, .. } => Some(patch_count),
+            Call::Indirect { .. } => None,
         };
-        if count == 0 || instance_count == 0 {
+        let [instance_count, base_instance] = instances.unwrap_or([1, 0]);
+        if count == Some(0) || instance_count == 0 {
             return Ok(());
         }
-        if draws.first_instance_zero && base_instance != 0 {
+        // An indirect draw's base instance is the GPU's to read.
+        if draws.first_instance_zero && (instances.is_none() || base_instance != 0) {
             return gap(DrawKind::DividedBaseInstance);
         }
         let lines = matches!(
@@ -1997,7 +2136,12 @@ impl RenderCommandEncoder {
         // reached through an address outside its resources, or buffers read while such a texture
         // the segment used has its image ahead of its buffer.
         let index_buffer = index.map(|(buffer, ..)| buffer);
-        // A patch draw's factor buffer is its read as an index buffer is an indexed draw's.
+        // An indirect draw's arguments, and a patch draw's factor buffer, are its reads as an
+        // index buffer is an indexed draw's.
+        let arguments = match call {
+            Call::Indirect { arguments, .. } => Some(arguments),
+            _ => None,
+        };
         let factors = (self.factors.as_ref()).filter(|_| patches);
         let overs = building.copies_over()
             && (draws.reads_unbound
@@ -2008,10 +2152,11 @@ impl RenderCommandEncoder {
         let each = reads.is_some()
             || self.facts.managed
             || index_buffer.is_some_and(|buffer| buffer.managed_overs().is_some())
+            || arguments.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
         match each {
-            true => self.draw_reaches(reads, index_buffer, overs)?,
+            true => self.draw_reaches(reads, [index_buffer, arguments], overs)?,
             false => {
                 if !self.shadow_slots.is_empty() {
                     self.shadow_slots.clear();
@@ -2025,6 +2170,9 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends");
         if self.facts.host {
             building.wrote_host();
+        }
+        if let Some(arguments) = arguments {
+            building.keep(arguments);
         }
         self.wrote |= writes_memory;
         (self.drew, self.pass_drew) = (true, true);
@@ -2142,6 +2290,28 @@ impl RenderCommandEncoder {
                     patch_start,
                     base_instance,
                 ),
+                (
+                    Call::Indirect {
+                        arguments, offset, ..
+                    },
+                    index,
+                ) => {
+                    let (reached, at) = arguments.device_range();
+                    let stride = indirect_bytes(index.is_some()) as u32;
+                    match index {
+                        Some((_, buffer, index_offset, ty)) => {
+                            device.cmd_bind_index_buffer(command, buffer, index_offset, ty);
+                            device.cmd_draw_indexed_indirect(
+                                command,
+                                reached,
+                                at + offset,
+                                1,
+                                stride,
+                            );
+                        }
+                        None => device.cmd_draw_indirect(command, reached, at + offset, 1, stride),
+                    }
+                }
                 (Call::Indexed { .. }, None) => {}
             }
         }
@@ -2298,12 +2468,12 @@ impl RenderCommandEncoder {
     /// hold copied; then the copies it needs first, its textures over a buffer in an image of
     /// their own (`crate::over`), where `overs`, and the textures over a Managed buffer's device
     /// copy it reaches (`crate::over::ManagedOvers`), each recorded between the rendering's end
-    /// and its new beginning. `index` is its index buffer; a patch draw reads the tessellation
-    /// factor buffer as such.
+    /// and its new beginning. `index` is its index buffer and its indirect arguments' buffer; a
+    /// patch draw reads the tessellation factor buffer as such.
     fn draw_reaches(
         &mut self,
         reads: Option<AttachmentReads>,
-        index: Option<&Buffer>,
+        index: [Option<&Buffer>; 2],
         overs: bool,
     ) -> Result<(), Error> {
         let reads_attachment = match reads {
@@ -2346,7 +2516,7 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends");
         let vertex_reads = (draws.bindings.iter())
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
-            .chain(index.map(BufferObject::object))
+            .chain(index.into_iter().flatten().map(BufferObject::object))
             .chain(factors);
         let copies = match overs {
             false => over::Copies::default(),

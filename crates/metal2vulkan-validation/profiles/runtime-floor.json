@@ -1140,6 +1140,7 @@
           "logicOp": true,
           "fullDrawIndexUint32": true,
           "depthBiasClamp": true,
+          "drawIndirectFirstInstance": true,
           "shaderClipDistance": true,
           "tessellationShader": true,
           "shaderTessellationAndGeometryPointSize": true,

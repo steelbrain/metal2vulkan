@@ -1636,15 +1636,15 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:i
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:indirectBuffer:indirectBufferOffset:		M			indirect draws	M	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:		M			indirect draws	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_primitives_indirect			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_indexed_primitives_indirect			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	textureBarrier	yes	M			deprecated; Metal states it as `memoryBarrierWithScope:` of textures from fragment to fragment, which the runtime has	S	barriers
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	updateFence:afterStages:		I	runtime	RenderCommandEncoder::update_fence			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	waitForFence:beforeStages:		I	runtime	RenderCommandEncoder::wait_for_fence			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTessellationFactorBuffer:offset:instanceStride:		I	runtime	RenderCommandEncoder::set_tessellation_factor_buffer			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTessellationFactorScale:		M			a tessellation factor scale; a state that enables one is refused (`RenderPipelineKind::Tessellation`)	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:		I	runtime	RenderCommandEncoder::draw_patches			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			indirect draws	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_patches_indirect	without a patch index buffer		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:		M			patches through a control-point index buffer	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			patches through a control-point index buffer, drawn indirectly	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileWidth		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile

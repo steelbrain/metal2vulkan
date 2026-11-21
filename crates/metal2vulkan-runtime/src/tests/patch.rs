@@ -452,6 +452,60 @@ BUFFER_META"#;
         });
     }
 
+    /// `drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:`
+    /// reads `MTLDrawPatchIndirectArguments` (two patches from patch 0, one instance, base
+    /// instance 0), 4 bytes into its buffer, as `vkCmdDrawIndirect`'s command, the patch count
+    /// the draw's vertex count: the patches draw as
+    /// [`every_device_draws_patches_from_their_factors`]'s. Through a patch index buffer the draw
+    /// is `DrawKind::PatchIndexBuffer`, as a direct one's.
+    #[test]
+    fn every_device_draws_patches_from_indirect_arguments() {
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        let d = patches(&libraries);
+        each_device("draw_patches_indirect", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (points, tints, factors) = patch_buffers(&device, &mut buffers);
+            let words: Vec<u8> = [0xeeee_eeee_u32, 2, 1, 0, 0]
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect();
+            let arguments = buffers.of(&device, &words);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
+            draw(encoder.set_tessellation_factor_buffer(Some(&factors), 8, 0));
+            let indexed = encoder.draw_patches_indirect(3, Some((&factors, 0)), &arguments, 4);
+            assert!(
+                matches!(
+                    indexed,
+                    Err(Error::Unsupported(Gap::Draw {
+                        kind: DrawKind::PatchIndexBuffer,
+                    }))
+                ),
+                "{name}: a patch index buffer: {indexed:?}"
+            );
+            draw(encoder.draw_patches_indirect(3, None, &arguments, 4));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let want = texels(|_, y| if y < 4 { GREEN } else { BLACK });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: two patches drawn from indirect arguments, the second culled");
+        });
+    }
+
     /// A post-tessellation function whose fields pass its push window ([`wide_vertex`]) spills
     /// the rest into its parameter block, which each draw writes into the ring and the function
     /// reads: the pipeline's control stage, whose fields the translator states as a second
