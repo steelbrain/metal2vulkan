@@ -2263,7 +2263,7 @@
       }
     },
     {
-      "case_id": "6ece8087a1124a9baebcbcefc0f858712d7b37abecf21d9d28c629406ce42eaf",
+      "case_id": "722202f0e4f7172f265f75422d37bbafb26b9763e6a4caab1489e61c5ab8451f",
       "name": "coverage-read-by-each-run-of-a-memory-writer-at-2x",
       "gap": "clipped_primitive_split",
       "review": {
@@ -2272,7 +2272,7 @@
           "D341.7",
           "D341.9"
         ],
-        "note": "A memory writer that reads [[sample_mask]] and no sample index runs once per covered sample over the generated full-screen triangle at 2 samples in a 1x1 pass without attachments; Apple's rasterizer splits no pixel of this draw at 2 samples, and the M4 counts 2 runs of 0x3 (EV VSM-nat-m4). A Vulkan device's loop reads the whole primitive's coverage; MoltenVK, which runs the function as written, reads Metal's (D341 item 9). Open until an exact emulation exists (the user's decision of 2026-10-06): the mismatch stays counted, its reason naming the gap.",
+        "note": "A memory writer that reads [[sample_mask]] and no sample index, drawn by the generated full-screen triangle at 2 samples in a 1x1 pass without attachments: word 0 ORs the coverages its runs read, 0x3 on the M3, the pixel's coverage, which a Vulkan device's runs over the whole primitive's coverage also give. Documented Metal names no run count for a memory-writing fragment, and the device runs one as it runs it (PrecisionNote::DeviceFragmentRuns), so the case compares no run count. Listed by its structure; the gap is named only for a mismatching row.",
         "sign_off": {
           "state": "awaiting_user",
           "decision": "C3 answer gap: Apple's rasterizer splits the primitives it clips; open until an exact emulation exists (the user's decision of 2026-10-06)"
@@ -2280,7 +2280,7 @@
       }
     },
     {
-      "case_id": "74b594b3df7dfe5a11ba2fd1aba919c0ac0af3e194f913ff86fc1a682606fc47",
+      "case_id": "bc5c29ad7fd0f978d1a4541cc63b38f71f54fe2f5eeb604af6f3760de5933b83",
       "name": "coverage-read-by-each-run-of-a-memory-writer-at-4x",
       "gap": "clipped_primitive_split",
       "review": {
@@ -2289,7 +2289,7 @@
           "D341.7",
           "D341.9"
         ],
-        "note": "The same at 4 samples, where Apple's rasterizer splits the clipped triangle's pixel (D341 item 6): the M4 counts 2 runs of 0x3 and 2 of 0xc (EV VSM-nat-m4). A Vulkan device's loop reads the whole primitive's coverage; MoltenVK, which runs the function as written, reads Metal's (D341 item 9). Open until an exact emulation exists (the user's decision of 2026-10-06): the mismatch stays counted, its reason naming the gap.",
+        "note": "The same at 4 samples, where Apple's rasterizer splits the clipped triangle's pixel into runs of 0x3 and of 0xc: word 0, their OR, is 0xf on the M3, the pixel's coverage. Documented Metal names no run count for a memory-writing fragment, and the device runs one as it runs it (PrecisionNote::DeviceFragmentRuns), so the case compares no run count. Listed by its structure; the gap is named only for a mismatching row.",
         "sign_off": {
           "state": "awaiting_user",
           "decision": "C3 answer gap: Apple's rasterizer splits the primitives it clips; open until an exact emulation exists (the user's decision of 2026-10-06)"
@@ -2297,7 +2297,7 @@
       }
     },
     {
-      "case_id": "6322020d4a6af24b6ac804511fb58c15862359d356b8c03483d6c3f66f78171a",
+      "case_id": "870c5c61ed694d0355c3efe41cc59a5148886cc6ac2784f38ce3690be26a6d41",
       "name": "coverage-and-pixel-center-read-by-each-run-at-4x",
       "gap": "clipped_primitive_split",
       "review": {
@@ -2306,7 +2306,24 @@
           "D341.7",
           "D341.9"
         ],
-        "note": "The same beside [[position]] at 4 samples: the M4 counts 2 runs of 0x3 and 2 of 0xc, each reading the pixel center (EV VSM-nat-m4). A Vulkan device's loop reads the whole primitive's coverage; MoltenVK, which runs the function as written, reads Metal's (D341 item 9). Open until an exact emulation exists (the user's decision of 2026-10-06): the mismatch stays counted, its reason naming the gap.",
+        "note": "The same beside [[position]] at 4 samples: word 18 ORs the position each run reads, the pixel center, 0x202 on the M3. Documented Metal names no run count for a memory-writing fragment, and the device runs one as it runs it (PrecisionNote::DeviceFragmentRuns), so the case compares no run count. Listed by its structure; the gap is named only for a mismatching row.",
+        "sign_off": {
+          "state": "awaiting_user",
+          "decision": "C3 answer gap: Apple's rasterizer splits the primitives it clips; open until an exact emulation exists (the user's decision of 2026-10-06)"
+        }
+      }
+    },
+    {
+      "case_id": "a997be267654b9c1d11c139af4e477dfeb1ff40244962ae93e5fb2c6d363fbdd",
+      "name": "coverage-beside-the-pixel-center-ored-over-its-runs-at-4x",
+      "gap": "clipped_primitive_split",
+      "review": {
+        "evidence": [
+          "D341.6",
+          "D341.7",
+          "D341.9"
+        ],
+        "note": "The same function's word 0, the OR of the coverages its runs read: 0xf on the M3, the pixel's coverage. Documented Metal names no run count for a memory-writing fragment, and the device runs one as it runs it (PrecisionNote::DeviceFragmentRuns), so the case compares no run count. Listed by its structure; the gap is named only for a mismatching row.",
         "sign_off": {
           "state": "awaiting_user",
           "decision": "C3 answer gap: Apple's rasterizer splits the primitives it clips; open until an exact emulation exists (the user's decision of 2026-10-06)"
