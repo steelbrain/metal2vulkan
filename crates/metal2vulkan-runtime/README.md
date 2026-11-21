@@ -1362,9 +1362,13 @@ made, with no lock, and never rewritten for layouts.
     a held group.
   - Over a Managed buffer's device copy, only at Metal's own Managed events, each texture keeping
     one flag of each kind: in, after a `did_modify_range` over its range, by the commit that
-    captures the range, after its copies into the device copy; and where device work wrote the
-    buffer (a binding whose compiled interface writes it, a blit or fill into it), by the upload
-    that leads the next submission using it; both from the device copy. Back, where device work
+    captures the range, after its copies into the device copy; and at its making, or where device
+    work wrote the buffer (a binding whose compiled interface writes it, a blit or fill into it),
+    by the upload that leads the next submission using it, in the order submissions go to the
+    device's one `VkQueue`: a command buffer of another queue that passes a group held takes the
+    copy ahead of that group. A capture over its range settles that copy only for the command
+    buffers committed at or after the capture; one committed before it takes its own. Both copy
+    from the device copy. Back, where device work
     wrote the texture, before the next reader of the device copy (a binding that reaches the
     buffer, a blit from or into it, a copy into another texture over a range that meets its, a
     `synchronize_resource`, a capture of a range over it, ahead of its copies): a

@@ -221,16 +221,16 @@ impl CopyIn {
     }
 }
 
-/// The copy-in of `named`, the ranges a capture takes: a command buffer of its own, recorded and
-/// ended, with the copies back owed to the textures over the ranges in images of their own
-/// first, then one `vkCmdCopyBuffer` for each buffer from the consumer's block into its device
-/// copy, then the copies in those textures take, or a barrier that makes the copies visible to
-/// every later command. It begins with no barrier of its own: the one ending each earlier command
-/// buffer on the queue puts every earlier command first (`record::end`). Its timestamps are its
-/// first command and its last ([`times::begin_own`]).
+/// The copy-in of `named`, the ranges the capture at the commit numbered `number` takes: a command
+/// buffer of its own, recorded and ended, with the copies back owed to the textures over the
+/// ranges in images of their own first, then one `vkCmdCopyBuffer` for each buffer from the
+/// consumer's block into its device copy, then the copies in those textures take, or a barrier
+/// that makes the copies visible to every later command. It begins with no barrier of its own:
+/// the one ending each earlier command buffer on the queue puts every earlier command first
+/// (`record::end`). Its timestamps are its first command and its last ([`times::begin_own`]).
 ///
 /// Err: [`Error::Vulkan`] where a command pool or buffer cannot be made or ended.
-pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> {
+pub(crate) fn copy_in(core: &Core, named: &[Modified], number: u64) -> Result<CopyIn, Error> {
     let device = &core.device;
     let mut recorder = core.recorders.take(device)?;
     let command = match recorder.next(device) {
@@ -242,7 +242,7 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> 
     };
     let stamps = times::begin_own(core, command);
     let backs = backs(named);
-    let into = copies_in(named);
+    let into = copies_in(named, number);
     let back_copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
     let into_copies: Vec<OverCopy> = into.iter().map(|(copy, _)| *copy).collect();
     // SAFETY: the command buffer is recording, and only this thread has it; the consumers'
@@ -304,12 +304,14 @@ fn backs(named: &[Modified]) -> Vec<Back> {
     backs
 }
 
-/// The copies in the textures over `named`'s ranges in images of their own take, after a
-/// capture's copies.
-fn copies_in(named: &[Modified]) -> Vec<(OverCopy, Arc<Image>)> {
+/// The copies in the textures over `named`'s ranges in images of their own take, after the
+/// copies of the capture at the commit numbered `number`.
+fn copies_in(named: &[Modified], number: u64) -> Vec<(OverCopy, Arc<Image>)> {
     let mut into = Vec::new();
     for modified in named.iter().filter(|modified| modified.overs.any()) {
-        modified.overs.copies_in_after(&modified.ranges, &mut into);
+        modified
+            .overs
+            .copies_in_after(&modified.ranges, number, &mut into);
     }
     into
 }

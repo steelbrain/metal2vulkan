@@ -528,6 +528,10 @@ struct Entry {
     /// An event named its range since its last copy in: its making, or submitted device work that
     /// wrote the buffer or another texture over a range that meets its.
     into: bool,
+    /// The commit number of the first capture that copied it in while `into` held: that copy in
+    /// runs ahead of every command buffer numbered at or after it (`crate::capture`), which then
+    /// takes none, while one numbered before it may run first and still takes its own.
+    captured: Option<u64>,
     /// Submitted device work wrote it since its last copy back: the upload that leads a
     /// submission may take the copy.
     back: bool,
@@ -556,11 +560,16 @@ impl Entry {
 ///
 /// - **In** after a didModifyRange over its range: the capture of the range at the next commit
 ///   (`crate::capture`) makes it, after its copies into the device copy, in the same command
-///   buffer. And where device work wrote the buffer (a binding whose compiled interface writes it,
-///   a blit or fill into it) or another texture over a range that meets its, from the submission
-///   after that work's: the upload that leads a submission using the texture makes it. Both copy
-///   from the device copy, never from the consumer's bytes a second time. Apple GPUs may alias
-///   Managed memory; the documented contract, not one GPU's answer, is the rule here.
+///   buffer. And at its making, or where device work wrote the buffer (a binding whose compiled
+///   interface writes it, a blit or fill into it) or another texture over a range that meets its,
+///   from the submission after that work's: the upload that leads the first submission that uses
+///   the texture makes it, taken as that submission goes, as the device's one `VkQueue` runs
+///   submissions in the order they go, so a command buffer of another queue that passes a group
+///   held takes it ahead of the group. A capture over its range settles that copy only for the
+///   command buffers committed at or after the capture, which run behind its copy in; one
+///   committed before it may run first, and takes its own. Both copy from the device copy, never
+///   from the consumer's bytes a second time. Apple GPUs may alias Managed memory; the documented
+///   contract, not one GPU's answer, is the rule here.
 /// - **Back** where device work wrote the texture since the last copy back: before the next
 ///   reader of the device copy (a binding whose interface reads the buffer, a blit from it, a copy
 ///   into another texture over a range that meets its, a synchronize, a capture of a range over
@@ -602,6 +611,7 @@ impl ManagedOvers {
             copy,
             range,
             into: true,
+            captured: None,
             back: false,
             fresh: false,
             pending: 0,
@@ -649,6 +659,7 @@ impl ManagedOvers {
         for entry in entries.iter_mut() {
             if !entry.of(texture) && meets(entry.range, range) {
                 entry.into = true;
+                entry.captured = None;
             }
         }
     }
@@ -657,6 +668,7 @@ impl ManagedOvers {
     pub(crate) fn written(&self) {
         for entry in lock(&self.entries).iter_mut() {
             entry.into = true;
+            entry.captured = None;
         }
     }
 
@@ -705,34 +717,53 @@ impl ManagedOvers {
         self.count.store(entries.len(), Relaxed);
     }
 
-    /// A capture copied `ranges` of the consumer's bytes into the device copy (`crate::capture`):
-    /// each live texture whose range meets one of them takes its copy in after those copies, in
-    /// the same command buffer, and owes none for the events before it, its copy and image going
-    /// to `into`.
+    /// A capture copied `ranges` of the consumer's bytes into the device copy (`crate::capture`),
+    /// at the commit numbered `number`: each live texture whose range meets one of them takes its
+    /// copy in after those copies, in the same command buffer, its copy and image going to
+    /// `into`. A copy in it owed for an event before stays owed to the command buffers numbered
+    /// before `number`, which may run ahead of the capture's ([`take_into`](Self::take_into)).
     pub(crate) fn copies_in_after(
         &self,
         ranges: &[(u64, u64)],
+        number: u64,
         into: &mut Vec<(OverCopy, Arc<Image>)>,
     ) {
         for entry in lock(&self.entries).iter_mut() {
             if !entry.released && meets_any(ranges, entry.range) {
-                entry.into = false;
+                if entry.into {
+                    entry.captured.get_or_insert(number);
+                }
                 into.push((entry.copy, Arc::clone(&entry.image)));
             }
         }
     }
 
-    /// The copy in texture `texture` owes, taken, for the upload that leads a submission: after
-    /// the copies back owed by submitted writes of textures whose ranges meet its, its own among
-    /// them, into `backs`.
-    pub(crate) fn take_into(&self, texture: u32, backs: &mut Vec<Back>) -> Option<OverCopy> {
+    /// The copy in texture `texture` owes, taken, for the upload that leads the submission of a
+    /// command buffer numbered `number` that reads it, as that submission goes: after the copies
+    /// back owed by submitted writes of textures whose ranges meet its, its own among them, into
+    /// `backs`. Taken as a submission goes, not as a command buffer joins a group held, so the
+    /// first submission on the device's one `VkQueue` that reads the texture makes it, of
+    /// whichever queue. None where it owes none, or where a capture numbered at or before
+    /// `number` copies it in ahead of that command buffer, which settles it
+    /// ([`copies_in_after`](Self::copies_in_after)).
+    pub(crate) fn take_into(
+        &self,
+        texture: u32,
+        number: u64,
+        backs: &mut Vec<Back>,
+    ) -> Option<OverCopy> {
         let (range, copy) = {
             let mut entries = lock(&self.entries);
             let entry = entries.iter_mut().find(|entry| entry.of(texture))?;
             if !entry.into {
                 return None;
             }
+            let captured = entry.captured.is_some_and(|at| at <= number);
             entry.into = false;
+            entry.captured = None;
+            if captured {
+                return None;
+            }
             (entry.range, entry.copy)
         };
         self.backs(Some(range), false, backs);

@@ -470,8 +470,9 @@ struct Batch {
     /// (`crate::over`).
     leans: Leans,
     /// The copies into those textures' images its upload makes first: one for each texture a
-    /// segment leans on the leading copy for, and each texture over a Managed buffer's device
-    /// copy a command buffer of it keeps that owes one (`crate::over::ManagedOvers`).
+    /// segment leans on the leading copy for, and, taken as it goes ([`WorkState::close`]), each
+    /// texture over a Managed buffer's device copy a command buffer of it keeps that owes one
+    /// (`crate::over::ManagedOvers`).
     overs: Vec<OverCopy>,
     /// The copies back owed first by textures over a Managed buffer's device copy whose ranges
     /// meet those, for writes already submitted, with their images, which the upload keeps.
@@ -737,13 +738,13 @@ impl Work {
         if state.closed {
             return Err(self.unwind(state, &named, Error::Quiesced));
         }
-        let copy_in = match capture::copy_in(core, &named) {
+        let number = state.next_seq + 1;
+        let copy_in = match capture::copy_in(core, &named, number) {
             Ok(copy_in) => copy_in,
             Err(error) => return Err(self.unwind(state, &named, error)),
         };
         core.counters
             .captured(named.iter().map(Modified::bytes).sum());
-        let number = state.next_seq + 1;
         state.changes.captured.push(number, copy_in);
         Ok(state)
     }
@@ -1750,19 +1751,6 @@ impl WorkState {
             }
         }
         group.wrote.extend(segment.managed_wrote.iter().cloned());
-        // Each texture over a Managed buffer's device copy the command buffer keeps that an event
-        // owes its copy in (`crate::over::ManagedOvers`).
-        if pending.gpu.managed {
-            for texture in pending.gpu.kept.textures.iter() {
-                let Some(buffer) = texture.managed_over() else {
-                    continue;
-                };
-                let taken = buffer
-                    .over_entries()
-                    .take_into(texture.id(), &mut group.backs);
-                group.overs.extend(taken);
-            }
-        }
         for copy in segment.overs.leaning() {
             if !group.overs.iter().any(|kept| kept.image == copy.image) {
                 group.overs.push(copy);
@@ -1837,6 +1825,28 @@ impl WorkState {
         batch.held &= room(&fifo.in_flight, batch.run);
         if batch.held {
             core.counters.held_start();
+        }
+        // Each texture over a Managed buffer's device copy that a command buffer of it with
+        // commands keeps and an event owes its copy in takes it now, as the group goes, not as it
+        // joined: the first submission on the device's one `VkQueue` that reads the texture, of
+        // whichever queue, makes the copy (`crate::over::ManagedOvers`).
+        let partial = batch.partial;
+        let head =
+            (fifo.entries.front().filter(|_| partial)).and_then(|entry| entry.pending.as_ref());
+        let readers = (batch.finished.iter())
+            .filter(|(_, _, error)| error.is_none())
+            .map(|(_, pending, _)| pending)
+            .chain(head)
+            .filter(|pending| pending.gpu.managed && !pending.gpu.is_empty());
+        for pending in readers {
+            for texture in pending.gpu.kept.textures.iter() {
+                let Some(buffer) = texture.managed_over() else {
+                    continue;
+                };
+                let taken =
+                    (buffer.over_entries()).take_into(texture.id(), pending.seq, &mut batch.backs);
+                batch.overs.extend(taken);
+            }
         }
         // The copy-ins captured at or before the number of a command buffer that goes first in
         // it, each ahead of the first such one (`crate::capture`).
