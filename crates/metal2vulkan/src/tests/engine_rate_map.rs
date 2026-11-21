@@ -1,10 +1,8 @@
 //! Rasterization-rate maps end to end (Apple's layout): `rasterization_rate_map_decoder`'s `float2`
 //! maps compile to Apple's GPU decoder of Metal's parameter data on every tested profile, pass L3,
 //! and record no `RasterizationRateMap` note (the decoder is Apple's arithmetic over Metal's
-//! bytes). Its `float` arithmetic is the device's: Metal's on a device measured to read `float`
-//! denormals as Metal does (`DriverDeviation::MetalFloatDenormals`, MoltenVK's), the device's own
-//! denormals elsewhere, noted `DeviceDenormals`, and its `NaN` the device's, noted
-//! `NativeNanEncoding` where the profile is not measured to answer Metal's. On the CPU interpreter,
+//! bytes). Its `float` arithmetic is the device's: its denormals the device's own, noted
+//! `DeviceDenormals`, and its `NaN` the device's, noted `NativeNanEncoding`. On the CPU interpreter,
 //! which keeps `float` denormals as lavapipe does, the module computes the shader decoder's
 //! arithmetic over the same bytes with denormals kept ([`kept`]): bit for bit, the sign of a zero
 //! included (a `NaN` is any `NaN`), in both directions, for every layer (a layer past the map's
@@ -27,10 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::air::canon::rate_map_data as format;
 use crate::bind::{RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapLayerDescriptor};
-use crate::device::profile::NanEncoding;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::lower::arith::{denormal, nan};
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
@@ -273,8 +269,7 @@ fn maps() -> Vec<(&'static str, RasterizationRateMap)> {
 
 /// Both maps of every layer, as the shader decoder's arithmetic computes them with the device's
 /// denormals ([`kept`]), on every profile, with the notes of the device's arithmetic: no
-/// `RasterizationRateMap`, `DeviceDenormals` where the profile does not read `float` denormals as
-/// Metal does, and `NativeNanEncoding` where it is not measured to answer Metal's `NaN`. The
+/// `RasterizationRateMap`, `DeviceDenormals` and `NativeNanEncoding`. The
 /// answers are `bind::RasterizationRateMap`'s shader decoders' (Metal's) at every point of a
 /// map's own layers; only a layer past a map's, whose tables are other words read as `float`s,
 /// some of them denormal, answers otherwise at some points.
@@ -294,15 +289,13 @@ fn the_decoder_answers_as_the_map() {
                 "{what}: {:?}",
                 a.precision
             );
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::DeviceDenormals),
-                !denormal::device_flushes(&p),
                 "{what}: {:?}",
                 a.precision
             );
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                nan::encoding(&p) == NanEncoding::Native,
                 "{what}: {:?}",
                 a.precision
             );

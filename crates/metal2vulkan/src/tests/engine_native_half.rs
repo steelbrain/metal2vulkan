@@ -193,8 +193,7 @@ fn half_rounding_is_the_devices_on_every_profile() {
 }
 
 /// On lavapipe and MoltenVK (`shaderFloat16`, no `DenormPreserve` for 16 bits) each kernel rounds
-/// its `half` through the conversion, records `NativeHalfConversion` and requires no
-/// `VkProperty::MetalHalfConversion`; on a profile without `shaderFloat16` it quantizes and
+/// its `half` through the conversion and records `NativeHalfConversion`; on a profile without `shaderFloat16` it quantizes and
 /// records `NativeHalfQuantize`; RADV takes the controlled conversion and holds `half` at 16 bits
 /// under those controls: its sum, between exact conversions, records nothing, and its narrowing
 /// widened back, a conversion pair a driver's compiler may fold, records `NativeHalfConversion`.
@@ -202,7 +201,7 @@ fn half_rounding_is_the_devices_on_every_profile() {
 /// whose conversion and quantize round to nearest even, the native modules answer Metal's
 /// `half(float)`, but for the quantize's zero below the smallest normal half.
 #[test]
-fn native_half_rounding_records_its_kind_and_requires_no_fact() {
+fn native_half_rounding_records_its_kind() {
     let Some(bc) = bitcode() else {
         return;
     };
@@ -225,12 +224,6 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let noted: Vec<_> = natives.iter().filter(|n| a.precision.contains(n)).collect();
             assert_eq!(noted, note.iter().collect::<Vec<_>>(), "{what}");
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfConversion),
-                "{what}"
-            );
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
@@ -392,7 +385,7 @@ fn decodes(m: &TypedModule) -> (usize, usize) {
 /// where the device flushes 16-bit denormals, a denormal); on NVIDIA, under the float controls (its
 /// driver folds only the conversion's round trip, `narrow::half_controls`), `NativeNanEncoding`
 /// alone; on the floor (no `shaderFloat16`) it is `UnpackHalf2x16` of each word, recording both
-/// notes. None requires `VkProperty::MetalHalfArithmetic`. A `half4` widens as one vector (two
+/// notes. A `half4` widens as one vector (two
 /// words unpacked and shuffled where the device unpacks). Each module passes L3 and answers the
 /// `half`s' values on the interpreter (whose widening is exact).
 #[test]
@@ -444,13 +437,6 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
                 native,
                 "{what}: {:?}",
                 a.precision
-            );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfArithmetic),
-                "{what}: {:?}",
-                a.requirements.properties
             );
             let res = Resources {
                 buffers: vec![Buffer {
@@ -1006,11 +992,10 @@ fn half_load_module() -> String {
 /// controls (ANV, RADV, the RTX 50 series) its entry declares them (`narrow::controlled_modes`, so
 /// a half denormal widens exactly) and it records no other note; elsewhere (lavapipe and MoltenVK:
 /// the device's conversion, no float controls) it records `NativeHalfConversion`, whose bound holds
-/// a denormal the device flushes. None requires `VkProperty::MetalHalfArithmetic` or
-/// `VkProperty::MetalNanMoves`. Without it (Pascal,
+/// a denormal the device flushes. Without it (Pascal,
 /// the LunarG baseline, SwiftShader, the floor) the widening is one `UnpackHalf2x16` of the word,
 /// a 16-bit unit's zero extension where the profile has 16-bit storage, with no 16-bit float type,
-/// recording `NativeHalfConversion` too and requiring no fact. Each passes L3; on the interpreter
+/// recording `NativeHalfConversion` too. Each passes L3; on the interpreter
 /// a half denormal, a zero's sign, `65504` and an infinity read as their values, and a NaN as a
 /// NaN; the `half` stored back unchanged keeps its bits, NaNs included.
 #[test]
@@ -1029,21 +1014,12 @@ fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         let r = rounding(&a.module.words);
         assert_eq!(r.narrowings, 0, "{what}: {r:?}");
-        let fact = a
-            .requirements
-            .properties
-            .contains(&VkProperty::MetalHalfArithmetic);
         let nan = a.precision.contains(&PrecisionNote::NativeNanEncoding);
-        let moved = a
-            .requirements
-            .properties
-            .contains(&VkProperty::MetalNanMoves);
         let conversion = a.precision.contains(&PrecisionNote::NativeHalfConversion);
-        assert!(!moved, "{what}: {:?}", a.requirements.properties);
         match form {
             QuantizeForm::Device => {
                 assert_eq!((r.widenings, r.unpacks), (0, 1), "{what}: {r:?}");
-                assert!(nan && conversion && !fact, "{what}: {:?}", a.precision);
+                assert!(nan && conversion, "{what}: {:?}", a.precision);
             }
             QuantizeForm::Controlled => {
                 assert_eq!((r.widenings, r.unpacks), (1, 0), "{what}: {r:?}");
@@ -1053,11 +1029,11 @@ fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
                         "{what}: {mode:?} {r:?}"
                     );
                 }
-                assert!(nan && !conversion && !fact, "{what}: {:?}", a.precision);
+                assert!(nan && !conversion, "{what}: {:?}", a.precision);
             }
             QuantizeForm::Converted => {
                 assert_eq!((r.widenings, r.unpacks), (1, 0), "{what}: {r:?}");
-                assert!(nan && conversion && !fact, "{what}: {:?}", a.precision);
+                assert!(nan && conversion, "{what}: {:?}", a.precision);
                 for mode in [M::RoundingModeRTE, M::DenormPreserve] {
                     assert!(
                         !r.modes.contains(&(mode as u32, 16)),
@@ -1169,7 +1145,7 @@ fn f16_arithmetic(words: &[u32]) -> Vec<(crate::spv::Op, bool)> {
 /// profiles): under fast math its one 16-bit instruction is undecorated, a product a plain
 /// `OpFMul`; under `contract` alone or no flag it is kept apart, decorated `NoContraction`, a
 /// product `Fma(a, b, -0.0)`. A lone operation has no neighbour to be rewritten with, so the module
-/// notes nothing, as for `float`, and requires no `VkProperty::MetalHalfArithmetic`. On the
+/// notes nothing, as for `float`. On the
 /// interpreter each answers the rounded result either way.
 #[test]
 fn half_arithmetic_on_the_device_takes_the_airs_contraction() {
@@ -1203,13 +1179,6 @@ fn half_arithmetic_on_the_device_takes_the_airs_contraction() {
                 !a.precision.contains(&PrecisionNote::FastMathRewrites),
                 "{what}: {:?}",
                 a.precision
-            );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfArithmetic),
-                "{what}: {:?}",
-                a.requirements.properties
             );
         }
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, p, x);

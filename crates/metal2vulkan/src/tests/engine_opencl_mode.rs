@@ -925,12 +925,9 @@ attributes #4 = { nounwind willreturn memory(argmem: write) }\n\
 /// A `float` narrowed to a stored `half` (`vstore_half_rtz`, and a plain `fptrunc` stored) is the
 /// device's conversion, whose NaN's bits are its own (NVIDIA's 0x7fff where Metal stores 0x7e00):
 /// on every committed profile the kernel's module records `NativeNanEncoding`, which the runtime
-/// announces as `native-nan-encoding`, but where the device's narrowing is measured to move a NaN
-/// as Metal's (`DriverDeviation::MetalNanMoves`), which the module then requires.
+/// announces as `native-nan-encoding`.
 #[test]
 fn an_opencl_mode_half_store_records_the_devices_nan_encoding() {
-    use crate::device::requirements::VkProperty;
-    use crate::error::DriverDeviation;
     use crate::pipeline::PrecisionNote;
     let b = Budget::standard();
     let mut checked = 0;
@@ -948,22 +945,10 @@ fn an_opencl_mode_half_store_records_the_devices_nan_encoding() {
                 Err(e) => panic!("{what}: {e}"),
             };
             let notes = &p.stage.precision_notes;
-            match dev
-                .profile()
-                .takes_driver_deviation(DriverDeviation::MetalNanMoves)
-            {
-                true => assert!(
-                    notes.contains(&PrecisionNote::NativeNanEncoding)
-                        || p.requirements
-                            .properties
-                            .contains(&VkProperty::MetalNanMoves),
-                    "{what}: {notes:?}"
-                ),
-                false => assert!(
-                    notes.contains(&PrecisionNote::NativeNanEncoding),
-                    "{what}: {notes:?}"
-                ),
-            }
+            assert!(
+                notes.contains(&PrecisionNote::NativeNanEncoding),
+                "{what}: {notes:?}"
+            );
             checked += 1;
         }
     }

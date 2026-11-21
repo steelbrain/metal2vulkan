@@ -185,14 +185,10 @@ pub fn storage_buffers(a: &FunctionArtifact) -> u32 {
 }
 
 /// Whether artifact `a` leaves a NaN's bits to the device, which the interpreter does not model:
-/// it records `PrecisionNote::NativeNanEncoding`, or it requires `VkProperty::MetalNanMoves`, whose
-/// measured device answers Metal's bits where the interpreter's conversions answer their own.
+/// it records `PrecisionNote::NativeNanEncoding`.
 pub fn device_nan_bits(a: &FunctionArtifact) -> bool {
     a.precision
         .contains(&crate::pipeline::artifact::PrecisionNote::NativeNanEncoding)
-        || a.requirements
-            .properties
-            .contains(&crate::device::requirements::VkProperty::MetalNanMoves)
 }
 
 /// A fresh per-attempt meter with the standard caps and no deadline.

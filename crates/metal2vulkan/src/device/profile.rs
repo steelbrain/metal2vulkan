@@ -226,27 +226,13 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::SimdgroupLockstep),
-            DriverDeviation::MetalFloatFunctions => f.float_functions == FloatFunctions::Metal,
-            DriverDeviation::MetalCanonicalNans => f.nan_encoding == NanEncoding::MetalCanonical,
             DriverDeviation::MetalSampler => {
                 f.enabled.properties.contains(&VkProperty::MetalSampler)
             }
-            DriverDeviation::MetalHalfFma => {
-                f.enabled.properties.contains(&VkProperty::MetalHalfFma)
-            }
-            DriverDeviation::MetalFloatDenormals => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalFloatDenormals),
             DriverDeviation::MetalCenterVaryings => f
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalCenterVaryings),
-            DriverDeviation::MetalMinMax => f.enabled.properties.contains(&VkProperty::MetalMinMax),
-            DriverDeviation::MetalHalfArithmetic => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfArithmetic),
             DriverDeviation::MetalHalfStorageWrites => f
                 .enabled
                 .properties
@@ -298,25 +284,10 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalAlphaCoverage),
-            DriverDeviation::MetalNanMoves => {
-                f.enabled.properties.contains(&VkProperty::MetalNanMoves)
-            }
-            DriverDeviation::MetalPackConversions => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalPackConversions),
-            DriverDeviation::MetalHalfConversion => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfConversion),
             DriverDeviation::MetalSmallFloatNans => f
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalSmallFloatNans),
-            DriverDeviation::MetalUnaryDenormals => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalUnaryDenormals),
         }
     }
 
@@ -477,14 +448,6 @@ pub struct ProfileFields {
     pub dynamic_vertex_stride: bool,
     /// The enabled capability sets `Requirements` are checked against.
     pub enabled: EnabledCaps,
-    /// Which functions the device's `GLSL.std.450` instructions and `OpFDiv` of `float` compute:
-    /// Metal's own, in the math mode Metal's compile of the module takes, or the device's. The
-    /// module takes the device's instructions on either; the notes it records differ.
-    pub float_functions: FloatFunctions,
-    /// Which NaN the device's `float` and `half` arithmetic answers: Metal's canonical NaN, measured,
-    /// or the device's own, which the module records where Metal answers a NaN. Either way the
-    /// translation leaves every NaN's bits to the device.
-    pub nan_encoding: NanEncoding,
     /// Whether a two-plane YCbCr texture's planes may be read in place
     /// (`bind::YCbCrInPlace`): on a device whose GPU reads the planes' memory with no bus between
     /// (`VkPhysicalDeviceType` integrated or CPU), a texture slot whose function reads such a
@@ -579,38 +542,6 @@ impl FunctionStorage {
             FunctionStorage::Measured(b) | FunctionStorage::Assumed(b) => b,
         }
     }
-}
-
-/// Which functions a device's `GLSL.std.450` instructions and `OpFDiv` of `float` compute
-/// ([`ProfileFields::float_functions`]), decided by the driver's measured deviation
-/// [`DriverDeviation::MetalFloatFunctions`]. Either way the module takes the device's
-/// instructions.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FloatFunctions {
-    /// Metal's own, in the math mode Metal compiles the module with: fast where the entry
-    /// declares no `SignedZeroInfNanPreserve`, precise where it declares one, and precise
-    /// `tanh` and `atan2` either way. The division likewise: Metal's fast division and
-    /// reciprocal in a fast-math module, its correctly rounded ones otherwise. A call that is
-    /// Metal's own in the entry's mode records no note there.
-    Metal,
-    /// The device's, within Vulkan's precision table, taken as they are, each kind recorded with
-    /// its bound.
-    Native,
-}
-
-/// Which NaN a device's `float` and `half` arithmetic answers ([`ProfileFields::nan_encoding`]),
-/// decided by the driver's measured deviation [`DriverDeviation::MetalCanonicalNans`]. The
-/// translation selects no NaN under either: every NaN's bits are the device's.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum NanEncoding {
-    /// Metal's canonical NaN, `0x7FC00000` (`0x7E00` as `half`), for every NaN result of the
-    /// arithmetic and of the functions whose NaN Metal canonicalizes, measured: such a result
-    /// records nothing.
-    MetalCanonical,
-    /// The device's own, unmeasured, noted `PrecisionNote::NativeNanEncoding` with its bound.
-    Native,
 }
 
 /// What the consumer enabled, as the capability vocabulary `Requirements` uses

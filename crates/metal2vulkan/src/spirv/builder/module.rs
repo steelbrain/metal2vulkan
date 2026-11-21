@@ -90,16 +90,6 @@ pub struct ModuleBuilder {
     /// Every result that carries a non-uniform descriptor element (`Inst::carries_non_uniform`):
     /// decorated `NonUniform`, and refused where it would reach an undecorated operand.
     pub(super) non_uniform: BTreeSet<Value>,
-    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured
-    /// to answer Metal's on the devices whose driver takes `DriverDeviation::MetalHalfConversion`
-    /// (`ModuleBuilder::note_measured_rounding`). Nothing emitted depends on it: the compile
-    /// reads it to decide `PrecisionNote::NativeHalfConversion`.
-    pub(super) measured_roundings: BTreeSet<Value>,
-    /// The texels the texture family's writes store (`ModuleBuilder::note_stored_texel`), whose
-    /// stored NaN the write's own notes account for (`lower::texture::half_write_nans` and
-    /// `half_storage_facts`). Nothing emitted depends on it: the compile reads it to decide
-    /// `PrecisionNote::NativeNanEncoding` (`lower::arith::narrow::moves_unfolded`).
-    pub(super) stored_texels: BTreeSet<Value>,
     /// The `Function` variables the emitter holds workgroup uniform by construction
     /// (`FunctionBuilder::note_uniform_var`). Nothing emitted depends on it: a record for the
     /// checks of `spirv::testing::barriers`, kept only where they build.
@@ -156,9 +146,6 @@ pub struct ModuleBuilder {
     /// The encode of a narrow vector computed for its lanes' stores in a block, with its offer
     /// group (`FunctionBuilder::note_encode`).
     pub(super) encodes: HashMap<(NarrowFmt, Value), (Value, BlockId, u32)>,
-    /// How a float multiply the device must round on its own is emitted
-    /// ([`ModuleBuilder::product_form`]).
-    pub(super) product_form: ProductForm,
     /// How the lowering rounds an `f32` to `half` ([`ModuleBuilder::quantize_form`]).
     quantize_form: QuantizeForm,
     /// Whether that rounding is the device's own rather than one measured to be Metal's
@@ -170,27 +157,6 @@ pub struct ModuleBuilder {
     /// Whether the module computes `half` under the 16-bit float controls
     /// ([`ModuleBuilder::half_controls`]).
     half_controls: bool,
-}
-
-/// How a float multiply the device must round on its own and never fuse is emitted
-/// ([`FunctionBuilder::binary_no_contraction`]). Lowering takes it from the profile's `float`
-/// functions fact (`ArithPlan::product`). In either form an `f32` product by a constant with a
-/// `-0.0` component multiplies by `+0.0` there and negates that component of the product.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ProductForm {
-    /// `OpFMul` decorated `NoContraction`, for a device whose driver compiles the SPIR-V itself:
-    /// the device rounds the product once, keeps a `-0` product, and folds a zero factor as
-    /// Metal does (`x · 0` to `0` where the multiply carries `nsz`). It has no addend a device
-    /// could answer for a zero product.
-    #[default]
-    Multiply,
-    /// `GLSL.std.450 Fma(a, b, -0.0)` decorated `NoContraction`, for a device whose SPIR-V reaches
-    /// Metal's compiler through SPIRV-Cross (MoltenVK, the profile whose `float` functions are
-    /// Metal's): SPIRV-Cross renders a `NoContraction` `OpFMul` as `fma(l, r, 0)`, which answers
-    /// `+0` for a `-0` product, and this form as `fma(a, b, -0.0)`, which Metal's compiler treats
-    /// as Metal treats its own multiply. `a · b + (-0.0)` is `a · b` exactly whether the device
-    /// fuses it or not.
-    NegativeZeroFma,
 }
 
 /// How the lowering rounds an `f32` to `half` (`lower::arith::narrow`): the device's own
@@ -260,13 +226,6 @@ impl ModuleBuilder {
         ModuleBuilder::default()
     }
 
-    /// Emit every float multiply the device must round on its own in `form`. Emission sets it
-    /// before any instruction, from the profile's `float` functions fact; a builder that never
-    /// sets it emits [`ProductForm::Multiply`].
-    pub fn product_form(&mut self, form: ProductForm) {
-        self.product_form = form;
-    }
-
     /// Round an `f32` to `half` in `form`. Emission sets it before any instruction, from the
     /// profile; a builder that never sets it emits [`QuantizeForm::Device`].
     pub fn set_quantize_form(&mut self, form: QuantizeForm) {
@@ -283,19 +242,6 @@ impl ModuleBuilder {
     /// form; a builder that never sets it takes its form as Metal's.
     pub fn set_native_half(&mut self, native: bool) {
         self.native_half = native;
-    }
-
-    /// Record `narrowed`, the narrowing to 16 bits of a conversion pair that rounds a `half` in a
-    /// form measured to answer Metal's where the driver takes
-    /// `DriverDeviation::MetalHalfConversion` (`narrow::round_measured`).
-    pub fn note_measured_rounding(&mut self, narrowed: Value) {
-        self.measured_roundings.insert(narrowed);
-    }
-
-    /// Record `texel`, a texel a texture write stores, whose stored NaN the write's own notes
-    /// account for (`lower::texture::emit`).
-    pub fn note_stored_texel(&mut self, texel: Value) {
-        self.stored_texels.insert(texel);
     }
 
     /// Whether the module's `half` rounding is the device's own
@@ -378,8 +324,6 @@ impl ModuleBuilder {
                 std::mem::size_of::<(GlobalId, crate::spv::Capability)>(),
             )
             + tree_bytes(self.non_uniform.len(), std::mem::size_of::<Value>())
-            + tree_bytes(self.measured_roundings.len(), std::mem::size_of::<Value>())
-            + tree_bytes(self.stored_texels.len(), std::mem::size_of::<Value>())
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
@@ -1376,8 +1320,6 @@ impl ModuleBuilder {
             unwritten_buffers: self.unwritten_buffers,
             enabling: self.enabling,
             non_uniform: self.non_uniform,
-            measured_roundings: self.measured_roundings,
-            stored_texels: self.stored_texels,
             #[cfg(test)]
             uniform_vars: self.uniform_vars,
         })

@@ -3266,28 +3266,17 @@ fn lower_bounded<K>(
     let device_quantize = quantize == crate::spirv::builder::QuantizeForm::Device
         && crate::lower::arith::narrow::quantizes(&module);
     // A `half` rounded through the device's conversion to 16 bits and back, with no quantize: the
-    // module records the native note, but where the device's conversion is measured to answer
-    // Metal's (`DriverDeviation::MetalHalfConversion`) and every such rounding is of a form the
-    // measurement covers (a `float` the function converts, or an image instruction's texel),
-    // which the module then requires.
+    // module records the native note.
     let converts = quantize == crate::spirv::builder::QuantizeForm::Converted
         && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
-    let measured_conversion = converts
-        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfConversion)
-        && !crate::lower::arith::narrow::rounds_unmeasured(&module, m)?;
     // A `half` read from its bits by the device's widening, or encoded to them by its narrowing
     // (every profile: `OpFConvert` with `shaderFloat16`, `UnpackHalf2x16` and `PackHalf2x16`
     // without): a NaN's bits are the device's, recorded. Under the float controls its denormals
-    // are Metal's, as a single conversion's, also on a driver that folds the round trip; on a
-    // device whose conversion is measured to read and
-    // narrow every `half` as Metal's (`DriverDeviation::MetalHalfArithmetic`) the module requires
-    // that fact; elsewhere the device may flush them, within the native conversion's note.
+    // are Metal's, as a single conversion's, also on a driver that folds the round trip; elsewhere
+    // the device may flush them, within the native conversion's note.
     let widens = crate::lower::arith::narrow::widens_bits(&module, m)?
         || crate::lower::arith::narrow::encodes_bits(&module, m)?;
-    let measured_widening = widens
-        && quantize == crate::spirv::builder::QuantizeForm::Converted
-        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
-    let native_widening = widens && !controls && !measured_widening;
+    let native_widening = widens && !controls;
     // A `half` rounded through the conversion and its widening under the float controls: Metal's
     // `half(float)` by the Vulkan spec, but a driver's compiler may fold the pair into the value it
     // started from or fuse the `float` operation computing the value into the narrowing and round
@@ -3295,17 +3284,6 @@ fn lower_bounded<K>(
     // the rounding.
     let controlled = quantize == crate::spirv::builder::QuantizeForm::Controlled;
     let fused = controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
-    // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
-    // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
-    // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
-    // measured, which it then requires; the device's, recorded, elsewhere.
-    let held_moves = plan.families.arith.held_nan_moves;
-    let unfolded = (widens || held_moves)
-        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves)
-        && crate::lower::arith::narrow::moves_unfolded(&module, m)?;
-    let moved_nans = widens
-        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves)
-        && !unfolded;
     // A `half` rounded through the device's conversion and its widening, each decorated
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
@@ -3320,16 +3298,13 @@ fn lower_bounded<K>(
         module.declare_modes(&modes)?;
     }
     // Native half rounding and widening: a module that rounds through the device's quantize or
-    // conversion, or widens a `half` by the device where that is not measured or controlled to be
-    // Metal's, records each kind, and requires no fact.
+    // conversion, or widens a `half` by the device where that is not controlled to be Metal's,
+    // records each kind, and requires no fact.
     let native_half = [
-        (
-            (widens && !moved_nans) || (held_moves && unfolded),
-            PrecisionNote::NativeNanEncoding,
-        ),
+        (widens, PrecisionNote::NativeNanEncoding),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
-            (converts && !measured_conversion) || native_widening || fused,
+            converts || native_widening || fused,
             PrecisionNote::NativeHalfConversion,
         ),
     ];
@@ -3404,39 +3379,6 @@ fn lower_bounded<K>(
             false => VkProperty::MetalSampler,
         });
     }
-    // A NaN's bits left to the device's widening, narrowing, negation or magnitude because they
-    // are Metal's.
-    if plan.families.arith.nan_moves || moved_nans || (held_moves && !unfolded) {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalNanMoves);
-    }
-    // A `half` rounded by the device's conversion with no note because it is Metal's.
-    if measured_conversion {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
-    }
-    // A packed format's conversion left to the device with no note because it is Metal's.
-    if plan.families.arith.metal_packs {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalPackConversions);
-    }
-    // Metal's `float` and `half` minimum and maximum family left to the device's `NMin`, `NMax`
-    // and `NClamp` because they are Metal's.
-    if plan.families.arith.device_min_max {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalMinMax);
-    }
-    // `half` `+ - * /` left to the device's 16-bit arithmetic because it is Metal's, and a `half`
-    // read from its bits by the device's widening, whose denormals that measurement makes Metal's.
-    if plan.families.arith.f16_arith || measured_widening {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalHalfArithmetic);
-    }
     // A fragment's simdgroup lane read from its subgroup lane because the device's fragment
     // subgroups are Metal's simdgroups.
     if plan.families.simd.metal_lane {
@@ -3450,27 +3392,6 @@ fn lower_bounded<K>(
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::MetalFullQuads);
-    }
-    // `float` denormals left to the device because it reads them as Metal does: measured in
-    // entries that declare no float-controls mode. In one that declares the 16-bit controls a
-    // driver may keep them (NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU), and no query
-    // tells which: there they are the device's own on every device, noted.
-    if plan.families.arith.device_denormals {
-        if !declares_controls {
-            requirements
-                .properties
-                .insert(crate::device::requirements::VkProperty::MetalFloatDenormals);
-        } else if !precision.contains(&PrecisionNote::DeviceDenormals) {
-            precision.push(PrecisionNote::DeviceDenormals);
-            precision.sort_unstable();
-        }
-    }
-    // The negations, absolute values, floors and ceilings whose `float` denormals the device
-    // reads as Metal does.
-    if plan.families.arith.unary_denormals {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalUnaryDenormals);
     }
     // Center varyings read as they are as their pixel form, because the device reads them at
     // the pixel center as Metal does.

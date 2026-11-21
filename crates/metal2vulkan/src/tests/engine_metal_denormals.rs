@@ -6,12 +6,10 @@
 //!
 //! Each kernel loops over its rows (three operand words a row in `[[buffer(0)]]`) and stores one
 //! answer word a row in `[[buffer(1)]]`. The CPU SPIR-V interpreter keeps denormals, as a device
-//! without `DriverDeviation::MetalFloatDenormals` may, so on each such committed profile (one per
-//! fused multiply-add route) an entry that records no `PrecisionNote::DeviceDenormals` must answer
-//! every row as Metal did. `llvm-as` assembles the module; without it the tests skip visibly.
+//! may, so on each committed profile (one per fused multiply-add route) an entry that records no
+//! `PrecisionNote::DeviceDenormals` must answer every row as Metal did. `llvm-as` assembles the module; without it the tests skip visibly.
 
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::error::DriverDeviation;
 use crate::lower::arith::fma;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
@@ -257,14 +255,13 @@ fn interpret(bc: &[u8], name: &str, p: &DeviceProfile, rows: &[([u32; 3], [u32; 
         .collect()
 }
 
-/// The committed profiles under `policy` whose device may keep denormals (no
-/// `DriverDeviation::MetalFloatDenormals`), one per fused multiply-add route.
+/// The committed profiles under `policy`, one per fused multiply-add route: each device may keep
+/// denormals.
 fn profiles(policy: DevicePolicy) -> Vec<(String, DeviceProfile)> {
     let mut seen = BTreeSet::new();
     committed_profiles_with(policy)
         .expect("profiles")
         .into_iter()
-        .filter(|(_, p)| !p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals))
         .filter(|(_, p)| seen.insert(fma::float_route(p)))
         .collect()
 }

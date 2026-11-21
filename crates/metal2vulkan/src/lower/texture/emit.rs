@@ -3046,8 +3046,7 @@ fn names_class(fb: &mut FunctionBuilder<'_>, index: SValue, class: TexelClass) -
 /// another class widens them (`reinterpret`), so a store of it moves those bits as the slot's
 /// does, a NaN's included. Merged as values, each arm's `half` would be the device's widening of
 /// its bits, selected against the zero a null handle reads and merged with the other arms'; Metal's
-/// compiler does not fold the widening of such a merge back to the bits (`narrow::moves_unfolded`),
-/// and on the Apple M3 Max a NaN's bits became `0x7E00` there. The own arm's bits are its texel's
+/// compiler does not fold the widening of such a merge back to the bits, and on the Apple M3 Max a NaN's bits became `0x7E00` there. The own arm's bits are its texel's
 /// narrowing (`narrow::to_bits`), the device's conversion of a `half` value, which a store of the
 /// merged value took before.
 fn read_crossed(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<SValue> {
@@ -3229,8 +3228,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         }
         ImageRef::Slot(_) => texel,
     };
-    // The write's notes account for the texel's stored NaN (`moves_unfolded`).
-    fb.module().note_stored_texel(texel);
     let mem = texel_memory(cx, fb, &w.image)?;
     // A write to a sparse texture is dropped.
     let kept = sparse_writes_kept(cx, fb, &w.image)?;
@@ -3416,7 +3413,6 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
             lanes: 4,
         };
         let texel = to_image(fb, &decl, form, held)?;
-        fb.module().note_stored_texel(texel);
         let ty = vec(fb, u, dims)?;
         let delta = if dims == 2 {
             fb.composite_construct(ty, &[x, y])?

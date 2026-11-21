@@ -638,27 +638,6 @@ pub enum VkProperty {
     /// `framebuffer*ColorSampleCounts` are the counts every format of a kind takes; one format
     /// may take more.
     ColorAttachmentSampleCount(vk::Format, u32),
-    /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma` (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalHalfFma`](crate::error::DriverDeviation::MetalHalfFma)). No Vulkan
-    /// query reports it. A module whose `half` fused multiply-add takes that instruction requires
-    /// it; without it, the fused multiply-add is a 16-bit `OpFmaKHR` under the 16-bit float
-    /// controls, or the device's `float` `Fma` rounded to `half`
-    /// (`PrecisionNote::NativeFma`).
-    MetalHalfFma,
-    /// The device's `float` arithmetic, comparisons, `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and
-    /// `RoundEven` read an `f32` denormal operand as the zero of its sign and flush a denormal
-    /// result, as Metal does
-    /// (the driver's measured deviation
-    /// [`DriverDeviation::MetalFloatDenormals`](crate::error::DriverDeviation::MetalFloatDenormals)).
-    /// No Vulkan query reports it: `DenormFlushToZero` makes only the results' flush a
-    /// requirement, the operands' remains the device's choice. A module that leaves such an
-    /// operation's denormals to the device, recording no `PrecisionNote::DeviceDenormals` for it,
-    /// requires it; without it, they are the device's own, and the module records that note. So
-    /// does a module whose entry declares the 16-bit float controls, on every device, as a driver
-    /// may keep `f32` denormals there (NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU); it
-    /// requires no such property.
-    MetalFloatDenormals,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
     /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
     /// measured deviation
@@ -669,24 +648,6 @@ pub enum VkProperty {
     /// pixel form, requires it; without it, their pixel form is `InterpolateAtOffset` at offset
     /// 0, which requires [`VkProperty::InterpolateAtOffsetCentered`].
     MetalCenterVaryings,
-    /// The device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` on 32-bit floats are Metal's own
-    /// `fmin`, `fmax` and `clamp` (the driver's measured deviation
-    /// [`DriverDeviation::MetalMinMax`](crate::error::DriverDeviation::MetalMinMax)). No Vulkan
-    /// query reports it. Every `float` or `half` minimum, maximum or clamp takes those
-    /// instructions: a module that does requires it, and without it the module records
-    /// `PrecisionNote::NativeMinMax`.
-    MetalMinMax,
-    /// The device's 16-bit `OpFAdd` and `OpFSub` decorated `NoContraction`, and its 16-bit
-    /// `Fma(a, b, -0.0)` decorated `NoContraction`, are Metal's own `half` `+`, `-` and `*` (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalHalfArithmetic`](crate::error::DriverDeviation::MetalHalfArithmetic)).
-    /// No Vulkan query reports it. A module whose `half` `+`, `-` or `*` takes those instructions
-    /// requires it; without it, the module takes them under the 16-bit float controls, or
-    /// computes in `float` and rounds the result to `half` as every `half` rounds. A module that
-    /// reads a `half` from its bits by the device's widening, outside the 16-bit float controls,
-    /// requires it too: the measurement reads every `half` through that widening, denormals
-    /// included; without it the module records `PrecisionNote::NativeHalfConversion`.
-    MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image as Metal stores a kernel's write, rounded toward zero (the driver's measured
     /// deviation
@@ -803,34 +764,6 @@ pub enum VkProperty {
     /// requires it, where no module does (the coverage is the pipeline's multisample state);
     /// without it, the pipeline's fragment stage records that note.
     MetalAlphaCoverage,
-    /// The device's widening and narrowing between 16- and 32-bit floats, and its `OpFNegate`
-    /// and `FAbs`, answer Metal's NaN bits (the driver's measured deviation
-    /// [`DriverDeviation::MetalNanMoves`](crate::error::DriverDeviation::MetalNanMoves)). No Vulkan
-    /// query reports it: Vulkan states no NaN's bits. A module that reads a `half` from its bits or
-    /// encodes one to them, widens a `half` to `float`, negates a `float` or takes the magnitude
-    /// of a `float` or `half`, and records no
-    /// [`PrecisionNote::NativeNanEncoding`](crate::pipeline::PrecisionNote::NativeNanEncoding)
-    /// for it requires it.
-    MetalNanMoves,
-    /// The device's conversions of the packed normalized formats measured to answer Metal's
-    /// (the driver's measured deviation
-    /// [`DriverDeviation::MetalPackConversions`](crate::error::DriverDeviation::MetalPackConversions)).
-    /// No Vulkan query reports it: Vulkan leaves the conversions' rounding to the device. A
-    /// module that converts one of those forms and records no
-    /// [`PrecisionNote::DevicePackConversion`](crate::pipeline::PrecisionNote::DevicePackConversion)
-    /// for it requires it.
-    MetalPackConversions,
-    /// The device's conversion of a 32-bit float to 16 bits answers Metal's `half(float)` where
-    /// the module converts a `float` it holds, and Metal's own `half` texel where the `float` is
-    /// an image instruction's texel (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)).
-    /// No Vulkan query reports it: without the float controls Vulkan leaves the conversion's
-    /// rounding to the device. A module that rounds a `half` through that conversion in those
-    /// forms alone (a texel's value among them: one the module decodes itself, or a merge of
-    /// texels) records no
-    /// [`PrecisionNote::NativeHalfConversion`](crate::pipeline::PrecisionNote::NativeHalfConversion)
-    /// and requires it.
-    MetalHalfConversion,
     /// The device stores a NaN a shader writes to a packed small float storage image
     /// (`B10G11R11_UFLOAT_PACK32`) as Metal stores it, a `float`'s or a `half`'s widened (the
     /// driver's measured deviation
@@ -839,15 +772,6 @@ pub enum VkProperty {
     /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding)
     /// for it and requires it.
     MetalSmallFloatNans,
-    /// The device's `float` `OpFNegate` and `FAbs` keep an `f32` denormal and its `Floor` and
-    /// `Ceil` read one as the zero of its sign, as Metal's `-x`, `fabs`, `floor` and `ceil` do (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalUnaryDenormals`](crate::error::DriverDeviation::MetalUnaryDenormals)).
-    /// Vulkan lets a device keep or flush them. A module that leaves those operations' denormals to
-    /// the device records no
-    /// [`PrecisionNote::DeviceDenormals`](crate::pipeline::PrecisionNote::DeviceDenormals) for
-    /// them and requires it.
-    MetalUnaryDenormals,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

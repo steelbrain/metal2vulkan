@@ -179,8 +179,7 @@ fn run_both(m: &TypedModule, res: &Resources) -> Vec<u32> {
 }
 
 /// Whether entry `entry` of `bc` on `prof` reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeNanEncoding`, or `VkProperty::MetalNanMoves` on a device the interpreter
-/// is not: `device_nan_bits`), whose reinterpretation of a NaN's bits is the device's.
+/// (`PrecisionNote::NativeNanEncoding`, `device_nan_bits`), whose reinterpretation of a NaN's bits is the device's.
 fn native_halves(bc: &[u8], entry: &str, prof: &DeviceProfile) -> bool {
     device_nan_bits(&compile(bc, entry, prof).expect("compile"))
 }

@@ -826,9 +826,8 @@ fn simd_uniform_runs_emulated_at_every_width() {
 /// out of both forms (1,145 against 462 words, 2.48x, to 1,136 against 453, 2.51x): the emulation's
 /// 683 words over the subgroup form did not change, so the hold moved to 2.55x. Through
 /// `Device::from_queries` the kernel is 1,164 words on `lavapipe` against 453 (2.57x), held at
-/// 2.6x, still below the flag form's 112 extra words (about 2.75x against 453). The subgroup form is `moltenvk-m3`'s
-/// without its driver's measured deviation (`MetalCanonicalNans`), which neither emulated profile
-/// has, so both forms carry the same NaN selects (the input's `fadd` before the reduction: 14
+/// 2.6x, still below the flag form's 112 extra words (about 2.75x against 453). The subgroup form is
+/// `moltenvk-m3`'s, so both forms carry the same NaN selects (the input's `fadd` before the reduction: 14
 /// words, 1,150 against 467 on `lavapipe`, 2.46x) and the ratio stays the emulation's. A profile
 /// with no measured half-rounding fact (`lavapipe`, `vk12-floor`) rounds each `half` add in integer
 /// arithmetic, twenty instructions, where `moltenvk-m3`'s measured conversion takes three. That

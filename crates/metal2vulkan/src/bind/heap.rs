@@ -440,8 +440,8 @@ pub(crate) const FILTERED: u32 = 2;
 /// `DriverDeviation::MetalHalfStorageWrites`.
 pub(crate) const NAN_SIXTEEN: u32 = 1;
 
-/// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is
-/// Metal's on a device of `DriverDeviation::MetalNanMoves`.
+/// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is the
+/// device's widening's.
 pub(crate) const NAN_WIDE: u32 = 2;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a packed small float format (`RG11B10Float`,

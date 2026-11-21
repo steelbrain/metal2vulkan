@@ -965,8 +965,7 @@ fn offsets(size: u64) -> Vec<u64> {
 /// bounds. Probes are skipped where the offset breaks the access's stated alignment (undefined in
 /// Metal). A `half` NaN loaded, or stored from a constant, need only come back a NaN where the
 /// module reads a `half` from its bits by the device's widening or encodes one by its narrowing
-/// (`PrecisionNote::NativeNanEncoding`, or `VkProperty::MetalNanMoves`, measured on a device the
-/// interpreter is not: `device_nan_bits`), whose NaN encoding is the device's.
+/// (`PrecisionNote::NativeNanEncoding`, `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
@@ -1274,8 +1273,8 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 /// and leaves the allocation unchanged. Robust buffer access does not cover device addresses, so
 /// the check is emitted on a robust profile too. A `half` NaN loaded, or stored from a constant,
 /// need only come back a NaN where the module reads a `half` from its bits by the device's
-/// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`, or
-/// `VkProperty::MetalNanMoves`: `device_nan_bits`), whose NaN encoding is the device's.
+/// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`,
+/// `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
@@ -1984,8 +1983,8 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
 /// follows the binder contract (descriptor base congruent to the Metal address modulo 4), and a
 /// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded, or stored
 /// from a constant, need only come back a NaN where the module reads a `half` from its bits by the
-/// device's widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`, or
-/// `VkProperty::MetalNanMoves`: `device_nan_bits`), whose NaN encoding is the device's.
+/// device's widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`,
+/// `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn narrow_units_are_exact_at_every_bind_residual() {
     let size = 32u64;

@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::device::profile::{DeviceProfile, FloatFunctions};
+use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs, Unsupported};
 use crate::lower::select::Plan;
@@ -1261,11 +1261,9 @@ fn the_emulation_validates_on_every_committed_profile() {
 /// The ids the footprint's three `f32` operations produce in the entry point of a linked module
 /// `words`, and whether each is rounded on its own. The operations are the normalized coordinate
 /// times the extent (a product of an `OpConvertUToF` result), `y = 256 x` (a product by the
-/// constant 256), and `r = y - floor(y)` (an `OpFSub` of a GLSL `Floor` result). A product
-/// rounded on its own is `GLSL.std.450 Fma(a, b, -0.0)` where the profile's `float` functions are
-/// Metal's (`metal`), and an `OpFMul` elsewhere; it and the subtraction are rounded on their own
-/// when decorated `NoContraction`.
-fn footprint_ops(words: &[u32], metal: bool) -> [Vec<(u32, bool)>; 3] {
+/// constant 256), and `r = y - floor(y)` (an `OpFSub` of a GLSL `Floor` result). A product and
+/// the subtraction are rounded on their own when decorated `NoContraction`.
+fn footprint_ops(words: &[u32]) -> [Vec<(u32, bool)>; 3] {
     let insts: Vec<&[u32]> = {
         let (mut v, mut i) = (Vec::new(), 5);
         while i < words.len() {
@@ -1322,27 +1320,9 @@ fn footprint_ops(words: &[u32], metal: bool) -> [Vec<(u32, bool)>; 3] {
             && glsl.contains(&w[3])
             && w[4] == crate::spv::GlslStd450Op::Floor as u32
     });
-    let negative_zero = insts
-        .iter()
-        .filter(|w| {
-            op(w) == crate::spv::Op::Constant as u32
-                && floats.contains(&w[1])
-                && w[3] == 0x8000_0000
-        })
-        .map(|w| w[2])
-        .collect::<Vec<_>>();
-    // The product of `a` and `b` rounded on its own, in the profile's form: `Fma(a, b, -0.0)`
-    // where its `float` functions are Metal's, an `OpFMul` elsewhere.
+    // The product of `a` and `b`: an `OpFMul`.
     let product = |w: &[u32], of: &[u32]| {
-        if metal {
-            op(w) == crate::spv::Op::ExtInst as u32
-                && glsl.contains(&w[3])
-                && w[4] == crate::spv::GlslStd450Op::Fma as u32
-                && negative_zero.contains(&w[7])
-                && (of.contains(&w[5]) || of.contains(&w[6]))
-        } else {
-            op(w) == crate::spv::Op::FMul as u32 && (of.contains(&w[3]) || of.contains(&w[4]))
-        }
+        op(w) == crate::spv::Op::FMul as u32 && (of.contains(&w[3]) || of.contains(&w[4]))
     };
     let decorated: Vec<u32> = insts
         .iter()
@@ -1368,9 +1348,8 @@ fn footprint_ops(words: &[u32], metal: bool) -> [Vec<(u32, bool)>; 3] {
 
 /// The footprint's `x = c n` (normalized coordinates only), `y = 256 x`, and `r = y - floor(y)` are
 /// each rounded on its own on every committed profile, one of each per plane axis, so no device
-/// fuses them into the arithmetic after them: the products in the profile's form (`Fma(a, b, -0.0)`
-/// where its `float` functions are Metal's, an `OpFMul` elsewhere), each decorated `NoContraction`
-/// as the subtraction is. A re-bless of the golden table would not notice the form dropped; this
+/// fuses them into the arithmetic after them: the products an `OpFMul`, each decorated
+/// `NoContraction` as the subtraction is. A re-bless of the golden table would not notice the form dropped; this
 /// test does.
 #[test]
 fn the_footprint_arithmetic_is_no_contraction() {
@@ -1386,8 +1365,7 @@ fn the_footprint_arithmetic_is_no_contraction() {
             let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{name} on {stem}: {e}"));
             let (_, spv) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name} on {stem}: {e}"));
-            let metal = p.fields().float_functions == FloatFunctions::Metal;
-            let [cn, y, r] = footprint_ops(&spv, metal);
+            let [cn, y, r] = footprint_ops(&spv);
             for (what, ops, want) in [
                 ("c n", cn, products),
                 ("256 x", y, 2),

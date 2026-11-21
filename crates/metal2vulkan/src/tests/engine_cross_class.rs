@@ -343,9 +343,8 @@ fn run(
 /// Every read through a slot of another class gives the words the slot of the texture's own
 /// class gives, a `half` result their low 16 bits: Metal's rule. A `ushort` result of an integer
 /// texture is the low 16 bits too, of a float texture the `half` read's bits. Where the module
-/// widens a `half` from its bits by the device and records `PrecisionNote::NativeNanEncoding` or
-/// requires `VkProperty::MetalNanMoves` (both profiles here, which have `shaderFloat16`;
-/// `device_nan_bits`), a `half` result's NaN is the device's widening's, which the interpreter is
+/// widens a `half` from its bits by the device and records `PrecisionNote::NativeNanEncoding`
+/// (both profiles here, which have `shaderFloat16`; `device_nan_bits`), a `half` result's NaN is the device's widening's, which the interpreter is
 /// not, so a NaN pattern need only come back a NaN.
 #[test]
 fn accesses_through_another_class_are_the_native_words() {

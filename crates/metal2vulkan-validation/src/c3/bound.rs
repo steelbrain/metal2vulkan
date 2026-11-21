@@ -34,7 +34,7 @@ use crate::case::BufferResource;
 use crate::observation_contract::{value_difference, ValueDifference};
 use base64::Engine as _;
 use metal2vulkan::device::{DeviceProfile, FloatWidth};
-use metal2vulkan::pipeline::{EntryMath, PrecisionNote};
+use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan_air::intrinsics::AirIntrinsic;
 use metal2vulkan_air::ir::{BinOp, FastMath};
 use msl::{Admits, Expr, Format, Math, Prim};
@@ -302,25 +302,20 @@ impl AirOp {
     /// The precision notes the product's lowering of this operation on `format` records under
     /// `math` on profile `profile`: the product's own answer (`PrecisionNote::of_float_operator`,
     /// or `PrecisionNote::of_math_call` of the call's name as [`AirIntrinsic::parse`] decodes it).
-    /// Under fast math Metal's calls and operators carry every fast-math flag (`fast`), and the
-    /// entry's module is a fast one ([`EntryMath::Fast`]); otherwise they carry none, a division
-    /// without them is Metal's precise one, which records nothing, and the module keeps NaNs
-    /// ([`EntryMath::Precise`]). An error where the product does not lower the operation as a float
-    /// operation.
+    /// Under fast math Metal's calls and operators carry every fast-math flag (`fast`); otherwise
+    /// they carry none, and a division without them is Metal's precise one. An error where the
+    /// product does not lower the operation as a float operation.
     pub fn product_notes(
         &self,
         format: Format,
         math: Math,
         profile: &DeviceProfile,
     ) -> Result<BTreeSet<PrecisionNote>, String> {
-        let (fmf, entry) = match math {
-            Math::Fast => (
-                FastMath::ALL
-                    .iter()
-                    .fold(FastMath::NONE, |all, (flag, _)| all.union(*flag)),
-                EntryMath::Fast,
-            ),
-            Math::Precise => (FastMath::NONE, EntryMath::Precise),
+        let fmf = match math {
+            Math::Fast => FastMath::ALL
+                .iter()
+                .fold(FastMath::NONE, |all, (flag, _)| all.union(*flag)),
+            Math::Precise => FastMath::NONE,
         };
         let notes = match self {
             AirOp::Binop(op) => PrecisionNote::of_float_operator(
@@ -331,12 +326,9 @@ impl AirOp {
                 },
                 fmf,
                 profile,
-                entry,
             ),
             AirOp::Call(name) => match AirIntrinsic::parse(name) {
-                Some(AirIntrinsic::Math(call)) => {
-                    PrecisionNote::of_math_call(call, fmf, profile, entry)
-                }
+                Some(AirIntrinsic::Math(call)) => PrecisionNote::of_math_call(call, fmf, profile),
                 _ => None,
             },
         };
@@ -359,8 +351,7 @@ impl std::fmt::Display for AirOp {
 /// Metal's (a near-equivalent): a float division, a square root or remainder, and a function the
 /// product computes with a division of its own (fast `float` `tanh` and `atan2`). Whether the
 /// product records it is the product's answer ([`AirOp::product_notes`]) on the row's venue profile
-/// `profile`: on a device whose `float` functions are Metal's own, an operation that is Metal's own
-/// under fast math records none there.
+/// `profile`.
 ///
 /// The device's transcendentals (`DeviceTranscendentals`) are the device's own answer, which the
 /// user accepts within Apple's bound, so they are no near-equivalent.

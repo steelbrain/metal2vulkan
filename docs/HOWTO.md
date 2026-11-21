@@ -45,10 +45,7 @@ A `half` computed in `float` rounds through the device's conversion to 16 bits a
 `half(float)` under the float controls the entry declares, where the driver keeps that pair (ANV,
 RADV). Elsewhere it rounds through the device's own conversion, or its `OpQuantizeToF16` alone
 without `shaderFloat16` (which may flush a value below the smallest normal `half`), and the
-pipeline records `NativeHalfConversion` or `NativeHalfQuantize`; not `NativeHalfConversion` on
-MoltenVK on the Apple M3 Max's macOS 27 identity (`DriverDeviation::MetalHalfConversion`), where
-every such `half` is a conversion of a `float` the function holds or of a texel, measured to be
-Metal's. NVIDIA's driver (615.71.09) folds the pair even under the float controls, so its
+pipeline records `NativeHalfConversion` or `NativeHalfQuantize`. NVIDIA's driver (615.71.09) folds the pair even under the float controls, so its
 rounding there is the device's conversion, or none; its pipelines still declare the float controls
 and compute a `half` `+`, `-`, `*`, `/` and `sqrt` with the device's 16-bit instructions, as ANV's
 and RADV's do. RADV's compiler fuses a `float` addition, subtraction, multiply or fused
@@ -60,11 +57,9 @@ A `half` read from memory or from its bits is the device's widening on every dev
 `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `GLSL.std.450
 UnpackHalf2x16` without it), and a `half` stored or reinterpreted as bits, unless they are the
 bits it was loaded from, the device's narrowing (an `OpFConvert` to 16 bits, `GLSL.std.450
-PackHalf2x16` without `shaderFloat16`); the pipeline records `NativeNanEncoding` (a NaN's bits;
-not on MoltenVK on the Apple M3 Max's macOS 27 identity, `DriverDeviation::MetalNanMoves`, where
-the `half` moves through the registers alone or into a texture write's texel) and, where that conversion is neither under the
-float controls nor measured to be Metal's, `NativeHalfConversion` (a denormal the device may
-flush).
+PackHalf2x16` without `shaderFloat16`); the pipeline records `NativeNanEncoding` (a NaN's bits)
+and, where that conversion is not under the float controls, `NativeHalfConversion` (a denormal the
+device may flush).
 
 To read AIR without translating it (list a metallib's functions, decode a module into typed IR,
 read its entry points' bindings, canonicalize an entry under function-constant values), depend on

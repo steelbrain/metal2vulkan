@@ -427,7 +427,7 @@ const OP_IS_NAN: u16 = 156;
 /// `DeviceNanEncoding`; bound in `RGBA16Float` it records the note too; bound in `RGBA8Unorm` it
 /// records none. Where the choice declares no format and no class, the write records the note
 /// under the format bound there. A choice declaring `RGBA16Float` records the note on every
-/// profile. No write requires `VkProperty::MetalHalfTexelWrites` or `VkProperty::MetalNanMoves`.
+/// profile. No write requires `VkProperty::MetalHalfTexelWrites`.
 #[test]
 fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_s() {
     use crate::device::requirements::VkProperty;
@@ -456,7 +456,6 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
         let required = |a: &FunctionArtifact| {
             let properties = &a.requirements.properties;
             properties.contains(&VkProperty::MetalHalfTexelWrites)
-                || properties.contains(&VkProperty::MetalNanMoves)
         };
         let tests = |a: &FunctionArtifact| opcodes(&a.module.words).contains(&OP_IS_NAN);
         for pf in [

@@ -1010,8 +1010,7 @@ pub struct TexturePlan {
     /// conversion because it stores Metal's half (`MetalHalfStorageWrites`) and its NaN
     /// (`MetalHalfStorageNans`), a write that may reach a normalized format, because it stores
     /// Metal's codes (`MetalNormStorageWrites`), and a `half` texel's NaN to a 16-bit float format
-    /// (`MetalHalfTexelWrites`); and a `half` read's NaN of a 32-bit float or packed small float
-    /// texel (`MetalHalfConversion`, `half_texel_nans`). The module requires them.
+    /// (`MetalHalfTexelWrites`). The module requires them.
     pub storage_properties: BTreeSet<crate::device::requirements::VkProperty>,
 }
 
@@ -1678,10 +1677,7 @@ pub enum OneTexel {
 /// none of the families (the slot's `UnmeasuredTexels` specialization), a 16-bit normalized grid
 /// (`BicubicTexels::WIDE16`: three steps of each round twice), and a sample of a 32-bit float
 /// texel (`BicubicTexels::LINEAR`: Metal rounds toward zero, saturating), tests of the bound
-/// format the runtime announces at a draw or dispatch binding such a texture. Not a sample's of a
-/// 32-bit float texel on a profile that takes `DriverDeviation::MetalHalfConversion` (the module
-/// then requires its property): there the device's `half` of every `float` word a read, sample or
-/// gather hands back is measured to be Metal's (`device::driver_facts`). A heap color
+/// format the runtime announces at a draw or dispatch binding such a texture. A heap color
 /// texture's and a depth texture's access records it outright.
 pub(crate) fn half_texels(
     cx: &mut SelectCx<'_>,
@@ -1708,22 +1704,9 @@ pub(crate) fn half_texels(
         [NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into(),
         [NoteTest::differ(NoteOn::Bound(index), B::WIDE16, 0)].into(),
     ];
-    // A sample of a 32-bit float texel, but on a profile that takes
-    // `DriverDeviation::MetalHalfConversion`, whose `half` of every `float` word a read, sample or
-    // gather hands back is measured to be Metal's (the module then requires its property).
+    // A sample of a 32-bit float texel.
     if sample {
-        match cx
-            .profile
-            .takes_driver_deviation(DriverDeviation::MetalHalfConversion)
-        {
-            true => {
-                cx.families
-                    .texture
-                    .storage_properties
-                    .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
-            }
-            false => when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into()),
-        }
+        when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into());
     }
     cx.note_when(PrecisionNote::HalfTexelConversion, when, m)?;
     let slot = slot_of(cx, index)?.slot;
@@ -1740,10 +1723,7 @@ pub(crate) fn half_texels(
 /// only where the class of the format bound there may hold a NaN (none of `TexelFormat::NAN_FREE`'s
 /// families): a test of `SpecKey::BoundTexelFormat`, which the runtime reads from the bound texture
 /// and no pipeline's key carries. A normalized, sRGB or extended-range texel decodes to no NaN, so
-/// the device's encoding of one cannot show. On a profile that takes
-/// `DriverDeviation::MetalHalfConversion` (the module then requires its property), not where the
-/// class is a 32-bit float or packed small float one either: the `half` the device makes of such a
-/// texel is measured to be Metal's, its NaN `0x7e00` (`device::driver_facts`). Of a heap's element
+/// the device's encoding of one cannot show. Of a heap's element
 /// or a depth texture, wherever it reads.
 pub(crate) fn half_texel_nans(
     cx: &mut SelectCx<'_>,
@@ -1753,27 +1733,13 @@ pub(crate) fn half_texel_nans(
 ) -> Result<(), Error> {
     match image {
         ImageRef::Slot(index) if !shape.depth => {
-            use crate::metal::bicubic::BicubicTexels as B;
             use crate::metal::texel_format::TexelFormat;
-            let bound = |mask, bits| NoteTest::equal(NoteOn::Bound(index), mask, bits);
-            let when = match cx
-                .profile
-                .takes_driver_deviation(DriverDeviation::MetalHalfConversion)
-            {
-                // A half-float class, and a class of no family.
-                true => {
-                    cx.families
-                        .texture
-                        .storage_properties
-                        .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
-                    let family = B::LINEAR | B::HALF | TexelFormat::NAN_FREE;
-                    vec![
-                        [bound(family, B::HALF), bound(TexelFormat::PACKED_MASK, 0)].into(),
-                        [bound(family, 0)].into(),
-                    ]
-                }
-                false => vec![[bound(TexelFormat::NAN_FREE, 0)].into()],
-            };
+            let when = vec![[NoteTest::equal(
+                NoteOn::Bound(index),
+                TexelFormat::NAN_FREE,
+                0,
+            )]
+            .into()];
             cx.note_when(PrecisionNote::DeviceNanEncoding, when, m)
         }
         _ => {
@@ -2374,10 +2340,7 @@ const NAN_FAMILIES: [(
                 VkProperty::MetalHalfTexelWrites,
             )),
         ),
-        (
-            NAN_WIDE,
-            Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
-        ),
+        (NAN_WIDE, None),
         (
             NAN_SMALL,
             Some((
@@ -2396,15 +2359,14 @@ const NAN_FAMILIES: [(
 /// `Private`). The write stores the half widened, its NaN's payload in the significand's top bits,
 /// which the device converts: a 16-bit float channel's NaN is Metal's on a device of
 /// `DriverDeviation::MetalHalfTexelWrites` (the module requires its property); a 32-bit one's is
-/// the widened `float`'s bits as written, Metal's `0x7fc00000` where the device's widening is
-/// Metal's (`DriverDeviation::MetalNanMoves`, whose property the module then requires); a packed
+/// the widened `float`'s bits as written, the device's widening's; a packed
 /// small float one's is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`, which
 /// stores every `float` NaN there as Metal does (the module requires its property); and every
 /// other float channel's is the device's.
 ///
 /// The write records `PrecisionNote::DeviceNanEncoding` where the stored NaN stays the device's:
 /// a 16-bit float channel's on a profile without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit
-/// one's without `DriverDeviation::MetalNanMoves`, a packed small float one's without
+/// one's, a packed small float one's without
 /// `DriverDeviation::MetalSmallFloatNans`, and a float channel's of none of those families (a
 /// format that may hold a NaN). A slot whose choice declares no format (or a variant that states
 /// none) records it under the format bound there (`m` charged for the clauses), and a heap
@@ -2419,14 +2381,13 @@ pub(super) fn half_write_nans(
 ) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
     use crate::vk::NumericFormat as N;
-    // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`), a 32-bit
-    // one's (`Wide`) or a packed small float one's (`Small`), each Metal's on its measured
-    // deviation, or the device's (`Device`).
+    // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`) or a packed
+    // small float one's (`Small`), each Metal's on its measured deviation, or the device's
+    // (`Device`).
     #[derive(PartialEq)]
     enum Stored {
         Exact,
         Sixteen,
-        Wide,
         Small,
         Device,
         Bound(u32),
@@ -2440,7 +2401,6 @@ pub(super) fn half_write_nans(
         };
         match (b.color, b.component_bits, b.packed_bits) {
             (Some(N::Sfloat), Some(16), None) => Stored::Sixteen,
-            (Some(N::Sfloat), Some(32), None) => Stored::Wide,
             (Some(N::Sfloat | N::Ufloat), _, _) => Stored::Device,
             _ => Stored::Exact,
         }
@@ -2492,10 +2452,7 @@ pub(super) fn half_write_nans(
                     VkProperty::MetalHalfTexelWrites,
                 )),
             ),
-            (
-                [bound(family, B::LINEAR), bound(packed, 0)].into(),
-                Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
-            ),
+            ([bound(family, B::LINEAR), bound(packed, 0)].into(), None),
             (
                 [bound(packed, PackedTexels::SmallFloat.class().0)].into(),
                 Some((
@@ -2521,7 +2478,6 @@ pub(super) fn half_write_nans(
             DriverDeviation::MetalHalfTexelWrites,
             VkProperty::MetalHalfTexelWrites,
         )),
-        Stored::Wide => Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
         Stored::Small => Some((
             DriverDeviation::MetalSmallFloatNans,
             VkProperty::MetalSmallFloatNans,

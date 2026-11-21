@@ -22,7 +22,7 @@ use super::ops::{self, BitcastPlan, CastKind};
 use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntFlags, IntPredicate};
 use crate::device::DeviceProfile;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
-use crate::spirv::builder::{FunctionBuilder, ModuleBuilder, ProductForm, QuantizeForm};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder, QuantizeForm};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{FuncId, GlobalId, TypeId, Value};
 use crate::spirv::interp::{run, Buffer, Config, Resources};
@@ -1040,20 +1040,14 @@ fn llvm_fcmp(pred: FloatPredicate, a: f64, b: f64) -> bool {
 
 /// A multiply rounded on its own is IEEE's product bit for bit on every pair of the value sets,
 /// `-0.0` operands, zero products of either sign, denormals, overflow, infinities, and NaNs
-/// included, on `float` scalars and vectors and on `double`, in either of its forms (`OpFMul`, and
-/// `Fma(a, b, -0.0)` where SPIRV-Cross renders the SPIR-V).
+/// included, on `float` scalars and vectors and on `double`.
 #[test]
 fn a_multiply_without_contraction_is_the_product() {
-    for (form, bits, vals, lanes) in [ProductForm::Multiply, ProductForm::NegativeZeroFma]
-        .into_iter()
-        .flat_map(|form| {
-            [
-                (form, 32u8, f32_values(), 1u8),
-                (form, 32, f32_values(), 4),
-                (form, 64, f64_values(), 1),
-            ]
-        })
-    {
+    for (bits, vals, lanes) in [
+        (32u8, f32_values(), 1u8),
+        (32, f32_values(), 4),
+        (64, f64_values(), 1),
+    ] {
         let f = vec(float(bits), lanes);
         let cases: Vec<Case> = pairs(&vals, &vals)
             .into_iter()
@@ -1064,13 +1058,10 @@ fn a_multiply_without_contraction_is_the_product() {
             })
             .collect();
         check(
-            &format!("fmul without contraction f{bits} x{lanes} as {form:?}"),
+            &format!("fmul without contraction f{bits} x{lanes}"),
             &[f, f],
             f,
-            &|fb, x| {
-                fb.module().product_form(form);
-                ops::float_binary(fb, AirBin::FMul, f, Contraction::Forbidden, x[0], x[1])
-            },
+            &|fb, x| ops::float_binary(fb, AirBin::FMul, f, Contraction::Forbidden, x[0], x[1]),
             &cases,
             &|c| {
                 let r = |l: usize| {
@@ -1088,13 +1079,12 @@ fn a_multiply_without_contraction_is_the_product() {
     }
 }
 
-/// An `f32` product by a constant with `-0.0` components is IEEE's product bit for bit in every
-/// [`ProductForm`] (a NaN's bits aside), as `OpFMul` with the constant on either side, with and
-/// without contraction, and as `OpVectorTimesScalar` by a `-0.0` scalar or of a constant vector,
-/// and in every form no product the module emits has a `-0.0` component in a constant factor: it
-/// multiplies by `+0.0` there and negates.
+/// An `f32` product by a constant with `-0.0` components is IEEE's product bit for bit (a NaN's
+/// bits aside), as `OpFMul` with the constant on either side, with and without contraction, and
+/// as `OpVectorTimesScalar` by a `-0.0` scalar or of a constant vector, and no product the module
+/// emits has a `-0.0` component in a constant factor: it multiplies by `+0.0` there and negates.
 #[test]
-fn a_product_by_a_negative_zero_factor_keeps_its_sign_in_every_form() {
+fn a_product_by_a_negative_zero_factor_keeps_its_sign() {
     const NZ: u64 = 0x8000_0000;
     const TWO: u64 = 0x4000_0000;
     #[derive(Clone, Copy, Debug)]
@@ -1144,76 +1134,72 @@ fn a_product_by_a_negative_zero_factor_keeps_its_sign_in_every_form() {
             .count()
     };
     let vals = f32_values();
-    for form in [ProductForm::Multiply, ProductForm::NegativeZeroFma] {
-        for contract in [Contraction::Forbidden, Contraction::Allowed] {
-            for (lanes, shape, c) in factors {
-                let what = format!("{form:?} {contract:?} {shape:?} x{lanes} by {c:x?}");
-                let x_lanes = match shape {
-                    Shape::OfConstant => 1,
-                    _ => lanes,
-                };
-                let input = vec(float(32), x_lanes);
-                let out = vec(float(32), lanes);
-                let body = |fb: &mut FunctionBuilder<'_>, xs: &[Value]| -> BResult<Value> {
-                    fb.module().product_form(form);
-                    let f32_ty = fb.module().ty(Type::Float { width: 32 })?;
-                    let parts = c
-                        .iter()
-                        .map(|bits| {
-                            fb.module().constant(Constant::Scalar {
-                                ty: f32_ty,
-                                bits: ConstBits(*bits),
-                            })
-                        })
-                        .collect::<BResult<Vec<_>>>()?;
-                    let k = if parts.len() == 1 {
-                        parts[0]
-                    } else {
-                        let ty = fb.module().ty(Type::Vector {
-                            elem: f32_ty,
-                            len: parts.len() as u8,
-                        })?;
-                        fb.module().constant(Constant::Composite {
-                            ty,
-                            parts: parts.into(),
-                        })?
-                    };
-                    let k = fb.module().const_value(k)?;
-                    let (op, a, b) = match shape {
-                        Shape::Mul { left: false } => (BinOp::FMul, xs[0], k),
-                        Shape::Mul { left: true } => (BinOp::FMul, k, xs[0]),
-                        Shape::ByScalar => (BinOp::VectorTimesScalar, xs[0], k),
-                        Shape::OfConstant => (BinOp::VectorTimesScalar, k, xs[0]),
-                    };
-                    fb.binary_with(op, a, b, contract)
-                };
-                let m = kernel_with(&[input], out, &body, true, false)
-                    .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
-                assert_eq!(negative_factors(&m), 0, "{what}: a -0.0 factor");
-                let cases: Vec<Case> = vals
+    for contract in [Contraction::Forbidden, Contraction::Allowed] {
+        for (lanes, shape, c) in factors {
+            let what = format!("{contract:?} {shape:?} x{lanes} by {c:x?}");
+            let x_lanes = match shape {
+                Shape::OfConstant => 1,
+                _ => lanes,
+            };
+            let input = vec(float(32), x_lanes);
+            let out = vec(float(32), lanes);
+            let body = |fb: &mut FunctionBuilder<'_>, xs: &[Value]| -> BResult<Value> {
+                let f32_ty = fb.module().ty(Type::Float { width: 32 })?;
+                let parts = c
                     .iter()
-                    .map(|x| vec![vec![*x; usize::from(x_lanes)]])
-                    .collect();
-                let factor = |l: usize| f32::from_bits(c[if c.len() == 1 { 0 } else { l }] as u32);
-                check_module(
-                    &what,
-                    m,
-                    &[input],
-                    out,
-                    &cases,
-                    &|case| {
-                        let x = |l: usize| {
-                            f32::from_bits(case[0][if x_lanes == 1 { 0 } else { l }] as u32)
-                        };
-                        Some(
-                            (0..usize::from(lanes))
-                                .map(|l| u64::from((x(l) * factor(l)).to_bits()))
-                                .collect(),
-                        )
-                    },
-                    &|g, w| g == w || (is_nan(out, g) && is_nan(out, w)),
-                );
-            }
+                    .map(|bits| {
+                        fb.module().constant(Constant::Scalar {
+                            ty: f32_ty,
+                            bits: ConstBits(*bits),
+                        })
+                    })
+                    .collect::<BResult<Vec<_>>>()?;
+                let k = if parts.len() == 1 {
+                    parts[0]
+                } else {
+                    let ty = fb.module().ty(Type::Vector {
+                        elem: f32_ty,
+                        len: parts.len() as u8,
+                    })?;
+                    fb.module().constant(Constant::Composite {
+                        ty,
+                        parts: parts.into(),
+                    })?
+                };
+                let k = fb.module().const_value(k)?;
+                let (op, a, b) = match shape {
+                    Shape::Mul { left: false } => (BinOp::FMul, xs[0], k),
+                    Shape::Mul { left: true } => (BinOp::FMul, k, xs[0]),
+                    Shape::ByScalar => (BinOp::VectorTimesScalar, xs[0], k),
+                    Shape::OfConstant => (BinOp::VectorTimesScalar, k, xs[0]),
+                };
+                fb.binary_with(op, a, b, contract)
+            };
+            let m = kernel_with(&[input], out, &body, true, false)
+                .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
+            assert_eq!(negative_factors(&m), 0, "{what}: a -0.0 factor");
+            let cases: Vec<Case> = vals
+                .iter()
+                .map(|x| vec![vec![*x; usize::from(x_lanes)]])
+                .collect();
+            let factor = |l: usize| f32::from_bits(c[if c.len() == 1 { 0 } else { l }] as u32);
+            check_module(
+                &what,
+                m,
+                &[input],
+                out,
+                &cases,
+                &|case| {
+                    let x =
+                        |l: usize| f32::from_bits(case[0][if x_lanes == 1 { 0 } else { l }] as u32);
+                    Some(
+                        (0..usize::from(lanes))
+                            .map(|l| u64::from((x(l) * factor(l)).to_bits()))
+                            .collect(),
+                    )
+                },
+                &|g, w| g == w || (is_nan(out, g) && is_nan(out, w)),
+            );
         }
     }
 }
@@ -2690,28 +2676,6 @@ fn half_nan_answers_follow_the_measured_states() {
     ] {
         assert_eq!(cast_answer(op, from, to), None, "{op:?} {from:?} {to:?}");
     }
-    use crate::device::profile::NanEncoding;
-    assert!(A::Canonical.device_answers(NanEncoding::MetalCanonical));
-    for a in [
-        A::CanonicalExact,
-        A::Operand,
-        A::OperandSign,
-        A::DomainSign,
-        A::BaseToExponentOne,
-    ] {
-        assert!(!a.device_answers(NanEncoding::MetalCanonical), "{a:?}");
-    }
-    // A device not measured to answer Metal's canonical NaN answers none of Metal's NaNs.
-    for a in [
-        A::Canonical,
-        A::CanonicalExact,
-        A::Operand,
-        A::OperandSign,
-        A::DomainSign,
-        A::BaseToExponentOne,
-    ] {
-        assert!(!a.device_answers(NanEncoding::Native), "{a:?}");
-    }
 }
 
 /// The float facts of a profile whose `float` fused multiply-add is `OpFmaKHR`, whose `half` one
@@ -2721,25 +2685,17 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
         float: super::fma::Route::Khr,
         half: super::fma::Route::Native,
     },
-    metal_functions: false,
-    device_denormals: false,
-    unary_denormals: false,
-    nans: crate::device::profile::NanEncoding::Native,
-    native_min_max: false,
-    nan_moves: false,
 };
 
 /// `ldexp` on `float` is lowered on the bits ([`math::ldexp_bits`]), which answer a NaN operand
 /// itself, bit for bit, as Metal does (`NanAnswer::Operand`): no NaN of the device's reaches the
-/// result, so the call records no `NativeNanEncoding` and leaves no NaN answer to the device, on a
-/// device of either NaN encoding. A `half` `ldexp` multiplies, so its NaN is the device's product's
-/// where Metal answers its canonical `half` NaN, and stays noted on a device not measured to answer
-/// that.
+/// result, so the call records no `NativeNanEncoding` and leaves no NaN answer to the device. A
+/// `half` `ldexp` multiplies, so its NaN is the device's product's where Metal answers its canonical
+/// `half` NaN, noted.
 #[test]
 fn float_ldexp_answers_metals_nan_itself() {
     use super::nan::NanAnswer as A;
     use crate::air::ir::FastMath;
-    use crate::device::profile::NanEncoding;
     use crate::pipeline::artifact::PrecisionNote;
     let form = |fmt| Form {
         held: Held::Float(fmt),
@@ -2750,133 +2706,96 @@ fn float_ldexp_answers_metals_nan_itself() {
     let every = FastMath::ALL
         .iter()
         .fold(FastMath::NONE, |a, (b, _)| a.union(*b));
-    for nans in [NanEncoding::Native, NanEncoding::MetalCanonical] {
-        let facts = super::FloatFacts { nans, ..KHR_FACTS };
-        for fmf in [FastMath::NONE, every] {
-            let call = super::float_call(FloatFn::Ldexp, false, fmf, form(FloatFmt::F32), facts)
-                .expect("float ldexp");
-            assert_eq!(call.nan, None, "{nans:?} {fmf:?}");
-            let noted = (call.notes.always.iter())
-                .chain(&call.notes.unless_metal_fast)
-                .any(|n| matches!(n, PrecisionNote::NativeNanEncoding));
-            assert!(!noted, "{nans:?} {fmf:?}: {:?}", call.notes);
-        }
-        let half = super::float_call(
-            FloatFn::Ldexp,
-            false,
-            FastMath::NONE,
-            form(FloatFmt::Half),
-            facts,
-        )
-        .expect("half ldexp");
-        assert_eq!(half.nan, Some(A::Canonical), "{nans:?}");
-        if nans == NanEncoding::Native {
-            assert!(
-                half.notes
-                    .always
-                    .contains(&PrecisionNote::NativeNanEncoding),
-                "{:?}",
-                half.notes
-            );
-        }
+    let facts = KHR_FACTS;
+    for fmf in [FastMath::NONE, every] {
+        let call = super::float_call(FloatFn::Ldexp, false, fmf, form(FloatFmt::F32), facts)
+            .expect("float ldexp");
+        assert_eq!(call.nan, None, "{fmf:?}");
+        let noted = (call.notes.iter()).any(|n| matches!(n, PrecisionNote::NativeNanEncoding));
+        assert!(!noted, "{fmf:?}: {:?}", call.notes);
     }
+    let half = super::float_call(
+        FloatFn::Ldexp,
+        false,
+        FastMath::NONE,
+        form(FloatFmt::Half),
+        facts,
+    )
+    .expect("half ldexp");
+    assert_eq!(half.nan, Some(A::Canonical));
+    assert!(
+        half.notes.contains(&PrecisionNote::NativeNanEncoding),
+        "{:?}",
+        half.notes
+    );
 }
 
 /// Precise `pow` on `float` leaves its NaNs to the device (the device's `Pow`, and the device's sum
 /// of NaN operands), where Metal's NaN is measured: the canonical NaN, but a NaN base to the
 /// exponent one, which is the base itself. It records `NativeNanEncoding` as fast `pow` and `atan2`
-/// do, on a device whose arithmetic answers Metal's canonical NaN too (its sum of `pow(NaN, 1)`'s
-/// operands is that NaN, not the base), and never `DeviceNanEncoding`, which is for a NaN Metal
+/// do, and never `DeviceNanEncoding`, which is for a NaN Metal
 /// answers no NaN of (fast `sin` and `cos`).
 #[test]
 fn precise_pow_notes_its_measured_nan_as_the_devices() {
     use super::nan::NanAnswer as A;
     use crate::air::ir::FastMath;
-    use crate::device::profile::NanEncoding;
     use crate::pipeline::artifact::PrecisionNote;
     let f = Form {
         held: Held::Float(FloatFmt::F32),
         lanes: 1,
     };
-    for nans in [NanEncoding::Native, NanEncoding::MetalCanonical] {
-        let facts = super::FloatFacts { nans, ..KHR_FACTS };
-        let call =
-            super::float_call(FloatFn::Pow, false, FastMath::NONE, f, facts).expect("float pow");
-        assert_eq!(call.nan, Some(A::BaseToExponentOne), "{nans:?}");
-        assert!(
-            call.notes
-                .always
-                .contains(&PrecisionNote::NativeNanEncoding),
-            "{nans:?}: {:?}",
-            call.notes
-        );
-        let every_note = call
-            .notes
-            .always
+    let facts = KHR_FACTS;
+    let call = super::float_call(FloatFn::Pow, false, FastMath::NONE, f, facts).expect("float pow");
+    assert_eq!(call.nan, Some(A::BaseToExponentOne));
+    assert!(
+        call.notes.contains(&PrecisionNote::NativeNanEncoding),
+        "{:?}",
+        call.notes
+    );
+    let every_note = call.notes.iter();
+    assert!(
+        !every_note
+            .clone()
+            .any(|n| *n == PrecisionNote::DeviceNanEncoding),
+        "{:?}",
+        call.notes
+    );
+    let sin = super::float_call(FloatFn::Sin, true, FastMath::NONE, f, facts).expect("fast sin");
+    assert_eq!(sin.nan, None);
+    assert!(
+        sin.notes
             .iter()
-            .chain(&call.notes.unless_metal_fast);
-        assert!(
-            !every_note
-                .clone()
-                .any(|n| *n == PrecisionNote::DeviceNanEncoding),
-            "{nans:?}: {:?}",
-            call.notes
-        );
-        let sin =
-            super::float_call(FloatFn::Sin, true, FastMath::NONE, f, facts).expect("fast sin");
-        assert_eq!(sin.nan, None, "{nans:?}");
-        assert!(
-            sin.notes
-                .always
-                .iter()
-                .chain(&sin.notes.unless_metal_fast)
-                .any(|n| *n == PrecisionNote::DeviceNanEncoding),
-            "{nans:?}: {:?}",
-            sin.notes
-        );
-    }
+            .any(|n| *n == PrecisionNote::DeviceNanEncoding),
+        "{:?}",
+        sin.notes
+    );
 }
 
-/// Class E: Metal's `float` `fneg` and `fabs` flip or clear the sign bit alone, a NaN's payload and
-/// a denormal kept (`nan_signbits`, `nan_signbits_fast`). The lowering takes the device's
-/// `floor`, `ceil` and `fabs` on `float` leave their denormals to the device, noted
-/// `DeviceDenormals`, but where the profile takes `DriverDeviation::MetalUnaryDenormals`
-/// (`denormal::Covered::Unary`, `denormal::moves_sign`); `trunc` follows the other deviation
-/// alone, in either mode.
+/// `floor`, `ceil`, `trunc` and `fabs` on `float` leave their denormals to the device, noted
+/// `DeviceDenormals`, in either mode (class E's `fabs` keeps a denormal on Metal).
 #[test]
-fn unary_denormals_follow_their_deviation() {
+fn unary_denormals_are_the_device_s() {
     use crate::air::ir::FastMath;
     use crate::pipeline::artifact::PrecisionNote;
     let f = Form {
         held: Held::Float(FloatFmt::F32),
         lanes: 1,
     };
-    for unary in [false, true] {
-        // A profile that takes the unary deviation (MoltenVK on an Apple9 GPU) takes
-        // `MetalFloatFunctions` too: its `fabs` is one of Metal's functions.
-        let facts = super::FloatFacts {
-            unary_denormals: unary,
-            metal_functions: unary,
-            ..KHR_FACTS
-        };
-        for op in [FloatFn::Floor, FloatFn::Ceil, FloatFn::Abs, FloatFn::Trunc] {
-            for fast in [false, true] {
-                let call = super::float_call(op, fast, FastMath::NONE, f, facts)
-                    .unwrap_or_else(|| panic!("{op:?}: no float call"));
-                assert_eq!(
-                    call.notes.always.contains(&PrecisionNote::DeviceDenormals),
-                    !(unary && op != FloatFn::Trunc),
-                    "{op:?}, fast {fast}, unary {unary}"
-                );
-            }
+    for op in [FloatFn::Floor, FloatFn::Ceil, FloatFn::Abs, FloatFn::Trunc] {
+        for fast in [false, true] {
+            let call = super::float_call(op, fast, FastMath::NONE, f, KHR_FACTS)
+                .unwrap_or_else(|| panic!("{op:?}: no float call"));
+            assert!(
+                call.notes.contains(&PrecisionNote::DeviceDenormals),
+                "{op:?}, fast {fast}"
+            );
         }
     }
 }
 
 /// `OpFNegate` and `FAbs` on every format, whose NaN is the device's: a `float` `fabs` answers
 /// Metal's operand NaN by none of its own, noted `NativeNanEncoding` (and a `half` one Metal's
-/// canonical NaN, class D), and off Metal's own functions records the device's precision and
-/// denormals.
+/// canonical NaN, class D), and records the device's precision and denormals.
 #[test]
 fn float_sign_operations_are_the_device_instructions() {
     use super::nan::NanAnswer as A;
@@ -2903,7 +2822,7 @@ fn float_sign_operations_are_the_device_instructions() {
                 PrecisionNote::NativeTranscendentals,
                 PrecisionNote::DeviceDenormals,
             ] {
-                assert!(call.notes.always.contains(&note), "{note:?} {fmf:?}");
+                assert!(call.notes.contains(&note), "{note:?} {fmf:?}");
             }
         }
         let call =
@@ -3429,7 +3348,7 @@ fn pi_scaled_functions_reduce_exactly_to_metal_answers() {
 
 /// [`FloatFn::words`] bounds what `sinpi`, `cospi`, and `tanpi` emit on every form: the exact
 /// reduction around the device's `Sin` and `Cos`, the axis arms and `tanpi`'s quarter turns
-/// included, whether or not the device's functions are Metal's. The module's growth over an
+/// included. The module's growth over an
 /// identity kernel is charged in full, its constants and the `GLSL.std.450` import included.
 #[test]
 fn pi_scaled_functions_stay_within_their_word_estimate() {

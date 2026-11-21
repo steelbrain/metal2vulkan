@@ -20,10 +20,7 @@
 //! these classes.
 //!
 //! The module leaves every NaN's bits to the device, and records
-//! `PrecisionNote::NativeNanEncoding` where Metal answers a NaN the device is not measured to
-//! answer: every answer these tables give, but the canonical class of the arithmetic on a device
-//! measured to answer Metal's canonical NaN ([`NanEncoding::MetalCanonical`],
-//! [`NanAnswer::device_answers`]).
+//! `PrecisionNote::NativeNanEncoding` where Metal answers a NaN: every answer these tables give.
 //!
 //! [`is_nan`] tests a value for a NaN, by `OpIsNan` where the entry declares
 //! `SignedZeroInfNanPreserve` for the width, without which a device may assume that no operand is a
@@ -31,8 +28,6 @@
 //! float mode reaches: the conversions and functions whose answer at a NaN is a number test so.
 
 use crate::air::ir::{BinOp as AirBin, CastOp, FastMath};
-use crate::device::profile::NanEncoding;
-use crate::device::DeviceProfile;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::math::FloatFn;
 use crate::lower::arith::narrow::u32_form;
@@ -51,9 +46,7 @@ pub enum NanAnswer {
     /// `0x7FC00000` for a result the device computes exactly, passing its operand's NaN on: the
     /// widening of a `half` to `float`, which a `half` held widened leaves no device operation at
     /// all, and `half` `fneg` and `fabs`, which a device computes on the sign alone. No device's
-    /// arithmetic answers it, so the canonical-NaN fact does not leave it to the device; where the
-    /// device's moves of a NaN are measured ([`moves_answered`]), the held `half` is its widening's
-    /// canonical NaN, so the widening and `fabs` answer it.
+    /// arithmetic answers it, so it is noted on every device.
     CanonicalExact,
     /// The canonical NaN with a NaN first operand's sign, and `+` for a NaN of another origin (a
     /// domain error): precise `asin`, `atan`, `asinh`, `atanh`.
@@ -69,20 +62,6 @@ pub enum NanAnswer {
     /// bit (`pow(-NaN, 1)` is `0xffc00000`): precise `pow` on `float` (A1 case 116e052a, every
     /// lane; `fast::pow` answers the canonical NaN there).
     BaseToExponentOne,
-}
-
-impl NanAnswer {
-    /// Whether the device is measured to answer this NaN under `encoding`: on a device whose
-    /// arithmetic answers Metal's canonical NaN ([`NanEncoding::MetalCanonical`]) the canonical
-    /// class of the arithmetic, which the device fact covers, and not
-    /// [`NanAnswer::CanonicalExact`]; nothing on another ([`NanEncoding::Native`]). The device's
-    /// NaN of an answer it is not measured to give is noted `PrecisionNote::NativeNanEncoding`.
-    pub fn device_answers(self, encoding: NanEncoding) -> bool {
-        match encoding {
-            NanEncoding::MetalCanonical => self == NanAnswer::Canonical,
-            NanEncoding::Native => false,
-        }
-    }
 }
 
 /// How [`is_nan`] tests a value for a NaN.
@@ -459,20 +438,4 @@ fn flagged_precise(op: FloatFn) -> bool {
         op,
         F::Sin | F::Cos | F::Tan | F::Asin | F::Acos | F::Atan | F::Asinh | F::Atanh | F::Atan2
     )
-}
-
-/// The profile's NaN encoding.
-pub fn encoding(p: &DeviceProfile) -> NanEncoding {
-    p.fields().nan_encoding
-}
-
-/// Whether profile `p`'s device is measured to answer Metal's NaN where an operation moves a NaN
-/// rather than computes one (`DriverDeviation::MetalNanMoves`): its widening of a `half` to
-/// `float` ([`NanAnswer::CanonicalExact`]), its `float` `fneg` and `fabs`
-/// ([`NanAnswer::Operand`]) and its `half` `fabs` ([`NanAnswer::CanonicalExact`]), each where the
-/// module moves its `half` values only as measured (`narrow::moves_unfolded`). A `half` `fneg`,
-/// whose held result keeps the operand's NaN with its sign flipped unless the driver's compiler
-/// moves the negation onto the `half`, is not among them.
-pub fn moves_answered(p: &DeviceProfile) -> bool {
-    p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves)
 }

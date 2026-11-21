@@ -285,8 +285,7 @@ pub fn f16_binary_words(f: Form) -> u32 {
 /// ([`narrow::round`]), so no conversion barrier and no conversion pair, which a device's compiler
 /// spends most on (ANV's register allocation grows with the values the pairs add).
 ///
-/// The instruction is Metal's where the profile takes `DriverDeviation::MetalHalfArithmetic`, and,
-/// by the Vulkan spec, in an entry declaring the 16-bit float controls the module's roundings take
+/// The instruction is Metal's, by the Vulkan spec, in an entry declaring the 16-bit float controls the module's roundings take
 /// ([`narrow::controlled_modes`]): the precision table "for IEEE754 half- (16 bit) and single- (32
 /// bit) precision instructions" lists `OpFAdd`, `OpFSub` and `OpFMul` as "Correctly rounded",
 /// "according to IEEE 754 roundTiesToEven" under `RoundingModeRTE`, `DenormPreserve` keeps
@@ -300,11 +299,7 @@ pub fn f16_binary_words(f: Form) -> u32 {
 /// The instruction takes the AIR's own contraction, as `float` arithmetic does
 /// ([`float_binary`]): one whose flags carry both `contract` and `reassoc`
 /// (`Contraction::Allowed`) is undecorated, a product a plain `OpFMul`, and the device's compiler
-/// groups and fuses it with its neighbours as it chooses. On MoltenVK, Metal's fast and relaxed
-/// compiles fold such an operation's narrowings and widening away and answer the `float` sum,
-/// difference or product of the widened operands, unrounded (measured with
-/// `DriverDeviation::MetalHalfArithmetic`), which selection records as
-/// `PrecisionNote::FastMathRewrites`. Any other (`Contraction::Forbidden`) is kept apart: a sum or
+/// groups and fuses it with its neighbours as it chooses. Any other (`Contraction::Forbidden`) is kept apart: a sum or
 /// difference decorated `NoContraction` (SPIRV-Cross writes its `[[clang::optnone]]` `spvFAdd` or
 /// `spvFSub`), a product as `Fma(a, b, -0.0)` decorated `NoContraction`, the product's value
 /// whether the device fuses it or not; a `NoContraction` `OpFMul`, which SPIRV-Cross writes as

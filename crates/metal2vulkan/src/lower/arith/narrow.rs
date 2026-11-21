@@ -21,8 +21,7 @@
 //! exact integer round-to-nearest-even of the `f32` bits. Where the device's 16-bit `+ - *`, kept
 //! apart, is Metal's `half` arithmetic and the profile has `shaderFloat16`, a `half` `+ - *` is
 //! that instruction between exact conversions instead, with no rounding here (`ops::f16_binary`):
-//! where it is measured to be (`DriverDeviation::MetalHalfArithmetic`), and under those float
-//! controls ([`half_controls`]), which make it so by the Vulkan spec and which the entry then
+//! under those float controls ([`half_controls`]), which make it so by the Vulkan spec and which the entry then
 //! declares ([`computes_in_16_bits`]), on a driver that folds the conversion's round trip too
 //! (NVIDIA's: the fold is the pair's, a 16-bit instruction keeps its rounding); there the emitted
 //! module holds every exact `half` at 16 bits, its moves, minimums, maximums and clamps, its
@@ -54,8 +53,6 @@
 //! `f32` ([`f64_to_f32_odd`]), and a `bfloat` fused multiply-add corrects its one inexact case
 //! ([`bf16_fma`]), so the final rounding is the only one that counts.
 
-mod merges;
-
 use crate::budget::Meter;
 use crate::device::profile::Independence;
 use crate::device::DeviceProfile;
@@ -67,8 +64,8 @@ use crate::spirv::builder::{FunctionBuilder, NarrowFmt, QuantizeForm};
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{
-    BinOp, ConstBits, ConstKind, Constant, ConvOp, ExecMode, GlslOp, Inst, StorageClass,
-    Terminator, Type, TypedModule, UnOp, ValueOrigin,
+    BinOp, ConstBits, ConstKind, Constant, ConvOp, ExecMode, GlslOp, Inst, Type, TypedModule, UnOp,
+    ValueOrigin,
 };
 
 /// The unsigned 32-bit integer form with `f`'s lanes.
@@ -179,11 +176,6 @@ pub fn native_rounding(form: QuantizeForm) -> Option<PrecisionNote> {
 /// rounded at all (the note's stated bound), and the store's conversion to bits rounds it
 /// ([`converted_bits`]).
 fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Value> {
-    converted_pair(fb, wide, x).map(|(_, w)| w)
-}
-
-/// [`converted`]'s pair: the narrowing to 16 bits and its widening back.
-fn converted_pair(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<(Value, Value)> {
     let e = fb.module().ty(Type::Float { width: 16 })?;
     let h = match wide.lanes {
         1 => e,
@@ -191,26 +183,7 @@ fn converted_pair(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult
     };
     let w = ty(fb, wide)?;
     let n = fb.convert(ConvOp::FConvert, x, h)?;
-    Ok((n, fb.convert(ConvOp::FConvert, n, w)?))
-}
-
-/// [`round`] of a `float` the function holds to `half` (an AIR `fptrunc` or `air.convert` of a
-/// `float`, [`resize`], and a texel's value, [`round_texel`]): the conversion Metal's compiler
-/// compiles from the AIR's own, which
-/// `DriverDeviation::MetalHalfConversion` measures to be Metal's `half(float)` whatever computed
-/// the `float` ([`rounds_unmeasured`]). In [`QuantizeForm::Converted`] the pair's narrowing is
-/// recorded as measured (`ModuleBuilder::note_measured_rounding`); every other form rounds as
-/// [`round`] does. A `half` an operation or a function computes in `float` is not this form:
-/// Metal computes it otherwise (its `half` `tanh`), and it takes [`round`].
-pub fn round_measured(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    match (f.held, fb.module().quantize_form()) {
-        (Held::Float(FloatFmt::Half), QuantizeForm::Converted) => {
-            let (n, w) = converted_pair(fb, f.with(Held::Float(FloatFmt::F32)), x)?;
-            fb.module().note_measured_rounding(n);
-            Ok(w)
-        }
-        _ => round(fb, f, x),
-    }
+    fb.convert(ConvOp::FConvert, n, w)
 }
 
 /// `x` (`f32` lanes of form `wide`) rounded to `half` by the device's conversion to 16 bits and
@@ -349,112 +322,6 @@ pub fn rounds_by_conversion(m: &TypedModule, meter: &mut Meter) -> Result<bool, 
     Ok(found)
 }
 
-/// Whether module `m` rounds a `half` through [`converted`] in a form
-/// `DriverDeviation::MetalHalfConversion` does not measure: a conversion pair (an `OpFConvert` of
-/// an `f32` to 16 bits whose result another widens back, as [`rounds_by_conversion`] finds them)
-/// whose narrowing is neither recorded as measured ([`round_measured`], [`round_texel`]) nor of a
-/// texel an image instruction hands back. A texel's pair is one whose `f32` is an image read, fetch, sample or
-/// gather's result (or a member of a sparse one's), or a parameter of a function every call of
-/// which passes such a texel there (the `half` texel routine, `texture::half`): Metal's compiler
-/// folds such a conversion into the image instruction, whose `half` is Metal's own. One pass over
-/// the instructions to find each value's definition, two over the conversions, and one over the
-/// calls of each routine a pair narrows a parameter of, with a word and a bit per value of the
-/// module charged to `meter` while they run.
-pub fn rounds_unmeasured(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
-    let width = |v: Value| -> Option<u8> {
-        let ty = m.value(v).ok()?.ty;
-        let ty = match m.types().get(ty).ok()? {
-            Type::Vector { elem, .. } => *elem,
-            _ => ty,
-        };
-        match m.types().get(ty).ok()? {
-            Type::Float { width } => Some(*width),
-            _ => None,
-        }
-    };
-    let words = m.values().len().div_ceil(64);
-    let bytes = 8 * m.values().len() + 8 * words;
-    meter.charge(bytes)?;
-    // Each instruction result's definition.
-    let mut def: Vec<Option<&Inst>> = vec![None; m.values().len()];
-    for n in m.blocks().iter().flat_map(|b| &b.insts) {
-        if let Some(slot) = n.result.and_then(|r| def.get_mut(r.index())) {
-            *slot = Some(&n.inst);
-        }
-    }
-    let image = |v: Value| -> bool {
-        let at = |v: Value| def.get(v.index()).copied().flatten();
-        let direct = |i: Option<&Inst>| {
-            matches!(
-                i,
-                Some(
-                    Inst::ImageFetch { .. }
-                        | Inst::ImageRead { .. }
-                        | Inst::ImageSample { .. }
-                        | Inst::ImageGather { .. }
-                        | Inst::ImageDrefGather { .. }
-                )
-            )
-        };
-        match at(v) {
-            Some(Inst::CompositeExtract { composite, .. }) => direct(at(*composite)),
-            i => direct(i),
-        }
-    };
-    let texel = |v: Value| -> bool {
-        if image(v) {
-            return true;
-        }
-        let Ok(ValueOrigin::Param { func, index }) = m.value(v).map(|d| d.origin) else {
-            return false;
-        };
-        let mut calls = m
-            .blocks()
-            .iter()
-            .flat_map(|b| &b.insts)
-            .filter_map(|n| match &n.inst {
-                Inst::Call { func: f, args } if *f == func => Some(args),
-                _ => None,
-            })
-            .peekable();
-        calls.peek().is_some()
-            && calls.all(|args| args.get(index as usize).is_some_and(|&a| image(a)))
-    };
-    let fconverts = || {
-        m.blocks()
-            .iter()
-            .flat_map(|b| &b.insts)
-            .filter_map(|n| match (&n.inst, n.result) {
-                (
-                    Inst::Convert {
-                        op: ConvOp::FConvert,
-                        a,
-                        ..
-                    },
-                    Some(r),
-                ) => Some((*a, r)),
-                _ => None,
-            })
-    };
-    // The narrowings some conversion widens back.
-    let mut widened = vec![0u64; words];
-    for (a, r) in fconverts() {
-        if width(a) == Some(16) && width(r) == Some(32) {
-            set_bit(&mut widened, a);
-        }
-    }
-    let found = fconverts().any(|(a, r)| {
-        width(a) == Some(32)
-            && width(r) == Some(16)
-            && has_bit(&widened, r)
-            && !m.measured_roundings().contains(&r)
-            && !texel(a)
-    });
-    drop((def, widened));
-    meter.release(bytes);
-    Ok(found)
-}
-
 /// An upper estimate of the SPIR-V words of one [`round_texel`] on form `f`: [`round`]'s, and the
 /// NaN test's four instructions with their two constants.
 pub fn round_texel_words(f: Form) -> u32 {
@@ -479,25 +346,21 @@ pub fn round_texel_words(f: Form) -> u32 {
 /// conversion keeps a NaN a NaN, its bits the device's, as the texel's decode is
 /// (`PrecisionNote::DeviceNanEncoding`, which the access records). Another form is [`round`]ed.
 ///
-/// A `half` texel rounds as [`round_measured`] rounds a `float` the function holds: in
-/// [`QuantizeForm::Converted`] the pair's narrowing is recorded as measured
-/// (`ModuleBuilder::note_measured_rounding`), the device's conversion of the texel's `f32` value,
-/// which `DriverDeviation::MetalHalfConversion` measures to be Metal's `half(float)` whatever
-/// computed it, so the module records no `PrecisionNote::NativeHalfConversion` for it there. That
-/// holds for a texel the module decodes itself (`extended_range::decode`) and for a merge of texels
-/// (a heap read's phi of its fetch and its decode routine's texel) as for an image instruction's.
-/// Where Metal's `half` texel is not that rounding of the texel's value, the access records its
+/// A `half` texel rounds as [`round`] rounds a `float` the function holds, in
+/// [`QuantizeForm::Converted`] by the device's conversion of the texel's `f32` value, which the
+/// module records as `PrecisionNote::NativeHalfConversion`. That holds for a texel the module
+/// decodes itself (`extended_range::decode`) and for a merge of texels (a heap read's phi of its
+/// fetch and its decode routine's texel) as for an image instruction's. Where Metal's `half` texel
+/// is not that rounding of the texel's value, the access records its
 /// own note: `PrecisionNote::HalfTexelConversion` (by the bound class at a slot; outright for a
 /// heap element and a depth texture) or, for a decoded texel, `PrecisionNote::DevicePackConversion`
 /// (whose bound states the `half`'s narrowing against Metal's rounding with ties away from zero).
 pub fn round_texel(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     let native = fb.module().native_half();
     match f.held {
-        Held::Float(FloatFmt::Half) if native || fb.module().native_half_nans() => {
-            round_measured(fb, f, x)
-        }
+        Held::Float(FloatFmt::Half) if native || fb.module().native_half_nans() => round(fb, f, x),
         Held::Float(FloatFmt::Half) => {
-            let r = round_measured(fb, f, x)?;
+            let r = round(fb, f, x)?;
             let u = u32_form(f);
             let ut = ty(fb, u)?;
             let b = fb.convert(ConvOp::Bitcast, x, ut)?;
@@ -947,9 +810,7 @@ fn encode(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
 /// device's (the SPIR-V spec's `SignedZeroInfNanPreserve`: "Bit patterns for NaNs might not be
 /// preserved"), where Metal moves a `half` NaN with its bits, and a denormal, which the device may
 /// flush to the zero of its sign without `DenormPreserve` for 16 bits: kept under the float
-/// controls ([`QuantizeForm::Controlled`], [`controlled_modes`]), measured kept on MoltenVK
-/// (`DriverDeviation::MetalHalfArithmetic`, whose measurement narrows every `half`), and elsewhere
-/// within `PrecisionNote::NativeHalfConversion`'s bound; the module records
+/// controls ([`QuantizeForm::Controlled`], [`controlled_modes`]), and elsewhere within `PrecisionNote::NativeHalfConversion`'s bound; the module records
 /// `PrecisionNote::NativeNanEncoding` ([`encodes_bits`]). A value that is no `half` value (under
 /// native half rounding the device's compiler may fold [`converted`]'s pair and hand `x` on
 /// unrounded, as NVIDIA's and lavapipe's do) takes the device's rounding, within
@@ -1046,8 +907,7 @@ fn packed_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value
 /// widening does the other way, with the same notes: the module records
 /// `PrecisionNote::NativeNanEncoding` (a NaN's bits the device's); under the float controls
 /// ([`QuantizeForm::Controlled`]) its entry declares [`controlled_modes`], and elsewhere its
-/// denormals are the measured fact's (`DriverDeviation::MetalHalfArithmetic`) or the device's
-/// (`PrecisionNote::NativeHalfConversion`). At most three passes over the instructions, with two
+/// denormals are the device's (`PrecisionNote::NativeHalfConversion`). At most three passes over the instructions, with two
 /// bits per value of the module charged to `meter` while they run.
 pub fn encodes_bits(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
     let packs = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
@@ -1418,9 +1278,8 @@ fn unpacked_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResul
 /// every `half` NaN to `0x7FC00000` and moves one unwidened with its bits; the module records
 /// `PrecisionNote::NativeNanEncoding` ([`widens_bits`]). A denormal "obtained via unpacking an
 /// integer into a vector of values with smaller bit width" is kept under `DenormPreserve` for 16
-/// bits, which the float controls declare ([`QuantizeForm::Controlled`], [`controlled_modes`]); on
-/// MoltenVK the measured `DriverDeviation::MetalHalfArithmetic` reads every `half` through this
-/// widening as Metal widens it, and the module requires that fact; elsewhere the device may flush
+/// bits, which the float controls declare ([`QuantizeForm::Controlled`], [`controlled_modes`]);
+/// elsewhere the device may flush
 /// it to the zero of its sign, within `PrecisionNote::NativeHalfConversion`'s bound, which the
 /// module records.
 fn device_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<Value> {
@@ -1470,11 +1329,9 @@ fn device_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<
 /// [`QuantizeForm::Device`]), or an `OpFConvert` to 32 bits of an `OpBitcast` to a 16-bit float or
 /// a vector of them, or of 16-bit floats taken from one by a component extract or a shuffle
 /// ([`device_from_bits`]). The module then records `PrecisionNote::NativeNanEncoding` (a NaN's
-/// bits the device's) unless the device's moves of a NaN are measured to be Metal's
-/// ([`moves_unfolded`]); under the float controls ([`QuantizeForm::Controlled`]) its entry
-/// declares [`controlled_modes`], and elsewhere its denormals are the measured fact's
-/// (`DriverDeviation::MetalHalfArithmetic`, which measures the conversion, not the unpack) or the
-/// device's (`PrecisionNote::NativeHalfConversion`). The device's 16-bit arithmetic and
+/// bits the device's); under the float controls ([`QuantizeForm::Controlled`]) its entry
+/// declares [`controlled_modes`], and elsewhere its denormals are the device's
+/// (`PrecisionNote::NativeHalfConversion`). The device's 16-bit arithmetic and
 /// conversions widen what they compute, which no bitcast gives. At most four passes over the
 /// instructions, with three bits per value of the module charged to `meter` while they run.
 pub fn widens_bits(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
@@ -1565,221 +1422,6 @@ fn set_bit(bits: &mut [u64], v: Value) {
 fn has_bit(bits: &[u64], v: Value) -> bool {
     bits.get(v.index() / 64)
         .is_some_and(|w| w & (1 << (v.index() % 64)) != 0)
-}
-
-/// Whether module `m` moves a `half` NaN where the device's compiler is not measured to fold the
-/// widening and the narrowing that hold it (`DriverDeviation::MetalNanMoves`), so that its bits
-/// stay the device's. A value a `half` read from its bits widens to ([`widens_bits`]), moved
-/// through phis, selects, copies, composites and a function's scalar or vector `float` variable
-/// (stored and loaded, which the driver's compiler keeps in the registers), may reach a
-/// conversion (its bits, by a bitcast, only as stored to a buffer or to workgroup memory), an
-/// arithmetic or comparison instruction, a fused multiply-add, a derivative, a `GLSL.std.450`
-/// function other than `FrexpStruct`, `ModfStruct` and `Ldexp`, each of which computes a value
-/// whose NaN Metal answers from the widened value's or its own note records, and a store to a
-/// buffer or to workgroup memory, which holds a `float` there, and a texture write's store of it
-/// as its texel (`TypedModule::stored_texels`), whose stored NaN the write's own notes account for
-/// under the format it stores (`lower::texture::half_write_nans` and `half_storage_facts`);
-/// anything else (a store to another class, a call, a return, an atomic, a group or another image
-/// operation, or its bits read) carries the widened `float` out of the registers or reads its bits
-/// before any narrowing. The module holding a 32-bit float constant that is a NaN other than
-/// `0x7FC00000`, such as a `half` NaN constant held widened with its payload, which no conversion
-/// of the device made, is unfolded too, and so is a module that merges a widened value a select
-/// took against a value it does not hold widened with another widened value, member by member
-/// where composites carry them (`merges::merges_mixed_selects`), which Metal's compiler does not
-/// fold. The measurement covers moves through the registers, and `half` values held as the
-/// device's conversions made them. One pass over the constants, then a pass over the instructions
-/// per round of the moves' closure and two more, with eight bits per value of the module charged
-/// to `meter` while it runs (and the merges' records while they run).
-pub fn moves_unfolded(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
-    let float32 = |ty| matches!(m.types().get(ty), Ok(Type::Float { width: 32 }));
-    let payload = m.consts().iter().any(|(_, c)| match &c.kind {
-        ConstKind::Plain(Constant::Scalar { ty, bits }) if float32(*ty) => {
-            let b = bits.0 as u32;
-            b & 0x7F80_0000 == 0x7F80_0000 && b & 0x007F_FFFF != 0 && b != 0x7FC0_0000
-        }
-        _ => false,
-    });
-    if payload {
-        return Ok(true);
-    }
-    let words = m.values().len().div_ceil(64);
-    // The class of pointer `ptr`, and the type it points to.
-    let pointer = |ptr| {
-        m.value(ptr).ok().and_then(|v| match m.types().get(v.ty) {
-            Ok(Type::Pointer { class, pointee }) => Some((*class, *pointee)),
-            _ => None,
-        })
-    };
-    // Whether pointer `ptr` is to a function's scalar or vector `float` variable.
-    let local_float = |ptr| match pointer(ptr) {
-        Some((StorageClass::Function, pointee)) => {
-            let lane = match m.types().get(pointee) {
-                Ok(Type::Vector { elem, .. }) => *elem,
-                _ => pointee,
-            };
-            float32(lane)
-        }
-        _ => false,
-    };
-    meter.charge(48 * words)?;
-    let carried = widenings(m, meter).and_then(|mut widened| {
-        // The widened values' bits, by a bitcast and the moves.
-        let mut bits = vec![0u64; words];
-        // The moves' closure: a phi, a select, a copy or a composite of a widened value is one,
-        // and of its bits.
-        let mut grew = true;
-        while grew {
-            grew = false;
-            for b in m.blocks() {
-                for phi in &b.phis {
-                    for set in [&mut widened, &mut bits] {
-                        if !has_bit(set, phi.result)
-                            && phi.incoming.iter().any(|(v, _)| has_bit(set, *v))
-                        {
-                            set_bit(set, phi.result);
-                            grew = true;
-                        }
-                    }
-                }
-                for n in &b.insts {
-                    // A function's `float` variable a widened value is stored to holds one.
-                    if let Inst::Store { ptr, value, .. } = &n.inst {
-                        if has_bit(&widened, *value)
-                            && local_float(*ptr)
-                            && !has_bit(&widened, *ptr)
-                        {
-                            set_bit(&mut widened, *ptr);
-                            grew = true;
-                        }
-                        continue;
-                    }
-                    let Some(r) = n.result else { continue };
-                    if let Inst::Load { ptr, .. } = &n.inst {
-                        if has_bit(&widened, *ptr) && !has_bit(&widened, r) {
-                            set_bit(&mut widened, r);
-                            grew = true;
-                        }
-                        continue;
-                    }
-                    if let Inst::Convert {
-                        op: ConvOp::Bitcast,
-                        a,
-                        ..
-                    } = &n.inst
-                    {
-                        if has_bit(&widened, *a) && !has_bit(&bits, r) {
-                            set_bit(&mut bits, r);
-                            grew = true;
-                        }
-                        continue;
-                    }
-                    if !moves(&n.inst) {
-                        continue;
-                    }
-                    for set in [&mut widened, &mut bits] {
-                        let mut from = false;
-                        n.inst.for_each_value(|v| from |= has_bit(set, v));
-                        if from && !has_bit(set, r) {
-                            set_bit(set, r);
-                            grew = true;
-                        }
-                    }
-                }
-            }
-        }
-        // A merge of a widened value a select took against a value it does not hold widened
-        // (the translation's bounds check selects a read against `0`) with another widened value,
-        // by a phi or by stores to one function variable, the two in a composite's members too:
-        // Metal's compiler widens and narrows the NaN there, where it folds each of the two moves
-        // alone (measured).
-        if merges::merges_mixed_selects(m, &widened, &local_float, meter)? {
-            return Ok(true);
-        }
-        // Whether pointer `ptr` is to a buffer or to workgroup memory.
-        let held_as_float = |ptr| {
-            matches!(
-                pointer(ptr),
-                Some((
-                    StorageClass::StorageBuffer
-                        | StorageClass::PhysicalStorageBuffer
-                        | StorageClass::Workgroup,
-                    _
-                ))
-            )
-        };
-        Ok(m.blocks().iter().any(|b| {
-            let returned = matches!(
-                b.term,
-                Terminator::ReturnValue(v) if has_bit(&widened, v) || has_bit(&bits, v)
-            );
-            returned
-                || b.insts.iter().filter(|n| !moves(&n.inst)).any(|n| {
-                    let (mut from, mut read) = (false, false);
-                    n.inst.for_each_value(|v| {
-                        from |= has_bit(&widened, v);
-                        read |= has_bit(&bits, v);
-                    });
-                    match &n.inst {
-                        Inst::Store { ptr, value, .. } => {
-                            has_bit(&bits, *ptr)
-                                || (has_bit(&widened, *value)
-                                    && !held_as_float(*ptr)
-                                    && !local_float(*ptr))
-                                || (has_bit(&bits, *value) && !held_as_float(*ptr))
-                        }
-                        Inst::Load { .. } => false,
-                        Inst::ImageWrite { texel, .. } => {
-                            read || (from
-                                && !(has_bit(&widened, *texel)
-                                    && m.stored_texels().contains(texel)))
-                        }
-                        Inst::AtomicStore { ptr, .. } => {
-                            from || has_bit(&widened, *ptr) || has_bit(&bits, *ptr)
-                        }
-                        Inst::Convert {
-                            op: ConvOp::Bitcast,
-                            ..
-                        } => read,
-                        inst => read || (from && !computes(inst)),
-                    }
-                })
-        }))
-    });
-    meter.release(48 * words);
-    carried
-}
-
-/// Whether `inst` moves its operands' values into its result unchanged ([`moves_unfolded`]).
-fn moves(inst: &Inst) -> bool {
-    matches!(
-        inst,
-        Inst::Select { .. }
-            | Inst::Unary {
-                op: UnOp::CopyObject,
-                ..
-            }
-            | Inst::CompositeConstruct { .. }
-            | Inst::CompositeExtract { .. }
-            | Inst::CompositeInsert { .. }
-            | Inst::VectorExtractDynamic { .. }
-            | Inst::VectorInsertDynamic { .. }
-            | Inst::VectorShuffle { .. }
-    )
-}
-
-/// Whether `inst` computes a value from its operands' in the registers, whose NaN Metal answers
-/// from the widened value's or its own note records ([`moves_unfolded`]).
-fn computes(inst: &Inst) -> bool {
-    match inst {
-        Inst::Convert { op, .. } => *op != ConvOp::Bitcast,
-        Inst::Glsl { op, .. } => {
-            !matches!(op, GlslOp::FrexpStruct | GlslOp::ModfStruct | GlslOp::Ldexp)
-        }
-        Inst::Unary { .. } | Inst::Binary { .. } | Inst::Fma { .. } | Inst::Derivative { .. } => {
-            true
-        }
-        _ => false,
-    }
 }
 
 /// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub`, `OpFMul` or `OpFDiv`, an
@@ -1992,8 +1634,6 @@ pub fn resize(fb: &mut FunctionBuilder<'_>, from: Form, to: Form, x: Value) -> B
     );
     if widening {
         Ok(x)
-    } else if (src, dst) == (FloatFmt::F32, FloatFmt::Half) {
-        round_measured(fb, to, x)
     } else {
         round(fb, to, x)
     }

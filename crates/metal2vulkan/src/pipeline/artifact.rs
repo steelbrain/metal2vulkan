@@ -555,9 +555,7 @@ pub enum PrecisionNote {
     /// NaN operand's answer may be a number there (`precise::sin`, `precise::cos` and
     /// `precise::sincos` of a NaN answer `0` on the Apple M3 Max through MoltenVK 1.4.2, where
     /// Metal answers the NaN). Not recorded by precise `fmod`, whose answer is the one right value on
-    /// every device, nor, on a device whose `float` functions are Metal's own, in an entry Metal
-    /// compiles with fast math ([`EntryMath::Fast`]) by a call the device answers as Metal's own
-    /// function; there its fast `sinpi`, `cospi`, and `tanpi`, near-equivalents, still record it.
+    /// every device.
     DeviceTranscendentals,
     /// Float reductions use the device's association order.
     ReductionOrder,
@@ -565,15 +563,9 @@ pub enum PrecisionNote {
     /// arithmetic, comparisons, and functions as the zero of its sign and flushes a denormal result
     /// to one, where a Vulkan device keeps or flushes them by its own float controls (this
     /// translation declares no `DenormFlushToZero`). Recorded where the module leaves an
-    /// operation's denormals to a device not measured to read them as Metal does: `+ - *`, the
-    /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc`, `rint` and `ldexp` on `float` (by the
-    /// device's products) but on a device that takes
-    /// the measured `DriverDeviation::MetalFloatDenormals`, and those on such a device too in an
-    /// entry that declares the 16-bit float controls, where a driver may keep them (NVIDIA's on
-    /// the RTX 3090 and the RTX 5080 Laptop GPU) and no query tells which; `fneg`, `fabs`, `floor`
-    /// and `ceil` on
-    /// `float` but on a device that takes the measured `DriverDeviation::MetalUnaryDenormals`; and
-    /// on every device the divisions and the remainder, the device's maths functions
+    /// operation's denormals to the device: `+ - *`, the comparisons, `fma`, `dot`, `sqrt`,
+    /// `rsqrt`, `trunc`, `rint` and `ldexp` on `float` (by the device's products), `fneg`, `fabs`,
+    /// `floor` and `ceil` on `float`, the divisions and the remainder, the device's maths functions
     /// (`fast::fmod`'s fused multiply-add, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt`
     /// by `Sqrt`, `dot` of vectors of other than two to four lanes, whose chunks' products the
     /// device sums where Metal flushes each one below `2^-126`, beside their own notes, and a
@@ -638,10 +630,7 @@ pub enum PrecisionNote {
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
     /// rounding. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
     /// reciprocal it rounds within about 0.64 ulp but not correctly. Not recorded by precise
-    /// `fmod`, whose answer is the one right value on every device, nor, on a device whose `float`
-    /// functions are Metal's own (MoltenVK), in an entry Metal compiles with fast math
-    /// ([`EntryMath::Fast`]), by a fast division, which is Metal's own there, or by a call the
-    /// device answers as Metal's own function.
+    /// `fmod`, whose answer is the one right value on every device.
     DeviceArithmetic,
     /// Float operations LLVM requires to keep signed zeros, infinities, and NaNs run without
     /// `SignedZeroInfNanPreserve`, which the device does not support at their width. Without the
@@ -830,11 +819,7 @@ pub enum PrecisionNote {
     /// pixel fetch of a `half` texel: Metal hands back the texel's own NaN, sign and payload, and
     /// Vulkan states no encoding for a 16-bit float texel's decode (MoltenVK answers the canonical
     /// NaN for every one); on a device that rounds a `half` through its conversion under the float
-    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Not by such an
-    /// access at a texture slot bound to a 32-bit float or packed small float format on a profile
-    /// that takes [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion),
-    /// whose `half` of such a texel is measured to be Metal's (`0x7e00` for its NaN); the module
-    /// then requires `VkProperty::MetalHalfConversion`. Also recorded
+    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Also recorded
     /// by a `half` texel's write to a storage texture that may hold a float format, a slot whose
     /// storage choice declares none or a heap element: Metal stores a 16-bit float texel's NaN as
     /// the half's own bits and a 32-bit or packed small float one's as its canonical NaN, and the
@@ -867,9 +852,7 @@ pub enum PrecisionNote {
     /// device converts the NaN as it likes, where Metal's fill keeps a half NaN's sign and payload
     /// and makes a small float's all ones. Not recorded by a texture write of a constant texel none
     /// of whose lanes is a NaN, nor where the write's stored NaN is measured to be Metal's: a
-    /// `half` texel's write to a 32-bit float format on a profile that takes
-    /// `DriverDeviation::MetalNanMoves` (MoltenVK on the Apple M3 Max's macOS 27 identity), and a
-    /// `float` or `half` texel's write to `RG11B10Float` on one that takes
+    /// `float` or `half` texel's write to `RG11B10Float` on a profile that takes
     /// `DriverDeviation::MetalSmallFloatNans` (that identity and lavapipe) (the module then
     /// requires the matching `VkProperty`). Validation derives no tolerance and no explanation from
     /// it, as for `DeviceDenormals`.
@@ -953,10 +936,7 @@ pub enum PrecisionNote {
     /// result, and its nearest even `half` is Metal's `half` but for the classes the note is
     /// recorded under, by the slot's bound format (`SpecKey::TexelFormat`): a 32-bit float
     /// texel's sample, which Metal rounds toward zero (within one `half` ulp, but past `±65504` the
-    /// infinity of its sign where Metal saturates to `±65504`), but on a profile that takes
-    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion),
-    /// whose `half` of every `float` word a read, sample or gather hands back is measured to be
-    /// Metal's (the module then requires `VkProperty::MetalHalfConversion`); a 16-bit normalized texel, whose
+    /// infinity of its sign where Metal saturates to `±65504`); a 16-bit normalized texel, whose
     /// `float` steps `65455 / 65535`, `65519 / 65535` and `32759 / 32767` round twice (one `half`
     /// ulp); and a format whose conversion is not measured (unbounded). A heap element and a depth
     /// texture record it wherever they are accessed. A two-plane YCbCr texture on the grid `8192`
@@ -1757,21 +1737,15 @@ pub enum PrecisionNote {
     ///   computed `half` NaN is `0x7FFF` (where 18 C3 cases differed in NaNs, signs of zero,
     ///   `atan2` and `pow` at special operands, and `half` texel and pack conversions).
     ///
-    /// Not recorded for that rounding on a profile that takes
-    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)
-    /// (MoltenVK on the Apple M3 Max's macOS 27 identity) where every `half` the module rounds
-    /// through the conversion is a conversion of a `float` the function holds (an AIR `fptrunc` or
-    /// `air.convert` from `float`, whatever computed the `float`) or of a texel's value, measured to
-    /// answer Metal's `half(float)` there; the module then requires
-    /// `VkProperty::MetalHalfConversion`. A texel's value is an image instruction's texel, a texel
-    /// the module decodes itself (an extended-range, padded or bfloat code) or a merge of texels (a
-    /// heap read's fetched texel and its decode routine's): where Metal's `half` texel is not that
-    /// rounding of the value, the access records its own note ([`PrecisionNote::HalfTexelConversion`],
-    /// outright for a heap element; [`PrecisionNote::DevicePackConversion`] for a decoded texel). A
-    /// `half` operation or function the module computes in `float` and rounds keeps this note
-    /// there (Metal's `half` `tanh` answers 7 of the 65,536 `half`s otherwise than the conversion
-    /// of its `float` `tanh`), as does every other rounding
-    /// (`lower::arith::narrow::rounds_unmeasured`).
+    /// Recorded for every such rounding, a conversion of a `float` the function holds (an AIR
+    /// `fptrunc` or `air.convert` from `float`), of a texel's value, or of a `half` operation or
+    /// function the module computes in `float` (Metal's `half` `tanh` answers 7 of the 65,536
+    /// `half`s otherwise than the conversion of its `float` `tanh`). A texel's value is an image
+    /// instruction's texel, a texel the module decodes itself (an extended-range, padded or bfloat
+    /// code) or a merge of texels (a heap read's fetched texel and its decode routine's): where
+    /// Metal's `half` texel is not that rounding of the value, the access records its own note
+    /// too ([`PrecisionNote::HalfTexelConversion`], outright for a heap element;
+    /// [`PrecisionNote::DevicePackConversion`] for a decoded texel).
     ///
     /// Every `half` a module reads from its bits (a load, a reinterpretation, a texel's bits) is
     /// the device's widening of them, on every device: an `OpFConvert` to 32 bits of the bits read
@@ -1780,10 +1754,8 @@ pub enum PrecisionNote {
     /// bits) where they are not the bits it was read from: the device's narrowing of it, an
     /// `OpFConvert` to 16 bits read as a word with `shaderFloat16`, `GLSL.std.450 PackHalf2x16`
     /// without it. A module that reads or encodes one records this note too where that widening
-    /// or narrowing is neither under the float controls' `DenormPreserve` for 16 bits (ANV, RADV,
-    /// NVIDIA) nor measured to read and narrow every `half` as Metal's (MoltenVK's conversion is,
-    /// `DriverDeviation::MetalHalfArithmetic`, and the module requires it there), so on every
-    /// device without `shaderFloat16`: its bound is the last two items', a half denormal read or
+    /// or narrowing is not under the float controls' `DenormPreserve` for 16 bits (ANV, RADV,
+    /// NVIDIA), so on every device without `shaderFloat16`: its bound is the last two items', a half denormal read or
     /// encoded as the zero of its sign on a device that flushes 16-bit denormals (the Vulkan spec
     /// lets a device flush a denormal "obtained via unpacking an integer" without `DenormPreserve`
     /// for 16 bits, and gives `UnpackHalf2x16` and `PackHalf2x16` implementation-defined
@@ -1833,13 +1805,8 @@ pub enum PrecisionNote {
     /// (an `OpFConvert` to 16 bits with `shaderFloat16`, `PackHalf2x16` without it), and a NaN
     /// narrows to a NaN whose bits are the device's, where Metal keeps a `half` NaN's sign and
     /// payload. Every other `half` widens to its value and narrows to its bits, but a denormal on a
-    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Not recorded,
-    /// on a device whose moves of a NaN are measured to be Metal's (MoltenVK on the Apple M3 Max's
-    /// macOS 27 identity, `DriverDeviation::MetalNanMoves`), for a `float` `fneg` or `fabs`, a
-    /// `half`'s widening to `float` or `fabs`, or a module's reads and encodes of a `half`'s bits
-    /// where it moves its `half` values through the registers alone, or into a texture write's
-    /// texel, whose store the write's [`PrecisionNote::DeviceNanEncoding`] accounts for.
-    /// Validation derives no tolerance from it.
+    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Validation
+    /// derives no tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or
@@ -1863,9 +1830,8 @@ pub enum PrecisionNote {
     /// Native device maths: Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half`
     /// one summed in `float` and rounded once to `half`, or the device's 16-bit `OpDot` where the
     /// module computes `half` in 16 bits under the 16-bit float controls and holds its operands
-    /// there, `spirv::half_hold`), not Metal's fused chain of its products, on every device but
-    /// for a `float` one where the device's functions are Metal's own (MoltenVK, Metal's own
-    /// `dot`). **Recorded bound:** a `float` `dot` of `n` lanes within
+    /// there, `spirv::half_hold`), not Metal's fused chain of its products, on every device.
+    /// **Recorded bound:** a `float` `dot` of `n` lanes within
     /// `(3n - 1) * 2^-24 * sum |a_i * b_i|` of Metal's chain, plus `n * 2^-126` where a product is
     /// an `f32` denormal the device keeps (Vulkan's `OpDot` inherits `OpFMul`'s and `OpFAdd`'s
     /// rounding, `2n - 1` roundings, where Metal's chain rounds `n` times); a `half` one rounded
@@ -1878,8 +1844,7 @@ pub enum PrecisionNote {
     /// (a `half` one computed in `float` and rounded once to `half`, or the device's 16-bit `FMix`
     /// where the module computes `half` in 16 bits under the 16-bit float controls and holds its
     /// operands there, `spirv::half_hold`), not Metal's `fma(t, y, fma(-t, x, x))`, on every
-    /// device but for a `float` one where the device's functions are Metal's own (MoltenVK,
-    /// Metal's own `mix`). **Recorded bound:** a `float` result within
+    /// device. **Recorded bound:** a `float` result within
     /// `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
     /// `x * (1 - t) + y * t`'s rounding, four roundings, where Metal's rounds twice); a `half` one
     /// rounded from `float` within `3 * 2^-10 * (|x * (1 - t)| + |y * t|) + 2^-23`, and a 16-bit
@@ -1900,14 +1865,7 @@ pub enum PrecisionNote {
     /// encode the byte of that table's step. Also: a write of an 8-bit sRGB storage texture held
     /// through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan having no sRGB storage
     /// view), at a slot or held by an argument buffer, encodes by `unorm4x8_srgb`'s pack.
-    /// Recorded on every device but for
-    /// a `float` conversion of the four named formats on a device whose functions are Metal's own
-    /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`), and but for the forms
-    /// measured to answer Metal's on a profile that takes
-    /// [`DriverDeviation::MetalPackConversions`](crate::error::DriverDeviation::MetalPackConversions)
-    /// (MoltenVK on the Apple M3 Max's macOS 27 identity: `unorm565` in `float`, and in `half`
-    /// `unorm4x8`, `snorm4x8`, `unorm10a2` and `unorm565` both ways and `unorm2x16` and
-    /// `snorm2x16` packed), which require `VkProperty::MetalPackConversions`. **Recorded bound:**
+    /// Recorded on every device. **Recorded bound:**
     /// Vulkan bounds the instructions by their definition (`round(clamp(c) * scale)` and
     /// `c / scale`): a packed code within one of Metal's, apart only where `clamp(c) * scale` lies
     /// within its `float` rounding of a half-integer (`Round` may tie either way); an unpacked
@@ -2335,23 +2293,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceFragmentRuns,
-}
-
-/// The math mode of an entry's module, which decides, on a device whose `float` functions are
-/// Metal's own (MoltenVK), how Metal compiles the entry's functions and its fast divisions, and
-/// so which of its operations record a precision note: a module declares `SignedZeroInfNanPreserve`
-/// where a `float` operation of the entry lacks one of the `nnan`, `ninf`, and `nsz` flags (an
-/// entry Metal compiled without fast math) and the device supports the mode at the operation's
-/// width. [`PrecisionNote::of_float_operator`] and [`PrecisionNote::of_math_call`] read it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum EntryMath {
-    /// The module declares no `SignedZeroInfNanPreserve`: Metal compiles it with fast math, its
-    /// fast division and its fast functions Metal's own.
-    Fast,
-    /// The module declares `SignedZeroInfNanPreserve`: Metal compiles it with its precise
-    /// functions and a correctly rounded division.
-    Precise,
 }
 
 /// Which lowering strategies a module used, with their word costs.

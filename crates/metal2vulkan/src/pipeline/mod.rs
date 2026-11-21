@@ -104,9 +104,9 @@ pub(crate) mod tile_map;
 pub(crate) mod vertex;
 
 pub use artifact::{
-    ComputePipeline, ComputePipelineMetalInfo, EntryMath, ModuleStats, PrecisionNote,
-    Reconvergence, RenderPipeline, RuntimeDependency, SpecClause, SpecConstant, SpecTest,
-    SpecializationLayout, SpecializedNote, StageModule, StrategyCensus, StrategyUse,
+    ComputePipeline, ComputePipelineMetalInfo, ModuleStats, PrecisionNote, Reconvergence,
+    RenderPipeline, RuntimeDependency, SpecClause, SpecConstant, SpecTest, SpecializationLayout,
+    SpecializedNote, StageModule, StrategyCensus, StrategyUse,
 };
 pub use descriptor::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, DynamicLibraries, FunctionDescriptor,

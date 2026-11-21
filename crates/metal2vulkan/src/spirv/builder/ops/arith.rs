@@ -1,12 +1,11 @@
 //! Arithmetic, bitwise, logical, comparison, linear-algebra, select, and bit-field constructors.
 
 use crate::spirv::builder::function::FunctionBuilder;
-use crate::spirv::builder::module::ProductForm;
 use crate::spirv::builder::ops::{err, Num};
 use crate::spirv::error::{BResult, OperandRule};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, ConstKind, Constant, Contraction, ConvOp, GlslOp, Inst, Shape, Type, UnOp,
+    BinOp, ConstBits, ConstKind, Constant, Contraction, ConvOp, Inst, Shape, Type, UnOp,
     ValueOrigin,
 };
 
@@ -70,19 +69,7 @@ impl FunctionBuilder<'_> {
     /// the operation on its own and never fuses it with another. `op` must allow the decoration
     /// ([`BinOp::allows_no_contraction`]).
     ///
-    /// A multiply (`FMul`) takes the module's [`ProductForm`]: an `OpFMul` decorated
-    /// `NoContraction` where the device's driver compiles the SPIR-V itself, or `GLSL.std.450
-    /// Fma(a, b, -0.0)` decorated `NoContraction` where it reaches Metal through SPIRV-Cross. `a *
-    /// b + (-0.0)` is `a * b` exactly whether the device fuses it or rounds the product and then
-    /// the sum (`x + (-0.0)` is `x` for every `x`, either zero included). SPIRV-Cross, which
-    /// MoltenVK uses, renders a `NoContraction` `OpFMul` as `fma(l, r, 0)`, which answers `+0` for
-    /// a `-0` product; it renders the `Fma` as `fma(a, b, -0.0)`. Elsewhere the `-0.0` addend is a
-    /// value the device may answer: Mesa folds `Fma(0, b, -0.0)` to it under `nsz`, where Metal's
-    /// multiply answers `+0`, and no per-instruction decoration keeps it from doing so on Mesa
-    /// 26.2. The `Fma`'s decoration is still needed: Mesa splits a contractable `Fma` into a
-    /// multiply and an add and folds the `-0.0` away, leaving a multiply that may be fused with a
-    /// following add allowing contraction (NIR's `fuse` option on older Mesa, or a backend such as
-    /// ACO). Mesa's SPIR-V reader marks a `NoContraction` result exact, so it is not split.
+    /// A multiply (`FMul`) is an `OpFMul` decorated `NoContraction`, which the device rounds once.
     pub fn binary_no_contraction(&mut self, op: BinOp, a: Value, b: Value) -> BResult<Value> {
         self.binary_with(op, a, b, Contraction::Forbidden)
     }
@@ -220,13 +207,6 @@ impl FunctionBuilder<'_> {
                 return Ok(r);
             }
         }
-        if op == BinOp::FMul
-            && contract == Contraction::Forbidden
-            && self.mb().product_form == ProductForm::NegativeZeroFma
-        {
-            let z = self.negative_zero(a)?;
-            return self.glsl_with(GlslOp::Fma, &[a, b, z], Contraction::Forbidden);
-        }
         self.emit(Inst::Binary { op, a, b, contract }, ty)
     }
 
@@ -330,7 +310,7 @@ impl FunctionBuilder<'_> {
 
     /// The product `op` of `a` and `b` where one of them is an `f32` constant with a `-0.0`
     /// component, on every device: the product by that constant with each such component `+0.0`
-    /// (in the module's [`ProductForm`]), negated in those components of the result
+    /// (an `OpFMul`), negated in those components of the result
     /// (`OpFNegate`, and an `OpVectorShuffle` of the product and its negation where only some
     /// components are). `-(x · +0)` is `x · (−0)` for every `x`; a NaN's sign is the device's
     /// either way. So no product the module emits has a `-0.0` factor beside a `+0.0` one, which a
@@ -426,24 +406,6 @@ impl FunctionBuilder<'_> {
         };
         let id = self.module().constant(positive)?;
         self.module().const_value(id)
-    }
-
-    /// The `-0.0` of `v`'s float scalar or vector type: the sign bit alone in each component.
-    fn negative_zero(&mut self, v: Value) -> BResult<Value> {
-        let x = self.want(crate::spv::Op::FMul, 0, v, Num::is_float)?;
-        let s = self.module().constant(Constant::Scalar {
-            ty: x.elem,
-            bits: ConstBits(1u64 << (x.width - 1)),
-        })?;
-        let c = if x.n == 1 {
-            s
-        } else {
-            self.module().constant(Constant::Composite {
-                ty: x.ty,
-                parts: vec![s; usize::from(x.n)].into(),
-            })?
-        };
-        self.module().const_value(c)
     }
 
     /// The value of `v` when it is a plain `bool` constant.

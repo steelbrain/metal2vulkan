@@ -821,16 +821,6 @@ fn the_version_485_member_round_trips() {
     assert_ne!(encode(&key), encode(&SpecKey::NearestPixelSampler(slot)));
 }
 
-/// The member format version 486 appends encodes and decodes as itself: the measured unary
-/// operations' kept denormals, a property a module requires.
-#[test]
-fn the_version_486_member_round_trips() {
-    use crate::device::requirements::VkProperty;
-    let p = VkProperty::MetalUnaryDenormals;
-    assert_eq!(decode::<VkProperty>(&encode(&p)), Ok(p));
-    assert_ne!(encode(&p), encode(&VkProperty::MetalSmallFloatNans));
-}
-
 /// The member format version 535 appends encodes and decodes as itself: a kernel's image-only
 /// fact.
 #[test]

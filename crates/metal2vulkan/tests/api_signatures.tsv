@@ -927,7 +927,6 @@ enum	metal2vulkan::pipeline::BufferForm	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::pipeline::BufferKind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferKind
 enum	metal2vulkan::pipeline::ChannelWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ChannelWrite
 enum	metal2vulkan::pipeline::DescriptorView	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DescriptorView
-enum	metal2vulkan::pipeline::EntryMath	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum EntryMath
 enum	metal2vulkan::pipeline::EntryRef	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum EntryRef<'a>
 enum	metal2vulkan::pipeline::FactorLane	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FactorLane
 enum	metal2vulkan::pipeline::HandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum HandleClass
@@ -6650,8 +6649,8 @@ method	metal2vulkan-runtime::MemoryClass::block_len	pub const fn block_len(self)
 method	metal2vulkan-runtime::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-runtime::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-runtime::PixelFormatInfo::describes_a_format	pub fn describes_a_format(&self) -> bool
-method	metal2vulkan-runtime::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
-method	metal2vulkan-runtime::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-runtime::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-runtime::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_indexed_primitives	pub fn draw_indexed_primitives(&mut self, primitive_type: PrimitiveType, index_count: u32, indices: IndexBuffer<'_>, instance_count: u32, base_vertex: i32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_patches	pub fn draw_patches(&mut self, number_of_patch_control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: Option<(&Buffer, u64)>, instance_count: u32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::draw_primitives	pub fn draw_primitives(&mut self, primitive_type: PrimitiveType, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32) -> Result<(), Error>
@@ -7282,8 +7281,8 @@ method	metal2vulkan::pipeline::MeshPipelineDescriptor::reflection	pub fn reflect
 method	metal2vulkan::pipeline::MeshPipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
 method	metal2vulkan::pipeline::MeshPipelineDescriptor::stages_using_direct_arguments	pub fn stages_using_direct_arguments(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Vec<DirectArgumentUse>, Error>
 method	metal2vulkan::pipeline::MeshPipelineDescriptor::unwritten_fragment_inputs	pub fn unwritten_fragment_inputs(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Option<UnwrittenFragmentInputs>, Error>
-method	metal2vulkan::pipeline::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
-method	metal2vulkan::pipeline::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan::pipeline::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan::pipeline::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan::pipeline::PrivateRenderState::new	pub const fn new() -> PrivateRenderState
 method	metal2vulkan::pipeline::RenderPipeline::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan::pipeline::RenderPipeline::footprint	pub fn footprint(&self) -> u64
@@ -10265,24 +10264,16 @@ variant	metal2vulkan::device::VkProperty::MetalCenterVaryings	MetalCenterVarying
 variant	metal2vulkan::device::VkProperty::MetalDepth16BiasedStores	MetalDepth16BiasedStores
 variant	metal2vulkan::device::VkProperty::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::device::VkProperty::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::device::VkProperty::MetalFloatDenormals	MetalFloatDenormals
 variant	metal2vulkan::device::VkProperty::MetalFragmentSimdgroups	MetalFragmentSimdgroups
 variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
-variant	metal2vulkan::device::VkProperty::MetalHalfArithmetic	MetalHalfArithmetic
-variant	metal2vulkan::device::VkProperty::MetalHalfConversion	MetalHalfConversion
-variant	metal2vulkan::device::VkProperty::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageWrites	MetalHalfStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::device::VkProperty::MetalInterpolation	MetalInterpolation
-variant	metal2vulkan::device::VkProperty::MetalMinMax	MetalMinMax
-variant	metal2vulkan::device::VkProperty::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::device::VkProperty::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::device::VkProperty::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::device::VkProperty::MetalSampler	MetalSampler
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatNans	MetalSmallFloatNans
-variant	metal2vulkan::device::VkProperty::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::device::VkProperty::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
 variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubgroupSizeStage(Stage)
@@ -10433,30 +10424,20 @@ variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { st
 variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
 variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
-variant	metal2vulkan::error::DriverDeviation::MetalCanonicalNans	MetalCanonicalNans
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::error::DriverDeviation::MetalDepth16BiasedStores	MetalDepth16BiasedStores
 variant	metal2vulkan::error::DriverDeviation::MetalDepth16Stores	MetalDepth16Stores
 variant	metal2vulkan::error::DriverDeviation::MetalFirstVertexIndices	MetalFirstVertexIndices
-variant	metal2vulkan::error::DriverDeviation::MetalFloatDenormals	MetalFloatDenormals
-variant	metal2vulkan::error::DriverDeviation::MetalFloatFunctions	MetalFloatFunctions
 variant	metal2vulkan::error::DriverDeviation::MetalFragmentSimdgroups	MetalFragmentSimdgroups
 variant	metal2vulkan::error::DriverDeviation::MetalFullQuads	MetalFullQuads
-variant	metal2vulkan::error::DriverDeviation::MetalHalfArithmetic	MetalHalfArithmetic
-variant	metal2vulkan::error::DriverDeviation::MetalHalfConversion	MetalHalfConversion
-variant	metal2vulkan::error::DriverDeviation::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageWrites	MetalHalfStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexelWrites
 variant	metal2vulkan::error::DriverDeviation::MetalInterpolation	MetalInterpolation
-variant	metal2vulkan::error::DriverDeviation::MetalMinMax	MetalMinMax
-variant	metal2vulkan::error::DriverDeviation::MetalNanMoves	MetalNanMoves
 variant	metal2vulkan::error::DriverDeviation::MetalNormStorageWrites	MetalNormStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalNormalizedVertexFetch	MetalNormalizedVertexFetch
-variant	metal2vulkan::error::DriverDeviation::MetalPackConversions	MetalPackConversions
 variant	metal2vulkan::error::DriverDeviation::MetalSampler	MetalSampler
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
-variant	metal2vulkan::error::DriverDeviation::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::error::DriverDeviation::SimdgroupLockstep	SimdgroupLockstep
 variant	metal2vulkan::error::DynamicLibraryProblem::FunctionConstants	FunctionConstants
@@ -10853,8 +10834,6 @@ variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
 variant	metal2vulkan::pipeline::DescriptorView::Storage	Storage
 variant	metal2vulkan::pipeline::DescriptorView::UniformVec4	UniformVec4
 variant	metal2vulkan::pipeline::DescriptorView::UniformWords	UniformWords
-variant	metal2vulkan::pipeline::EntryMath::Fast	Fast
-variant	metal2vulkan::pipeline::EntryMath::Precise	Precise
 variant	metal2vulkan::pipeline::EntryRef::Index	Index(u32)
 variant	metal2vulkan::pipeline::EntryRef::Name	Name(&'a str)
 variant	metal2vulkan::pipeline::FactorLane::One	One

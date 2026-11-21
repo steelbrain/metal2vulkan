@@ -12,7 +12,7 @@
 //! `llvm-as` assembles the module; without it the tests skip visibly.
 
 use crate::air::{self, SpecRequest};
-use crate::device::profile::{DeviceProfile, FloatFunctions};
+use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
@@ -24,7 +24,6 @@ use crate::pipeline::testing::{
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run, Buffer, Config, Resources};
-use crate::spirv::testing::committed_profiles_with;
 
 const OP_FUNCTION: u32 = 54;
 
@@ -209,16 +208,6 @@ fn ulps(got: f32, want: f64) -> f64 {
     let w = want as f32;
     let ulp = f64::from(f32::from_bits(w.abs().to_bits() + 1) - w.abs());
     (f64::from(got) - want).abs() / ulp
-}
-
-/// On every committed profile the maths functions are the device's.
-#[test]
-fn the_maths_functions_are_the_device_s() {
-    let profiles = committed_profiles_with(DevicePolicy::default()).expect("profiles");
-    assert!(profiles.len() >= 10, "{} profiles", profiles.len());
-    for (stem, p) in &profiles {
-        assert_eq!(p.fields().float_functions, FloatFunctions::Native, "{stem}");
-    }
 }
 
 /// On lavapipe each kernel records its kind, passes L3, and is its entry alone (no routine).

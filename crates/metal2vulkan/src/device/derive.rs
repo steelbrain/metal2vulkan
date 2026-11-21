@@ -16,8 +16,8 @@ use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::DevicePolicy;
 use crate::device::profile::{
     BufferAccess, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile, EnabledCaps,
-    FloatFunctions, FormatTable, FragmentCaps, FunctionStorage, HandleDomain, ImageCaps,
-    Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields, Robustness,
+    FormatTable, FragmentCaps, FunctionStorage, HandleDomain, ImageCaps, Independence, LeafCaps,
+    PointerDomain, ProfileFields, Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -331,8 +331,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         // so the extended dynamic states a pipeline makes are exactly what it requires.
         dynamic_vertex_stride: has(VkFeature::ExtendedDynamicState),
         enabled: enabled_caps(desc),
-        float_functions: FloatFunctions::Native,
-        nan_encoding: NanEncoding::Native,
         // The planes of a two-plane YCbCr texture read in place on every device.
         ycbcr_in_place: true,
         // The floor: no Vulkan query states how much a thread holds.

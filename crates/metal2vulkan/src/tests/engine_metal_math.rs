@@ -28,7 +28,6 @@
 //! `llvm-as` assembles the modules; without it the tests skip visibly.
 
 use crate::air::{self, SpecRequest};
-use crate::device::profile::FloatFunctions;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
 use crate::lower::simd::WidestPin;
@@ -62,12 +61,8 @@ struct Kernel {
     has: &'static [u32],
     lacks: &'static [u32],
     /// Whether the module takes the device's instruction for a function Metal defines otherwise,
-    /// recording `NativeTranscendentals` wherever the device's functions are not Metal's own.
+    /// recording `NativeTranscendentals`.
     native: bool,
-    /// Whether the instruction on MoltenVK is not Metal's own function for the call
-    /// (`DeviceTranscendentals` there): MSL's precise `tanh` for `fast::tanh`, its `float` one
-    /// rounded for a `half` one.
-    off_metal: bool,
     /// The stored word on the interpreter, when it models the kernel.
     want: Option<u32>,
 }
@@ -79,7 +74,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[TANH],
         lacks: &[EXP2],
         native: true,
-        off_metal: true,
         want: None,
     },
     Kernel {
@@ -88,7 +82,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[TANH],
         lacks: &[EXP2],
         native: false,
-        off_metal: false,
         want: None,
     },
     Kernel {
@@ -97,7 +90,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[TANH],
         lacks: &[EXP2],
         native: true,
-        off_metal: true,
         want: None,
     },
     Kernel {
@@ -106,7 +98,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[FSIGN],
         lacks: &[],
         native: true,
-        off_metal: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -115,7 +106,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[FSIGN],
         lacks: &[],
         native: true,
-        off_metal: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -124,7 +114,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
         native: false,
-        off_metal: false,
         want: None,
     },
     Kernel {
@@ -133,7 +122,6 @@ const KERNELS: [Kernel; 7] = [
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
         native: false,
-        off_metal: false,
         want: None,
     },
 ];
@@ -259,21 +247,16 @@ fn metal_math_variants_select_their_forms() {
                     "{what}: GLSL.std.450 {i} present ({ext:?})"
                 );
             }
-            let metal = p.fields().float_functions == FloatFunctions::Metal;
             assert!(!div, "{what}: OpFDiv");
-            // The device's instruction: noted `NativeTranscendentals` wherever the device's
-            // functions are not Metal's own. On MoltenVK `sign` is MSL's own; `fast::tanh` is
-            // MSL's precise `tanh`, and a `half` `tanh` MSL's `float` one rounded to `half`.
+            // The device's instruction: noted `NativeTranscendentals`.
             if k.native {
-                assert_eq!(
+                assert!(
                     a.precision.contains(&PrecisionNote::NativeTranscendentals),
-                    !metal,
                     "{what}: {:?}",
                     a.precision
                 );
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceTranscendentals),
-                    metal && k.off_metal,
+                assert!(
+                    !a.precision.contains(&PrecisionNote::DeviceTranscendentals),
                     "{what}: {:?}",
                     a.precision
                 );

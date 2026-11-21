@@ -420,8 +420,7 @@ fn half_nan(bits: u32) -> bool {
 /// infinities and NaNs returned with their bits and exponent 0, `ilogb` `INT_MAX` for an infinity
 /// and `INT_MIN` for a NaN, lane by lane. The one exception: a module that records
 /// `NativeNanEncoding` answers a `half` NaN's mantissa with a NaN of the device's bits; every
-/// `half` kernel records it, on a profile whose moves of a NaN are measured to be Metal's
-/// (`DriverDeviation::MetalNanMoves`) too, since the routines read the widened value's bits.
+/// `half` kernel records it, since the routines read the widened value's bits.
 #[test]
 fn frexp_and_ilogb_answer_as_metals_routines() {
     let Some(bc) = assemble() else {
@@ -434,8 +433,7 @@ fn frexp_and_ilogb_answer_as_metals_routines() {
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let device_nans = a.precision.contains(&PrecisionNote::NativeNanEncoding);
-            // The routines read a `half`'s widened bits, which the device's measured moves of a
-            // NaN do not cover (`narrow::moves_unfolded`): noted on every profile.
+            // The routines read a `half`'s widened bits: noted on every profile.
             assert!(!k.half || device_nans, "{what}: {:?}", a.precision);
             let got = interpret(&bc, k, &p, &what);
             for (i, &(x, mantissa, exponent, ilogb)) in k.inputs().iter().enumerate() {

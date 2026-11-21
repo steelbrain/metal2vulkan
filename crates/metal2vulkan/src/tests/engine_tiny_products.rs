@@ -9,13 +9,11 @@
 //! `2^-126` there, and the module takes the device's multiply (announced once per device,
 //! `float-tininess-after-rounding`).
 //!
-//! The CPU SPIR-V interpreter rounds first and keeps denormals, as a device without
-//! `DriverDeviation::MetalFloatDenormals` may, so on each such committed profile (one per fused
-//! multiply-add route) it shows what the device answers. `llvm-as` assembles the fixtures; without
+//! The CPU SPIR-V interpreter rounds first and keeps denormals, as a device may, so on each
+//! committed profile (one per fused multiply-add route) it shows what the device answers. `llvm-as` assembles the fixtures; without
 //! it the tests skip visibly.
 
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::error::DriverDeviation;
 use crate::lower::arith::fma;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -138,15 +136,13 @@ fn interpret(bc: &[u8], entry: &str, p: &DeviceProfile, threads: &[Thread]) -> V
         .collect()
 }
 
-/// The committed profiles whose device may keep denormals (no
-/// `DriverDeviation::MetalFloatDenormals`), as the interpreter does, one per fused multiply-add
-/// route.
+/// The committed profiles, one per fused multiply-add route: each device may keep denormals, as
+/// the interpreter does.
 fn keeping() -> Vec<(String, DeviceProfile)> {
     let mut seen = BTreeSet::new();
     committed_profiles_with(DevicePolicy::default())
         .expect("profiles")
         .into_iter()
-        .filter(|(_, p)| !p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals))
         .filter(|(_, p)| seen.insert(fma::float_route(p)))
         .collect()
 }

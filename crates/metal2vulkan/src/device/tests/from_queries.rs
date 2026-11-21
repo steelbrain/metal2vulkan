@@ -134,12 +134,6 @@ entry:
 !5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
 "#;
 
-/// On every committed profile `Device::from_queries` derives, a kernel's `float` product beside a
-/// `half` one ([`MIXED_PRODUCTS`]) records `PrecisionNote::DeviceDenormals` and requires no
-/// `VkProperty::MetalFloatDenormals`, whether its entry declares the 16-bit float controls (where
-/// the device computes the `half` product in 16 bits) or not: no Vulkan query states that a
-/// device reads an `f32` denormal as Metal does, and a driver may keep one under the 16-bit
-/// controls, so the note is static.
 /// A device whose `maxPushConstantsSize` is below the 256 bytes of the push window every stage is
 /// lowered for is below the floor: `Unsupported{PushWindow}`, needing `MaxPushConstantsSize` 256.
 /// The descriptions below it are committed apart (`validation/profiles/below-floor/`, this test's
@@ -180,9 +174,13 @@ fn a_push_window_below_256_bytes_is_below_the_floor() {
     }
 }
 
+/// On every committed profile `Device::from_queries` derives, a kernel's `float` product beside a
+/// `half` one ([`MIXED_PRODUCTS`]) records `PrecisionNote::DeviceDenormals`, whether its entry
+/// declares the 16-bit float controls (where the device computes the `half` product in 16 bits) or
+/// not: no Vulkan query states that a device reads an `f32` denormal as Metal does, and a driver
+/// may keep one under the 16-bit controls, so the note is static.
 #[test]
 fn from_queries_records_the_device_denormals_of_a_float_product() {
-    use crate::device::requirements::VkProperty;
     use crate::pipeline::artifact::PrecisionNote;
     use crate::pipeline::testing::{compile, llvm_assemble_text, AssembleError};
     let bc = match llvm_assemble_text(MIXED_PRODUCTS) {
@@ -202,10 +200,6 @@ fn from_queries_records_the_device_denormals_of_a_float_product() {
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(
             a.precision.contains(&PrecisionNote::DeviceDenormals),
-            "{stem}"
-        );
-        assert!(
-            !(a.requirements.properties).contains(&VkProperty::MetalFloatDenormals),
             "{stem}"
         );
         compiled += 1;

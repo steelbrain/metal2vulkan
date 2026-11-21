@@ -1118,14 +1118,6 @@ fn rewrite(
         }
         block.term.for_each_value_mut(swap);
     }
-    m.measured_roundings.retain(|v| !replaced.contains_key(v));
-    let texels = tree_bytes(m.stored_texels.len(), std::mem::size_of::<Value>());
-    charge(meter, ledger, texels)?;
-    m.stored_texels = m
-        .stored_texels
-        .iter()
-        .map(|v| replaced.get(v).copied().unwrap_or(*v))
-        .collect();
     Ok(Some(held))
 }
 

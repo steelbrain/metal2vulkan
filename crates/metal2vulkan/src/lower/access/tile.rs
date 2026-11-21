@@ -118,7 +118,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{ImageblockArg, ImageblockKind, ParamBinding, ParamRole};
 use crate::air::intrinsics::{Imageblock, PackDir, PackFormat};
 use crate::air::ir::{Call, Const, Value};
-use crate::device::profile::FloatFunctions;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::error::{
     Attachment, Capability, DescriptorError, Error, Feature, MetalAnswer, RuntimeInput, Unsupported,
@@ -878,20 +877,9 @@ pub(super) fn select_texel(
     slot.staged = true;
     slot.stored |= store;
     let (offset, leaf) = (slot.offset, slot.leaf);
-    // The device's conversion, but a `float` one of a format `GLSL.std.450` names on a device
-    // whose `float` functions are Metal's (Metal's own `pack_float_to_*` and `unpack_*_to_float`,
-    // as `air.pack`'s strategy notes it); a `half` load rounds the unpacked `float` once more.
-    if let Some(n) = norm {
-        let dir = match store {
-            true => PackDir::Pack,
-            false => PackDir::Unpack,
-        };
-        let own = cx.profile.fields().float_functions == FloatFunctions::Metal
-            && (store || !n.half)
-            && pack::instruction(n.norm.format, dir).is_some();
-        if !own {
-            cx.precision.insert(PrecisionNote::DevicePackConversion);
-        }
+    // The device's conversion; a `half` load rounds the unpacked `float` once more.
+    if norm.is_some() {
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
     imageblock::place_region(cx, cell_bytes)?;
     let coord = imageblock::operand(cx, coord)?;

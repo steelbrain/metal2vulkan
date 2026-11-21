@@ -99,10 +99,7 @@ pub struct Declared {
 /// Declare the plan's module-scope objects: the access family's views, the push block, then
 /// every other family's objects.
 fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Declared> {
-    // Before any instruction: every multiply the device must round on its own takes the
-    // profile's form.
-    mb.product_form(plan.families.arith.product);
-    // And every `half` rounding's quantize the device's form.
+    // Before any instruction: every `half` rounding's quantize the device's form.
     mb.set_quantize_form(plan.families.arith.quantize);
     mb.set_native_half(plan.families.arith.native_half);
     mb.set_native_half_nans(plan.families.arith.native_half_nans);

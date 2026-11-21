@@ -14,16 +14,11 @@
 //! (`PrecisionNote::NativeTranscendentals`). No routine computes Metal's answer where the device
 //! has an instruction, and no select reads a special operand as Metal does where the device's
 //! instruction answers it: the selects around `pow`, `powr` and `atan2` give only the C99 and MSL
-//! values `GLSL.std.450` leaves undefined, by the device's comparisons. Where the device is
-//! Metal's own
-//! (`FloatFunctions::Metal`: MoltenVK on an Apple GPU), its instruction is Metal's function in the
-//! math mode Metal compiles the module with ([`module_mode`]), so a call in that mode is Metal's
-//! own answer there ([`Fun::device_answers`]), which the notes read.
+//! values `GLSL.std.450` leaves undefined, by the device's comparisons.
 //!
 //! Precise `fmod` keeps its routine: the device's form, `OpFRem` (`x - y · trunc(x / y)` at the
 //! device's precision), Vulkan leaves unbounded once the quotient passes `2^24`, where Metal's is
-//! exact. Where the device is Metal's own, a precise module's `OpFRem` is Metal's `fmod`, and takes
-//! no routine ([`Fun::device_answers`]).
+//! exact.
 
 pub(crate) mod fmod;
 
@@ -39,36 +34,17 @@ use crate::spirv::ir::{BinOp, Contraction, ConvOp, Type};
 /// The quiet NaN Metal answers at precise `fmod`'s domain errors ([`E::metal_nan`]).
 pub(crate) const METAL_NAN: u32 = 0x7FC0_0000;
 
-/// A math mode: Metal's precise functions (MSL Table 8.1) or its fast ones (Table 8.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Mode {
-    Precise,
-    Fast,
-}
-
-/// The mode Metal compiles the `float` functions of an entry in on a device whose functions are
-/// Metal's (MoltenVK: `MVKDevice::getMTLCompileOptions` under its default on-demand fast math):
-/// precise where the entry declares a `SignedZeroInfNanPreserve` execution mode of any width
-/// (`declared`, the widths [`super::ArithPlan::modes`] holds), fast otherwise.
-pub fn module_mode(declared: &std::collections::BTreeSet<u8>) -> Mode {
-    if declared.is_empty() {
-        Mode::Fast
-    } else {
-        Mode::Precise
-    }
-}
-
 /// A function of Metal's math library on `float` operands, as a call of a float function takes it
 /// ([`uses`]): one whose answer the device's instruction may give otherwise than Metal, beyond
 /// Vulkan's precision table, or a part of one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Fun {
-    /// Metal's `atan` in a mode: within 5 ulp in both (Tables 8.1 and 8.2).
-    Atan(Mode),
-    /// Metal's `asin` in a mode: within 4 ulp precise, 5 fast.
-    Asin(Mode),
-    /// Metal's `acos` in a mode: within 4 ulp precise, 5 fast.
-    Acos(Mode),
+    /// Metal's `atan`, precise or fast: within 5 ulp in both (Tables 8.1 and 8.2).
+    Atan,
+    /// Metal's `asin`, precise or fast: within 4 ulp precise, 5 fast.
+    Asin,
+    /// Metal's `acos`, precise or fast: within 4 ulp precise, 5 fast.
+    Acos,
     /// The generic part of Metal's precise `atan2(y, x)` (within 6 ulp): finite nonzero normal
     /// operands, whose special values `math::atan2_special` answers around it.
     Atan2,
@@ -94,13 +70,12 @@ pub enum Fun {
     /// Metal's fast `atanh`, MSL Table 8.2's `0.5 · log((1 + x) / (1 - x))`.
     FastAtanh,
     /// Metal's `sinpi`, for a precise call (`air.sinpi`) or a fast one (`air.fast_sinpi`): Metal's
-    /// fast function is its precise one, and only a device whose functions are Metal's tells them
-    /// apart ([`Fun::device_answers`]).
-    SinPi(Mode),
+    /// fast function is its precise one.
+    SinPi,
     /// Metal's `cospi`, as [`Fun::SinPi`].
-    CosPi(Mode),
+    CosPi,
     /// Metal's `tanpi`, as [`Fun::SinPi`].
-    TanPi(Mode),
+    TanPi,
     /// Metal's precise `sqrt`: correctly rounded (MSL Tables 8.1 and 8.3).
     Sqrt,
     /// Metal's precise `rsqrt`: correctly rounded (Tables 8.1 and 8.3).
@@ -174,88 +149,6 @@ pub enum Fun {
 }
 
 impl Fun {
-    /// Whether a device whose `float` functions are Metal's answers `self` with its own
-    /// instruction as Metal's function in an entry whose functions Metal compiles in mode
-    /// `module`: the instruction is Metal's function in that mode, and `atan2` is always the
-    /// precise one (SPIRV-Cross emits `precise::atan2` whatever the flags). The precise-only
-    /// functions (`sin`, `cos`, `tan`, `sqrt`, `rsqrt`, and `fmod`, whose fast calls are their own
-    /// functions) are Metal's only in a precise module. Metal's fast `sin`, `cos`, `tan`, `sinh`,
-    /// `cosh` and `atanh` are the device's `Sin`, `Cos`, `Tan`, `Sinh`, `Cosh` and `Atanh` in a
-    /// fast-math module only (in a precise one those are Metal's precise functions, which differ:
-    /// `fast::sin` is `+0` past its flush point), and its fast `tanh` in none (SPIRV-Cross emits
-    /// `precise::tanh`, below). Metal's `sinpi`, `cospi`,
-    /// and `tanpi` are none of the instructions SPIRV-Cross emits (it emits no `sinpi`), so the
-    /// device's `Sin` and `Cos` of `float(π) r` answer a precise call otherwise than Metal (849,
-    /// 922 and 637 of case 087758cb's 1,024 lanes matched); a fast call is that composition, in
-    /// either mode, within Apple's fast bound (MSL Table 8.2) and off Metal's own form
-    /// ([`Fun::device_near_equivalent`]).
-    ///
-    /// `exp2` and `log2` are Metal's in either mode (Metal's fast ones are its precise ones), and
-    /// so is `tanh` (SPIRV-Cross emits `precise::tanh` whatever the flags); `powr` and the other
-    /// hyperbolic functions, `exp` and `log` only in a precise module. No `GLSL.std.450`
-    /// instruction reaches Metal's `exp10` and `log10`, but Metal's own compositions of its `exp2`
-    /// and `log2` do, in either mode (`math::exp10`, `math::log10`). Its reciprocal is the
-    /// device's `1 / y` in a fast-math module, where Metal
-    /// compiles the division with its fast reciprocal, and not in a precise one, whose quotient is
-    /// correctly rounded. The device's instruction on a `half` held as `float` is its `float`
-    /// function, never Metal's `half` form.
-    pub fn device_answers(self, module: Mode) -> bool {
-        match self {
-            Fun::FastSin
-            | Fun::FastCos
-            | Fun::FastTan
-            | Fun::FastSinh
-            | Fun::FastCosh
-            | Fun::FastAtanh => module == Mode::Fast,
-            Fun::FastTanh => false,
-            Fun::SinPi(m) | Fun::CosPi(m) | Fun::TanPi(m) => m == Mode::Fast,
-            Fun::Atan(m) | Fun::Asin(m) | Fun::Acos(m) => m == module,
-            Fun::Sin
-            | Fun::Cos
-            | Fun::Tan
-            | Fun::Sqrt
-            | Fun::Rsqrt
-            | Fun::Fmod
-            | Fun::Powr
-            | Fun::Exp
-            | Fun::Log
-            | Fun::Sinh
-            | Fun::Cosh
-            | Fun::Asinh
-            | Fun::Acosh
-            | Fun::Atanh => module == Mode::Precise,
-            // Metal's fast `asinh` and `acosh` are the device's `Asinh` and `Acosh` in a fast-math
-            // module.
-            Fun::Recip | Fun::FastAsinh | Fun::FastAcosh => module == Mode::Fast,
-            Fun::HalfAtan
-            | Fun::HalfAtan2
-            | Fun::HalfTan
-            | Fun::HalfSin
-            | Fun::HalfCos
-            | Fun::HalfAsinh
-            | Fun::HalfExp
-            | Fun::HalfLog
-            | Fun::HalfPowr
-            | Fun::HalfSinh
-            | Fun::HalfCosh
-            | Fun::HalfTanh => false,
-            Fun::Atan2 | Fun::Exp2 | Fun::Log2 | Fun::Tanh | Fun::Exp10 | Fun::Log10 => true,
-        }
-    }
-
-    /// Whether the device answers the function, where it does ([`Fun::device_answers`]), by a
-    /// near-equivalent of Metal's function rather than by Metal's function itself: Metal's fast
-    /// `sinpi`, `cospi`, and `tanpi`, which the device answers by its `Sin` and `Cos` of
-    /// `float(π) r`, within Apple's fast bound but off Metal's own forms (case f6524207 differs at
-    /// 175, 102, and 264 of its 1,024 lanes through MoltenVK). Every other function the device
-    /// answers is Metal's own, word for word (`DriverDeviation::MetalFloatFunctions`).
-    pub fn device_near_equivalent(self) -> bool {
-        matches!(
-            self,
-            Fun::SinPi(Mode::Fast) | Fun::CosPi(Mode::Fast) | Fun::TanPi(Mode::Fast)
-        )
-    }
-
     /// Whether the call takes the device's instruction for the function: every function but
     /// precise `fmod`, whose routine computes Metal's exact remainder ([`fmod`]). Its
     /// precision is Vulkan's (`PrecisionNote::NativeTranscendentals`).
@@ -264,8 +157,7 @@ impl Fun {
     }
 
     /// Whether Metal's answer to the function is the one right value at every operand, so that
-    /// the routine's answer, and the device's where it is Metal's own ([`Fun::device_answers`]), is
-    /// Metal's on every device in either math mode: precise `fmod`, which Metal documents exact
+    /// the routine's answer is Metal's on every device in either math mode: precise `fmod`, which Metal documents exact
     /// (MSL Table 8.1 for `float`, Table 8.3 for `half`), and which its routine computes.
     pub fn correctly_rounded(self) -> bool {
         self == Fun::Fmod
@@ -312,27 +204,27 @@ pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
         }
     }
     match crate::lower::arith::math::half_form(op, f) {
-        FloatFn::Atan => &[Fun::Atan(Mode::Precise)],
-        FloatFn::FastAtan => &[Fun::Atan(Mode::Fast)],
-        FloatFn::Asin => &[Fun::Asin(Mode::Precise)],
-        FloatFn::FastAsin => &[Fun::Asin(Mode::Fast)],
-        FloatFn::Acos => &[Fun::Acos(Mode::Precise)],
-        FloatFn::FastAcos => &[Fun::Acos(Mode::Fast)],
+        FloatFn::Atan => &[Fun::Atan],
+        FloatFn::FastAtan => &[Fun::Atan],
+        FloatFn::Asin => &[Fun::Asin],
+        FloatFn::FastAsin => &[Fun::Asin],
+        FloatFn::Acos => &[Fun::Acos],
+        FloatFn::FastAcos => &[Fun::Acos],
         FloatFn::Atan2 => &[Fun::Atan2],
         // `atan(y · rcp(x))`, Metal's fast `atan` of its fast quotient.
-        FloatFn::FastAtan2 { .. } => &[Fun::Atan(Mode::Fast), Fun::Recip],
+        FloatFn::FastAtan2 { .. } => &[Fun::Atan, Fun::Recip],
         FloatFn::Sin => &[Fun::Sin],
         FloatFn::Cos => &[Fun::Cos],
         FloatFn::Tan => &[Fun::Tan],
         FloatFn::FastSin => &[Fun::FastSin],
         FloatFn::FastCos => &[Fun::FastCos],
         FloatFn::FastTan => &[Fun::FastTan],
-        FloatFn::SinPi => &[Fun::SinPi(Mode::Precise)],
-        FloatFn::CosPi => &[Fun::CosPi(Mode::Precise)],
-        FloatFn::TanPi => &[Fun::TanPi(Mode::Precise)],
-        FloatFn::FastSinPi => &[Fun::SinPi(Mode::Fast)],
-        FloatFn::FastCosPi => &[Fun::CosPi(Mode::Fast)],
-        FloatFn::FastTanPi => &[Fun::TanPi(Mode::Fast)],
+        FloatFn::SinPi => &[Fun::SinPi],
+        FloatFn::CosPi => &[Fun::CosPi],
+        FloatFn::TanPi => &[Fun::TanPi],
+        FloatFn::FastSinPi => &[Fun::SinPi],
+        FloatFn::FastCosPi => &[Fun::CosPi],
+        FloatFn::FastTanPi => &[Fun::TanPi],
         FloatFn::Sqrt => &[Fun::Sqrt],
         FloatFn::Rsqrt => &[Fun::Rsqrt],
         FloatFn::Fmod => &[Fun::Fmod],
@@ -405,7 +297,7 @@ impl Lib {
     }
 
     /// Metal's precise `fmod` of `x` and `y` (`float` lanes of form `f`) by its routine, one call
-    /// per lane; `None` where the module takes the device's `OpFRem` ([`Fun::device_answers`]).
+    /// per lane; `None` where the module defines no routine ([`Lib::instructions`]).
     pub fn fmod(
         &self,
         fb: &mut FunctionBuilder<'_>,

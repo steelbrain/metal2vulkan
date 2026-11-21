@@ -1,10 +1,10 @@
-//! Fast `sin`, `cos` and `tan` on `[-pi, pi]` keep the device's own instruction, and on a device
-//! whose functions are Metal's (MoltenVK) fast `sinpi`, `cospi` and `tanpi` keep the device's `Sin`
-//! and `Cos` around their exact reduction: a near-equivalent of Metal's answer, accepted by the
-//! user's standing sign-off only where the device answers within Apple's fast-math bound (MSL Table
-//! 8.2: `sin` and `cos` within `2^-13` absolute on `[-pi, pi]`, `sinpi` and `cospi` on `[-1, 1]`,
-//! `tan` as `sin(x) * (1 / cos(x))` and `tanpi` as `tan(x * pi)`). This test holds that condition
-//! to the committed evidence instead of to prose. Every committed Vulkan and MoltenVK row of the
+//! Fast `sin`, `cos` and `tan` on `[-pi, pi]` keep the device's own instruction, and fast `sinpi`,
+//! `cospi` and `tanpi` keep the device's `Sin` and `Cos` around their exact reduction: a
+//! near-equivalent of Metal's answer, accepted by the user's standing sign-off only where the
+//! device answers within Apple's fast-math bound (MSL Table 8.2: `sin` and `cos` within `2^-13`
+//! absolute on `[-pi, pi]`, `sinpi` and `cospi` on `[-1, 1]`, `tan` as `sin(x) * (1 / cos(x))` and
+//! `tanpi` as `tan(x * pi)`). This test holds that condition to the committed evidence instead of
+//! to prose. Every committed Vulkan and MoltenVK row of the
 //! fast math-library probe case (1,024 operands under Metal's default fast math; words `32t` to
 //! `32t + 4` are the fast `sin`, `cos`, `tan`, and `sincos` of operand `t`, and words `32t + 26`
 //! to `32t + 28` its fast `sinpi`, `cospi`, and `tanpi`) is judged by C3's bound check

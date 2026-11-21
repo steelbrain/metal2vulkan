@@ -1471,13 +1471,6 @@ pub struct TypedModule {
     /// The values decorated `NonUniform`: every result that carries a non-uniform descriptor
     /// element ([`Inst::carries_non_uniform`]), recorded as the builder appends it.
     pub(in crate::spirv) non_uniform: std::collections::BTreeSet<Value>,
-    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured
-    /// to answer Metal's where the driver takes `DriverDeviation::MetalHalfConversion`
-    /// (`ModuleBuilder::measured_roundings`), recorded as the builder emits them.
-    pub(in crate::spirv) measured_roundings: std::collections::BTreeSet<Value>,
-    /// The texels the texture family's writes store, whose stored NaN the write's own notes
-    /// account for (`ModuleBuilder::stored_texels`), recorded as the builder emits them.
-    pub(in crate::spirv) stored_texels: std::collections::BTreeSet<Value>,
     /// The `Function` variables the emitter holds workgroup uniform by construction: the `cont`
     /// flag of a predicated loop that iterates together, which the lowering's uniformity analysis
     /// proved. An in-memory record for checks (`spirv::testing::barriers`), kept only where they
@@ -1501,17 +1494,6 @@ impl TypedModule {
     /// The constant table.
     pub fn consts(&self) -> &Consts {
         &self.consts
-    }
-
-    /// The narrowings to 16 bits of the conversion pairs that round a `half` in a form measured to
-    /// answer Metal's (`ModuleBuilder::note_measured_rounding`).
-    pub fn measured_roundings(&self) -> &std::collections::BTreeSet<Value> {
-        &self.measured_roundings
-    }
-
-    /// The texels the texture family's writes store (`ModuleBuilder::note_stored_texel`).
-    pub fn stored_texels(&self) -> &std::collections::BTreeSet<Value> {
-        &self.stored_texels
     }
 
     /// The SSA value of a constant.

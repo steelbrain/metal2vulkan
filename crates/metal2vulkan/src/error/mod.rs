@@ -501,16 +501,6 @@ pub enum DriverDeviation {
     /// an Apple GPU runs a Metal simdgroup (`VkProperty::SimdgroupLockstep`). Unmeasured, a kernel
     /// that needs that order takes emulated simdgroups, exact.
     SimdgroupLockstep,
-    /// The device computes each `GLSL.std.450` function and `OpFDiv` of `float` as Metal's own,
-    /// in the math mode Metal compiles the module with (`FloatFunctions::Metal`). Unmeasured, the
-    /// module takes the device's instructions all the same, each kind recorded with its bound
-    /// (`PrecisionNote::NativeTranscendentals`, and `NativeDivision`, `NativeDot` and `NativeMix`
-    /// for a division, a `dot` and a `mix`).
-    MetalFloatFunctions,
-    /// The device's `float` and `half` arithmetic answers Metal's canonical NaN
-    /// (`NanEncoding::MetalCanonical`). The module leaves every NaN's bits to the device either
-    /// way; unmeasured, a NaN Metal answers records `PrecisionNote::NativeNanEncoding`.
-    MetalCanonicalNans,
     /// The device samples, filters and converts texels through Metal's own sampler
     /// (`VkProperty::MetalSampler`), an 8-bit sRGB texel's decode included. Unmeasured, every
     /// sample, gather, comparison and level query is the device's own sampler's all the same
@@ -527,23 +517,6 @@ pub enum DriverDeviation {
     /// two tangents: an `x` or `z` face's gradient reaches it as Metal's own, a `y` face's `z`
     /// tangent is lost. Unmeasured, as [`DriverDeviation::CubeGradientRoute`].
     GraphicsCubeGradientTangents,
-    /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma`, which
-    /// rounds the exact `a * b + c` once (`VkProperty::MetalHalfFma`). Where the profile also has
-    /// `shaderFloat16`, a `half` fused multiply-add converts its operands (each a `half`, so
-    /// exactly) to 16 bits, takes the device's `Fma` and widens its result. Unmeasured, it takes
-    /// `OpFmaKHR` on 16 bits where the profile has `shaderFmaFloat16` and rounds to `half` under
-    /// the 16-bit float controls, and elsewhere the device's `float` `Fma` rounded to `half`,
-    /// recorded as `PrecisionNote::NativeFma`.
-    MetalHalfFma,
-    /// The device's `float` arithmetic reads an `f32` denormal operand as the zero of its sign
-    /// and flushes a denormal result to one, as Metal does (`VkProperty::MetalFloatDenormals`):
-    /// `OpFAdd`, `OpFSub`, `OpFMul`, `OpFmaKHR`, `OpDot`, the comparisons, and `GLSL.std.450`'s
-    /// `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and `RoundEven`. Measured in entries that declare
-    /// no float-controls mode: in an entry that declares the 16-bit float controls a driver may
-    /// keep them, and no query tells which, so there they are the device's own on every device.
-    /// Unmeasured, or in such an entry, such operands and results are the device's own, recorded
-    /// as `PrecisionNote::DeviceDenormals`.
-    MetalFloatDenormals,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
     /// invocation, a sample-rate one's included, as Metal reads it
@@ -554,37 +527,6 @@ pub enum DriverDeviation {
     /// that reads from the center (`VkProperty::InterpolateAtOffsetCentered`), and a function that
     /// runs per sample is refused elsewhere.
     MetalCenterVaryings,
-    /// The device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` on 32-bit floats are Metal's own
-    /// `fmin`, `fmax` and `clamp` (`VkProperty::MetalMinMax`): a NaN operand loses, two NaNs and a
-    /// tie answer the second operand's bits, an `f32` denormal compares as a zero but is returned
-    /// itself, and `clamp(x, lo, hi)` is `fmin(fmax(x, lo), hi)`, in every math mode, of every
-    /// operand class, and of every `half` held widened. Metal's `fmin`, `fmax`, `min3`, `max3`,
-    /// `clamp` and `saturate` on `float` and `half` are those instructions on every profile: where
-    /// the profile takes it the module requires the property, and unmeasured it records
-    /// `PrecisionNote::NativeMinMax`.
-    MetalMinMax,
-    /// The device's 16-bit `OpFAdd` and `OpFSub` decorated `NoContraction`, and its 16-bit
-    /// `Fma(a, b, -0.0)` decorated `NoContraction`, are Metal's own `half` `+`, `-` and `*`
-    /// (`VkProperty::MetalHalfArithmetic`), with operands narrowed from `float` and the result
-    /// widened back: the exact result rounded once to nearest even on the `half` grid, `half`
-    /// denormals kept, an exact zero sum `+0` unless both addends are `-0`, and every NaN result
-    /// `0x7E00`, in every math mode. Where the profile also has `shaderFloat16`, a `half` `fadd`,
-    /// `fsub` or `fmul` converts its operands (each a `half`, so exactly) to 16 bits, takes that
-    /// kept instruction and widens its result; one whose flags carry `contract` and `reassoc` takes
-    /// the instruction undecorated instead, the AIR's own contraction, outside the measurement
-    /// (Metal's fast compile folds its conversions away, `PrecisionNote::FastMathRewrites`), and
-    /// requires nothing for it. Unmeasured, it takes the same instruction under the
-    /// 16-bit float controls that make it Metal's by the Vulkan spec (`QuantizeForm::Controlled`),
-    /// and elsewhere computes the result in `float` and rounds it to `half` as every `half`
-    /// rounds (`narrow::round`, noted `NativeHalfConversion` or `NativeHalfQuantize` where that
-    /// rounding is not Metal's). The measurement reads every `half` through the device's
-    /// widening (`x + -0` of every `x`), exact but for a NaN, denormals included: a module that
-    /// reads a `half` from its bits by that widening (every profile with `shaderFloat16` does)
-    /// requires the property for its denormals, and records `PrecisionNote::NativeNanEncoding`
-    /// for its NaNs' bits but where the profile takes [`MetalNanMoves`].
-    ///
-    /// [`MetalNanMoves`]: DriverDeviation::MetalNanMoves
-    MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image (`R16Float`, `RG16Float`, `RGBA16Float`; a storage texel buffer of one too) as Metal
     /// stores a kernel's write (`VkProperty::MetalHalfStorageWrites`): rounded toward zero, a
@@ -710,71 +652,13 @@ pub enum DriverDeviation {
     /// alpha records no `PrecisionNote::DeviceAlphaCoverage` and requires the property.
     /// Unmeasured, such a pipeline's fragment stage records the note.
     MetalAlphaCoverage,
-    /// The device's operations that move a `float` or `half` NaN, rather than compute one, answer
-    /// Metal's bits (`VkProperty::MetalNanMoves`): its widening of a 16-bit float to 32 bits
-    /// (`OpFConvert`) answers `0x7FC00000` for every `half` NaN, as Metal's `float(half)` does;
-    /// its narrowing of a 32-bit float to 16 bits answers Metal's `half` NaN, and its narrowing of
-    /// such a widening, moved through the registers (selects, phis, a function's `float`
-    /// variable), which the driver's compiler folds, the `half`'s own bits, as Metal's moves of a
-    /// `half` keep them; its `OpFNegate` and `FAbs` of a `float` keep a NaN's payload with the sign
-    /// flipped or cleared, as Metal's `fneg` and `fabs` do; and its `FAbs` of a `half` held
-    /// widened answers the canonical NaN, as Metal's `half` `fabs` does. Where the profile takes
-    /// it, a module that reads a `half` from its bits or encodes one to them, a `half`'s widening
-    /// to `float` and a `half` `fabs` record no `PrecisionNote::NativeNanEncoding` and the module
-    /// requires the property, but where the module carries a widened `half` out of the registers
-    /// (a store to a stage output or another variable, a call, a group, atomic or image operation)
-    /// or reads its bits before narrowing it, or holds a `float` NaN constant other than
-    /// `0x7FC00000`, which the measurement does not cover (`narrow::moves_unfolded`): there each
-    /// records the note. A `float` `fneg` and `fabs` record none and require the property. A `half`
-    /// `fneg` records the note on every profile: the device negates the held `float`, whose NaN
-    /// keeps its flipped sign unless the driver's compiler moves the negation onto the `half`.
-    /// Unmeasured, each records it.
-    MetalNanMoves,
-    /// The device's conversions of Metal's packed normalized formats outside the four
-    /// `GLSL.std.450` names in `float` answer Metal's codes and values
-    /// (`VkProperty::MetalPackConversions`): `unpack_unorm565_to_float` and
-    /// `pack_float_to_unorm565`, and the `half` forms of `unorm4x8`, `snorm4x8` and `unorm10a2`
-    /// (both ways), `unorm565` (both ways) and `unorm2x16` and `snorm2x16` (packing). The module
-    /// takes each as it does on every profile (the format's `GLSL.std.450` instruction, or its
-    /// definition on the format's fields, around a `half`'s widening or rounding); where the
-    /// profile takes this deviation, each records no `PrecisionNote::DevicePackConversion` and
-    /// the module requires the property. The sRGB format, `unorm10a2` in `float`, `snorm10a2`, and
-    /// the `half` unpacks of `unorm2x16` and `snorm2x16` stay noted. Unmeasured, each records it.
-    MetalPackConversions,
-    /// The device's conversion of a 32-bit float to 16 bits, `OpFConvert` (MSL's `half(x)`
-    /// through MoltenVK), answers Metal's (`VkProperty::MetalHalfConversion`): Metal's
-    /// `half(float)` (to nearest even on the `half` grid, `half` denormals kept, infinity from
-    /// 65520 up) of every `float` a function converts, whatever instruction computed it, and,
-    /// where the `float` is an image instruction's texel, Metal's own `half` result of that access,
-    /// into which Metal's compiler folds the conversion. Where the profile takes it, a module whose
-    /// every `half` rounding through that conversion (`QuantizeForm::Converted`) is a conversion of
-    /// a `float` the function holds (an AIR `fptrunc` or `air.convert` from `float`) or of a
-    /// texel's value (an image instruction's texel, one the module decodes itself, or a merge of
-    /// them, whose `half` the access's own texel notes state against Metal's) records no
-    /// `PrecisionNote::NativeHalfConversion` and requires the property. A `half` a function or an
-    /// operation computes in `float` and rounds
-    /// keeps the note on every profile: Metal computes it otherwise (its `half` `tanh` answers 7
-    /// of the 65,536 `half`s otherwise than the nearest even `half` of its `float` `tanh`, which the
-    /// device's conversion answers). Unmeasured, each records it.
-    MetalHalfConversion,
     /// The device stores the NaN a shader writes to a packed small float storage image
     /// (`B10G11R11_UFLOAT_PACK32`, Metal's `RG11B10Float`) as Metal stores the same write: a
     /// `float` texel's NaN, whatever its sign and payload, and a `half` texel's, handed to the
     /// device widened (`VkProperty::MetalSmallFloatNans`). Where the profile takes it, a write that
     /// may reach such an image records no `PrecisionNote::DeviceNanEncoding` for it and the module
-    /// requires the property; with [`DriverDeviation::MetalNanMoves`], whose widening of a `half`
-    /// answers Metal's, a widened `half` written there moves its NaN as measured
-    /// (`lower::arith::narrow::moves_unfolded`). Unmeasured, the write records the note.
+    /// requires the property. Unmeasured, the write records the note.
     MetalSmallFloatNans,
-    /// The device's `float` negation, absolute value, floor and ceiling (`OpFNegate`, `FAbs`,
-    /// `Floor` and `Ceil`) read an `f32` denormal as Metal does (`VkProperty::MetalUnaryDenormals`):
-    /// a negation and an absolute value move the sign bit alone, keeping the denormal, and a floor
-    /// and a ceiling read it as the zero of its sign (`floor(-2^-149)` is `-0`, `ceil(2^-149)` is
-    /// `+0`). Where the profile takes it, those operations record no
-    /// `PrecisionNote::DeviceDenormals` and the module requires the property. A texel centre's
-    /// `floor` stays noted where its address mode parts texel -1 from texel 0: Metal's sampler
-    /// reads its coordinate unflushed. Unmeasured, each records the note.
-    MetalUnaryDenormals,
 }
 
 /// One device capability a refusal can name.

@@ -316,7 +316,6 @@ surface! {
         struct ComputePipelineMetalInfo N;
         struct CompileReport N;
         struct EntryDescriptor N;
-        enum EntryMath E;
         struct EntryPlan N;
         enum EntryRef E;
         struct LinkedSource O;
@@ -936,7 +935,7 @@ use metal2vulkan::library::{CompiledFunction, Library};
 use metal2vulkan::metal::{PixelFormat, VertexFormat};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipeline, ComputePipelineDescriptor, EntryDescriptor,
-    EntryMath, EntryRef, FunctionDescriptor, LoweringInputs, PrecisionNote, RenderPipeline,
+    EntryRef, FunctionDescriptor, LoweringInputs, PrecisionNote, RenderPipeline,
     RenderPipelineDescriptor, Stage, StageSource, VertexAttributeDescriptor,
     VertexBufferLayoutDescriptor, VertexDescriptor,
 };
@@ -1222,12 +1221,11 @@ fn the_precision_contract_names_each_float_operations_notes() {
         .fold(FastMath::NONE, |all, (flag, _)| all.union(*flag));
     let lavapipe = device("lavapipe");
     let lavapipe = lavapipe.profile();
-    let fdiv = |p: &metal2vulkan::device::DeviceProfile, math| {
-        PrecisionNote::of_float_operator(BinOp::FDiv, FloatWidth::F32, fast, p, math)
-    };
-    assert!(fdiv(lavapipe, EntryMath::Fast)
-        .expect("a float operator")
-        .contains(&PrecisionNote::DeviceArithmetic));
+    assert!(
+        PrecisionNote::of_float_operator(BinOp::FDiv, FloatWidth::F32, fast, lavapipe)
+            .expect("a float operator")
+            .contains(&PrecisionNote::DeviceArithmetic)
+    );
     let native = device_under("lavapipe", DevicePolicy::default());
     assert_eq!(
         PrecisionNote::of_float_operator(
@@ -1235,7 +1233,6 @@ fn the_precision_contract_names_each_float_operations_notes() {
             FloatWidth::F32,
             FastMath::NONE,
             native.profile(),
-            EntryMath::Precise
         ),
         Some(BTreeSet::from([
             PrecisionNote::DeviceDenormals,
@@ -1244,20 +1241,13 @@ fn the_precision_contract_names_each_float_operations_notes() {
         ]))
     );
     assert_eq!(
-        PrecisionNote::of_float_operator(
-            BinOp::Add,
-            FloatWidth::F32,
-            fast,
-            lavapipe,
-            EntryMath::Fast
-        ),
+        PrecisionNote::of_float_operator(BinOp::Add, FloatWidth::F32, fast, lavapipe,),
         None
     );
     let Some(AirIntrinsic::Math(tanh)) = AirIntrinsic::parse("air.fast_tanh.f32") else {
         panic!("air.fast_tanh.f32 is a math call");
     };
-    let notes = PrecisionNote::of_math_call(tanh, fast, lavapipe, EntryMath::Fast)
-        .expect("a float function");
+    let notes = PrecisionNote::of_math_call(tanh, fast, lavapipe).expect("a float function");
     assert!(
         notes.contains(&PrecisionNote::NativeTranscendentals),
         "{notes:?}"
