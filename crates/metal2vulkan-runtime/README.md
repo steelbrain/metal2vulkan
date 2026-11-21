@@ -3607,12 +3607,16 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   draw every command in order where it was measured: on RADV (Mesa 26.2.6, a Radeon RX 7900 XTX)
   an execution of N commands whose generated commands pass about 4 MiB (296 bytes a command,
   14,170 commands) drew only its first N - 14,170 commands, or none, a driver bug; on NVIDIA's
-  driver (620.70.06, an RTX 2080) one of more than 64 commands ended out of order, a cause not yet
-  found. The parts cost, at 14,000 commands against one execution: 62% more GPU time on the XTX
-  and 61 times as much on the 2080, and 25 to 34 times the recording time. Their memory, for a
-  frame of Apple's rendering sample at its worst (45,024 commands of 17 tokens in 11 executions,
-  710 parts): about 108 MB of preprocess regions on the 2080 and 28 MB on the XTX, where single
-  executions would take about 27 MB on each (592 and 608 bytes a command).
+  driver (620.70.06, an RTX 2080) one of 96 commands or more (65 drew right) ended with its own
+  29th to 32nd commands on top of every later one, a cause not yet found. The parts cost, at
+  14,000 commands against one execution: 62% more GPU time on the XTX and 61 times as much on the
+  2080, and 25 to 34 times the recording time. Their memory, for a frame of Apple's rendering
+  sample at its worst (45,024 commands of 17 tokens in 11 executions, 710 parts): about 108 MB of
+  preprocess regions on the 2080 and 28 MB on the XTX, where single executions would take about 27
+  MB on each (592 and 608 bytes a command).
+- On NVIDIA's driver (620.70.06, an RTX 2080) an execution whose leading commands draw nothing
+  loses the draws after them in the same part: after a reset of commands 0 to 31, an execution of
+  commands 0 to 63 draws nothing. A cause not yet found.
 - On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
   `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
   command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver
