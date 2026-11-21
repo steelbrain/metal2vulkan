@@ -2,9 +2,9 @@
 //! under the identity domains, the runtime's.
 //!
 //! Owned synthetic kernel `branches` keeps a private array of 7176 words (28,704 bytes, past the
-//! floor's 16 KiB, so it lives in the runtime's memory): it writes the word its thread ID picks in
-//! the entry block, reads one in one arm of a branch, writes one and reads one in the other, and
-//! reads one after the branch joins.
+//! floor's 16 KiB, so it lives in the runtime's memory). Its entry block does not reach the array:
+//! one arm of a branch writes the word its thread ID picks and reads another, the other arm writes
+//! that word and another and reads the first back, and the join reads one.
 //!
 //! On every committed profile `Device::from_queries` derives under the identity domains whose
 //! plan keeps the arena in device memory, with the default lowering inputs and as a kernel whose
@@ -50,11 +50,11 @@ define void @branches(ptr addrspace(1) %out, i32 %gid) {{
 entry:
   %a = alloca [{n} x i32], align 4
   %w = urem i32 %gid, {n}
-  %p = getelementptr inbounds [{n} x i32], ptr %a, i32 0, i32 %w
-  store i32 %gid, ptr %p, align 4
   %c = icmp ult i32 %gid, 4
   br i1 %c, label %left, label %right
 left:
+  %p1 = getelementptr inbounds [{n} x i32], ptr %a, i32 0, i32 %w
+  store i32 %gid, ptr %p1, align 4
   %r1 = mul i32 %gid, 7
   %i1 = urem i32 %r1, {n}
   %q1 = getelementptr inbounds [{n} x i32], ptr %a, i32 0, i32 %i1
@@ -63,9 +63,11 @@ left:
 right:
   %r2 = mul i32 %gid, 11
   %i2 = urem i32 %r2, {n}
+  %p2 = getelementptr inbounds [{n} x i32], ptr %a, i32 0, i32 %w
+  store i32 %gid, ptr %p2, align 4
   %q2 = getelementptr inbounds [{n} x i32], ptr %a, i32 0, i32 %i2
   store i32 %r2, ptr %q2, align 4
-  %x2 = load i32, ptr %p, align 4
+  %x2 = load i32, ptr %p2, align 4
   br label %done
 done:
   %x = phi i32 [ %x1, %left ], [ %x2, %right ]
@@ -125,7 +127,9 @@ fn slot_derivations(m: &TypedModule, slot_bytes: u32) -> usize {
 /// The slot is derived once and every push field, the arena's address among them, is loaded
 /// once, however many blocks reach the arena: with the default lowering inputs, and as a kernel
 /// whose threadgroups may be partial (`LowerInputs::partial_threadgroups`), whose entry hooks
-/// return past the grid in a construct after the slot is asked for.
+/// return past the grid in a construct after the slot is asked for, so the body starts in a block
+/// other than the one the hook asked in, and the first blocks to reach the arena are the arms of a
+/// branch: each recalls the slot the function's first block made.
 #[test]
 fn the_arena_slot_is_made_once_and_its_push_field_read_once() {
     let Some(bc) = module() else {
