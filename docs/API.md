@@ -2624,6 +2624,13 @@ named states the rule in full.
   viewport's centre and covers its square whole, past the viewport's edge, where lavapipe covers
   no pixel whose centre lies on or past that edge and culls no point at the clip volume (the
   conformance case `point-viewport-coverage`).
+- **A filled primitive reaching past a viewport whose edge crosses a pixel is covered at that edge by
+  the device's own rule.** Metal states only that "fragments that lie outside of the viewport are
+  clipped" (`MTLRenderCommandEncoder.h`, `setViewport:`), not which a pixel the viewport's edge
+  crosses is. Measured, Metal on an Apple M3 Max covers every pixel the viewport overlaps, a pixel it
+  holds only part of included; a Vulkan device clips the primitive to the viewport and covers a pixel
+  where its sample lies in the clipped primitive (the conformance case `fractional-viewport-coverage`,
+  lavapipe: 344 elements).
 - **A line's tie-break is the device's own.** Lines draw by Bresenham's rule, which is Metal's
   (`bresenhamLines`, the runtime's floor): the pixels whose diamond the line exits, each within
   the one pixel Vulkan allows an implementation (`PrecisionNote::DeviceLineRasterization`). Vulkan's

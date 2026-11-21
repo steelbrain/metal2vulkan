@@ -9860,7 +9860,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `format-footprints-plain-stragglers` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
-| `fractional-viewport-coverage` | OPEN (main's bug list, 11-21, A FILL REACHING PAST A FRACTIONAL VIEWPORT): Metal on the Apple M3 Max covers every pixel the viewport overlaps for a draw that re… |
+| `fractional-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws): Metal states only that fragments outside the viewport are clipped (MTLRenderCommandEncoder.h, setViewpor… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
