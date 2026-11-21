@@ -103,6 +103,34 @@ impl Indices {
     }
 }
 
+/// A grant of `count` texture indices of `device`'s at the next of `indices`, none for no
+/// texture, and the indices it holds: each texture a shader reads or writes and each color
+/// attachment takes one.
+pub(super) fn texture_indices(
+    device: &rt::Device,
+    indices: &mut Indices,
+    count: usize,
+    error: &impl Fn(&str, rt::Error) -> ExecutorError,
+) -> Result<(Option<rt::IndexGrant>, std::ops::Range<u32>), ExecutorError> {
+    let first = indices.texture;
+    let end = u32::try_from(count)
+        .ok()
+        .and_then(|count| first.checked_add(count))
+        .ok_or_else(|| {
+            ExecutorError::Failed("the case binds more textures than an index grant holds".into())
+        })?;
+    let grant = match end - first {
+        0 => None,
+        count => Some(
+            device
+                .grant_indices(rt::IndexClass::Texture, first, count)
+                .map_err(|e| error("grant the texture indices", e))?,
+        ),
+    };
+    indices.texture = end;
+    Ok((grant, first..end))
+}
+
 /// Make `wanted`'s textures and samplers on `device` at the next of `indices`, as the module
 /// documentation says. The run already holds its grant of the whole sampler range; `error` maps
 /// the runtime's errors as the run's.
@@ -112,22 +140,8 @@ pub(super) fn make(
     indices: &mut Indices,
     error: impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Bound, ExecutorError> {
-    let first = indices.texture;
     let count = wanted.textures.len() + wanted.members.len();
-    let grant = match u32::try_from(count) {
-        Ok(0) => None,
-        Ok(count) => Some(
-            device
-                .grant_indices(rt::IndexClass::Texture, first, count)
-                .map_err(|e| error("grant the texture indices", e))?,
-        ),
-        Err(_) => {
-            return Err(ExecutorError::Failed(
-                "the case binds more textures than an index grant holds".into(),
-            ))
-        }
-    };
-    let mut at = first..;
+    let (grant, mut at) = texture_indices(device, indices, count, &error)?;
     let mut textures = BTreeMap::new();
     for ((&binding, texture), index) in wanted.textures.iter().zip(&mut at) {
         let usage = wanted
@@ -152,7 +166,6 @@ pub(super) fn make(
         })?;
         members.insert(key, made_texture(device, texture, usage, index, &error)?);
     }
-    indices.texture = at.start;
     let mut samplers = BTreeMap::new();
     for (&binding, sampler) in wanted.samplers {
         let state = device

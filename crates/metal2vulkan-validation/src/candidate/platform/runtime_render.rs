@@ -79,7 +79,8 @@ fn run(
     let state = runtime::made_within(|numbered| {
         device.new_render_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
-    let stages = Stages::make(device, case, draw)?;
+    let mut indices = Indices::new();
+    let stages = Stages::make(device, case, draw, &mut indices)?;
     let vertex_buffers = case
         .vertex_buffers
         .iter()
@@ -96,7 +97,7 @@ fn run(
         .as_deref()
         .map(|bytes| Placed::new(device, "the index buffer", bytes))
         .transpose()?;
-    let targets = Targets::make(device, case)?;
+    let targets = Targets::make(device, case, &mut indices)?;
     let depth_stencil = device.new_depth_stencil_state(&case.depth_stencil_state.descriptor);
     let label = crate::gpu::wait::SubmissionLabel {
         case_id: case_id.into(),
@@ -260,12 +261,12 @@ impl Stages {
         device: &rt::Device,
         case: &RenderCase,
         draw: &RuntimeDraw<'_>,
+        indices: &mut Indices,
     ) -> Result<Stages, ExecutorError> {
         let no_usages = BTreeMap::new();
         let no_member_usages = BTreeMap::new();
         let no_members = BTreeMap::new();
         let no_member_samplers = BTreeMap::new();
-        let mut indices = Indices::new();
         let mut stages = Vec::new();
         for (stage, function) in case.stages() {
             let own = case.companion_stage() != Some(stage);
@@ -292,7 +293,7 @@ impl Stages {
                 },
                 member_usages: &no_member_usages,
             };
-            let bound = runtime_textures::make(device, &wanted, &mut indices, runtime_error)?;
+            let bound = runtime_textures::make(device, &wanted, indices, runtime_error)?;
             stages.push((stage, placed, bound));
         }
         Ok(Stages { stages })
@@ -351,18 +352,39 @@ impl Stages {
 /// The pass's color attachments, by Metal index.
 struct Targets {
     textures: BTreeMap<u32, rt::Texture>,
+    _grant: Option<rt::IndexGrant>,
 }
 
 impl Targets {
     /// Each color target of `case` as a Shared 2D texture of its format and extent, made for
-    /// rendering and written from its bytes; a rasterization-disabled draw's is the oracle's 1x1
-    /// `R8Unorm` attachment at index 0, which no draw writes.
-    fn make(device: &rt::Device, case: &RenderCase) -> Result<Targets, ExecutorError> {
+    /// rendering at the next of `indices` and written from its bytes; a rasterization-disabled
+    /// draw's one attachment is the oracle's 1x1 `R8Unorm` one at index 0, which no draw writes
+    /// (a case of that draw authors no color target, `RasterizationDisabledRenderTarget`).
+    fn make(
+        device: &rt::Device,
+        case: &RenderCase,
+        indices: &mut Indices,
+    ) -> Result<Targets, ExecutorError> {
+        if case.fragment.is_none() {
+            let (grant, at) =
+                runtime_textures::texture_indices(device, indices, 1, &runtime_error)?;
+            let sink = attachment(device, SINK, [1, 1], (0, at.start))?;
+            return Ok(Targets {
+                textures: BTreeMap::from([(0, sink)]),
+                _grant: grant,
+            });
+        }
+        let (grant, at) = runtime_textures::texture_indices(
+            device,
+            indices,
+            case.color_targets.len(),
+            &runtime_error,
+        )?;
         let mut textures = BTreeMap::new();
-        for (&index, target) in &case.color_targets {
+        for ((&index, target), at) in case.color_targets.iter().zip(at) {
             let format = resources::pixel_format(target.format);
             let [width, height] = target.dimensions;
-            let texture = attachment(device, format, [width, height], index)?;
+            let texture = attachment(device, format, [width, height], (index, at))?;
             let row = width as usize * target.format.bytes_per_pixel();
             texture
                 .replace_region(
@@ -376,10 +398,10 @@ impl Targets {
                 .map_err(|error| runtime_error(&format!("color target {index}"), error))?;
             textures.insert(index, texture);
         }
-        if case.fragment.is_none() {
-            textures.insert(0, attachment(device, SINK, [1, 1], 0)?);
-        }
-        Ok(Targets { textures })
+        Ok(Targets {
+            textures,
+            _grant: grant,
+        })
     }
 
     /// The pass: each attachment loaded and stored.
@@ -430,18 +452,19 @@ impl Targets {
     }
 }
 
-/// A Shared 2D color attachment of `format` and `extent`, color attachment `index`'s.
+/// A Shared 2D color attachment of `format` and `extent`, color attachment `index`'s, at texture
+/// index `at` of the run's grant.
 fn attachment(
     device: &rt::Device,
     format: rt::PixelFormat,
     [width, height]: [u32; 2],
-    index: u32,
+    (index, at): (u32, u32),
 ) -> Result<rt::Texture, ExecutorError> {
     let mut descriptor = rt::TextureDescriptor::new(rt::TextureType::Type2D, format, width, height);
     descriptor.usage = rt::TextureUsage::RENDER_TARGET;
     descriptor.storage_mode = rt::StorageMode::Shared;
     device
-        .new_texture(&descriptor, None)
+        .new_texture(&descriptor, Some(at))
         .map_err(|error| runtime_error(&format!("color target {index}"), error))
 }
 
