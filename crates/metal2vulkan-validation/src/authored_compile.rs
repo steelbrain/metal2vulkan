@@ -25,10 +25,10 @@
 //!   restricted to what the executor enables; this compiles for the committed profile.
 //! - **The baseline.** The committed expectation file ([`EXPECTATIONS`] under the corpus root):
 //!   one line per case, its cell on each profile ([`Cell`]): `compiled` or the executor's
-//!   stable refusal label (`NotSupported::outcome`), with its uncovered count when that is not 0.
+//!   stable refusal label (`NotSupported::outcome`).
 //!   A run fails on any failure (an internal error, a worker stop, a case that does not check or
 //!   map) and on any difference from the file: a compiled case refused, a refusal label changed,
-//!   a refused case compiled, an uncovered count changed, a new case, a removed case. `--bless` rewrites the file and prints the same differences; it never writes a
+//!   a refused case compiled, a new case, a removed case. `--bless` rewrites the file and prints the same differences; it never writes a
 //!   failure. `--bless-additions` ([`Mode::BlessAdditions`], what each train's gate runs) fails as
 //!   a check does on any failure and on any changed cell of a case and profile the file
 //!   already holds, and otherwise writes the file with new cases and every C3 venue's missing
@@ -73,9 +73,8 @@ mod tests;
 /// compiles a cell is made of and in which order, how their results are classified into an outcome,
 /// and which outcomes are recorded. Bump it with any change to one of those.
 ///
-/// 1: the first census. 2: each recorded cell holds its uncovered count, which the expectation file
-/// records and a run
-///    compares.
+/// 1: the first census. 2: each recorded cell holds its uncovered count (pipelines the census does
+///    not compile), which the expectation file records and a run compares.
 /// 3: each recorded cell holds the digest of what a run of its case executes there,
 ///    which the expectation file records on the C3 venues' profiles, at the build its
 ///    `artifacts_at` line names.
@@ -86,7 +85,9 @@ mod tests;
 /// 6: an object or mesh case whose only stop is that the executor draws no mesh render pipeline
 ///    (`mesh_render_pipeline`) compiles it, where the run's preparation refuses it
 ///    (`engine::prepare_compile`).
-pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 6;
+/// 7: a cell holds no uncovered count: a run compiles only its case's own pipeline
+///    (`engine::case_compile`).
+pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 7;
 
 /// The expectation file's name under the corpus root (`validation/corpus`).
 pub const EXPECTATIONS: &str = "authored-compile.tsv";
@@ -196,14 +197,13 @@ impl CellOutcome {
     /// The refusal `label`, when a cell of the expectation file (a tab-separated line) and the
     /// cache can hold it and read it back as itself: not empty, not `compiled`, no control
     /// character (a tab, a line break), no space at either end, and no last word that starts
-    /// with `uncovered=` or `artifact=` (a cell's uncovered count or artifact digest, [`Cell`]).
+    /// with `artifact=` (a cell's artifact digest, [`Cell`]).
     pub fn refused(label: String) -> Result<CellOutcome, String> {
         let last_word = label.rsplit(' ').next().unwrap_or_default();
         if label.is_empty()
             || label == Self::COMPILED
             || label.contains(char::is_control)
             || label.trim() != label
-            || last_word.starts_with(Cell::UNCOVERED)
             || last_word.starts_with(Cell::ARTIFACT)
         {
             return Err(format!("{label:?} is not a refusal label a cell can hold"));
@@ -222,102 +222,70 @@ impl CellOutcome {
     }
 }
 
-/// A case's cell on one profile, as the expectation file records it: its outcome, how many
-/// of the case's executed command buffers compile on the profile pipelines the census does
-/// not (uncovered, [`CellResult::host_replayed`]), and, on a
-/// C3 venue's profile, the digest of what a run of the case executes there
-/// ([`CellResult::artifact`]): for a compiled case with nothing uncovered. A cell whose outcome or
-/// uncovered count changed is a [`Difference::Changed`], and so is one whose digest changed at
-/// the build the file's digests were computed at ([`ArtifactBuild`]).
+/// A case's cell on one profile, as the expectation file records it: its outcome, and, on a C3
+/// venue's profile, the digest of what a run of the case executes there
+/// ([`CellResult::artifact`]): for a compiled case. A cell whose outcome changed is a
+/// [`Difference::Changed`], and so is one whose digest changed at the build the file's digests
+/// were computed at ([`ArtifactBuild`]).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Cell {
     pub outcome: CellOutcome,
-    pub uncovered: usize,
     pub artifact: Option<String>,
 }
 
 impl Cell {
-    /// The start of the word after the outcome that states a nonzero uncovered count.
-    const UNCOVERED: &'static str = "uncovered=";
     /// The start of the word after `compiled` that states the artifact digest.
     const ARTIFACT: &'static str = "artifact=";
 
-    /// A cell with nothing uncovered and no artifact digest.
-    pub fn covered(outcome: CellOutcome) -> Cell {
+    /// A cell with no artifact digest.
+    pub fn bare(outcome: CellOutcome) -> Cell {
         Cell {
             outcome,
-            uncovered: 0,
             artifact: None,
         }
     }
 
-    /// The cell's text: its outcome, then ` uncovered=N` when `N` is not 0, or
-    /// ` artifact=SHA256` when it has a digest.
+    /// The cell's text: its outcome, then ` artifact=SHA256` when it has a digest.
     pub fn text(&self) -> String {
-        match (self.uncovered, &self.artifact) {
-            (0, None) => self.outcome.as_str().to_string(),
-            (0, Some(artifact)) => {
-                format!("{} {}{artifact}", self.outcome.as_str(), Self::ARTIFACT)
-            }
-            (count, _) => format!("{} {}{count}", self.outcome.as_str(), Self::UNCOVERED),
+        match &self.artifact {
+            None => self.outcome.as_str().to_string(),
+            Some(artifact) => format!("{} {}{artifact}", self.outcome.as_str(), Self::ARTIFACT),
         }
     }
 
-    /// The cell a cell's text states: an outcome ([`CellOutcome::parse`]), and a last word
-    /// `uncovered=N` for a count `N` above 0, written without leading zeros, or, after
-    /// `compiled`, `artifact=SHA256` for a lowercase SHA-256; or neither.
+    /// The cell a cell's text states: an outcome ([`CellOutcome::parse`]), and, after `compiled`,
+    /// a last word `artifact=SHA256` for a lowercase SHA-256, or none.
     pub fn parse(cell: &str) -> Result<Cell, String> {
         let Some((outcome, word)) = cell.rsplit_once(' ') else {
-            return Ok(Cell::covered(CellOutcome::parse(cell)?));
+            return Ok(Cell::bare(CellOutcome::parse(cell)?));
         };
-        if let Some(artifact) = word.strip_prefix(Self::ARTIFACT) {
-            crate::observation::validate_hash("the artifact digest", artifact)
-                .map_err(|why| format!("{cell:?}: {why}"))?;
-            if outcome != CellOutcome::COMPILED {
-                return Err(format!("{cell:?} states a digest of no compiled case"));
-            }
-            return Ok(Cell {
-                outcome: CellOutcome::Compiled,
-                uncovered: 0,
-                artifact: Some(artifact.into()),
-            });
+        let Some(artifact) = word.strip_prefix(Self::ARTIFACT) else {
+            return Ok(Cell::bare(CellOutcome::parse(cell)?));
+        };
+        crate::observation::validate_hash("the artifact digest", artifact)
+            .map_err(|why| format!("{cell:?}: {why}"))?;
+        if outcome != CellOutcome::COMPILED {
+            return Err(format!("{cell:?} states a digest of no compiled case"));
         }
-        let Some(count) = word.strip_prefix(Self::UNCOVERED) else {
-            return Ok(Cell::covered(CellOutcome::parse(cell)?));
-        };
-        let uncovered = count
-            .parse::<usize>()
-            .ok()
-            .filter(|&value| value > 0 && value.to_string() == count)
-            .ok_or_else(|| format!("{cell:?} states no uncovered count above 0"))?;
         Ok(Cell {
-            outcome: CellOutcome::parse(outcome)?,
-            uncovered,
-            artifact: None,
+            outcome: CellOutcome::Compiled,
+            artifact: Some(artifact.into()),
         })
     }
 
-    /// The cell of `outcome` with `uncovered` command buffers host-replayed, keeping `artifact`
-    /// only where a cell holds one: on a profile that records digests (`digested`), for a
-    /// compiled case with nothing uncovered.
-    fn of(
-        outcome: CellOutcome,
-        uncovered: usize,
-        artifact: Option<String>,
-        digested: bool,
-    ) -> Cell {
-        let holds = digested && outcome == CellOutcome::Compiled && uncovered == 0;
+    /// The cell of `outcome`, keeping `artifact` only where a cell holds one: on a profile that
+    /// records digests (`digested`), for a compiled case.
+    fn of(outcome: CellOutcome, artifact: Option<String>, digested: bool) -> Cell {
+        let holds = digested && outcome == CellOutcome::Compiled;
         Cell {
             outcome,
-            uncovered,
             artifact: artifact.filter(|_| holds),
         }
     }
 
-    /// Whether `self` and `other` state the same outcome and uncovered count, whatever their
-    /// artifact digests.
+    /// Whether `self` and `other` state the same outcome, whatever their artifact digests.
     fn same_outcome(&self, other: &Cell) -> bool {
-        self.outcome == other.outcome && self.uncovered == other.uncovered
+        self.outcome == other.outcome
     }
 
     /// This cell, when [`Cell::parse`] reads its text back as itself.
@@ -395,16 +363,11 @@ impl Cost {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellResult {
     pub outcome: Result<CellOutcome, CellFailure>,
-    /// The case's executed command buffers whose commands' pipelines no device-free compile builds
-    /// on the profile (`engine::CaseCompiles::host_replayed`: a render one's, and a compute one the
-    /// host replay runs): uncovered.
-    pub host_replayed: usize,
     /// The compiles run (a failure stops the cell at its compile, as it stops the executor).
     pub compiles: usize,
     pub cost: Cost,
     /// The digest of what a run of the case executes on the profile, as the executor records
-    /// it (`candidate::engine::artifact`): for a case that compiled with nothing uncovered,
-    /// `None` otherwise.
+    /// it (`candidate::engine::artifact`): for a case that compiled, `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
 }
@@ -414,7 +377,6 @@ impl CellResult {
     fn decided(outcome: Result<CellOutcome, CellFailure>) -> CellResult {
         CellResult {
             outcome,
-            host_replayed: 0,
             compiles: 0,
             cost: Cost::default(),
             artifact: None,
@@ -659,7 +621,6 @@ pub fn compile_prepared(
     let (result, measured) = planned.compile(worker, device, &mut artifact);
     let mut cell = CellResult {
         outcome: Ok(CellOutcome::Compiled),
-        host_replayed: 0,
         compiles: 1,
         cost: Cost::default(),
         artifact: None,
@@ -821,16 +782,17 @@ impl Expectations {
     /// file with a digest has a build, or this is an error naming it.
     pub fn render(&self) -> Result<String, String> {
         let mut out = String::from(
-            "# The authored compile census's expectations: one line per \
-             committed authored\n# case, its id, then its cell on each profile of the \
-             header: `compiled`, or the executor's\n# stable refusal label, followed by \
-             ` uncovered=N` when N of the case's command buffers are\n# host-replayed there \
-             (pipelines the census does not compile). On a C3 venue's profile, a\n# \
-             compiled cell with nothing uncovered is followed by ` artifact=SHA256`, the digest \
-             of what a\n# run of the case executes there, computed at the build the \
-             `artifacts_at` line names. Written\n# only by `corpus-triage --audit \
-             authored-compile --bless` or `--bless-additions`; a merge\n# conflict here is \
-             resolved by blessing again at the merged tree, never by taking a side.\n",
+            "# The authored compile census's expectations: one line per committed authored\n\
+             # case, its id, then its cell on each profile of the header: `compiled`, or the \
+             executor's\n\
+             # stable refusal label. On a C3 venue's profile, a compiled cell is followed by\n\
+             # ` artifact=SHA256`, the digest of what a run of the case executes there, computed \
+             at the\n\
+             # build the `artifacts_at` line names. Written only by `corpus-triage --audit \
+             authored-compile\n\
+             # --bless` or `--bless-additions`; a merge conflict here is resolved by blessing \
+             again at the\n\
+             # merged tree, never by taking a side.\n",
         );
         let digests = self
             .cases
@@ -1014,8 +976,8 @@ pub enum Difference {
     NewCase { case_id: String },
     /// A case the expectations list that is no longer committed.
     RemovedCase { case_id: String },
-    /// A case whose cell on a profile changed: its outcome, its uncovered count, or, at the
-    /// build the file's digests were computed at, its artifact digest.
+    /// A case whose cell on a profile changed: its outcome, or, at the build the file's digests
+    /// were computed at, its artifact digest.
     Changed {
         case_id: String,
         profile: String,
@@ -1063,12 +1025,7 @@ impl Difference {
                 let kind = match (&was.outcome, &now.outcome) {
                     (CellOutcome::Compiled, CellOutcome::Refused(_)) => "regressed",
                     (CellOutcome::Refused(_), CellOutcome::Compiled) => "compiles",
-                    (was_outcome, now_outcome)
-                        if was_outcome == now_outcome && was.uncovered == now.uncovered =>
-                    {
-                        "artifact-changed"
-                    }
-                    (was, now) if was == now => "uncovered-changed",
+                    (was_outcome, now_outcome) if was_outcome == now_outcome => "artifact-changed",
                     _ => "refusal-changed",
                 };
                 format!(
@@ -1143,8 +1100,8 @@ pub fn differences(
     out
 }
 
-/// The cells of `profiles` whose artifact digest moved from `expected`'s while their outcome and
-/// uncovered count did not: what a bless records.
+/// The cells of `profiles` whose artifact digest moved from `expected`'s while their outcome did
+/// not: what a bless records.
 pub fn moved_artifacts(
     expected: &Expectations,
     profiles: &[ProfileStem],
@@ -1303,8 +1260,6 @@ pub struct Report {
     pub compiled: usize,
     pub refused: usize,
     pub failures: Vec<Failed>,
-    /// Cells whose case has executed command buffers the host replay runs there: uncovered.
-    pub uncovered: Vec<(String, String, usize)>,
     pub differences: Vec<Difference>,
     /// Whether the expectation file's artifact digests are at this build ([`ArtifactBuild`]), and
     /// how many of its cells' digests this run moved while their outcome held.
@@ -1354,7 +1309,7 @@ impl Report {
         }
     }
 
-    /// The report's lines: a summary, then every failure, difference, and uncovered cell.
+    /// The report's lines: a summary, then every failure and difference.
     pub fn lines(&self) -> Vec<String> {
         let measure = |name: &str, slot: &Option<Measure>| match slot {
             Some(m) => format!(
@@ -1364,7 +1319,7 @@ impl Report {
             None => format!("\t{name}=none"),
         };
         let mut summary = format!(
-            "authored-compile-summary\tcases={}\tprofiles={}\tcells={}\tcached_cells={}\tselected_cases={}\tselected_cells={}\tcompiles={}\tcompiled={}\trefused={}\tfailed={}\tuncovered_cells={}\tdifferences={}\tregressions={}\tartifacts_at_this_build={}\tmoved_artifacts={}\tblessed={}\twritten={}\twall_ms={}",
+            "authored-compile-summary\tcases={}\tprofiles={}\tcells={}\tcached_cells={}\tselected_cases={}\tselected_cells={}\tcompiles={}\tcompiled={}\trefused={}\tfailed={}\tdifferences={}\tregressions={}\tartifacts_at_this_build={}\tmoved_artifacts={}\tblessed={}\twritten={}\twall_ms={}",
             self.cases,
             self.profiles.len(),
             self.cases * self.profiles.len(),
@@ -1375,7 +1330,6 @@ impl Report {
             self.compiled,
             self.refused,
             self.failures.len(),
-            self.uncovered.len(),
             self.differences.len(),
             self.differences.iter().filter(|d| d.is_regression()).count(),
             self.artifacts_at_this_build,
@@ -1451,20 +1405,13 @@ impl Report {
                 self.written,
             ));
         }
-        for (case_id, profile, count) in &self.uncovered {
-            out.push(format!(
-                "authored-compile-uncovered\t{case_id}\tprofile={profile}\thost_replayed_command_buffers={count}"
-            ));
-        }
         out
     }
 }
 
-/// One cached cell: its outcome, how many of its command buffers the host replay runs, and its
-/// artifact digest.
+/// One cached cell: its outcome and its artifact digest.
 struct Cached {
     outcome: CellOutcome,
-    host_replayed: usize,
     artifact: Option<String>,
 }
 
@@ -1594,7 +1541,6 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
                 Some(hit) => {
                     row[index] = Some(Ok(Cell::of(
                         hit.outcome.clone(),
-                        hit.host_replayed,
                         hit.artifact.clone(),
                         digested[index],
                     )));
@@ -1606,13 +1552,6 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
                             outcome: Ok(hit.outcome.clone()),
                             compiled: None,
                         });
-                    }
-                    if hit.host_replayed > 0 {
-                        report.uncovered.push((
-                            case.case_id.clone(),
-                            labels[index].clone(),
-                            hit.host_replayed,
-                        ));
                     }
                 }
                 None => uncached.push(index),
@@ -1713,11 +1652,6 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
                         result.cost.allocator_peak_bytes,
                     );
                 }
-                if result.host_replayed > 0 {
-                    report
-                        .uncovered
-                        .push((case_id.clone(), label.clone(), result.host_replayed));
-                }
                 if options.cases.is_some() {
                     report.probed.push(ProbedCell {
                         case_id: case_id.clone(),
@@ -1735,11 +1669,11 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
                         result: result.clone(),
                     });
                 }
-                let (uncovered, artifact) = (result.host_replayed, result.artifact);
+                let artifact = result.artifact;
                 row[index] = Some(
                     result
                         .outcome
-                        .map(|outcome| Cell::of(outcome, uncovered, artifact, digested[index])),
+                        .map(|outcome| Cell::of(outcome, artifact, digested[index])),
                 );
             }
             if batch.len() >= CACHE_BATCH {
@@ -1781,7 +1715,6 @@ pub fn run(options: &Options<'_>, compiler: &dyn CaseCompiler) -> Result<Report,
             outcomes.insert(case_id, outcome_row);
         }
     }
-    report.uncovered.sort();
     report.probed.sort_by(|a, b| {
         (&a.case_id, labels.iter().position(|l| *l == a.profile))
             .cmp(&(&b.case_id, labels.iter().position(|l| *l == b.profile)))
@@ -1849,6 +1782,19 @@ struct Recorded {
 fn open(index: &Path) -> Result<Connection, String> {
     let connection = Connection::open(index)
         .map_err(|error| format!("open index {}: {error}", index.display()))?;
+    // A table of census version 6 or older holds an uncovered count per cell (`host_replayed`);
+    // its cells are under older keys, so none is read, and it is made again.
+    let old = connection
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{TABLE}') WHERE name='host_replayed'"
+        ))
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(|error| format!("read the authored compile census table's columns: {error}"))?;
+    if old {
+        connection
+            .execute_batch(&format!("DROP TABLE {TABLE};"))
+            .map_err(|error| format!("drop the older authored compile census table: {error}"))?;
+    }
     connection
         .execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
@@ -1856,7 +1802,6 @@ fn open(index: &Path) -> Result<Connection, String> {
                profile TEXT NOT NULL,
                key TEXT NOT NULL,
                outcome TEXT NOT NULL,
-               host_replayed INTEGER NOT NULL,
                compiles INTEGER NOT NULL,
                elapsed_ms INTEGER NOT NULL,
                peak_resident_bytes INTEGER,
@@ -1866,19 +1811,6 @@ fn open(index: &Path) -> Result<Connection, String> {
              );"
         ))
         .map_err(|error| format!("create the authored compile census table: {error}"))?;
-    // A table of census version 2 lacks the digest column; its cells are under older keys, so
-    // none is read before a version-3 run replaces it.
-    let has_artifact = connection
-        .prepare(&format!(
-            "SELECT 1 FROM pragma_table_info('{TABLE}') WHERE name='artifact'"
-        ))
-        .and_then(|mut statement| statement.exists([]))
-        .map_err(|error| format!("read the authored compile census table's columns: {error}"))?;
-    if !has_artifact {
-        connection
-            .execute_batch(&format!("ALTER TABLE {TABLE} ADD COLUMN artifact TEXT;"))
-            .map_err(|error| format!("add the artifact digest column: {error}"))?;
-    }
     Ok(connection)
 }
 
@@ -1890,7 +1822,7 @@ fn read_cached(
 ) -> Result<BTreeMap<String, Cached>, String> {
     let mut statement = connection
         .prepare(&format!(
-            "SELECT case_id, outcome, host_replayed, artifact FROM {TABLE} \
+            "SELECT case_id, outcome, artifact FROM {TABLE} \
              WHERE profile=?1 AND key=?2"
         ))
         .map_err(|error| format!("prepare the authored compile census selection: {error}"))?;
@@ -1899,20 +1831,18 @@ fn read_cached(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(2)?,
             ))
         })
         .map_err(|error| format!("select authored compile census cells: {error}"))?;
     let mut out = BTreeMap::new();
     for row in rows {
-        let (case_id, outcome, host_replayed, artifact) =
+        let (case_id, outcome, artifact) =
             row.map_err(|error| format!("read an authored compile census cell: {error}"))?;
         out.insert(
             case_id,
             Cached {
                 outcome: CellOutcome::parse(&outcome)?,
-                host_replayed: usize::try_from(host_replayed).unwrap_or(0),
                 artifact,
             },
         );
@@ -1932,9 +1862,9 @@ fn write_cached(connection: &Connection, cells: &[Recorded]) -> Result<(), Strin
     {
         let mut statement = transaction
             .prepare(&format!(
-                "INSERT OR REPLACE INTO {TABLE} (case_id, profile, key, outcome, host_replayed, \
-                 compiles, elapsed_ms, peak_resident_bytes, allocator_peak_bytes, artifact) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                "INSERT OR REPLACE INTO {TABLE} (case_id, profile, key, outcome, compiles, \
+                 elapsed_ms, peak_resident_bytes, allocator_peak_bytes, artifact) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
             ))
             .map_err(|error| format!("prepare an authored compile census write: {error}"))?;
         for cell in cells {
@@ -1945,7 +1875,6 @@ fn write_cached(connection: &Connection, cells: &[Recorded]) -> Result<(), Strin
                     cell.profile,
                     cell.key,
                     cell.outcome.as_str(),
-                    to_i64(cell.result.host_replayed as u64),
                     to_i64(cell.result.compiles as u64),
                     to_i64(cell.result.cost.elapsed.as_millis() as u64),
                     cell.result.cost.peak_resident_bytes.map(to_i64),

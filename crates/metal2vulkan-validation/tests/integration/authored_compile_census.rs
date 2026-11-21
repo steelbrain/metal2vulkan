@@ -92,7 +92,7 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
         .unwrap();
     assert_eq!(
         expected.cases.values().collect::<Vec<_>>(),
-        vec![&vec![Cell::covered(CellOutcome::Compiled)]]
+        vec![&vec![Cell::bare(CellOutcome::Compiled)]]
     );
 
     // Nothing changed: no case is admitted, no compile runs.
@@ -127,7 +127,7 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
     assert_eq!(expected.build, Some(ArtifactBuild::this()));
     for (profile, cell) in profiles.iter().zip(expected.cases.values().next().unwrap()) {
         let venue = profile.label() != "lavapipe";
-        if cell.outcome == CellOutcome::Compiled && cell.uncovered == 0 {
+        if cell.outcome == CellOutcome::Compiled {
             assert_eq!(cell.artifact.is_some(), venue, "{}", profile.label());
         } else {
             assert_eq!(cell.artifact, None, "{}", profile.label());
@@ -167,7 +167,7 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
                 (
                     id.clone(),
                     vec![
-                        Cell::covered(CellOutcome::Refused("not_supported{bind}".into()));
+                        Cell::bare(CellOutcome::Refused("not_supported{bind}".into()));
                         profiles.len()
                     ],
                 )

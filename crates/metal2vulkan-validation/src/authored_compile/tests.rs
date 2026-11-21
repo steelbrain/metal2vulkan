@@ -143,7 +143,6 @@ const PROFILES: [&str; 2] = ["lavapipe", "gate-lavapipe"];
 #[derive(Default)]
 struct Scripted {
     outcomes: Mutex<BTreeMap<(String, String), Result<CellOutcome, CellFailure>>>,
-    host_replayed: Mutex<BTreeMap<String, usize>>,
     artifacts: Mutex<BTreeMap<(String, String), String>>,
     asked: Mutex<Vec<(String, String)>>,
 }
@@ -196,13 +195,6 @@ impl CaseCompiler for Scripted {
                         .get(&(case.name.clone(), label))
                         .cloned()
                         .unwrap_or(Ok(CellOutcome::Compiled)),
-                    host_replayed: self
-                        .host_replayed
-                        .lock()
-                        .unwrap()
-                        .get(&case.name)
-                        .copied()
-                        .unwrap_or(0),
                     compiles: 1,
                     cost: Cost {
                         elapsed: Duration::from_millis(7),
@@ -422,8 +414,8 @@ fn a_compiled_case_that_is_refused_now_fails_as_a_regression() {
         vec![Difference::Changed {
             case_id: beta.clone(),
             profile: PROFILES[1].into(),
-            was: Cell::covered(CellOutcome::Compiled),
-            now: Cell::covered(CellOutcome::Refused(label.into())),
+            was: Cell::bare(CellOutcome::Compiled),
+            now: Cell::bare(CellOutcome::Refused(label.into())),
         }]
     );
     assert!(report.differences[0].is_regression());
@@ -474,175 +466,6 @@ fn new_and_removed_cases_are_differences() {
     assert_eq!(found, expected);
 }
 
-/// Host-replayed command buffers are reported as uncovered, from a compile and from the cache,
-/// and a bless records each cell's count in the expectation file.
-#[test]
-fn host_replayed_command_buffers_are_reported_uncovered() {
-    let corpus = Corpus::new(&["alpha", "beta"]);
-    let compiler = Scripted::default();
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .insert("beta".into(), 2);
-    let cold = corpus.run(&compiler, Some(&PROFILES), true, None).unwrap();
-    let warm = corpus.run(&compiler, None, false, None).unwrap();
-    assert!(warm.passed(), "{:#?}", warm.lines());
-    let beta = case("beta").case_id;
-    // The report lists its uncovered cells sorted, by case and then profile label.
-    let mut uncovered = PROFILES
-        .map(|label| (beta.clone(), label.to_string(), 2))
-        .to_vec();
-    uncovered.sort();
-    for report in [&cold, &warm] {
-        assert_eq!(report.uncovered, uncovered);
-    }
-    let text = std::fs::read_to_string(corpus.expectations()).unwrap();
-    assert!(
-        text.contains(&format!(
-            "\n{beta}\tcompiled uncovered=2\tcompiled uncovered=2\n"
-        )),
-        "{text}"
-    );
-    assert_eq!(
-        Expectations::parse(&text).unwrap().cases,
-        BTreeMap::from([
-            (
-                case("alpha").case_id,
-                vec![Cell::covered(CellOutcome::Compiled); 2]
-            ),
-            (
-                beta,
-                vec![
-                    Cell {
-                        outcome: CellOutcome::Compiled,
-                        uncovered: 2,
-                        artifact: None,
-                    };
-                    2
-                ]
-            ),
-        ])
-    );
-}
-
-/// An uncovered count that changes is a difference like a changed outcome, in either direction:
-/// a check fails on it, an additions bless refuses it and writes nothing, and only a bless records
-/// it. An additions bless records the counts of the cells it adds.
-#[test]
-fn a_changed_uncovered_count_fails_until_a_bless_records_it() {
-    let corpus = Corpus::new(&["alpha", "beta"]);
-    let compiler = Scripted::default();
-    compiler.set("beta", PROFILES[1], refused("not_supported{bind}"));
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .insert("beta".into(), 1);
-    corpus.run(&compiler, Some(&PROFILES), true, None).unwrap();
-    let before = std::fs::read_to_string(corpus.expectations()).unwrap();
-
-    // The product now host-replays a command buffer of alpha's, and one more of beta's.
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .extend([("alpha".to_string(), 1), ("beta".to_string(), 2)]);
-    let fresh = corpus.root().join("fresh.sqlite");
-    let check = corpus.run(&compiler, None, false, Some(&fresh)).unwrap();
-    assert!(!check.passed() && check.failures.is_empty());
-    let (alpha, beta) = (case("alpha").case_id, case("beta").case_id);
-    let cell = |outcome: Result<CellOutcome, CellFailure>, uncovered| Cell {
-        outcome: outcome.unwrap(),
-        uncovered,
-        artifact: None,
-    };
-    let compiled = || Ok(CellOutcome::Compiled);
-    let mut wanted = Vec::new();
-    for (case_id, was, now) in [(&alpha, 0, 1), (&beta, 1, 2)] {
-        for label in PROFILES {
-            let outcome = if case_id == &beta && label == PROFILES[1] {
-                refused("not_supported{bind}")
-            } else {
-                compiled()
-            };
-            wanted.push(Difference::Changed {
-                case_id: case_id.clone(),
-                profile: label.into(),
-                was: cell(outcome.clone(), was),
-                now: cell(outcome, now),
-            });
-        }
-    }
-    wanted.sort();
-    let mut found = check.differences.clone();
-    found.sort();
-    assert_eq!(found, wanted);
-    assert!(found.iter().all(|difference| !difference.is_regression()));
-    let lines = check.lines();
-    assert!(
-        lines.contains(&format!(
-            "authored-compile-difference\tuncovered-changed\t{alpha}\tprofile={}\twas=compiled\tnow=compiled uncovered=1",
-            PROFILES[0]
-        )),
-        "{lines:#?}"
-    );
-    assert!(
-        lines.contains(&format!(
-            "authored-compile-difference\tuncovered-changed\t{beta}\tprofile={}\twas=not_supported{{bind}} uncovered=1\tnow=not_supported{{bind}} uncovered=2",
-            PROFILES[1]
-        )),
-        "{lines:#?}"
-    );
-
-    // An additions bless refuses the changed counts, even beside a new case, and writes nothing.
-    corpus.store().put_case(case("delta")).unwrap();
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .insert("delta".into(), 3);
-    let additions = corpus.additions(&compiler, &[], Some(&fresh)).unwrap();
-    assert!(!additions.passed() && !additions.blessed && !additions.written);
-    assert!(additions
-        .lines()
-        .iter()
-        .any(|line| line.ends_with("\tchanged_cells=4\tblessed=false\twritten=false")));
-    assert_eq!(
-        std::fs::read_to_string(corpus.expectations()).unwrap(),
-        before
-    );
-
-    // With the counts back as blessed, the additions bless writes the new case with its count.
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .extend([("alpha".to_string(), 0), ("beta".to_string(), 1)]);
-    let other = corpus.root().join("other.sqlite");
-    let added = corpus.additions(&compiler, &[], Some(&other)).unwrap();
-    assert!(added.passed() && added.written, "{:#?}", added.lines());
-    let delta = case("delta").case_id;
-    assert_eq!(
-        Expectations::load(&corpus.expectations())
-            .unwrap()
-            .unwrap()
-            .cases[&delta],
-        vec![cell(compiled(), 3); 2]
-    );
-
-    // A bless records the changed counts, and the next check passes.
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .extend([("alpha".to_string(), 1), ("beta".to_string(), 2)]);
-    let blessed = corpus.run(&compiler, None, true, Some(&fresh)).unwrap();
-    assert!(blessed.blessed && blessed.written, "{:#?}", blessed.lines());
-    let check = corpus.run(&compiler, None, false, Some(&fresh)).unwrap();
-    assert!(check.passed(), "{:#?}", check.lines());
-}
-
 /// A check needs the expectation file and compiles its profiles; only a bless names others.
 #[test]
 fn a_check_compiles_the_expectation_files_profiles() {
@@ -681,51 +504,35 @@ fn the_expectation_file_round_trips_and_refuses_malformed_lines() {
             (
                 "a".repeat(64),
                 vec![
-                    Cell::covered(CellOutcome::Compiled),
-                    Cell::covered(CellOutcome::Refused("not_supported{bind}".into())),
+                    Cell::bare(CellOutcome::Compiled),
+                    Cell::bare(CellOutcome::Refused("not_supported{bind}".into())),
                 ],
             ),
             (
                 "b".repeat(64),
                 vec![
-                    Cell {
-                        outcome: CellOutcome::Compiled,
-                        uncovered: 1,
-                        artifact: None,
-                    },
-                    Cell {
-                        outcome: CellOutcome::Refused("not_supported{a label} with spaces".into()),
-                        uncovered: 12,
-                        artifact: None,
-                    },
+                    Cell::bare(CellOutcome::Compiled),
+                    Cell::bare(CellOutcome::Refused(
+                        "not_supported{a label} with spaces".into(),
+                    )),
                 ],
             ),
-            (
-                "c".repeat(64),
-                vec![Cell::covered(CellOutcome::Compiled); 2],
-            ),
+            ("c".repeat(64), vec![Cell::bare(CellOutcome::Compiled); 2]),
         ]),
         build: None,
     };
     let text = expectations.render().unwrap();
     assert!(
         text.contains(&format!(
-            "\n{}\tcompiled uncovered=1\tnot_supported{{a label}} with spaces uncovered=12\n",
+            "\n{}\tcompiled\tnot_supported{{a label}} with spaces\n",
             "b".repeat(64)
         )),
         "{text}"
     );
     assert_eq!(Expectations::parse(&text).unwrap(), expectations);
     let header = format!("case_id\t{}\t{}\n", PROFILES[0], PROFILES[1]);
-    let uncovered = |cell: &str| format!("{}\tcompiled\t{cell}\n", "a".repeat(64));
     for (body, why) in [
         (format!("{}\tcompiled\n", "a".repeat(64)), "1 cells"),
-        (uncovered("compiled uncovered=0"), "no uncovered count"),
-        (uncovered("compiled uncovered=01"), "no uncovered count"),
-        (uncovered("compiled uncovered=x"), "no uncovered count"),
-        (uncovered("compiled uncovered="), "no uncovered count"),
-        (uncovered("uncovered=2"), "not an outcome"),
-        (uncovered(" uncovered=2"), "not an outcome"),
         (
             format!(
                 "{0}\tcompiled\tcompiled\n{0}\tcompiled\tcompiled\n",
@@ -1011,9 +818,7 @@ fn every_outcome_kind_round_trips_through_a_bless() {
         }
         wanted.insert(
             case(name).case_id,
-            cells
-                .map(|cell| Cell::covered(cell.clone().unwrap()))
-                .to_vec(),
+            cells.map(|cell| Cell::bare(cell.clone().unwrap())).to_vec(),
         );
     }
     let blessed = corpus.run(&compiler, Some(&PROFILES), true, None).unwrap();
@@ -1040,16 +845,7 @@ fn every_outcome_kind_round_trips_through_a_bless() {
     assert_eq!(cold.compiles, 2 * outcomes.len());
 
     // A label no cell can hold never reaches the file.
-    for label in [
-        "a\tb",
-        "a\nb",
-        " padded",
-        "",
-        "compiled",
-        "uncovered=1",
-        "a uncovered=1",
-        "a uncovered=x",
-    ] {
+    for label in ["a\tb", "a\nb", " padded", "", "compiled"] {
         let failure = refusal(label.into()).unwrap_err();
         assert_eq!(
             (failure.class, failure.key.as_str()),
@@ -1060,7 +856,7 @@ fn every_outcome_kind_round_trips_through_a_bless() {
             profiles: vec![ProfileStem::parse(PROFILES[0]).unwrap()],
             cases: BTreeMap::from([(
                 "a".repeat(64),
-                vec![Cell::covered(CellOutcome::Refused(label.into()))],
+                vec![Cell::bare(CellOutcome::Refused(label.into()))],
             )]),
             build: None,
         };
@@ -1130,13 +926,13 @@ fn an_additions_bless_adds_new_cases_and_drops_removed_ones() {
         BTreeMap::from([
             (
                 case("alpha").case_id,
-                vec![Cell::covered(CellOutcome::Compiled); 2]
+                vec![Cell::bare(CellOutcome::Compiled); 2]
             ),
             (
                 case("gamma").case_id,
                 vec![
-                    Cell::covered(CellOutcome::Compiled),
-                    Cell::covered(CellOutcome::Refused("not_supported{bind}".into()))
+                    Cell::bare(CellOutcome::Compiled),
+                    Cell::bare(CellOutcome::Refused("not_supported{bind}".into()))
                 ]
             ),
         ])
@@ -1200,19 +996,14 @@ fn an_additions_bless_refuses_a_changed_cell_and_writes_nothing() {
     );
 }
 
-/// An additions bless that adds a new venue's profile records each of its cells' uncovered
-/// count, compiling only that profile's cells; the file's own cells keep theirs, and a check over the
-/// written file, warm or cold, finds no difference.
+/// An additions bless that adds a new venue's profile records each of its cells, compiling only
+/// that profile's cells; the file's own cells keep theirs, and a check over the written file, warm
+/// or cold, finds no difference.
 #[test]
-fn an_added_profile_leg_records_its_uncovered_counts() {
+fn an_added_profile_leg_records_its_cells() {
     let corpus = Corpus::new(&["alpha", "beta"]);
     let compiler = Scripted::default();
     compiler.set("beta", PROFILES[1], refused("not_supported{bind}"));
-    compiler
-        .host_replayed
-        .lock()
-        .unwrap()
-        .insert("beta".into(), 2);
     corpus
         .run(&compiler, Some(&PROFILES[..1]), true, None)
         .unwrap();
@@ -1234,9 +1025,7 @@ fn an_added_profile_leg_records_its_uncovered_counts() {
     let text = std::fs::read_to_string(corpus.expectations()).unwrap();
     let beta = case("beta").case_id;
     assert!(
-        text.contains(&format!(
-            "\n{beta}\tcompiled uncovered=2\tnot_supported{{bind}} uncovered=2\n"
-        )),
+        text.contains(&format!("\n{beta}\tcompiled\tnot_supported{{bind}}\n")),
         "{text}"
     );
     assert_eq!(
@@ -1244,21 +1033,13 @@ fn an_added_profile_leg_records_its_uncovered_counts() {
         BTreeMap::from([
             (
                 case("alpha").case_id,
-                vec![Cell::covered(CellOutcome::Compiled); 2]
+                vec![Cell::bare(CellOutcome::Compiled); 2]
             ),
             (
                 beta,
                 vec![
-                    Cell {
-                        outcome: CellOutcome::Compiled,
-                        uncovered: 2,
-                        artifact: None,
-                    },
-                    Cell {
-                        outcome: CellOutcome::Refused("not_supported{bind}".into()),
-                        uncovered: 2,
-                        artifact: None,
-                    },
+                    Cell::bare(CellOutcome::Compiled),
+                    Cell::bare(CellOutcome::Refused("not_supported{bind}".into())),
                 ]
             ),
         ])
@@ -1380,13 +1161,12 @@ fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
 }
 
-/// A cell holds an artifact digest only after `compiled` with nothing uncovered; a refusal label
+/// A cell holds an artifact digest only after `compiled`; a refusal label
 /// cannot end in a word a digest starts with; and a file with a digest names the build it is at.
 #[test]
 fn a_cell_holds_its_artifact_digest_at_a_named_build() {
     let digested = Cell {
         outcome: CellOutcome::Compiled,
-        uncovered: 0,
         artifact: Some(digest('a')),
     };
     assert_eq!(
@@ -1406,24 +1186,17 @@ fn a_cell_holds_its_artifact_digest_at_a_named_build() {
         assert!(error.contains(why), "{text}: {error}");
     }
     assert!(CellOutcome::refused(format!("a label artifact={}", digest('a'))).is_err());
-    // A digest beside an uncovered count, or on a refusal, is not a cell the file can hold.
-    for cell in [
-        Cell {
-            uncovered: 1,
-            ..digested.clone()
-        },
-        Cell {
-            outcome: CellOutcome::Refused("not_supported{bind}".into()),
-            ..digested.clone()
-        },
-    ] {
-        let expectations = Expectations {
-            build: Some(ArtifactBuild::this()),
-            profiles: vec![ProfileStem::parse(PROFILES[0]).unwrap()],
-            cases: BTreeMap::from([("a".repeat(64), vec![cell])]),
-        };
-        assert!(expectations.render().is_err());
-    }
+    // A digest on a refusal is not a cell the file can hold.
+    let refused_digest = Cell {
+        outcome: CellOutcome::Refused("not_supported{bind}".into()),
+        ..digested.clone()
+    };
+    let expectations = Expectations {
+        build: Some(ArtifactBuild::this()),
+        profiles: vec![ProfileStem::parse(PROFILES[0]).unwrap()],
+        cases: BTreeMap::from([("a".repeat(64), vec![refused_digest])]),
+    };
+    assert!(expectations.render().is_err());
 
     let expectations = Expectations {
         build: Some(ArtifactBuild::this()),
@@ -1432,7 +1205,7 @@ fn a_cell_holds_its_artifact_digest_at_a_named_build() {
             .to_vec(),
         cases: BTreeMap::from([(
             "a".repeat(64),
-            vec![digested.clone(), Cell::covered(CellOutcome::Compiled)],
+            vec![digested.clone(), Cell::bare(CellOutcome::Compiled)],
         )]),
     };
     let text = expectations.render().unwrap();
@@ -1501,7 +1274,7 @@ fn a_bless_records_digests_on_the_venues_profile_legs_only() {
     let beta = &written.cases[&case("beta").case_id];
     assert_eq!(
         beta[0],
-        Cell::covered(CellOutcome::Refused("not_supported{bind}".into()))
+        Cell::bare(CellOutcome::Refused("not_supported{bind}".into()))
     );
 
     // Warm, the cache gives the digests back: no compile, no difference.
@@ -1597,10 +1370,10 @@ fn a_moved_digest_differs_only_at_the_files_own_build() {
     );
 }
 
-/// A table of census version 2 (no digest column) is extended in place, and its cells, under
-/// older keys, are compiled again.
+/// A table of census version 6 or older (an uncovered count per cell) is made again, and its
+/// cells, under older keys, are compiled again.
 #[test]
-fn a_version_2_cache_table_gains_the_digest_column() {
+fn an_older_cache_table_is_made_again() {
     let corpus = Corpus::new(&["alpha"]);
     let connection = Connection::open(corpus.index()).unwrap();
     connection
@@ -1609,8 +1382,8 @@ fn a_version_2_cache_table_gains_the_digest_column() {
                case_id TEXT NOT NULL, profile TEXT NOT NULL, key TEXT NOT NULL,
                outcome TEXT NOT NULL, host_replayed INTEGER NOT NULL, compiles INTEGER NOT NULL,
                elapsed_ms INTEGER NOT NULL, peak_resident_bytes INTEGER,
-               allocator_peak_bytes INTEGER, PRIMARY KEY(case_id, profile));
-             INSERT INTO {TABLE} VALUES ('{}', 'lavapipe', 'old-key', 'compiled', 0, 1, 1, NULL, NULL);",
+               allocator_peak_bytes INTEGER, artifact TEXT, PRIMARY KEY(case_id, profile));
+             INSERT INTO {TABLE} VALUES ('{}', 'lavapipe', 'old-key', 'compiled', 0, 1, 1, NULL, NULL, NULL);",
             case("alpha").case_id
         ))
         .unwrap();

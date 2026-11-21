@@ -3464,7 +3464,6 @@ mod tests {
         let bless = |build: &ArtifactBuild, stated_digest: &str| {
             let cell = |digest: &str| Cell {
                 outcome: CellOutcome::Compiled,
-                uncovered: 0,
                 artifact: Some(digest.into()),
             };
             Expectations {
