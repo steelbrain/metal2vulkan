@@ -380,6 +380,7 @@ mod on_device {
             let keys: Vec<_> = (table.iter())
                 .map(|&(dispatch, size, pipeline)| {
                     (state.dispatch_variant(dispatch, size, &[]))
+                        .map(|(variant, _)| variant)
                         .unwrap_or_else(|| panic!("{name}: {pipeline}: {dispatch:?} by {size:?}"))
                 })
                 .collect();

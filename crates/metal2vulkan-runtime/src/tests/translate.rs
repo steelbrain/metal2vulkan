@@ -783,7 +783,8 @@ mod on_device {
             let from = next(&counters);
             let tiles = state(name, &device, &tiling);
             let make = one(name, counters.variant_makes(from), "the state's tiles");
-            let key = tiles.dispatch_variant(Dispatch::Threads([300, 1, 1]), [4, 1, 1], &[]);
+            let key = (tiles.dispatch_variant(Dispatch::Threads([300, 1, 1]), [4, 1, 1], &[]))
+                .map(|(variant, _)| variant);
             assert_eq!(
                 (Some(make.variant), make.start, make.waits, make.first_wait),
                 (key, VariantStart::State, 0, 0),
@@ -797,7 +798,8 @@ mod on_device {
             let from = next(&counters);
             state.prepare_dispatch(Dispatch::Threads(grid), size, &lengths);
             let make = one(name, counters.variant_makes(from), "prepare_dispatch");
-            let key = state.dispatch_variant(Dispatch::Threads(grid), size, &lengths);
+            let key = (state.dispatch_variant(Dispatch::Threads(grid), size, &lengths))
+                .map(|(variant, _)| variant);
             assert_eq!(
                 (Some(make.variant), make.start, make.waits),
                 (key, VariantStart::Ahead, 0),
@@ -817,7 +819,8 @@ mod on_device {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             let after = counters.metrics();
             let make = one(name, counters.variant_makes(from), "the first use");
-            let key = state.dispatch_variant(Dispatch::Threadgroups(groups), size, &lengths);
+            let key = (state.dispatch_variant(Dispatch::Threadgroups(groups), size, &lengths))
+                .map(|(variant, _)| variant);
             assert_eq!(
                 (Some(make.variant), make.start, make.waits),
                 (key, VariantStart::FirstUse, 1),
@@ -935,6 +938,7 @@ mod on_device {
             type Entry<'a> = (Dispatch, [u32; 3], u32, &'a str);
             let key = |state: &ComputePipelineState, (dispatch, size, length, pipeline): Entry| {
                 (state.dispatch_variant(dispatch, size, &[(0, length)]))
+                    .map(|(variant, _)| variant)
                     .unwrap_or_else(|| panic!("{name}: {pipeline}: {dispatch:?} by {size:?}"))
             };
             let keys: Vec<_> = table.iter().map(|&entry| key(&first, entry)).collect();
@@ -1011,6 +1015,48 @@ mod on_device {
                 table.len(),
                 met.len()
             );
+        });
+    }
+
+    /// `dispatch_variant` answers with each key whether its pipeline is made: false for each of
+    /// ten threadgroup sizes of `icb_replay_grid_template` until `prepare_dispatch` makes it, true
+    /// after, the same key both times, past the kernel's eight variant cells too; and true for each
+    /// once all are made, for a second state of the content as well.
+    #[test]
+    fn every_device_answers_whether_a_dispatch_s_pipeline_is_made() {
+        use crate::Dispatch;
+
+        let Some(descriptor) = descriptor("icb_replay_grid_template") else {
+            return;
+        };
+        each_device("compute_variant_made", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let dispatch = Dispatch::Threadgroups([2, 1, 1]);
+            let lengths = |x: u32| [(0, (4 * x).next_multiple_of(16))];
+            let mut keys = Vec::new();
+            for x in 1..=10 {
+                let (size, lengths) = ([x, 1, 1], lengths(x));
+                let (key, made) = (state.dispatch_variant(dispatch, size, &lengths))
+                    .unwrap_or_else(|| panic!("{name}: {size:?}: no key"));
+                assert!(!made, "{name}: {size:?}: made before its make");
+                state.prepare_dispatch(dispatch, size, &lengths);
+                let answer = state.dispatch_variant(dispatch, size, &lengths);
+                assert_eq!(
+                    answer,
+                    Some((key, true)),
+                    "{name}: {size:?}: after its make"
+                );
+                keys.push(key);
+            }
+            let again = self::state(name, &device, &descriptor);
+            for (x, key) in (1..=10).zip(keys) {
+                let (size, lengths) = ([x, 1, 1], lengths(x));
+                for state in [&state, &again] {
+                    let answer = state.dispatch_variant(dispatch, size, &lengths);
+                    assert_eq!(answer, Some((key, true)), "{name}: {size:?}: all made");
+                }
+            }
+            println!("{name}: made answers: ten sizes, before and after their makes");
         });
     }
 

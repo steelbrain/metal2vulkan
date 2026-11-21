@@ -1623,21 +1623,27 @@ impl ComputePipelineState {
     /// beyond whether its last threadgroups are partial, or a tiling kernel's direct grid and
     /// threadgroup size.
     ///
+    /// With the key, whether its `VkPipeline` is made, so a pre-pass can leave a made one alone:
+    /// read from the kernel's first eight variants with no lock, and past them under the short
+    /// lock of the kernel's list, which no make holds while the driver compiles. It may answer
+    /// false for a key whose make ends after the read, and never answers true for a key not
+    /// made.
+    ///
     /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
     /// memory, or records nothing (a grid with no threads, a kernel that writes no memory): where
-    /// `prepare_dispatch` makes nothing whatever was made before. It takes no lock and makes
-    /// nothing, allocates nothing where it answers a key, and says nothing of whether the
-    /// pipeline is made.
+    /// `prepare_dispatch` makes nothing whatever was made before. It makes nothing and allocates
+    /// nothing where it answers a key.
     pub fn dispatch_variant(
         &self,
         dispatch: Dispatch,
         threads_per_threadgroup: [u32; 3],
         threadgroup_memory_lengths: &[(u32, u32)],
-    ) -> Option<DispatchVariant> {
+    ) -> Option<(DispatchVariant, bool)> {
         let compiled = &self.inner.compiled;
         let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
-        let (_, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
-        Some(compiled.variant(module, local, lengths))
+        let (kernel, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
+        let variant = compiled.variant(module, local, lengths);
+        Some((variant, kernel.is_made(variant.key())))
     }
 
     /// `maxTotalThreadsPerThreadgroup`: the translator's answer for the device, which is Metal's
@@ -1939,6 +1945,18 @@ impl Kernel {
         let pipeline = self.make_pending(core, more, variant, start, Some(began))?;
         waited(core);
         Ok(pipeline)
+    }
+
+    /// Whether the variant `key` is made: read from its cell with no lock, and past the cells under
+    /// the list's lock, which no make holds while it compiles. False for a make that ends after
+    /// the read.
+    fn is_made(&self, key: Key<'_>) -> bool {
+        let variants = &self.variants;
+        match variants.in_cells(key) {
+            Ok(_) => true,
+            Err(false) => false,
+            Err(true) => variants.made(&lock(&variants.more), key).is_some(),
+        }
     }
 
     /// A make of `variant` ahead of its dispatches, started by `start`: none where it is made or a

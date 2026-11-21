@@ -2329,10 +2329,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   compiled content (the states of one content share theirs), the same module, workgroup size and
   threadgroup memory lengths. What the decision does not read does not change the key: an
   observing kernel's grid beyond whether its last threadgroups are partial, a tiling kernel's
-  direct grid and threadgroup size. Keys of different contents never compare equal. It answers
-  None where `prepare_dispatch` makes nothing whatever was made before, takes no lock, makes
-  nothing, allocates nothing where it answers a key, and says nothing of whether the pipeline is
-  made. A kernel holds at most 31
+  direct grid and threadgroup size. Keys of different contents never compare equal. With the
+  key it answers whether that `VkPipeline` is made, so a pre-pass can leave a made one alone:
+  read from the kernel's first eight variants with no lock, and past them under the short lock of
+  the kernel's list, which no make holds while the driver compiles. It may answer false for a key
+  whose make ends after the read, and never answers true for one not made. It answers None where
+  `prepare_dispatch` makes nothing whatever was made before, makes nothing, and allocates nothing
+  where it answers a key. A kernel holds at most 31
   threadgroup memory lengths, the indices `setThreadgroupMemoryLength:atIndex:` sets; a module
   with more is refused at the state's creation (`KernelInputKind::Specialization`).
 - Each lowering of a state's creation is one translation within its own 500 MiB ceiling, one
