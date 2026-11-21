@@ -3591,7 +3591,9 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 - Each execution takes a preprocess region when it is recorded, an idle one of the device's pool
   or one made then, its parts' preprocess one after another, each sized by
   `vkGetGeneratedCommandsMemoryRequirementsEXT` with the inherited pipeline at 64 commands, and
-  gives it back when its command buffer completes. The pool keeps at most 128 MiB of idle regions,
+  gives it back when its command buffer completes. Its sizes are those of a token per slot word
+  (known gaps, below): on the 2080 a part of 64 commands of four slot words takes 69,888 bytes,
+  1,092 a command, and one of 17 tokens 151,808. The pool keeps at most 128 MiB of idle regions,
   the oldest freed past that, and the block-maker thread frees each region idle for 250 ms, the
   idle age, as it frees idle allocations: at rest the pool holds nothing.
   `Metrics::preprocess_regions_remade` counts the regions made within a second after one was freed
@@ -3633,9 +3635,11 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   every later command, and three 8-byte tokens of the same bytes carried each command's own (a
   standalone program, which draws right either way on RADV and lavapipe). The cost: a command takes
   at most `maxIndirectCommandsTokenCount` less 3 buffer slots (13 on lavapipe, 29 on NVIDIA's
-  driver, 125 on RADV), and on the 2080 that program's part of 64 commands of three vertex words
-  and one fragment word takes 69,888 preprocess bytes, against 57,600 with the vertex words in one
-  token.
+  driver, 125 on RADV), refused past that (`IndirectCommandsKind::Tokens`); and that program's
+  part of 64 commands of three vertex words and one fragment word takes 69,888 preprocess bytes on
+  the 2080 against 57,600 with the vertex words in one token (21% more), 567,808 against 557,568
+  on lavapipe, and 19,712 either way on the XTX. Only preprocess bytes were measured, not GPU or
+  frame time.
 - On NVIDIA's driver (620.70.06, an RTX 2080) an execution whose leading commands draw nothing
   loses the draws after them in the same part: after a reset of commands 0 to 31, an execution of
   commands 0 to 63 draws nothing. A cause not yet found.
