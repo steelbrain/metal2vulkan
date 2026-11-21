@@ -52,15 +52,15 @@ fn copy(
     buffer_copy(&side.with_option(option)?, at, [8, 8, 1], lies, into_image)
 }
 
-/// The aspect and the unit's bytes of the copy `result`, which copies something.
-fn plane(result: Result<Option<BufferCopy>, Error>) -> (vk::ImageAspectFlags, u32) {
+/// The aspect (its bits) and the unit's bytes of the copy `result`, which copies something.
+fn plane(result: Result<Option<BufferCopy>, Error>) -> (u32, u32) {
     match result {
         Ok(Some(copy)) => {
             let aspect = copy.unit.aspect;
             assert!(copy
                 .regions()
                 .all(|r| r.image_subresource.aspect_mask == aspect));
-            (copy.unit.aspect, copy.unit.bytes)
+            (aspect.as_raw(), copy.unit.bytes)
         }
         Ok(None) => panic!("it copies nothing"),
         Err(error) => panic!("{error}"),
@@ -84,17 +84,17 @@ fn a_plane_option_copies_the_aspect_it_names_where_the_format_has_it() {
     for into_image in [false, true] {
         assert_eq!(
             plane(copy(both, d32s8, 1, Stencil, into_image)),
-            (A::STENCIL, 1)
+            (A::STENCIL.as_raw(), 1)
         );
         let d16 = (PixelFormat::Depth16Unorm, vk::Format::D16_UNORM);
         assert_eq!(
             plane(copy(d16.0, d16.1, 1, Depth, into_image)),
-            (A::DEPTH, 2)
+            (A::DEPTH.as_raw(), 2)
         );
         let s8 = (PixelFormat::Stencil8, vk::Format::S8_UINT);
         assert_eq!(
             plane(copy(s8.0, s8.1, 1, Stencil, into_image)),
-            (A::STENCIL, 1)
+            (A::STENCIL.as_raw(), 1)
         );
         let refused = [
             (both, d32s8, 1, BlitOption::None),
@@ -117,7 +117,10 @@ fn a_plane_option_copies_the_aspect_it_names_where_the_format_has_it() {
             );
         }
     }
-    assert_eq!(plane(copy(both, d32s8, 1, Depth, false)), (A::DEPTH, 4));
+    assert_eq!(
+        plane(copy(both, d32s8, 1, Depth, false)),
+        (A::DEPTH.as_raw(), 4)
+    );
     assert_eq!(
         gap(copy(both, d32s8, 1, Depth, true)),
         Gap::FloatDepthUpload { pixel_format: both }

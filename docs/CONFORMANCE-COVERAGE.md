@@ -2278,8 +2278,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `buffer-blit-empty-ranges` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceOffset:to:destinationOffset:size:) page gives dest… |
 | `buffer-blit-overlapping-copies` | An accepted difference: Metal documents the copy as invalid on macOS, and rt refuses it typed. Apple's copy(from:sourceOffset:to:destinationOffset:size:) page: … |
-| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-tails-blits` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-kernels` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
 | `buffer-tails-texture-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
@@ -7348,18 +7348,18 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `blit-whole-texture-copy` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no copyFromTexture:toTexture:). The rt side of t… |
 | `buffer-blit-any-range` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every fillBuffer:range:value: range at a whole 4… |
 | `buffer-depth-samples-d16-54-2` | The device's own answer (rule 2): this device's framebuffer sample counts do not include 2, so rt makes no texture of that count (Error::Limit). |
-| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-d16-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-d16-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-depth-samples-s8-54-2` | The device's own answer (rule 2): this device's framebuffer sample counts do not include 2, so rt makes no texture of that count (Error::Limit). |
-| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `buffer-depth-samples-s8-part-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-54-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `buffer-depth-samples-s8-part-4` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-fills-of-every-size` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every fillBuffer:range:value: range at a whole 4… |
 | `buffer-textures-cpu-access` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `buffer-textures-made` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
@@ -8694,8 +8694,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-25` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-250` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-253` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
-| `texture-fills-260` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
-| `texture-fills-261` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). The rt side of the … |
+| `texture-fills-260` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `texture-fills-261` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-30` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-40` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-41` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
