@@ -1478,8 +1478,8 @@ pub enum DrawKind {
     /// lines at width 1 alone, as Vulkan's wider lines are a device feature (`wideLines`) the
     /// floor does not require.
     LineWidth,
-    /// More than one viewport or scissor rectangle, or none (`setViewports:count:`,
-    /// `setScissorRects:count:`), which no replay stream sets.
+    /// No viewport or scissor rectangle, or more than Metal's 16 (`setViewports:count:`,
+    /// `setScissorRects:count:`), which Metal's validation stops.
     Viewports,
     /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
     /// `[0, 1]`, or bounds past the device's viewport limits.

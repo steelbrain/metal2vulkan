@@ -2777,9 +2777,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   value changed since the encoder's last draw), and `ring_writes` counts it. The values only a
   checked access reads (a checked slot's bounds and the zero range's address) come last, so they
   are the first to move to the block.
-- A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
-  (line or triangle) of the draws it serves. It takes as dynamic state the viewport, scissor, cull
-  mode, front face, primitive topology within its class, primitive restart, depth test, write and
+- A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content, the topology class
+  (point, line or triangle) of the draws it serves, and the depth clip and triangle fill modes. It
+  takes as dynamic state the viewports and scissors with their count, cull mode, front face, primitive topology within its class, primitive restart, depth test, write and
   compare, stencil test, operations, masks and reference, depth bias and blend constants, and a
   state without rasterization its discard, which keeps its attachment formats and that state in
   the pipeline. Vertex buffer strides are the descriptor's, so the content's, and baked. It
@@ -3110,7 +3110,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   the floor's `maxColorAttachments` is 8.
 - An encoder holds Metal's render state: a pipeline state, the vertex and fragment functions'
   buffers (`set_vertex_buffer`, `set_vertex_bytes` and their offsets, the fragment's alike),
-  textures and sampler states, one viewport and scissor rectangle, the cull mode, the
+  textures and sampler states, up to 16 viewports and scissor rectangles, the cull mode, the
   front-facing winding, a depth-stencil state (`Device::new_depth_stencil_state`), the stencil
   references, the depth bias and the blend color, Metal's defaults where it set none. A vertex buffer slot serves
   the vertex function's buffer argument of its index and the vertex descriptor's layout of its
@@ -3178,6 +3178,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
   covers, so the scissor is Metal's rectangle cut to them; a rectangle past Metal's render area,
   which Metal's validation stops, is cut to it, as plain Metal cuts it. A stencil reference
   saturates at 255, as Metal stores it.
+- `set_viewports` and `set_scissor_rects` are `setViewports:count:` and
+  `setScissorRects:count:`, 1 to 16 each, recorded with their count (`vkCmdSetViewportWithCount`,
+  `vkCmdSetScissorWithCount`, so no pipeline is made for a count). A vertex function's
+  `[[viewport_array_index]]` selects a viewport per primitive: the translator stores it to
+  `ViewportIndex` (Floor: `multiViewport`, `shaderOutputViewportIndex`), 0 for an index at or past
+  the encoder's count, which a draw pushes, as Metal draws it through viewport 0. A draw of any
+  other function draws through viewport 0. Vulkan takes as many scissors as viewports: each
+  viewport's is the rectangle of its index, the one rectangle where one is set, and none past
+  the rectangles set where several are, each cut to the pixels its viewport covers. An index
+  that is not one value across a primitive is the translator's refusal at creation, as a layer
+  index is: its form is a geometry stage, which device creation does not enable.
 - A draw may read an attachment of its own pass through a texture, as Metal reads a render
   target, where the device reads attachments (Floor, Attachment reads): through the attachment
   feedback loop where the device has it, else through a copy. The texture reaches the
@@ -3261,7 +3272,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - Refused by `Gap::Draw`, naming its `DrawKind`: the triangle fill mode `Lines` on a device
   without `fillModeNonSolid` (KosmicKrisp on the M3 Max, of the venues dumped, m3-max-48737) and
   the fill mode of raw value 2, which no SDK header declares (`FillMode`,
-  `set_triangle_fill_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
+  `set_triangle_fill_mode`), no viewport or scissor rectangle, or more than 16 (`Viewports`,
   `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
   (`VisibilityResults`, `set_visibility_result_mode`), each refused where it is set, the
   encoder's state unchanged; the replay streams set Metal's defaults alone, which those setters
@@ -3655,6 +3666,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |
 | `shaderOutputLayer` | `VkPhysicalDeviceVulkan12Features` | a vertex function's `[[render_target_array_index]]`, stored to `Layer` in every pass; every venue's driver reports it (RADV on the 780M, the RX 550 and the RX 7900 XTX, NVIDIA's on the RTX 3090 and RTX 2080, lavapipe, KosmicKrisp on the M3 Max, and the UHD 630's Windows driver, a Vulkan 1.3 device; jobs m3-max-61359 to 61362 and 61366) |
+| `multiViewport` | `VkPhysicalDeviceFeatures` | several viewports and scissor rectangles (`set_viewports`, `set_scissor_rects`); every venue's driver reports it (jobs m3-max-48727 to 48731, 48736, 48737 and 61508) |
+| `shaderOutputViewportIndex` | `VkPhysicalDeviceVulkan12Features` | a vertex function's `[[viewport_array_index]]`, stored to `ViewportIndex`; every venue's driver reports it (jobs m3-max-48727 to 48731, 48736, 48737 and 61508, and the probes 61359 to 61362 and 61366) |
 | `largePoints` | `VkPhysicalDeviceFeatures` | a draw of points at the `[[point_size]]` its vertex function writes, up to the device's `pointSizeRange`; without it a device draws only points of size 1.0; Vulkan 1.4 and Roadmap 2022 require it |
 | `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `sampleRateShading` | `VkPhysicalDeviceFeatures` | a fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, run once per covered sample as Metal runs it; Vulkan 1.4 requires it |

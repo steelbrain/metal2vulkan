@@ -217,16 +217,17 @@ fn a_fragment_primitive_id_takes_the_enabled_alternative() {
 }
 
 /// Fragment `Layer` and `ViewportIndex` inputs take their enabled alternatives. The floor declares
-/// `Layer` through `shaderOutputLayer` and cannot declare `ViewportIndex`, so no stage can have
-/// written the viewport index and the function reads it as 0, Metal's value with no vertex write
-/// (`StageIo::zero_indices`). Below the floor, without `shaderOutputLayer`, it reads both as 0 and
-/// declares neither.
+/// both, through `shaderOutputLayer`, `shaderOutputViewportIndex` and `multiViewport`. Below it,
+/// without the viewport index's two, no stage can have written the viewport index and the function
+/// reads it as 0, Metal's value with no vertex write (`StageIo::zero_indices`); without
+/// `shaderOutputLayer` too, it reads both as 0 and declares neither.
 #[test]
 fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
     let Some(bc) = fixture() else { return };
     for (stem, caps) in [
         ("moltenvk-m3", [Cap::ShaderLayer, Cap::MultiViewport]),
         ("lavapipe", [Cap::Geometry, Cap::MultiViewport]),
+        ("runtime-floor", [Cap::ShaderLayer, Cap::MultiViewport]),
     ] {
         let p = prof(stem);
         let a = compile(&bc, "tail_fragment_layer", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -239,7 +240,9 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
         }
         validate(&a, &p);
     }
-    let floor = prof("runtime-floor");
+    let viewport = [F::ShaderOutputViewportIndex, F::MultiViewport];
+    let floor = profile_without("runtime-floor", &viewport, DevicePolicy::default())
+        .expect("below the runtime's floor");
     let a = compile(&bc, "tail_fragment_layer", &floor).expect("floor");
     let io = &a.interface.io;
     assert_eq!(io.zero_indices, [StageBuiltin::ViewportIndex]);
@@ -256,7 +259,7 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
     validate(&a, &floor);
     let below = profile_without(
         "runtime-floor",
-        &[F::ShaderOutputLayer],
+        &[viewport.as_slice(), &[F::ShaderOutputLayer]].concat(),
         DevicePolicy::default(),
     )
     .expect("below the runtime's floor");

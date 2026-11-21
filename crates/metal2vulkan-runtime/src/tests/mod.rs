@@ -104,6 +104,7 @@ mod upload;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod validation;
 mod view;
+mod viewports;
 
 /// This crate's directory: the test process's `CARGO_MANIFEST_DIR` where it holds the crate's
 /// sources (cargo and nextest set it for each test, and an archive run elsewhere remaps it to the

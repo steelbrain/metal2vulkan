@@ -1291,8 +1291,8 @@ pub(crate) mod on_device {
     /// 0.0625, passes and writes 0.3125 on every device; one at 0.375 with no bias then fails; one
     /// at 0.25 under `Greater`, without writes, passes only by its unclamped bias of 2^23. Setting
     /// the depth clip mode `Clamp` and the triangle fill mode `Lines` (refused without
-    /// `fillModeNonSolid`) makes no pipeline when no draw follows; the viewport and scissor setters
-    /// refuse a count but 1.
+    /// `fillModeNonSolid`) makes no pipeline when no draw follows; the scissor setter refuses no
+    /// rectangle.
     #[test]
     fn every_device_tests_writes_and_biases_a_depth_attachment() {
         let Some(library) = examples() else {
@@ -1393,11 +1393,6 @@ pub(crate) mod on_device {
             draw(encoder.set_depth_clip_mode(crate::DepthClipMode::Clamp));
             draw(encoder.set_depth_clip_mode(crate::DepthClipMode::Clip));
             draw(encoder.set_viewports(&[at(0.25)]));
-            same(
-                encoder.set_viewports(&[at(0.25), at(0.5)]),
-                gap(DrawKind::Viewports),
-                "two viewports",
-            );
             same(
                 encoder.set_scissor_rects(&[]),
                 gap(DrawKind::Viewports),

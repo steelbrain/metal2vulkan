@@ -164,6 +164,10 @@ pub struct IndexBuffer<'a> {
     pub index_type: IndexType,
 }
 
+/// Metal's most viewports and scissor rectangles (`setViewports:count:`), which Vulkan's
+/// `maxViewports` holds on every device with `multiViewport` (Floor).
+const MAX_VIEWPORTS: usize = 16;
+
 /// The dynamic state a draw records before it: the viewport and scissor, the cull mode, the
 /// front face, the depth test, the stencil references, the blend constants, the depth bias, the
 /// feedback loop's enable where the device reads attachments, and the stencil test. A setter
@@ -548,7 +552,7 @@ struct Declarations {
 /// [`memory_barrier`](Self::memory_barrier).
 ///
 /// Built: a render pipeline state, the vertex and fragment functions' buffers, bytes, textures
-/// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
+/// and sampler states, up to 16 viewports and scissor rectangles, the cull mode, the front-facing
 /// winding, the depth clip mode, the triangle fill modes `Fill` and `Lines`, a depth-stencil
 /// state's depth and stencil tests, the depth bias and its clamp, the stencil references, the
 /// blend color, the line width (lines drawn at 1 alone: a draw of lines at another width is
@@ -556,8 +560,8 @@ struct Declarations {
 /// them unknown, memory barriers, fences, draws of points, lines and triangles, indexed or not,
 /// draws of patches with a tessellation factor buffer, each direct or indirect, and the `Disabled`
 /// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
-/// built, and so not methods: several viewports or scissor rectangles, the store action options
-/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// built, and so not methods: the store action options setters, tile functions, the
+/// `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
 /// type, which is refused). A draw of what the runtime does not build is [`Gap::Draw`], naming
@@ -588,10 +592,13 @@ pub struct RenderCommandEncoder {
     tests: Tests,
     /// The tests the encoder last recorded, none before its first draw.
     recorded: Option<Tests>,
-    viewport: Viewport,
-    /// Metal's scissor rectangle cut to Metal's render area (`Pass::area`), per axis
-    /// `[first, end)`.
-    scissor: [[u32; 2]; 2],
+    /// The viewports, the first `viewport_count` of them set (`setViewports:count:`).
+    viewports: [Viewport; MAX_VIEWPORTS],
+    viewport_count: usize,
+    /// Metal's scissor rectangles cut to Metal's render area (`Pass::area`), per axis
+    /// `[first, end)`, the first `scissor_count` of them set.
+    scissors: [[[u32; 2]; 2]; MAX_VIEWPORTS],
+    scissor_count: usize,
     cull_mode: CullMode,
     winding: Winding,
     /// The front and back stencil references, saturated to 8 bits.
@@ -683,15 +690,17 @@ impl CommandBuffer {
                     factors: None,
                     renders_into: false,
                     tests: Tests::of(&DepthStencilDescriptor::default()),
-                    viewport: Viewport {
+                    viewports: [Viewport {
                         origin_x: 0.0,
                         origin_y: 0.0,
                         width: f64::from(width),
                         height: f64::from(height),
                         znear: 0.0,
                         zfar: 1.0,
-                    },
-                    scissor: [[0, width], [0, height]],
+                    }; MAX_VIEWPORTS],
+                    viewport_count: 1,
+                    scissors: [[[0, width], [0, height]]; MAX_VIEWPORTS],
+                    scissor_count: 1,
                     cull_mode: CullMode::None,
                     winding: Winding::Clockwise,
                     stencil_reference: [0; 2],
@@ -1136,6 +1145,14 @@ impl RenderCommandEncoder {
     /// [`DrawKind::Viewport`] for a negative width, a depth range past `[0, 1]`, or bounds past
     /// the device's `maxViewportDimensions` and `viewportBoundsRange`.
     pub fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error> {
+        let v = self.checked(viewport)?;
+        self.viewports[0] = v;
+        self.viewports_set(1);
+        Ok(())
+    }
+
+    /// `viewport` as a draw takes it, checked as [`set_viewport`](Self::set_viewport) says.
+    fn checked(&self, viewport: Viewport) -> Result<Viewport, Error> {
         let v = match viewport.origin_x.is_nan() {
             true => Viewport {
                 origin_x: 0.0,
@@ -1166,24 +1183,38 @@ impl RenderCommandEncoder {
                 kind: DrawKind::Viewport,
             }));
         }
-        self.viewport = v;
+        Ok(v)
+    }
+
+    /// The first `count` viewports are set: each later draw records them, and one whose vertex
+    /// function writes `[[viewport_array_index]]` pushes the count.
+    fn viewports_set(&mut self, count: usize) {
+        if count != self.viewport_count {
+            self.viewport_count = count;
+            self.push_filled = false;
+        }
         self.dirty |= VIEWPORT;
-        Ok(())
+    }
+
+    /// Metal's scissor rectangle `rect` cut to Metal's render area.
+    fn cut(&self, rect: ScissorRect) -> [[u32; 2]; 2] {
+        let [width, height] = self.pass.area;
+        let cut = |origin: u64, size: u64, limit: u32| {
+            let limit = u64::from(limit);
+            [origin.min(limit), origin.saturating_add(size).min(limit)].map(|at| at as u32)
+        };
+        [
+            cut(rect.x, rect.width, width),
+            cut(rect.y, rect.height, height),
+        ]
     }
 
     /// `setScissorRect:`. Metal's default is Metal's render area. A rectangle past that area,
     /// which Metal's validation stops, is cut to it, as plain Metal cuts it; the pass's load and
     /// store reach past it to 32-pixel rounding (`RenderPassDescriptor::render_target_width`).
     pub fn set_scissor_rect(&mut self, rect: ScissorRect) {
-        let [width, height] = self.pass.area;
-        let cut = |origin: u64, size: u64, limit: u32| {
-            let limit = u64::from(limit);
-            [origin.min(limit), origin.saturating_add(size).min(limit)].map(|at| at as u32)
-        };
-        self.scissor = [
-            cut(rect.x, rect.width, width),
-            cut(rect.y, rect.height, height),
-        ];
+        self.scissors[0] = self.cut(rect);
+        self.scissor_count = 1;
         self.dirty |= VIEWPORT;
     }
 
@@ -1348,34 +1379,49 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// `setViewports:count:`: one viewport is [`set_viewport`](Self::set_viewport)'s; several are
-    /// not built.
+    /// `setViewports:count:`: 1 to 16 viewports, each as [`set_viewport`](Self::set_viewport)
+    /// takes it. A vertex function's `[[viewport_array_index]]` selects one per primitive (the
+    /// floor's `multiViewport` and `shaderOutputViewportIndex`), viewport 0 for an index at or past
+    /// the count, as Metal draws it; a draw of any other function takes viewport 0. Each viewport's
+    /// scissor is the rectangle of its index, the one rectangle where one is set, and none past the
+    /// rectangles set where several are, each cut to the pixels its viewport covers. An index that
+    /// is not one value across a primitive is the translator's refusal at the state's creation (a
+    /// geometry stage, which device creation does not enable).
     ///
-    /// Err: as [`set_viewport`](Self::set_viewport); [`Gap::Draw`] of [`DrawKind::Viewports`] for
-    /// a count other than 1.
+    /// Err: as [`set_viewport`](Self::set_viewport) for any of them, the encoder's viewports
+    /// unchanged; [`Gap::Draw`] of [`DrawKind::Viewports`] for none or more than 16.
     pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error> {
-        match viewports {
-            [viewport] => self.set_viewport(*viewport),
-            _ => Err(Error::Unsupported(Gap::Draw {
+        if viewports.is_empty() || viewports.len() > MAX_VIEWPORTS {
+            return Err(Error::Unsupported(Gap::Draw {
                 kind: DrawKind::Viewports,
-            })),
+            }));
         }
+        let mut checked = self.viewports;
+        for (at, viewport) in checked.iter_mut().zip(viewports) {
+            *at = self.checked(*viewport)?;
+        }
+        self.viewports = checked;
+        self.viewports_set(viewports.len());
+        Ok(())
     }
 
-    /// `setScissorRects:count:`: one rectangle is [`set_scissor_rect`](Self::set_scissor_rect)'s;
-    /// several are not built.
+    /// `setScissorRects:count:`: 1 to 16 rectangles, each cut as
+    /// [`set_scissor_rect`](Self::set_scissor_rect) cuts it, the scissors of the viewports of
+    /// their indices ([`set_viewports`](Self::set_viewports)).
     ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::Viewports`] for a count other than 1.
+    /// Err: [`Gap::Draw`] of [`DrawKind::Viewports`] for none or more than 16.
     pub fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error> {
-        match rects {
-            [rect] => {
-                self.set_scissor_rect(*rect);
-                Ok(())
-            }
-            _ => Err(Error::Unsupported(Gap::Draw {
+        if rects.is_empty() || rects.len() > MAX_VIEWPORTS {
+            return Err(Error::Unsupported(Gap::Draw {
                 kind: DrawKind::Viewports,
-            })),
+            }));
         }
+        for (at, rect) in rects.iter().enumerate() {
+            self.scissors[at] = self.cut(*rect);
+        }
+        self.scissor_count = rects.len();
+        self.dirty |= VIEWPORT;
+        Ok(())
     }
 
     /// `setColorStoreAction:atIndex:`: the store action of the colour attachment at `index`, which
@@ -2198,7 +2244,8 @@ impl RenderCommandEncoder {
                 });
                 fill_push(
                     (&mut self.push, &mut self.blocks),
-                    (&self.tables, self.facts.nil, factors, self.alpha_test),
+                    (&self.tables, self.facts.nil, factors),
+                    [self.alpha_test, self.viewport_count as u32],
                     (&self.moved, &self.shadow_slots, &self.pass),
                     state,
                 );
@@ -2349,7 +2396,7 @@ impl RenderCommandEncoder {
     /// through its texture.
     fn attachment_reads(&self, draws: &Draws) -> Result<AttachmentReads, Error> {
         let core = &*self.core;
-        let drawn = self.drawn();
+        let drawn = self.drawn(draws);
         let tables = &self.tables;
         let mut found = AttachmentReads {
             reads: false,
@@ -2628,15 +2675,23 @@ impl RenderCommandEncoder {
         let both = [vk::StencilFaceFlags::FRONT, vk::StencilFaceFlags::BACK];
         // SAFETY: the command buffer records; each state is dynamic in every render pipeline.
         unsafe {
+            // As many scissors as viewports, as Vulkan's with-count states require.
+            let count = self.viewport_count;
             if dirty & VIEWPORT != 0 {
-                device.cmd_set_viewport(command, 0, &[vk_viewport(&self.viewport)]);
+                let mut viewports = [vk::Viewport::default(); MAX_VIEWPORTS];
+                for (at, viewport) in viewports.iter_mut().zip(&self.viewports[..count]) {
+                    *at = vk_viewport(viewport);
+                }
+                device.cmd_set_viewport_with_count(command, &viewports[..count]);
             }
             if dirty & VIEWPORT != 0 || hidden != self.hidden {
-                let scissor = match hidden {
-                    true => vk::Rect2D::default(),
-                    false => self.vk_scissor(),
-                };
-                device.cmd_set_scissor(command, 0, &[scissor]);
+                let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
+                if !hidden {
+                    for (at, scissor) in scissors[..count].iter_mut().enumerate() {
+                        *scissor = rect(self.drawn_through(at));
+                    }
+                }
+                device.cmd_set_scissor_with_count(command, &scissors[..count]);
                 self.hidden = hidden;
             }
             if dirty & CULL != 0 {
@@ -2736,31 +2791,41 @@ impl RenderCommandEncoder {
         }
     }
 
-    /// The pixels a draw covers, per axis `[first, end)`: Metal's scissor rectangle cut to the
-    /// pixels its viewport covers.
-    fn drawn(&self) -> [[u32; 2]; 2] {
-        let pixels = viewport_pixels(&self.viewport, self.pass.area);
+    /// The pixels a draw covers through viewport `at`, per axis `[first, end)`: its scissor
+    /// rectangle (the one rectangle where one is set, and none past those set where several are)
+    /// cut to the pixels the viewport covers.
+    fn drawn_through(&self, at: usize) -> [[u32; 2]; 2] {
+        let pixels = viewport_pixels(&self.viewports[at], self.pass.area);
+        let scissor = match (self.scissor_count, self.scissors.get(at)) {
+            (1, _) => self.scissors[0],
+            (count, Some(scissor)) if at < count => *scissor,
+            _ => [[0, 0], [0, 0]],
+        };
         [0, 1].map(|axis| {
-            let first = self.scissor[axis][0].max(pixels[axis][0]);
-            let end = self.scissor[axis][1].min(pixels[axis][1]);
+            let first = scissor[axis][0].max(pixels[axis][0]);
+            let end = scissor[axis][1].min(pixels[axis][1]);
             [first, end.max(first)]
         })
     }
 
-    /// The draw's scissor: the pixels it covers ([`drawn`](Self::drawn)).
-    fn vk_scissor(&self) -> vk::Rect2D {
-        let [x, y] = self.drawn();
-        // Each bound lies in Metal's render area, which fits an `i32`.
-        vk::Rect2D {
-            offset: vk::Offset2D {
-                x: x[0] as i32,
-                y: y[0] as i32,
-            },
-            extent: vk::Extent2D {
-                width: x[1] - x[0],
-                height: y[1] - y[0],
-            },
-        }
+    /// The pixels a draw of `draws` covers, per axis `[first, end)`: those through viewport 0, or
+    /// through every viewport set where its vertex function selects one, their bounds.
+    fn drawn(&self, draws: &Draws) -> [[u32; 2]; 2] {
+        let used = match draws.selects_viewport {
+            true => self.viewport_count,
+            false => 1,
+        };
+        let mut through = (0..used).map(|at| self.drawn_through(at));
+        let first = through.next().unwrap_or([[0, 0], [0, 0]]);
+        through
+            .filter(|[x, y]| x[0] < x[1] && y[0] < y[1])
+            .fold(first, |[x, y], [nx, ny]| match x[0] < x[1] && y[0] < y[1] {
+                true => [
+                    [x[0].min(nx[0]), x[1].max(nx[1])],
+                    [y[0].min(ny[0]), y[1].max(ny[1])],
+                ],
+                false => [nx, ny],
+            })
     }
 
     /// Ends the pass's rendering, has `record` record into the command buffer, and begins the
@@ -2874,10 +2939,11 @@ fn primitives(primitive_type: PrimitiveType) -> (vk::PrimitiveTopology, bool) {
 /// image the pass `moved` to the feedback layout reads through its second element in that layout,
 /// and one in `shadow_slots`, which reads a shadow, through its second element, the shadow's; a
 /// colour attachment of `pass` the fragment function reads is read through its texture's second
-/// element.
+/// element; the alpha test's code and the encoder's viewport count are the encoder's.
 fn fill_push(
     (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
-    (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
+    (tables, (nil, zero), factors): (&[Tables; 2], (u64, u64), u64),
+    [alpha_test, viewports]: [u32; 2],
     (moved, shadow_slots, pass): (&[Moved], &[(usize, u32)], &Pass),
     state: &RenderPipelineState,
 ) {
@@ -2956,6 +3022,9 @@ fn fill_push(
             }
             FieldValue::RenderTargetArrayLength => {
                 bytes[at..at + 4].copy_from_slice(&pass.layers.to_le_bytes());
+            }
+            FieldValue::ViewportCount => {
+                bytes[at..at + 4].copy_from_slice(&viewports.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion | FieldValue::PrivateArena => {}
@@ -3072,6 +3141,21 @@ pub(crate) fn vk_viewport(v: &Viewport) -> vk::Viewport {
         height: (-height) as f32,
         min_depth: v.znear as f32,
         max_depth: v.zfar as f32,
+    }
+}
+
+/// The Vulkan rectangle of the pixels `[x, y]`, per axis `[first, end)`, which lie in Metal's
+/// render area and so fit an `i32`.
+fn rect([x, y]: [[u32; 2]; 2]) -> vk::Rect2D {
+    vk::Rect2D {
+        offset: vk::Offset2D {
+            x: x[0] as i32,
+            y: y[0] as i32,
+        },
+        extent: vk::Extent2D {
+            width: x[1] - x[0],
+            height: y[1] - y[0],
+        },
     }
 }
 

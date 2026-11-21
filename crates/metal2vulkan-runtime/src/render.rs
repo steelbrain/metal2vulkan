@@ -18,7 +18,8 @@
 //! What a `VkPipeline` bakes is what Vulkan 1.3 cannot leave dynamic: the content, the topology
 //! class (point, line or triangle) of the draws it serves, and the encoder's depth clip mode and
 //! triangle fill mode ([`Raster`]). Everything Metal sets on the
-//! encoder that Vulkan 1.3 makes dynamic without a feature is dynamic state: viewport, scissor,
+//! encoder that Vulkan 1.3 makes dynamic without a feature is dynamic state: the viewports and
+//! scissors with their count,
 //! cull mode, front face, the primitive topology within its class and primitive restart, the
 //! depth test, write and compare, the stencil test, operations, masks and reference, depth bias
 //! and blend constants. Vertex buffer strides are the descriptor's, so the content's: they are
@@ -173,12 +174,16 @@ pub(crate) struct Draws {
     /// Whether the vertex function is post-tessellation: the content draws patches alone, through
     /// its patch-class `VkPipeline`, and reads the encoder's tessellation factor buffer.
     pub(crate) patches: bool,
+    /// Whether the vertex function writes `[[viewport_array_index]]`
+    /// (`GraphicsState::writes_viewport_index`): its primitives reach every viewport the encoder
+    /// set, where any other function's reach viewport 0.
+    pub(crate) selects_viewport: bool,
 }
 
 /// The state Vulkan 1.3 lets a draw set, which every render `VkPipeline` takes as dynamic.
 const DYNAMIC: [vk::DynamicState; 17] = [
-    vk::DynamicState::VIEWPORT,
-    vk::DynamicState::SCISSOR,
+    vk::DynamicState::VIEWPORT_WITH_COUNT,
+    vk::DynamicState::SCISSOR_WITH_COUNT,
     vk::DynamicState::CULL_MODE,
     vk::DynamicState::FRONT_FACE,
     vk::DynamicState::PRIMITIVE_TOPOLOGY,
@@ -536,6 +541,10 @@ fn draws(
             RuntimeFact::RenderTargetArrayLength {
                 layer_dropped: false,
             } => {}
+            // A vertex function's `[[viewport_array_index]]`, which stores `ViewportIndex` 0 at or
+            // past the encoder's viewport count, read from its push field
+            // (`FieldValue::ViewportCount`).
+            RuntimeFact::ViewportCount => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does
             // not supply.
             _ => return Err(draw_input()),
@@ -684,6 +693,9 @@ fn draws(
                 PushField::RenderTargetArrayLength if at == VERTEX => {
                     FieldValue::RenderTargetArrayLength
                 }
+                // The encoder's viewport count, below which the vertex function's index selects
+                // its viewport.
+                PushField::ViewportCount if at == VERTEX => FieldValue::ViewportCount,
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));
@@ -731,6 +743,7 @@ fn draws(
         blocks,
         first_instance_zero: divided && !nonzero_first_instance,
         patches: pipeline.graphics.tessellation.is_some(),
+        selects_viewport: pipeline.graphics.writes_viewport_index,
     };
     Ok((draws, (numbered, constexprs)))
 }
@@ -1201,9 +1214,8 @@ impl RenderCompiled {
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology);
         let tessellation = vk::PipelineTessellationStateCreateInfo::default()
             .patch_control_points(fixed.patch_control_points);
-        let viewport = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
+        // The draw sets its viewports and scissors with their count (`VIEWPORT_WITH_COUNT`).
+        let viewport = vk::PipelineViewportStateCreateInfo::default();
         // `Clamp` keeps what lies past the near and far planes and clamps its depth to the
         // viewport's range, as Vulkan's depth clamp does (`depthClamp`, Floor); `Lines` draws each
         // triangle's edges as lines 1 pixel wide (`fillModeNonSolid`, which the encoder asks of

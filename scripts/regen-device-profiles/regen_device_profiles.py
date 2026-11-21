@@ -117,7 +117,8 @@ RUNTIME_FLOOR = {
             "fragmentStoresAndAtomics", "alphaToOne", "logicOp", "fullDrawIndexUint32",
             "imageCubeArray", "depthBiasClamp", "drawIndirectFirstInstance", "depthClamp",
             "shaderClipDistance", "tessellationShader", "shaderTessellationAndGeometryPointSize",
-            "largePoints", "dualSrcBlend", "sampleRateShading", "vertexPipelineStoresAndAtomics")},
+            "largePoints", "dualSrcBlend", "sampleRateShading", "vertexPipelineStoresAndAtomics",
+            "multiViewport")},
         "VkPhysicalDeviceVulkan11Features": {member: True for member in (
             "storageBuffer16BitAccess", "multiview", "shaderDrawParameters")},
         "VkPhysicalDeviceVulkan12Features": {member: True for member in (
@@ -130,7 +131,7 @@ RUNTIME_FLOOR = {
             "shaderInt8", "storageBuffer8BitAccess", "scalarBlockLayout",
             "uniformBufferStandardLayout", "vulkanMemoryModel", "vulkanMemoryModelDeviceScope",
             "shaderSubgroupExtendedTypes", "timelineSemaphore", "hostQueryReset",
-            "shaderOutputLayer")},
+            "shaderOutputLayer", "shaderOutputViewportIndex")},
         "VkPhysicalDeviceVulkan13Features": {member: True for member in (
             "subgroupSizeControl", "computeFullSubgroups", "robustImageAccess",
             "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",

@@ -1499,7 +1499,8 @@ impl Parameters {
                 | FieldValue::TessellationFactors
                 | FieldValue::AlphaTestReference
                 | FieldValue::FetchedColor(_)
-                | FieldValue::RenderTargetArrayLength => {}
+                | FieldValue::RenderTargetArrayLength
+                | FieldValue::ViewportCount => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

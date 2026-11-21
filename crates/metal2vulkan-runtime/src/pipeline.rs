@@ -747,6 +747,10 @@ pub(crate) enum FieldValue {
     /// invocation's at its index in the dispatch times the slot's bytes
     /// (`PushField::PrivateArenaAddress`).
     PrivateArena,
+    /// A `u32`: the viewports the render encoder set (`setViewports:count:`, at least 1), at or
+    /// past which a vertex function's `[[viewport_array_index]]` stores `ViewportIndex` 0
+    /// (`PushField::ViewportCount`).
+    ViewportCount,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the

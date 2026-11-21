@@ -1149,7 +1149,8 @@
           "largePoints": true,
           "dualSrcBlend": true,
           "sampleRateShading": true,
-          "vertexPipelineStoresAndAtomics": true
+          "vertexPipelineStoresAndAtomics": true,
+          "multiViewport": true
         },
         "VkPhysicalDeviceVulkan11Features": {
           "storageBuffer16BitAccess": true,
@@ -1175,7 +1176,8 @@
           "shaderSubgroupExtendedTypes": true,
           "timelineSemaphore": true,
           "hostQueryReset": true,
-          "shaderOutputLayer": true
+          "shaderOutputLayer": true,
+          "shaderOutputViewportIndex": true
         },
         "VkPhysicalDeviceVulkan13Features": {
           "subgroupSizeControl": true,

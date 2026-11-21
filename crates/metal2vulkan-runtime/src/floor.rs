@@ -474,6 +474,11 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // output (written 0 for an index at or past the pass's length), in every pass. Every venue's
     // driver reports it.
     feature!(vulkan12.shader_output_layer => ShaderOutputLayer),
+    // Several viewports and scissors (`setViewports:count:`), and a vertex function's
+    // `[[viewport_array_index]]`: one form, its `ViewportIndex` output (written 0 for an index at
+    // or past the encoder's viewport count). Every venue's driver reports both.
+    feature!(core.multi_viewport => MultiViewport),
+    feature!(vulkan12.shader_output_viewport_index => ShaderOutputViewportIndex),
     // A point drawn at the size its vertex function writes, up to the device's `pointSizeRange`:
     // without it a device draws only points of size 1.0. Vulkan 1.4 and Roadmap 2022 require it
     // of every device.

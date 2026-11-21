@@ -72,6 +72,8 @@ fn at_the_floor() -> Queried {
     features.core.shader_tessellation_and_geometry_point_size = vk::TRUE;
     features.core.large_points = vk::TRUE;
     features.vulkan12.shader_output_layer = vk::TRUE;
+    features.core.multi_viewport = vk::TRUE;
+    features.vulkan12.shader_output_viewport_index = vk::TRUE;
     features.core.shader_int16 = vk::TRUE;
     features.vulkan12.shader_int8 = vk::TRUE;
     features.vulkan11.storage_buffer16_bit_access = vk::TRUE;
@@ -251,7 +253,6 @@ fn the_translator_sees_only_what_device_creation_enables() {
     use metal2vulkan::device::{VkExtension, VkFeature};
     let mut device = at_the_floor();
     device.features.core.geometry_shader = vk::TRUE;
-    device.features.vulkan12.shader_output_viewport_index = vk::TRUE;
     device.features.vulkan13.robust_image_access = vk::TRUE;
     device.features.robustness2.robust_buffer_access2 = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
@@ -291,7 +292,6 @@ fn the_translator_sees_only_what_device_creation_enables() {
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
     for reported in [
         VkFeature::GeometryShader,
-        VkFeature::ShaderOutputViewportIndex,
         VkFeature::RobustBufferAccess2,
         VkFeature::RobustBufferAccess,
     ] {
@@ -307,7 +307,6 @@ fn a_device_at_the_floor_is_above_it() {
     // Features beyond the floor are not enabled.
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan11.storage_input_output16 = vk::TRUE;
-    device.features.vulkan12.shader_output_viewport_index = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(!capabilities.float16);
     assert!(!capabilities.storage_read_without_format);
@@ -345,7 +344,7 @@ fn a_device_at_the_floor_is_above_it() {
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
     assert_eq!(enabled.vulkan11.storage_input_output16, vk::FALSE);
-    assert_eq!(enabled.vulkan12.shader_output_viewport_index, vk::FALSE);
+    assert_eq!(enabled.vulkan12.shader_output_viewport_index, vk::TRUE);
     assert_eq!(enabled.vulkan12.shader_output_layer, vk::TRUE);
     assert_eq!(enabled.vulkan13.robust_image_access, vk::TRUE);
     assert_eq!(enabled.core.independent_blend, vk::TRUE);
@@ -375,7 +374,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 57] = [
+    let cases: [(Clear, Missing); 59] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -598,6 +597,14 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.shader_output_layer = vk::FALSE,
             feature(V12, "shaderOutputLayer"),
+        ),
+        (
+            |f| f.core.multi_viewport = vk::FALSE,
+            feature(CORE, "multiViewport"),
+        ),
+        (
+            |f| f.vulkan12.shader_output_viewport_index = vk::FALSE,
+            feature(V12, "shaderOutputViewportIndex"),
         ),
         (
             |f| f.core.large_points = vk::FALSE,
