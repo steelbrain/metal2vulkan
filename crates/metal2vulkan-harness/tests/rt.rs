@@ -1,7 +1,9 @@
 //! The runtime through the harness, on the device the cfg names (docs/VALIDATION.md): a range
 //! given back is the next one taken, buffers alive at once lie apart, and a buffer longer than a
 //! pooled block takes a block of its own; and what textures released under work in flight leave
-//! waiting stays within what the work in flight accounts for (`releases_under_work`).
+//! waiting stays within what the work in flight accounts for (`releases_under_work`), and a
+//! queue's command buffers beside another queue's backlog complete, each waiter after its
+//! signaller (`two_queues`).
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::authored::OwnRow;
@@ -40,4 +42,16 @@ fn releases_under_work_in_flight_stay_flat() {
         .expect("a row of the runtime's own")
         .unwrap_or_else(|why| panic!("{why}"));
     println!("releases_under_work: {}", report.lines.join("; "));
+}
+
+/// The runtime's row `two_queues` passes its check: every command buffer a queue commits beside
+/// another queue's backlog completes, and each that waits for a signal of the other's ends after
+/// its signaller.
+#[test]
+fn two_queues_complete_each_waiter_after_its_signaller() {
+    let device = rt::system_default(None).unwrap();
+    let report = (device.own_row(OwnRow::TwoQueues))
+        .expect("a row of the runtime's own")
+        .unwrap_or_else(|why| panic!("{why}"));
+    println!("two_queues: {}", report.lines.join("; "));
 }

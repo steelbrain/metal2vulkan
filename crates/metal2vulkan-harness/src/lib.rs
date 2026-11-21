@@ -153,7 +153,11 @@
 //! cross-GPU outlier against the leg's base. `releases_under_work` holds its check alone, and
 //! records no time: what textures released while three command buffers keep the GPU running
 //! leave waiting, read with that work in flight, is to stay flat from its 100th iteration to its
-//! 200th.
+//! 200th. `two_queues` records one queue's commit-to-completed times beside another queue's
+//! backlog (`b_p50`, `b_p90`, `b_max`), that backlog's GPU run (`a_run`), and how long after a
+//! signaller's GPU end its waiter on the other queue starts (`wait_p50`, `wait_p90`), judged as
+//! `export_submit_cost`'s are; its check is that every command buffer completes, each waiter
+//! after its signaller.
 
 use std::ptr::NonNull;
 

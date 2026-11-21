@@ -271,10 +271,22 @@ pub enum OwnRow {
     /// that waits for more work than that, or a texture never freed, passes a bound and fails the
     /// row.
     ReleasesUnderWork,
+    /// One queue's command buffer beside another queue's backlog, both on the device's one
+    /// `VkQueue`: queue A keeps 8 command buffers uncompleted from a thread of its own, each
+    /// sized by fills of a 256 MiB `Private` buffer to about 20 ms on the GPU, while queue B
+    /// commits 60 command buffers, one every 16.7 ms, each one fill of 4 KiB. In a first part the
+    /// two are unrelated, and B's commit-to-completed times at p50, p90 and the most, and A's
+    /// GPU run at p50, are its times, in microseconds. In a second, each of A's command buffers
+    /// signals a shared event with its count and each of B's waits first for the count of A's
+    /// last committed; the GPU start of each of B's after the GPU end of the signaller it waited
+    /// for, at p50 and p90, are its times. Both print the command buffers held for room
+    /// (`Metrics::held_for_room`). Every command buffer is to complete, and each of B's to end
+    /// after its signaller, or the row fails.
+    TwoQueues,
 }
 
 /// The rows of one runtime's own.
-pub const OWN_ROWS: [Own; 4] = [
+pub const OWN_ROWS: [Own; 5] = [
     Own {
         name: "idle_frees",
         row: OwnRow::IdleFrees,
@@ -290,6 +302,10 @@ pub const OWN_ROWS: [Own; 4] = [
     Own {
         name: "releases_under_work",
         row: OwnRow::ReleasesUnderWork,
+    },
+    Own {
+        name: "two_queues",
+        row: OwnRow::TwoQueues,
     },
 ];
 
