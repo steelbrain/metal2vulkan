@@ -113,9 +113,9 @@ pub struct BindState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub primitive_id_indices: Option<metal::IndexType>,
     /// The draw is of Metal's private quads or quad strip, which the consumer lists as two
-    /// triangles a quad, each quad's adjacent (`bind::RewriteProgram::Quads`, `QuadStrip`): a
-    /// pipeline whose fragment function reads Vulkan's `PrimitiveId` runs the variant that reads
-    /// the quad's, that value shifted right by one, as Metal counts one primitive a quad
+    /// triangles a quad, each quad's adjacent: a pipeline whose fragment function reads Vulkan's
+    /// `PrimitiveId` runs the variant that reads the quad's, that value shifted right by one, as
+    /// Metal counts one primitive a quad
     /// (`VariantKey::quad_primitive_ids`). Part of the shape (`BindShape::quad_primitive_ids`);
     /// `false` for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]

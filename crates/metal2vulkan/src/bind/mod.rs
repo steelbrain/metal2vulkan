@@ -35,19 +35,7 @@
 //! [`StatusReport`] names. A command reaches it by its device address where the device addresses buffers, and
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
 //! dispatch reads its group counts from Metal's buffer itself ([`IndirectArgs::Buffer`]).
-//! An indexed indirect draw whose index fetch
-//! nothing bounds (`DrawCommands::index_bounds_pass`) can bound it on the GPU instead of reading
-//! its arguments: an [`IndexBoundsPass`] of [`index_bounds_plan_module`] and
-//! [`index_bounds_fill_module`] before the render pass instance, and two indirect draws (a run of
-//! such draws over one arguments buffer and one index buffer, one [`IndexBoundsRun`] plan of
-//! [`index_bounds_plan_run_module`] and one fill of [`index_bounds_fill_run_module`] for all of
-//! them instead). An
-//! indexed draw whose primitives Vulkan's input assembly does not form as Metal does (a strip
-//! restarting at another index than all-ones) can draw them as a list instead: an
-//! [`IndexRewritePass`] of three [`index_rewrite_module`] dispatches ([`RewritePhase`]) before the
-//! render pass instance, and one indirect draw (a run of direct draws of one walk group each,
-//! over one index buffer, one [`IndexRewriteRun`] dispatch of [`index_rewrite_run_module`] for
-//! all of them instead). A pass's visibility results are its queries' results copied to their
+//! A pass's visibility results are its queries' results copied to their
 //! offsets, a `Boolean` one the device's own nonzero value where a sample passed. A pass whose
 //! fetching draws
 //! read a multisampled attachment's sample planes (`StorageAttachmentView::SamplePlanes`) splits
@@ -100,8 +88,6 @@ pub(crate) mod etc_decode;
 pub mod fan_out;
 pub(crate) mod graphics;
 pub(crate) mod heap;
-pub(crate) mod index_bounds;
-pub(crate) mod index_rewrite;
 pub mod indirect_commands;
 pub(crate) mod instantiate;
 pub(crate) mod mesh_arguments;
@@ -144,16 +130,6 @@ pub use graphics::{alpha_test_code, DrawCall, DrawCommands, IndexOverrun};
 pub use heap::{
     handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,
     HeapElements, HeapSource, HANDLE_ENTRY_BYTES, HANDLE_TABLE_CAPACITY, NEUTRAL_HEAP_ELEMENT,
-};
-pub use index_bounds::{
-    index_bounds_fill_module, index_bounds_fill_run_module, index_bounds_plan_module,
-    index_bounds_plan_run_module, BoundsRunDraw, IndexBoundsFillModule, IndexBoundsPass,
-    IndexBoundsPlanModule, IndexBoundsRun,
-};
-pub use index_rewrite::{
-    index_rewrite_module, index_rewrite_run_module, IndexRewriteModule, IndexRewritePass,
-    IndexRewriteRun, RewriteOrder, RewriteOutput, RewritePhase, RewriteProgram, RewriteRunDraw,
-    RewriteSource,
 };
 pub use instantiate::{
     BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, IndexBufferRef, IndirectRef,

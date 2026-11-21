@@ -202,8 +202,7 @@
 //!   reads anything for it. An indexed indirect draw's counts are in GPU memory, so where the
 //!   device lacks `robustBufferAccess2` (or the index offset is at or past the buffer's length) it
 //!   asks for its arguments on the CPU (`indirect_needs_arguments`), and the direct draw is bounded
-//!   as above. Where that is the only reason, `index_bounds_pass` says the GPU index bounds pass
-//!   may bound it instead (`bind::IndexBoundsPass`).
+//!   as above.
 //! - **Tessellation**. A tessellation pipeline's Metal stages are its evaluation stage (the vertex
 //!   function, whose push range, bindings, and uses name `TESSELLATION_EVALUATION`) and its
 //!   fragment stage; its synthesized vertex and control stages bind nothing of Metal's. The control
@@ -459,11 +458,6 @@ pub struct DrawCommands {
     /// A direct indexed draw that reads indices past its index buffer: how `draw`
     /// treats those index positions. `None` for every other draw.
     pub index_overrun: Option<IndexOverrun>,
-    /// An indexed indirect draw asks for its arguments on the CPU (`indirect_needs_arguments`)
-    /// only because nothing bounds its index fetch: the consumer may record the GPU index bounds
-    /// pass instead of the CPU read (`IndexBoundsPass`), which draws each position past the buffer
-    /// at index 0 plus the base vertex.
-    pub index_bounds_pass: bool,
     /// A plan that draws each vertex amplification as a draw of its own (`BindingPlan::variant`'s
     /// `amplification_draws`): one entry per amplification, in order, the push writes that make the
     /// next draw that amplification's (its id and its view mapping's offsets, in each stage that
@@ -535,7 +529,6 @@ impl Default for DrawCommands {
             vertex_strides: Vec::new(),
             uses: Vec::new(),
             index_overrun: None,
-            index_bounds_pass: false,
             mesh_arguments: None,
             object_fold: None,
             discards_command_buffer: false,
@@ -3533,7 +3526,6 @@ fn instantiate(
         vertex_strides,
         uses,
         index_overrun: overrun_out,
-        index_bounds_pass,
         amplifications: amplifications_out,
         specialization: specialization_out,
         mesh_arguments: mesh_arguments_out,
@@ -3879,7 +3871,6 @@ fn instantiate(
         });
     }
     *indirect_needs_arguments = arguments_elsewhere || index_unbounded;
-    *index_bounds_pass = index_unbounded && !arguments_elsewhere;
     *mesh_arguments_out = mesh_arguments;
     *object_fold_out = object_fold;
     *discards_out = discards;

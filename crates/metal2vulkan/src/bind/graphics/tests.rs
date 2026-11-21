@@ -764,17 +764,15 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         let t = template(robust, false);
         let cmds = instantiate(&t, &state, &indirect(at(8))).expect("indexed");
         assert_eq!(cmds.indirect_needs_arguments, !robust);
-        // The index bound is the only reason: the GPU pass may bound it instead.
-        assert_eq!(cmds.index_bounds_pass, !robust);
         assert_eq!(cmds.index_overrun, None);
         let cmds = instantiate(&t, &state, &indirect(at(64))).expect("indexed past");
-        assert!(cmds.indirect_needs_arguments && cmds.index_bounds_pass);
+        assert!(cmds.indirect_needs_arguments);
         let cmds = instantiate(&t, &state, &indirect(None)).expect("indirect");
-        assert!(!cmds.indirect_needs_arguments && !cmds.index_bounds_pass);
-        // Another reason asks for the CPU read too: the pass does not stand in for it.
+        assert!(!cmds.indirect_needs_arguments);
+        // Another reason asks for the CPU read too.
         let t = template(robust, true);
         let cmds = instantiate(&t, &state, &indirect(at(8))).expect("indexed");
-        assert!(cmds.indirect_needs_arguments && !cmds.index_bounds_pass);
+        assert!(cmds.indirect_needs_arguments);
     }
 }
 
@@ -2081,7 +2079,7 @@ fn mesh_draws_specialize_their_threadgroup_within_the_device() {
             stride: 12,
         }
     );
-    assert!(!cmds.indirect_needs_arguments && !cmds.index_bounds_pass);
+    assert!(!cmds.indirect_needs_arguments);
     assert_eq!(cmds.mesh_arguments, Some(MeshArgumentsForm::Mesh));
     assert_eq!(
         cmds.uses,

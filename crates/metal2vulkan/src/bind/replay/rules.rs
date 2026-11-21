@@ -54,8 +54,6 @@ pub enum DrawReplayRule {
     InputAttachments,
     /// The state's indirect draw needs its arguments on the CPU.
     ArgumentsOnCpu,
-    /// The state's draw bounds its indices.
-    IndexBounds,
     /// The state's draw is amplified or draws views.
     Amplified,
     /// The state's vertex function fetches attributes of a layout whose stride is set per bind
@@ -115,7 +113,6 @@ impl fmt::Display for DrawReplayRule {
             DrawReplayRule::ArgumentsOnCpu => {
                 "the inherited state's indirect draw needs its arguments on the CPU"
             }
-            DrawReplayRule::IndexBounds => "the inherited state's draw bounds its indices",
             DrawReplayRule::Amplified => "the inherited state's draw is amplified or draws views",
             DrawReplayRule::VertexAttributes => {
                 "the inherited state's vertex function fetches attributes at a stride set per bind"
@@ -280,7 +277,6 @@ pub fn draw_replay_draw(
             commands.indirect_needs_arguments,
             DrawReplayRule::ArgumentsOnCpu,
         ),
-        (commands.index_bounds_pass, DrawReplayRule::IndexBounds),
         (
             !commands.amplifications.is_empty() || plan.views != ViewSetup::default(),
             DrawReplayRule::Amplified,

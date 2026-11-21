@@ -323,8 +323,8 @@ impl Case for RestartIndices {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // **Nothing is loosened.** Every draw here is the direct indexed form, which reaches no
-        // bounds pass, and every texel of every cell still compares exactly.
+        // **Nothing is loosened.** Every draw here is the direct indexed form, and every texel of
+        // every cell still compares exactly.
         //
         // One kind is declared over the notices site. The vertex function writes
         // `[[point_size]]`, which a device whose largest point is below Metal's announces at the

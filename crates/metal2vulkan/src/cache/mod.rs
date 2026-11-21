@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2225;
+pub const SEMANTICS_VERSION: u32 = 2226;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 571;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2545;
+pub const RUNTIME_VERSION: u32 = 2546;
 
 /// Writes a digest as lowercase hex.
 pub(crate) fn write_hex(f: &mut fmt::Formatter<'_>, name: &str, hash: &Hash256) -> fmt::Result {

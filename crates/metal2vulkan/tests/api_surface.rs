@@ -661,26 +661,6 @@ surface! {
         struct DepthStencilCopyModules N;
         struct StencilBit O;
         struct StencilSplitModule N;
-        fn index_bounds_fill_module;
-        fn index_bounds_fill_run_module;
-        fn index_bounds_plan_module;
-        fn index_bounds_plan_run_module;
-        struct BoundsRunDraw E;
-        struct IndexBoundsFillModule N;
-        struct IndexBoundsPass N;
-        struct IndexBoundsPlanModule N;
-        struct IndexBoundsRun O;
-        fn index_rewrite_module;
-        fn index_rewrite_run_module;
-        struct IndexRewriteModule N;
-        struct IndexRewritePass N;
-        struct IndexRewriteRun O;
-        enum RewriteOrder N;
-        enum RewriteOutput N;
-        enum RewritePhase N;
-        enum RewriteProgram N;
-        struct RewriteRunDraw E;
-        enum RewriteSource N;
         mod fan_out;
         mod indirect_commands;
     }

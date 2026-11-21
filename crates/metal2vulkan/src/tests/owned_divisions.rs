@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::bind::{self, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram};
+use crate::bind::{self, DepthStandInForm, PlanesCopy};
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
 use crate::spirv::testing::{all_ones_divisions, committed_descriptions};
@@ -26,23 +26,11 @@ fn modules() -> Vec<Build> {
             $(out.push((stringify!($f).into(), Box::new(|d| Ok(bind::$f(d)?.spirv))));)*
         };
     }
-    plain!(
-        index_bounds_fill_module,
-        index_bounds_plan_module,
-        replay_preprocess_module,
-    );
+    plain!(replay_preprocess_module);
     let mut push =
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {
             out.push((name, build));
         };
-    for program in RewriteProgram::ALL {
-        for phase in RewritePhase::ALL {
-            push(
-                format!("index_rewrite_module({program:?}, {phase:?})"),
-                Box::new(move |d| Ok(bind::index_rewrite_module(d, program, phase)?.spirv)),
-            );
-        }
-    }
     for copy in PlanesCopy::ALL {
         push(
             format!("planes_split_module({copy:?})"),
